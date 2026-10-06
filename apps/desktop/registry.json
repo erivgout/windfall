@@ -1,0 +1,673 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "windfall",
+  "homepage": "https://github.com/windfall-daw/windfall",
+  "items": [
+    {
+      "name": "knob",
+      "type": "registry:component",
+      "title": "Knob",
+      "description": "A rotary control in three sizes with unipolar and bipolar arcs, drag, wheel, keyboard and typed entry.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/knob.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/knob.tsx"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        },
+        {
+          "path": "src/components/audio/value-input.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/value-input.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)",
+          "wf-control-track": "oklch(0.86 0.005 330)",
+          "wf-control-fill": "var(--wf-brand)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)",
+          "wf-control-track": "oklch(0.34 0.008 330)",
+          "wf-control-fill": "var(--wf-brand)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "pan-control",
+      "type": "registry:component",
+      "title": "Pan Control",
+      "description": "A bipolar knob from -1 to 1 with a center detent, read out as L50, C and R50.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/pan-control.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/pan-control.tsx"
+        },
+        {
+          "path": "src/components/audio/knob.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/knob.tsx"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        },
+        {
+          "path": "src/components/audio/value-input.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/value-input.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)",
+          "wf-control-track": "oklch(0.86 0.005 330)",
+          "wf-control-fill": "var(--wf-brand)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)",
+          "wf-control-track": "oklch(0.34 0.008 330)",
+          "wf-control-fill": "var(--wf-brand)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "fader",
+      "type": "registry:component",
+      "title": "Fader",
+      "description": "A vertical or horizontal level fader with a dB taper, scale marks and a slot for a meter.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/fader.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/fader.tsx"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        },
+        {
+          "path": "src/components/audio/value-input.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/value-input.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)",
+          "wf-control-track": "oklch(0.86 0.005 330)",
+          "wf-control-fill": "var(--wf-brand)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)",
+          "wf-control-track": "oklch(0.34 0.008 330)",
+          "wf-control-fill": "var(--wf-brand)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "level-meter",
+      "type": "registry:component",
+      "title": "Level Meter",
+      "description": "A canvas peak meter fed through a ref, with peak hold, a latching clip light and its own ballistics.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/level-meter.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/level-meter.tsx"
+        },
+        {
+          "path": "src/components/audio/canvas.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/canvas.ts"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-meter-bg": "oklch(0.9 0.004 330)",
+          "wf-meter-low": "oklch(0.72 0.19 150)",
+          "wf-meter-mid": "oklch(0.82 0.17 90)",
+          "wf-meter-high": "oklch(0.63 0.24 27)"
+        },
+        "dark": {
+          "wf-meter-bg": "oklch(0.26 0.008 330)",
+          "wf-meter-low": "oklch(0.76 0.2 150)",
+          "wf-meter-mid": "oklch(0.85 0.17 90)",
+          "wf-meter-high": "oklch(0.68 0.23 27)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "toggle-led",
+      "type": "registry:component",
+      "title": "Toggle LED",
+      "description": "A small latching button that lights up when on, plus a mute and solo pair.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/toggle-led.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/toggle-led.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-meter-low": "oklch(0.72 0.19 150)",
+          "wf-meter-mid": "oklch(0.82 0.17 90)",
+          "wf-meter-high": "oklch(0.63 0.24 27)",
+          "wf-step-off": "oklch(0.885 0.005 330)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-meter-low": "oklch(0.76 0.2 150)",
+          "wf-meter-mid": "oklch(0.85 0.17 90)",
+          "wf-meter-high": "oklch(0.68 0.23 27)",
+          "wf-step-off": "oklch(0.32 0.008 330)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "step-button",
+      "type": "registry:component",
+      "title": "Step Button",
+      "description": "One step of a step sequencer.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/step-button.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/step-button.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-step-off": "oklch(0.885 0.005 330)",
+          "wf-step-off-alt": "oklch(0.83 0.03 10)",
+          "wf-step-on": "var(--wf-brand)",
+          "wf-playhead": "oklch(0.55 0.2 250)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-step-off": "oklch(0.32 0.008 330)",
+          "wf-step-off-alt": "oklch(0.36 0.03 10)",
+          "wf-step-on": "var(--wf-brand)",
+          "wf-playhead": "oklch(0.75 0.15 250)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "step-grid",
+      "type": "registry:component",
+      "title": "Step Grid",
+      "description": "A step sequencer row with drag painting, right-drag clearing, keyboard navigation and an imperative playhead.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/step-grid.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/step-grid.tsx"
+        },
+        {
+          "path": "src/components/audio/step-button.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/step-button.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-step-off": "oklch(0.885 0.005 330)",
+          "wf-step-off-alt": "oklch(0.83 0.03 10)",
+          "wf-step-on": "var(--wf-brand)",
+          "wf-playhead": "oklch(0.55 0.2 250)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-step-off": "oklch(0.32 0.008 330)",
+          "wf-step-off-alt": "oklch(0.36 0.03 10)",
+          "wf-step-on": "var(--wf-brand)",
+          "wf-playhead": "oklch(0.75 0.15 250)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "piano-keyboard",
+      "type": "registry:component",
+      "title": "Piano Keyboard",
+      "description": "A playable horizontal or vertical keyboard with glissando, velocity and guaranteed note-off.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/piano-keyboard.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/piano-keyboard.tsx"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "waveform",
+      "type": "registry:component",
+      "title": "Waveform",
+      "description": "A canvas waveform overview from min and max peak pairs, with draggable region handles and a playhead.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/waveform.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/waveform.tsx"
+        },
+        {
+          "path": "src/components/audio/canvas.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/canvas.ts"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-meter-bg": "oklch(0.9 0.004 330)",
+          "wf-playhead": "oklch(0.55 0.2 250)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)",
+          "wf-waveform": "oklch(0.45 0.01 330)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-meter-bg": "oklch(0.26 0.008 330)",
+          "wf-playhead": "oklch(0.75 0.15 250)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)",
+          "wf-waveform": "oklch(0.8 0.01 330)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "envelope-editor",
+      "type": "registry:component",
+      "title": "Envelope Editor",
+      "description": "An attack, decay, sustain, release editor with draggable, keyboard-accessible nodes on a time axis.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/envelope-editor.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/envelope-editor.tsx"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-meter-bg": "oklch(0.9 0.004 330)",
+          "wf-grid-line": "oklch(0 0 0 / 8%)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-meter-bg": "oklch(0.26 0.008 330)",
+          "wf-grid-line": "oklch(1 0 0 / 7%)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "number-field",
+      "type": "registry:component",
+      "title": "Number Field",
+      "description": "A compact number that is dragged, typed or nudged with the wheel, as for a tempo.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/number-field.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/number-field.tsx"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        },
+        {
+          "path": "src/components/audio/value-input.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/value-input.tsx"
+        }
+      ],
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "use-drag-value",
+      "type": "registry:hook",
+      "title": "useDragValue",
+      "description": "The interaction model the value controls share, for building controls of your own.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/value-input.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/value-input.tsx"
+        }
+      ],
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "audio-units",
+      "type": "registry:lib",
+      "title": "Audio Units",
+      "description": "Gain and decibel conversion, and matching formatters and parsers for dB, pan, percent, time, pitch and frequency.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        }
+      ],
+      "meta": {
+        "license": "MIT"
+      }
+    },
+    {
+      "name": "audio-kit",
+      "type": "registry:component",
+      "title": "Windfall Audio Kit",
+      "description": "Every Windfall audio control and the helpers they share.",
+      "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
+      "categories": [
+        "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
+      ],
+      "files": [
+        {
+          "path": "src/components/audio/canvas.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/canvas.ts"
+        },
+        {
+          "path": "src/components/audio/envelope-editor.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/envelope-editor.tsx"
+        },
+        {
+          "path": "src/components/audio/fader.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/fader.tsx"
+        },
+        {
+          "path": "src/components/audio/knob.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/knob.tsx"
+        },
+        {
+          "path": "src/components/audio/level-meter.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/level-meter.tsx"
+        },
+        {
+          "path": "src/components/audio/number-field.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/number-field.tsx"
+        },
+        {
+          "path": "src/components/audio/pan-control.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/pan-control.tsx"
+        },
+        {
+          "path": "src/components/audio/piano-keyboard.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/piano-keyboard.tsx"
+        },
+        {
+          "path": "src/components/audio/step-button.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/step-button.tsx"
+        },
+        {
+          "path": "src/components/audio/step-grid.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/step-grid.tsx"
+        },
+        {
+          "path": "src/components/audio/toggle-led.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/toggle-led.tsx"
+        },
+        {
+          "path": "src/components/audio/units.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/units.ts"
+        },
+        {
+          "path": "src/components/audio/use-drag-value.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/use-drag-value.ts"
+        },
+        {
+          "path": "src/components/audio/value-input.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/value-input.tsx"
+        },
+        {
+          "path": "src/components/audio/waveform.tsx",
+          "type": "registry:component",
+          "target": "@components/audio/waveform.tsx"
+        },
+        {
+          "path": "src/components/audio/index.ts",
+          "type": "registry:lib",
+          "target": "@components/audio/index.ts"
+        }
+      ],
+      "cssVars": {
+        "light": {
+          "wf-brand": "oklch(0.592 0.249 0.58)",
+          "wf-meter-bg": "oklch(0.9 0.004 330)",
+          "wf-meter-low": "oklch(0.72 0.19 150)",
+          "wf-meter-mid": "oklch(0.82 0.17 90)",
+          "wf-meter-high": "oklch(0.63 0.24 27)",
+          "wf-step-off": "oklch(0.885 0.005 330)",
+          "wf-step-off-alt": "oklch(0.83 0.03 10)",
+          "wf-step-on": "var(--wf-brand)",
+          "wf-playhead": "oklch(0.55 0.2 250)",
+          "wf-grid-line": "oklch(0 0 0 / 8%)",
+          "wf-grid-line-strong": "oklch(0 0 0 / 22%)",
+          "wf-control-track": "oklch(0.86 0.005 330)",
+          "wf-control-fill": "var(--wf-brand)",
+          "wf-waveform": "oklch(0.45 0.01 330)"
+        },
+        "dark": {
+          "wf-brand": "oklch(0.66 0.23 0.58)",
+          "wf-meter-bg": "oklch(0.26 0.008 330)",
+          "wf-meter-low": "oklch(0.76 0.2 150)",
+          "wf-meter-mid": "oklch(0.85 0.17 90)",
+          "wf-meter-high": "oklch(0.68 0.23 27)",
+          "wf-step-off": "oklch(0.32 0.008 330)",
+          "wf-step-off-alt": "oklch(0.36 0.03 10)",
+          "wf-step-on": "var(--wf-brand)",
+          "wf-playhead": "oklch(0.75 0.15 250)",
+          "wf-grid-line": "oklch(1 0 0 / 7%)",
+          "wf-grid-line-strong": "oklch(1 0 0 / 20%)",
+          "wf-control-track": "oklch(0.34 0.008 330)",
+          "wf-control-fill": "var(--wf-brand)",
+          "wf-waveform": "oklch(0.8 0.01 330)"
+        }
+      },
+      "meta": {
+        "license": "MIT"
+      }
+    }
+  ]
+}

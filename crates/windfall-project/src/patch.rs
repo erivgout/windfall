@@ -1,0 +1,142 @@
+//! What the app shell sends the UI after an edit.
+//!
+//! Sending the whole project on every fader move would not scale to a
+//! project with ten thousand notes, so the document reports which sections an
+//! edit touched and the shell sends only those.
+
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::model::{
+    Channel, Mixer, Pattern, PatternId, Playlist, Project, ProjectSettings, SampleAsset,
+};
+
+/// The sections of a project an edit changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Touched {
+    pub settings: bool,
+    pub samples: bool,
+    pub channels: bool,
+    pub mixer: bool,
+    pub playlist: bool,
+    /// A pattern was added, removed or reordered.
+    pub pattern_list: bool,
+    /// Patterns whose own data changed. Removed patterns are not listed.
+    pub patterns: Vec<PatternId>,
+}
+
+impl Touched {
+    /// Everything changed, as after loading a project.
+    pub fn all(project: &Project) -> Self {
+        Self {
+            settings: true,
+            samples: true,
+            channels: true,
+            mixer: true,
+            playlist: true,
+            pattern_list: true,
+            patterns: project.patterns.iter().map(|pattern| pattern.id).collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Adds everything `other` touched to `self`.
+    pub fn merge(&mut self, other: &Touched) {
+        self.settings |= other.settings;
+        self.samples |= other.samples;
+        self.channels |= other.channels;
+        self.mixer |= other.mixer;
+        self.playlist |= other.playlist;
+        self.pattern_list |= other.pattern_list;
+        for id in &other.patterns {
+            if !self.patterns.contains(id) {
+                self.patterns.push(*id);
+            }
+        }
+    }
+}
+
+/// The changed sections of a project. A section that is absent did not
+/// change. The UI keeps a copy of the project and merges patches into it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProjectPatch {
+    /// Counts up by one for every patch the document produces. A UI that
+    /// sees a gap has missed a patch and must fetch the whole project again.
+    #[ts(type = "number")]
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub settings: Option<ProjectSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub samples: Option<Vec<SampleAsset>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub channels: Option<Vec<Channel>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mixer: Option<Mixer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub playlist: Option<Playlist>,
+    /// Ids of every pattern, in order. Present when a pattern was added,
+    /// removed or reordered. Patterns missing from it were removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pattern_order: Option<Vec<PatternId>>,
+    /// Full data of each pattern that was added or changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<Pattern>,
+    pub history: HistoryView,
+    /// The project has edits that are not saved.
+    pub dirty: bool,
+}
+
+/// The undo history as the UI shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistoryView {
+    /// Oldest first.
+    pub entries: Vec<HistoryEntry>,
+    /// How many entries are currently applied. Entries at or past this index
+    /// have been undone and can be redone.
+    pub cursor: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistoryEntry {
+    /// What the edit did, in words a menu can show, such as "Add channel".
+    pub label: String,
+}
+
+/// The result of dispatching a command.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DispatchResult {
+    /// Ids the command created, in the order its documentation gives.
+    pub created: Vec<u32>,
+    pub patch: ProjectPatch,
+}
+
+/// The whole document, sent when the UI starts and after a project loads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DocumentSnapshot {
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub project: Project,
+    pub history: HistoryView,
+    pub dirty: bool,
+    /// Path of the `.windfall` file, or `None` for a project never saved.
+    pub path: Option<String>,
+}

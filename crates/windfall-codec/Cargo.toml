@@ -1,0 +1,31 @@
+[package]
+name = "windfall-codec"
+description = "Audio file decoding, WAV writing and waveform overviews for Windfall"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+
+# MPL-2.0. Only the containers and codecs Windfall reads are switched on.
+symphonia = { version = "0.6.1", default-features = false, features = [
+    "opt-simd",
+    "id3v1",
+    "id3v2",
+    "wav",
+    "aiff",
+    "pcm",
+    "flac",
+    "mp3",
+    "ogg",
+    "vorbis",
+] }
+# MIT OR Apache-2.0.
+thiserror = "2"
+
+[lints]
+workspace = true

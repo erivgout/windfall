@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/windfall-daw/windfall"
+authors = ["The Windfall contributors"]
+
+[workspace.dependencies]
+windfall-core = { path = "crates/windfall-core" }
+windfall-project = { path = "crates/windfall-project" }
+windfall-ipc = { path = "crates/windfall-ipc" }
+windfall-codec = { path = "crates/windfall-codec" }
+windfall-engine = { path = "crates/windfall-engine" }
+windfall-factory = { path = "crates/windfall-factory" }
+
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Audio code is unusable at opt-level 0, so dev builds optimize a little and
+# dependencies optimize fully.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

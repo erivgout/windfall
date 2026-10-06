@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Windfall</title>
+    <script>
+      // Sets the theme before the first paint so the window does not flash.
+      // The UI store keeps the preference under this key.
+      ;(function () {
+        var theme = "dark"
+        try {
+          var saved = JSON.parse(localStorage.getItem("windfall.ui") || "{}")
+          theme = (saved.state && saved.state.theme) || theme
+        } catch (error) {}
+        if (theme === "system") {
+          theme = matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light"
+        }
+        document.documentElement.classList.add(theme)
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,3 @@
+# The root .gitattributes marks the other audio types as binary; AIFF-C is
+# not in its list, and these files must never get line-ending conversion.
+*.aifc binary

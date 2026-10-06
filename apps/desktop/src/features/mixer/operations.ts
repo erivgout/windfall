@@ -1,0 +1,231 @@
+import type { MixerTrack, MixerTrackPatch, TrackId } from "@/bindings"
+import {
+  askConfirm,
+  dispatch,
+  newGestureId,
+  useProjectStore,
+  useUiStore,
+} from "@/lib/store"
+import { clamp, MASTER_TRACK, MAX_GAIN, MAX_MIXER_TRACKS } from "@/lib/units"
+
+import { useMixerUi } from "./mixer-ui"
+import { resetAllPeaks } from "./peaks"
+import { feedersOf } from "./routing"
+
+/*
+ * Everything the mixer does to the project, in one place. The strips and
+ * the registry actions both call these, so a click and a palette entry do
+ * the same thing.
+ */
+
+const project = () => useProjectStore.getState().project
+const ui = () => useUiStore.getState()
+
+export function mixerTracks(): MixerTrack[] {
+  return project().mixer.tracks
+}
+
+export function findTrack(id: TrackId | null): MixerTrack | undefined {
+  return mixerTracks().find((track) => track.id === id)
+}
+
+/** The selected track, or undefined when none is or it no longer exists. */
+export function selectedTrack(): MixerTrack | undefined {
+  return findTrack(ui().selectedTrack)
+}
+
+export function mixerIsFull(): boolean {
+  return mixerTracks().length >= MAX_MIXER_TRACKS
+}
+
+/**
+ * The backend clamps values that are out of range but the browser mock
+ * rejects them, so everything is brought into range before it is sent.
+ */
+export function clampGain(gain: number): number {
+  return Number.isFinite(gain) ? clamp(gain, 0, MAX_GAIN) : 0
+}
+
+export function clampPan(pan: number): number {
+  return Number.isFinite(pan) ? clamp(pan, -1, 1) : 0
+}
+
+export function patchTrack(id: TrackId, patch: MixerTrackPatch) {
+  return dispatch({ type: "updateMixerTrack", id, patch })
+}
+
+export async function addTrack(): Promise<void> {
+  const result = await dispatch({ type: "addMixerTrack" })
+  if (!result) return
+  ui().setPanelVisible("mixer", true)
+  ui().selectTrack(result.created[0])
+}
+
+function listNames(names: string[]): string {
+  const shown = names.slice(0, 3).map((name) => `"${name}"`)
+  const rest = names.length - shown.length
+  return rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(", ")
+}
+
+/** What deleting a track undoes for everything that plays into it. */
+export function deleteWarning(track: MixerTrack): string | null {
+  const { channels, outputs, sends } = feedersOf(
+    mixerTracks(),
+    project().channels,
+    track.id
+  )
+  const parts: string[] = []
+  if (channels.length === 1) {
+    parts.push(
+      `The channel "${channels[0].name}" plays into this track. It will fall back to the master.`
+    )
+  } else if (channels.length > 1) {
+    parts.push(
+      `${channels.length} channels play into this track: ${listNames(channels.map((channel) => channel.name))}. They will fall back to the master.`
+    )
+  }
+  if (outputs.length === 1) {
+    parts.push(
+      `The track "${outputs[0].name}" is routed into it and will go to the master instead.`
+    )
+  } else if (outputs.length > 1) {
+    parts.push(
+      `${outputs.length} tracks are routed into it and will go to the master instead.`
+    )
+  }
+  if (sends.length > 0) {
+    parts.push(
+      sends.length === 1
+        ? `The send from "${sends[0].name}" will be removed.`
+        : `Sends from ${sends.length} tracks will be removed.`
+    )
+  }
+  return parts.length > 0 ? parts.join(" ") : null
+}
+
+/** Deletes a track. Asks first when anything plays into it. */
+export async function deleteTrack(id: TrackId): Promise<void> {
+  const track = findTrack(id)
+  if (!track || id === MASTER_TRACK) return
+  const warning = deleteWarning(track)
+  if (warning !== null) {
+    const choice = await askConfirm({
+      title: `Delete the track "${track.name}"?`,
+      description: warning,
+      choices: [
+        { id: "delete", label: "Delete track", variant: "destructive" },
+      ],
+    })
+    if (choice !== "delete") return
+  }
+  const tracks = mixerTracks()
+  const index = tracks.findIndex((item) => item.id === id)
+  const neighbor = tracks[index + 1] ?? tracks[index - 1]
+  const wasSelected = ui().selectedTrack === id
+  const result = await dispatch({ type: "removeMixerTrack", id })
+  if (result && wasSelected) ui().selectTrack(neighbor?.id ?? MASTER_TRACK)
+}
+
+/** Opens the name of a track for editing in its strip. */
+export function startRename(id: TrackId) {
+  if (!findTrack(id)) return
+  ui().setPanelVisible("mixer", true)
+  ui().selectTrack(id)
+  useMixerUi.setState({ renaming: id, coloring: null })
+}
+
+export async function renameTrack(id: TrackId, name: string): Promise<void> {
+  const track = findTrack(id)
+  const trimmed = name.trim()
+  if (!track || trimmed === "" || trimmed === track.name) return
+  await patchTrack(id, { name: trimmed })
+}
+
+/** Opens the color swatches of a track. */
+export function startColoring(id: TrackId) {
+  if (!findTrack(id)) return
+  ui().setPanelVisible("mixer", true)
+  ui().selectTrack(id)
+  useMixerUi.setState({ coloring: id, renaming: null })
+}
+
+export async function setTrackColor(id: TrackId, color: number) {
+  if (findTrack(id)?.color === color) return
+  await patchTrack(id, { color: color & 0xffffff })
+}
+
+export async function resetVolume(id: TrackId) {
+  if (findTrack(id)?.volume !== 1) await patchTrack(id, { volume: 1 })
+}
+
+export async function centerPan(id: TrackId) {
+  if (findTrack(id)?.pan !== 0) await patchTrack(id, { pan: 0 })
+}
+
+export async function toggleMute(id: TrackId) {
+  const track = findTrack(id)
+  if (track) await patchTrack(id, { muted: !track.muted })
+}
+
+export async function toggleSolo(id: TrackId) {
+  const track = findTrack(id)
+  if (track) await patchTrack(id, { solo: !track.solo })
+}
+
+/** Applies one patch to several tracks as a single undo step. */
+async function patchTracks(tracks: MixerTrack[], patch: MixerTrackPatch) {
+  const gesture = newGestureId()
+  for (const track of tracks) {
+    await dispatch({ type: "updateMixerTrack", id: track.id, patch }, gesture)
+  }
+}
+
+export function unmuteAll() {
+  return patchTracks(
+    mixerTracks().filter((track) => track.muted),
+    { muted: false }
+  )
+}
+
+export function unsoloAll() {
+  return patchTracks(
+    mixerTracks().filter((track) => track.solo),
+    { solo: false }
+  )
+}
+
+/** Routes a track's output to another track, or nowhere with `null`. */
+export async function setOutput(id: TrackId, output: TrackId | null) {
+  const track = findTrack(id)
+  if (!track || id === MASTER_TRACK || track.output === output) return
+  await dispatch({
+    type: "setTrackOutput",
+    id,
+    output: output ?? undefined,
+  })
+}
+
+export function addSend(from: TrackId, to: TrackId) {
+  return dispatch({ type: "setSend", from, to, gain: 1 })
+}
+
+export function removeSend(from: TrackId, to: TrackId) {
+  return dispatch({ type: "setSend", from, to })
+}
+
+/** Moves the selection one strip left (-1) or right (1), or to an end. */
+export function selectStrip(move: -1 | 1 | "first" | "last"): TrackId | null {
+  const tracks = mixerTracks()
+  if (tracks.length === 0) return null
+  const current = tracks.findIndex((track) => track.id === ui().selectedTrack)
+  let next: number
+  if (move === "first") next = 0
+  else if (move === "last") next = tracks.length - 1
+  else if (current < 0) next = move === 1 ? 0 : tracks.length - 1
+  else next = clamp(current + move, 0, tracks.length - 1)
+  const id = tracks[next].id
+  ui().selectTrack(id)
+  return id
+}
+
+export { resetAllPeaks }

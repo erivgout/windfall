@@ -1,0 +1,260 @@
+//! Decoded audio files, kept so that the same file is not decoded twice.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
+
+use windfall_core::AudioBuffer;
+use windfall_ipc::SampleInfo;
+
+use crate::paths;
+use crate::sync::lock;
+
+/// Buckets in the waveform overview of a [`SampleInfo`].
+pub const PEAK_BUCKETS: usize = 512;
+
+/// Decoded files the cache keeps at most.
+const MAX_FILES: usize = 64;
+
+/// Decoded audio the cache keeps at most, in bytes of samples. The file
+/// decoded last is always kept, whatever its size.
+const MAX_BYTES: usize = 256 * 1024 * 1024;
+
+/// Waveform overviews kept before the oldest are forgotten.
+const MAX_INFOS: usize = 512;
+
+/// One version of one file: a file that is written again is a new entry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct FileKey {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+impl FileKey {
+    fn of(path: &Path) -> Result<Self, String> {
+        let metadata = fs::metadata(path).map_err(|error| unreadable(path, &error))?;
+        if metadata.is_dir() {
+            return Err(format!(
+                "\"{}\" is a folder, not an audio file",
+                paths::display(path)
+            ));
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        })
+    }
+}
+
+fn unreadable(path: &Path, error: &dyn std::fmt::Display) -> String {
+    format!("Could not load \"{}\": {error}", paths::display(path))
+}
+
+/// A small cache of decoded audio files and their waveform overviews.
+///
+/// The browser previews a file, asks for its waveform and then adds it to
+/// the project; undo and redo take a sample out of the project and put it
+/// back. All of those want the same decoded audio, and the audio itself is
+/// shared, so keeping it costs nothing while the project also holds it.
+///
+/// Paths must be cleaned with [`paths::clean`] so one file has one entry.
+#[derive(Default)]
+pub struct SampleCache {
+    inner: Mutex<Inner>,
+}
+
+#[derive(Default)]
+struct Inner {
+    /// Least recently used first.
+    decoded: Vec<(FileKey, AudioBuffer)>,
+    infos: HashMap<FileKey, SampleInfo>,
+    /// Keys of `infos`, oldest first.
+    info_order: Vec<FileKey>,
+}
+
+impl Inner {
+    fn touch(&mut self, key: &FileKey) -> Option<AudioBuffer> {
+        let index = self.decoded.iter().position(|(held, _)| held == key)?;
+        let entry = self.decoded.remove(index);
+        let buffer = entry.1.clone();
+        self.decoded.push(entry);
+        Some(buffer)
+    }
+
+    fn insert(&mut self, key: FileKey, buffer: AudioBuffer) {
+        // An older version of the file is of no use once it has changed.
+        self.decoded.retain(|(held, _)| held.path != key.path);
+        self.decoded.push((key, buffer));
+        let bytes = |entries: &[(FileKey, AudioBuffer)]| -> usize {
+            entries
+                .iter()
+                .map(|(_, buffer)| size_of_val(buffer.samples()))
+                .sum()
+        };
+        while self.decoded.len() > 1
+            && (self.decoded.len() > MAX_FILES || bytes(&self.decoded) > MAX_BYTES)
+        {
+            self.decoded.remove(0);
+        }
+    }
+}
+
+impl SampleCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Decodes the file at `path`, or returns the audio decoded earlier if
+    /// the file has not changed since. Slow for a file not seen before; call
+    /// it off the UI thread and without holding a lock.
+    ///
+    /// The error is a sentence that names the file and can be shown as it is.
+    pub fn decode(&self, path: &Path) -> Result<AudioBuffer, String> {
+        let key = FileKey::of(path)?;
+        if let Some(buffer) = lock(&self.inner).touch(&key) {
+            return Ok(buffer);
+        }
+        let buffer = windfall_codec::decode_file(path).map_err(|error| unreadable(path, &error))?;
+        lock(&self.inner).insert(key, buffer.clone());
+        Ok(buffer)
+    }
+
+    /// The audio last decoded from `path`, if it is still held. Does not
+    /// touch the disk, so it is safe where waiting is not: it may return
+    /// audio from before the file last changed.
+    pub fn peek(&self, path: &Path) -> Option<AudioBuffer> {
+        let inner = lock(&self.inner);
+        let (_, buffer) = inner
+            .decoded
+            .iter()
+            .rev()
+            .find(|(key, _)| key.path == path)?;
+        Some(buffer.clone())
+    }
+
+    /// Facts about the file at `path` and its waveform overview. Decodes the
+    /// file the first time, so the same rules as [`decode`](Self::decode)
+    /// apply.
+    pub fn info(&self, path: &Path) -> Result<SampleInfo, String> {
+        let key = FileKey::of(path)?;
+        if let Some(info) = lock(&self.inner).infos.get(&key) {
+            return Ok(info.clone());
+        }
+        let buffer = self.decode(path)?;
+        let info = SampleInfo {
+            path: paths::display(path),
+            name: paths::stem(path),
+            sample_rate: buffer.sample_rate(),
+            channels: buffer.channels(),
+            frames: buffer.frames() as u64,
+            duration_secs: buffer.duration_secs(),
+            peaks: windfall_codec::peaks(&buffer, PEAK_BUCKETS),
+        };
+
+        let mut inner = lock(&self.inner);
+        if inner.infos.insert(key.clone(), info.clone()).is_none() {
+            inner.info_order.push(key);
+        }
+        while inner.info_order.len() > MAX_INFOS {
+            let oldest = inner.info_order.remove(0);
+            inner.infos.remove(&oldest);
+        }
+        Ok(info)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windfall_codec::{WavSampleFormat, write_wav};
+
+    use super::*;
+
+    fn write_tone(path: &Path, frames: usize, level: f32) {
+        let buffer = AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]);
+        write_wav(path, &buffer, WavSampleFormat::Float32).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_decoded_once_until_it_changes() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("tone.wav");
+        write_tone(&file, 100, 0.25);
+        let cache = SampleCache::new();
+
+        let first = cache.decode(&file).unwrap();
+        let second = cache.decode(&file).unwrap();
+        assert!(std::ptr::eq(first.samples(), second.samples()));
+        assert!(std::ptr::eq(
+            cache.peek(&file).unwrap().samples(),
+            first.samples()
+        ));
+
+        // A different length is a different file, even within the clock's
+        // resolution.
+        write_tone(&file, 200, 0.5);
+        let third = cache.decode(&file).unwrap();
+        assert_eq!(third.frames(), 200);
+        assert_eq!(cache.peek(&file).unwrap().frames(), 200);
+    }
+
+    #[test]
+    fn info_describes_the_file_and_is_kept() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("Tone One.wav");
+        write_tone(&file, 4_800, 0.5);
+        let cache = SampleCache::new();
+
+        let info = cache.info(&file).unwrap();
+        assert_eq!(info.name, "Tone One");
+        assert_eq!(info.path, paths::display(&file));
+        assert_eq!(
+            (info.sample_rate, info.channels, info.frames),
+            (48_000, 1, 4_800)
+        );
+        assert!((info.duration_secs - 0.1).abs() < 1e-9);
+        assert_eq!(info.peaks.len(), PEAK_BUCKETS * 2);
+        assert!(info.peaks.iter().all(|peak| (peak - 0.5).abs() < 1e-6));
+        assert_eq!(cache.info(&file).unwrap(), info);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_gives_a_sentence_that_names_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = SampleCache::new();
+
+        let missing = folder.path().join("missing.wav");
+        let error = cache.decode(&missing).unwrap_err();
+        assert!(error.starts_with("Could not load \""), "{error}");
+        assert!(error.contains("missing.wav"), "{error}");
+
+        let text = folder.path().join("notes.wav");
+        fs::write(&text, "not audio at all").unwrap();
+        let error = cache.info(&text).unwrap_err();
+        assert!(error.contains("notes.wav"), "{error}");
+        assert!(error.contains("not a supported audio file"), "{error}");
+
+        let error = cache.decode(folder.path()).unwrap_err();
+        assert!(error.contains("is a folder"), "{error}");
+        assert!(cache.peek(&text).is_none());
+    }
+
+    #[test]
+    fn the_cache_forgets_the_least_recently_used_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = SampleCache::new();
+        let file = |index: usize| folder.path().join(format!("{index}.wav"));
+        for index in 0..=MAX_FILES {
+            write_tone(&file(index), 8, 0.1);
+            cache.decode(&file(index)).unwrap();
+            // Keeps the first file the most recently used.
+            cache.decode(&file(0)).unwrap();
+        }
+        assert!(cache.peek(&file(0)).is_some());
+        assert!(cache.peek(&file(1)).is_none());
+        assert!(cache.peek(&file(MAX_FILES)).is_some());
+    }
+}

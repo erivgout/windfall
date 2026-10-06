@@ -1,0 +1,292 @@
+import { DragDropVerticalIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  memo,
+  useCallback,
+  useMemo,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react"
+
+import type { ChannelId, PatternId } from "@/bindings"
+import {
+  faderTaper,
+  formatGain,
+  formatPan,
+  formatPercent,
+  gainUnit,
+  Knob,
+  PanControl,
+  StepGrid,
+} from "@/components/audio"
+import { useGesture } from "@/lib/store/gesture"
+import { useHint } from "@/lib/store/hint"
+import { useChannel, useLane } from "@/lib/store/selectors"
+import { useUiStore } from "@/lib/store/ui"
+import { colorToCss, DEFAULT_CHANNEL_VOLUME, MAX_GAIN } from "@/lib/units"
+import { cn } from "@/lib/utils"
+
+import { ChannelButton } from "./channel-button"
+import { selectChannel } from "./channel-ops"
+import {
+  LEFT_COLUMNS,
+  LEFT_WIDTH,
+  pitches,
+  PITCH_VAR,
+  ROW_HEIGHT,
+  STEP_GAP,
+  STEPS_INSET,
+  STEPS_TRAIL,
+} from "./layout"
+import { MixerBadge } from "./mixer-badge"
+import { MuteLamp } from "./mute-lamp"
+import { detailSteps, litSteps } from "./steps"
+import { useGestureValue } from "./use-gesture-value"
+import { useLiveHint } from "./use-live-hint"
+
+const STEPS_HINT =
+  "Click a step to turn it on or off, drag to paint, right-drag to erase. Enter toggles the focused step, Space plays or stops"
+const STEPS_HINT_WITH_DETAIL = `${STEPS_HINT}. A dot marks notes the step grid cannot show`
+
+type ChannelRowProps = {
+  id: ChannelId
+  pattern: PatternId
+  lengthSteps: number
+  /** Steps per beat, which the row shades in alternating groups. */
+  groupSize: number
+  /** Some channel is soloed. */
+  anySolo: boolean
+  /** A dragged sample is over this row's button. */
+  dropTarget: boolean
+}
+
+function Grip({ id, name }: { id: ChannelId; name: string }) {
+  const hint = useHint(
+    "Drag to move the channel up or down. Alt+Up and Alt+Down move the selected channel"
+  )
+  return (
+    <span
+      draggable
+      data-drag-channel={id}
+      aria-label={`Move ${name}`}
+      role="img"
+      className="flex h-5 cursor-grab items-center justify-center text-muted-foreground/50 hover:text-foreground active:cursor-grabbing"
+      {...hint}
+    >
+      <HugeiconsIcon
+        icon={DragDropVerticalIcon}
+        strokeWidth={2}
+        className="pointer-events-none size-3"
+      />
+    </span>
+  )
+}
+
+function Mix({
+  id,
+  name,
+  volume,
+  pan,
+}: {
+  id: ChannelId
+  name: string
+  volume: number
+  pan: number
+}) {
+  const panControl = useGestureValue(pan, (value, dispatch) =>
+    dispatch({ type: "updateChannel", id, patch: { pan: value } })
+  )
+  const volumeControl = useGestureValue(volume, (value, dispatch) =>
+    dispatch({ type: "updateChannel", id, patch: { volume: value } })
+  )
+  const panHint = useLiveHint(
+    `${name} pan: ${formatPan(panControl.value)}. Drag up or down, Shift for fine, double-click to center`
+  )
+  const volumeHint = useLiveHint(
+    `${name} volume: ${formatGain(volumeControl.value)} (${formatPercent(volumeControl.value)}). Drag up or down, Shift for fine, double-click to reset`
+  )
+
+  return (
+    <>
+      <PanControl
+        size="sm"
+        aria-label={`${name} channel pan`}
+        {...panControl}
+        {...panHint}
+      />
+      <Knob
+        size="sm"
+        aria-label={`${name} channel volume`}
+        min={0}
+        max={MAX_GAIN}
+        scale={faderTaper}
+        defaultValue={DEFAULT_CHANNEL_VOLUME}
+        {...gainUnit}
+        {...volumeControl}
+        {...volumeHint}
+      />
+    </>
+  )
+}
+
+/**
+ * One channel: lamp, pan, volume, name, mixer track and its steps in the
+ * pattern being edited. It reads only its own channel and lane from the
+ * store, so an edit to one row renders that row and no other.
+ */
+export const ChannelRow = memo(function ChannelRow({
+  id,
+  pattern,
+  lengthSteps,
+  groupSize,
+  anySolo,
+  dropTarget,
+}: ChannelRowProps) {
+  const channel = useChannel(id)
+  const lane = useLane(pattern, id)
+  const selected = useUiStore((state) => state.selectedChannel === id)
+  const gesture = useGesture()
+
+  const notes = lane?.notes
+  const steps = useMemo(
+    () => litSteps(notes, lengthSteps),
+    [notes, lengthSteps]
+  )
+  const detail = useMemo(
+    () => detailSteps(notes, lengthSteps),
+    [notes, lengthSteps]
+  )
+  const gridStyle = useMemo<CSSProperties>(
+    () => ({
+      width: pitches(lengthSteps),
+      gridTemplateColumns: `repeat(${lengthSteps}, calc(var(${PITCH_VAR}) - ${STEP_GAP}px))`,
+      // Makes the row a whole number of step widths, so the step under the
+      // pointer is found exactly.
+      paddingRight: STEP_GAP,
+    }),
+    [lengthSteps]
+  )
+  const stepLabel = useCallback(
+    (step: number) =>
+      detail.includes(step)
+        ? `Step ${step + 1}, with notes the step grid cannot show`
+        : `Step ${step + 1}`,
+    [detail]
+  )
+  const onToggle = useCallback(
+    (step: number) => {
+      void gesture.dispatch({ type: "toggleStep", pattern, channel: id, step })
+    },
+    [gesture, pattern, id]
+  )
+  const stepsHint = useHint(
+    detail.length > 0 ? STEPS_HINT_WITH_DETAIL : STEPS_HINT
+  )
+
+  if (!channel) return null
+
+  const silenced = anySolo && !channel.solo && !channel.muted
+  const quiet = channel.muted || silenced
+
+  // Left from the first step goes back to the channel's name.
+  function onKeyDownCapture(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" || !(event.target instanceof HTMLElement)) {
+      return
+    }
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    if (event.target.dataset.step !== "0") return
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget
+      .querySelector<HTMLElement>("[data-channel-button]")
+      ?.focus()
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label={channel.name}
+      data-channel-row={id}
+      data-selected={selected ? "" : undefined}
+      className="group/row flex w-max min-w-full items-center"
+      style={{ height: ROW_HEIGHT }}
+      onPointerDownCapture={() => {
+        if (!selected) selectChannel(id)
+      }}
+      onFocusCapture={() => {
+        if (!selected) selectChannel(id)
+      }}
+      onKeyDownCapture={onKeyDownCapture}
+    >
+      <div
+        className={cn(
+          LEFT_COLUMNS,
+          "sticky left-0 z-10 h-full shrink-0 bg-background",
+          selected && "bg-accent"
+        )}
+        style={{ width: LEFT_WIDTH }}
+      >
+        <Grip id={id} name={channel.name} />
+        <MuteLamp
+          id={id}
+          name={channel.name}
+          muted={channel.muted}
+          solo={channel.solo}
+          silenced={silenced}
+        />
+        <Mix
+          id={id}
+          name={channel.name}
+          volume={channel.volume}
+          pan={channel.pan}
+        />
+        <ChannelButton
+          id={id}
+          name={channel.name}
+          color={channel.color}
+          selected={selected}
+          muted={channel.muted}
+          dimmed={quiet}
+          solo={channel.solo}
+          hasSample={channel.source.sample !== null}
+          dropTarget={dropTarget}
+        />
+        <MixerBadge
+          channel={id}
+          channelName={channel.name}
+          track={channel.mixerTrack}
+        />
+      </div>
+      <div
+        className={cn(
+          "relative flex h-full flex-1 items-center",
+          selected && "bg-accent/45"
+        )}
+        style={{ paddingLeft: STEPS_INSET, paddingRight: STEPS_TRAIL }}
+        {...stepsHint}
+      >
+        <StepGrid
+          steps={steps}
+          color={colorToCss(channel.color)}
+          groupSize={groupSize}
+          aria-label={`${channel.name} steps`}
+          stepLabel={stepLabel}
+          onToggle={onToggle}
+          onGestureStart={gesture.begin}
+          onGestureEnd={gesture.end}
+          className={cn("h-5.5", quiet && "opacity-40")}
+          style={gridStyle}
+        />
+        {detail.map((step) => (
+          <span
+            key={step}
+            aria-hidden
+            data-detail-step={step}
+            className="pointer-events-none absolute top-[5px] size-1.5 rounded-full bg-foreground ring-1 ring-background"
+            style={{ left: pitches(step + 1, STEPS_INSET - STEP_GAP - 8) }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+})

@@ -1,0 +1,31 @@
+[package]
+name = "windfall-engine"
+description = "Realtime audio engine, offline renderer and soak test for Windfall"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# ASIO needs the Steinberg ASIO SDK at build time, so it is off by default.
+asio = ["cpal/asio"]
+
+[dependencies]
+windfall-core.workspace = true
+windfall-project.workspace = true
+windfall-ipc.workspace = true
+
+# Apache-2.0. `realtime` raises the audio thread's priority through
+# audio_thread_priority (MPL-2.0).
+cpal = { version = "0.18.2", features = ["realtime"] }
+# MIT OR Apache-2.0.
+rtrb = "0.4"
+
+[[bin]]
+name = "windfall-soak"
+path = "src/bin/windfall-soak.rs"
+
+[lints]
+workspace = true

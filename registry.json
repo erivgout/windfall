@@ -1,0 +1,6 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "windfall",
+  "homepage": "https://github.com/windfall-daw/windfall",
+  "include": ["apps/desktop/registry.json"]
+}

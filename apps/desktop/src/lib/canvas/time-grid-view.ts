@@ -1,0 +1,564 @@
+import { rgbaToCss } from "./color"
+import { createRenderer, type RendererChoice } from "./create-renderer"
+import {
+  DEFAULT_TIME_GRID,
+  pianoRows,
+  writeGrid,
+  type RowStyle,
+  type TimeGridSpec,
+} from "./grid"
+import { hitTestPoint, type Hit, type HitOptions } from "./hit-test"
+import { RectBatch } from "./rect-batch"
+import type { RectRenderer } from "./renderer"
+import { visibleRange, type IndexedBatch } from "./spatial-index"
+import {
+  createCanvasColorParser,
+  deriveGridTheme,
+  observeTheme,
+  readThemeTokens,
+  type CssColorParser,
+  type GridTheme,
+  type ThemeTokens,
+} from "./theme"
+import {
+  DEFAULT_LIMITS,
+  backingSize,
+  clampViewport,
+  deviceTransform,
+  deviceX,
+  deviceY,
+  scrollByPx,
+  visibleTicks,
+  zoomRowsAt,
+  zoomTimeAt,
+  type DeviceTransform,
+  type Viewport,
+  type ViewportLimits,
+} from "./viewport"
+
+export interface TimeGridViewOptions {
+  /** Defaults to "auto": WebGL2, then Canvas 2D if that fails. */
+  readonly renderer?: RendererChoice
+  readonly limits?: Partial<ViewportLimits>
+  readonly timeGrid?: TimeGridSpec
+  /** Defaults to piano rows for `limits.rowCount`. */
+  readonly rows?: RowStyle
+  readonly initial?: Partial<
+    Pick<Viewport, "scrollTick" | "scrollRow" | "pxPerTick" | "rowHeight">
+  >
+  /**
+   * When true (the default) the view draws itself on the next animation
+   * frame after anything changes. Turn it off to call `flush` yourself.
+   */
+  readonly autoRender?: boolean
+}
+
+/** A selection box in content space, so it stays put while the view scrolls. */
+export interface Marquee {
+  readonly tick0: number
+  readonly row0: number
+  readonly tick1: number
+  readonly row1: number
+}
+
+export interface OverlayFrame {
+  readonly viewport: Viewport
+  readonly transform: DeviceTransform
+  readonly theme: GridTheme
+}
+
+/**
+ * Draws extra content on the overlay canvas, under the marquee and the
+ * playhead. Coordinates are device pixels: use `deviceX` and `deviceY`.
+ */
+export type OverlayPainter = (
+  ctx: CanvasRenderingContext2D,
+  frame: OverlayFrame
+) => void
+
+export interface FrameStats {
+  /** Whether the grid and items were redrawn. */
+  readonly base: boolean
+  /** Whether the marquee and playhead layer was redrawn. */
+  readonly overlay: boolean
+  /** Main-thread time spent issuing the draw, in milliseconds. */
+  readonly cpuMs: number
+  /** Size of the item index range sent to the renderer. */
+  readonly itemsInRange: number
+}
+
+export type Layer = "base" | "overlay" | "all"
+
+function styleCanvas(canvas: HTMLCanvasElement, interactive: boolean): void {
+  canvas.style.position = "absolute"
+  canvas.style.inset = "0"
+  canvas.style.width = "100%"
+  canvas.style.height = "100%"
+  canvas.style.display = "block"
+  if (!interactive) canvas.style.pointerEvents = "none"
+}
+
+/**
+ * A scrollable, zoomable grid of rects over time: the drawing half of the
+ * piano roll and the playlist. It owns two stacked canvases. The base one
+ * holds the grid and the items and is drawn by the chosen renderer. The
+ * overlay holds the marquee and the playhead, so those move without the
+ * items being redrawn or any item data being touched.
+ *
+ * The view holds no project state. Give it a batch, a viewport and a
+ * playhead position; it draws them.
+ */
+export class TimeGridView {
+  readonly renderer: RectRenderer
+  /** Called after every drawn frame. */
+  onFrame: ((stats: FrameStats) => void) | null = null
+
+  private readonly container: HTMLElement
+  private readonly baseCanvas: HTMLCanvasElement
+  private readonly overlayCanvas: HTMLCanvasElement
+  private readonly overlayContext: CanvasRenderingContext2D | null
+  private readonly gridBatch = new RectBatch(512)
+  private readonly parseColor: CssColorParser
+  private readonly resizeObserver: ResizeObserver
+  private readonly stopThemeObserver: () => void
+  private readonly timeGrid: TimeGridSpec
+  private readonly autoRender: boolean
+  private rows: RowStyle
+  private viewportLimits: ViewportLimits
+  private currentViewport: Viewport
+  private tokens: ThemeTokens
+  private currentTheme: GridTheme
+  private currentItems: IndexedBatch | null = null
+  private dragTicks = 0
+  private dragRows = 0
+  private marquee: Marquee | null = null
+  private playheadTick: number | null = null
+  private overlayPainters: OverlayPainter[] = []
+  private themeListeners: ((theme: GridTheme) => void)[] = []
+  private viewportListeners: ((viewport: Viewport) => void)[] = []
+  private baseDirty = true
+  private overlayDirty = true
+  private themeDirty = false
+  private frameRequest = 0
+  private destroyed = false
+
+  static async create(
+    container: HTMLElement,
+    options: TimeGridViewOptions = {}
+  ): Promise<TimeGridView> {
+    const { renderer, canvas } = await createRenderer(
+      options.renderer ?? "auto",
+      () => document.createElement("canvas")
+    )
+    return new TimeGridView(container, renderer, canvas, options)
+  }
+
+  private constructor(
+    container: HTMLElement,
+    renderer: RectRenderer,
+    baseCanvas: HTMLCanvasElement,
+    options: TimeGridViewOptions
+  ) {
+    this.container = container
+    this.renderer = renderer
+    this.baseCanvas = baseCanvas
+    this.overlayCanvas = document.createElement("canvas")
+    this.overlayContext = this.overlayCanvas.getContext("2d")
+    this.timeGrid = options.timeGrid ?? DEFAULT_TIME_GRID
+    this.autoRender = options.autoRender ?? true
+    this.viewportLimits = { ...DEFAULT_LIMITS, ...options.limits }
+    this.rows = options.rows ?? pianoRows(this.viewportLimits.rowCount)
+
+    if (getComputedStyle(container).position === "static") {
+      container.style.position = "relative"
+    }
+    styleCanvas(baseCanvas, true)
+    styleCanvas(this.overlayCanvas, false)
+    container.append(baseCanvas, this.overlayCanvas)
+
+    this.parseColor = createCanvasColorParser()
+    this.tokens = readThemeTokens(container, this.parseColor)
+    this.currentTheme = deriveGridTheme(this.tokens)
+    renderer.setTheme(this.currentTheme)
+    renderer.onRestored = () => this.invalidate("all")
+
+    const dpr = window.devicePixelRatio || 1
+    this.currentViewport = clampViewport(
+      {
+        width: container.clientWidth,
+        height: container.clientHeight,
+        dpr,
+        scrollTick: options.initial?.scrollTick ?? 0,
+        scrollRow: options.initial?.scrollRow ?? 0,
+        pxPerTick: options.initial?.pxPerTick ?? 0.0625,
+        rowHeight: options.initial?.rowHeight ?? 16,
+      },
+      this.viewportLimits
+    )
+    this.resizeCanvases(
+      Math.round(container.clientWidth * dpr),
+      Math.round(container.clientHeight * dpr)
+    )
+
+    this.resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (entry) this.handleResize(entry)
+    })
+    try {
+      this.resizeObserver.observe(container, {
+        box: "device-pixel-content-box",
+      })
+    } catch {
+      // Safari has no device-pixel-content-box.
+      this.resizeObserver.observe(container)
+    }
+    this.stopThemeObserver = observeTheme(() => {
+      this.themeDirty = true
+      this.invalidate("all")
+    })
+    this.invalidate("all")
+  }
+
+  get viewport(): Viewport {
+    return this.currentViewport
+  }
+
+  get limits(): ViewportLimits {
+    return this.viewportLimits
+  }
+
+  get theme(): GridTheme {
+    return this.currentTheme
+  }
+
+  get items(): IndexedBatch | null {
+    return this.currentItems
+  }
+
+  /** The canvas that receives pointer and wheel events. */
+  get element(): HTMLCanvasElement {
+    return this.baseCanvas
+  }
+
+  get transform(): DeviceTransform {
+    return {
+      ...deviceTransform(this.currentViewport),
+      widthDev: this.baseCanvas.width,
+      heightDev: this.baseCanvas.height,
+    }
+  }
+
+  setViewport(next: Viewport): void {
+    const clamped = clampViewport(next, this.viewportLimits)
+    const previous = this.currentViewport
+    if (
+      clamped.scrollTick === previous.scrollTick &&
+      clamped.scrollRow === previous.scrollRow &&
+      clamped.pxPerTick === previous.pxPerTick &&
+      clamped.rowHeight === previous.rowHeight &&
+      clamped.width === previous.width &&
+      clamped.height === previous.height &&
+      clamped.dpr === previous.dpr
+    ) {
+      return
+    }
+    this.currentViewport = clamped
+    this.invalidate("all")
+    for (const listener of this.viewportListeners) listener(clamped)
+  }
+
+  setLimits(limits: Partial<ViewportLimits>): void {
+    this.viewportLimits = { ...this.viewportLimits, ...limits }
+    this.setViewport(this.currentViewport)
+  }
+
+  setRows(rows: RowStyle): void {
+    this.rows = rows
+    this.invalidate("base")
+  }
+
+  panBy(dxPx: number, dyPx: number): void {
+    this.setViewport(
+      scrollByPx(this.currentViewport, dxPx, dyPx, this.viewportLimits)
+    )
+  }
+
+  zoomTime(anchorX: number, factor: number): void {
+    this.setViewport(
+      zoomTimeAt(this.currentViewport, anchorX, factor, this.viewportLimits)
+    )
+  }
+
+  zoomRows(anchorY: number, factor: number): void {
+    this.setViewport(
+      zoomRowsAt(this.currentViewport, anchorY, factor, this.viewportLimits)
+    )
+  }
+
+  /**
+   * Replaces the items. The previous batch's GPU buffers are freed, so do
+   * not hand the old batch back later.
+   */
+  setItems(items: IndexedBatch | null): void {
+    const previous = this.currentItems
+    if (previous && previous.batch !== items?.batch) {
+      this.renderer.release(previous.batch)
+    }
+    this.currentItems = items
+    this.invalidate("base")
+  }
+
+  /**
+   * Shows selected items moved by this much without changing the batch.
+   * Commit the move to the project when the drag ends, then pass (0, 0).
+   */
+  setDragOffset(ticks: number, rows: number): void {
+    if (ticks === this.dragTicks && rows === this.dragRows) return
+    this.dragTicks = ticks
+    this.dragRows = rows
+    this.invalidate("base")
+  }
+
+  setMarquee(marquee: Marquee | null): void {
+    this.marquee = marquee
+    this.invalidate("overlay")
+  }
+
+  /** Call from the realtime feed. Redraws the overlay only. */
+  setPlayhead(tick: number | null): void {
+    if (tick === this.playheadTick) return
+    this.playheadTick = tick
+    this.invalidate("overlay")
+  }
+
+  addOverlayPainter(painter: OverlayPainter): () => void {
+    this.overlayPainters.push(painter)
+    this.invalidate("overlay")
+    return () => {
+      this.overlayPainters = this.overlayPainters.filter((p) => p !== painter)
+      this.invalidate("overlay")
+    }
+  }
+
+  /** Item colors come from the theme, so rebuild them in the listener. */
+  onThemeChange(listener: (theme: GridTheme) => void): () => void {
+    this.themeListeners.push(listener)
+    return () => {
+      this.themeListeners = this.themeListeners.filter((l) => l !== listener)
+    }
+  }
+
+  onViewportChange(listener: (viewport: Viewport) => void): () => void {
+    this.viewportListeners.push(listener)
+    return () => {
+      this.viewportListeners = this.viewportListeners.filter(
+        (l) => l !== listener
+      )
+    }
+  }
+
+  /** Marks a layer for redraw. Call after mutating the item batch in place. */
+  invalidate(layer: Layer = "all"): void {
+    if (layer !== "overlay") this.baseDirty = true
+    if (layer !== "base") this.overlayDirty = true
+    if (this.autoRender && this.frameRequest === 0 && !this.destroyed) {
+      this.frameRequest = requestAnimationFrame(() => {
+        this.frameRequest = 0
+        this.flush()
+      })
+    }
+  }
+
+  /** Draws whatever is dirty right now. Returns null when nothing was. */
+  flush(): FrameStats | null {
+    if (this.destroyed) return null
+    if (this.themeDirty) this.refreshTheme()
+    if (!this.baseDirty && !this.overlayDirty) return null
+    const started = performance.now()
+    const base = this.baseDirty
+    const overlay = this.overlayDirty
+    this.baseDirty = false
+    this.overlayDirty = false
+    const transform = this.transform
+    const itemsInRange = base ? this.drawBase(transform) : 0
+    if (overlay) this.drawOverlay(transform)
+    const stats: FrameStats = {
+      base,
+      overlay,
+      cpuMs: performance.now() - started,
+      itemsInRange,
+    }
+    this.onFrame?.(stats)
+    return stats
+  }
+
+  /** Converts a pointer event position to CSS pixels inside the view. */
+  localPoint(event: { clientX: number; clientY: number }): {
+    x: number
+    y: number
+  } {
+    const bounds = this.container.getBoundingClientRect()
+    return {
+      x: event.clientX - bounds.left - this.container.clientLeft,
+      y: event.clientY - bounds.top - this.container.clientTop,
+    }
+  }
+
+  hitTest(x: number, y: number, options?: HitOptions): Hit | null {
+    return this.currentItems
+      ? hitTestPoint(this.currentViewport, this.currentItems, x, y, options)
+      : null
+  }
+
+  destroy(): void {
+    if (this.destroyed) return
+    this.destroyed = true
+    if (this.frameRequest !== 0) cancelAnimationFrame(this.frameRequest)
+    this.resizeObserver.disconnect()
+    this.stopThemeObserver()
+    this.renderer.dispose()
+    this.baseCanvas.remove()
+    this.overlayCanvas.remove()
+    this.themeListeners = []
+    this.viewportListeners = []
+    this.overlayPainters = []
+  }
+
+  private refreshTheme(): void {
+    this.themeDirty = false
+    const tokens = readThemeTokens(this.container, this.parseColor)
+    // Any class change on the root element lands here; most are not a
+    // theme change.
+    if (JSON.stringify(tokens) === JSON.stringify(this.tokens)) return
+    this.tokens = tokens
+    this.currentTheme = deriveGridTheme(tokens)
+    this.renderer.setTheme(this.currentTheme)
+    this.baseDirty = true
+    this.overlayDirty = true
+    for (const listener of this.themeListeners) listener(this.currentTheme)
+  }
+
+  private handleResize(entry: ResizeObserverEntry): void {
+    const dpr = window.devicePixelRatio || 1
+    const width = this.container.clientWidth
+    const height = this.container.clientHeight
+    const size = backingSize(
+      width,
+      height,
+      dpr,
+      entry.devicePixelContentBoxSize?.[0]
+    )
+    const resized = this.resizeCanvases(size.width, size.height)
+    this.setViewport({ ...this.currentViewport, width, height, dpr })
+    if (resized) {
+      this.invalidate("all")
+      // Resizing clears a canvas. Drawing before the browser paints keeps
+      // a drag-resize from flickering.
+      this.flush()
+    }
+  }
+
+  private resizeCanvases(widthDev: number, heightDev: number): boolean {
+    const width = Math.max(1, widthDev)
+    const height = Math.max(1, heightDev)
+    if (
+      this.baseCanvas.width === width &&
+      this.baseCanvas.height === height &&
+      this.overlayCanvas.width === width &&
+      this.overlayCanvas.height === height
+    ) {
+      return false
+    }
+    this.renderer.resize(width, height)
+    this.overlayCanvas.width = width
+    this.overlayCanvas.height = height
+    return true
+  }
+
+  private drawBase(transform: DeviceTransform): number {
+    const viewport = this.currentViewport
+    const renderer = this.renderer
+    writeGrid(
+      this.gridBatch,
+      viewport,
+      this.timeGrid,
+      this.rows,
+      this.currentTheme
+    )
+    renderer.beginFrame(transform)
+    renderer.drawBatch(this.gridBatch)
+    let itemsInRange = 0
+    const items = this.currentItems
+    if (items && items.batch.count > 0) {
+      const ticks = visibleTicks(viewport)
+      const dragging = items.batch.selectedCount > 0
+      const dragTicks = dragging ? this.dragTicks : 0
+      // A dragged item is drawn at start + dragTicks, so the range has to
+      // reach the items that are being dragged into view.
+      const range = visibleRange(
+        items,
+        Math.min(ticks.start, ticks.start - dragTicks),
+        Math.max(ticks.end, ticks.end - dragTicks)
+      )
+      itemsInRange = range.last - range.first
+      renderer.drawBatch(items.batch, {
+        first: range.first,
+        last: range.last,
+        dragTicks,
+        dragRows: dragging ? this.dragRows : 0,
+      })
+    }
+    renderer.endFrame()
+    return itemsInRange
+  }
+
+  private drawOverlay(transform: DeviceTransform): void {
+    const ctx = this.overlayContext
+    if (!ctx) return
+    const width = this.overlayCanvas.width
+    const height = this.overlayCanvas.height
+    const theme = this.currentTheme
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, width, height)
+
+    if (this.overlayPainters.length > 0) {
+      const frame: OverlayFrame = {
+        viewport: this.currentViewport,
+        transform,
+        theme,
+      }
+      for (const painter of this.overlayPainters) {
+        ctx.save()
+        painter(ctx, frame)
+        ctx.restore()
+      }
+    }
+
+    const marquee = this.marquee
+    if (marquee) {
+      const lw = transform.lineWidth
+      const x0 = deviceX(transform, Math.min(marquee.tick0, marquee.tick1))
+      const x1 = deviceX(transform, Math.max(marquee.tick0, marquee.tick1))
+      const y0 = deviceY(transform, Math.min(marquee.row0, marquee.row1))
+      const y1 = deviceY(transform, Math.max(marquee.row0, marquee.row1))
+      const w = Math.max(lw, x1 - x0)
+      const h = Math.max(lw, y1 - y0)
+      ctx.fillStyle = rgbaToCss(theme.marqueeFill)
+      ctx.fillRect(x0, y0, w, h)
+      ctx.fillStyle = rgbaToCss(theme.marqueeStroke)
+      ctx.fillRect(x0, y0, w, lw)
+      ctx.fillRect(x0, y0 + h - lw, w, lw)
+      ctx.fillRect(x0, y0, lw, h)
+      ctx.fillRect(x0 + w - lw, y0, lw, h)
+    }
+
+    if (this.playheadTick !== null) {
+      const thickness = Math.max(1, Math.round(1.5 * this.currentViewport.dpr))
+      const x = deviceX(transform, this.playheadTick)
+      if (x + thickness > 0 && x < width) {
+        ctx.fillStyle = rgbaToCss(theme.playhead)
+        ctx.fillRect(x, 0, thickness, height)
+      }
+    }
+  }
+}

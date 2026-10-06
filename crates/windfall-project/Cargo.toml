@@ -1,0 +1,24 @@
+[package]
+name = "windfall-project"
+description = "The Windfall project model, edit commands, undo history and file format"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+serde.workspace = true
+# Without float_roundtrip a tempo can come back from a file one bit off.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+thiserror.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3"
+
+[lints]
+workspace = true

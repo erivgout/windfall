@@ -1,0 +1,4 @@
+[env]
+# ts-rs writes the TypeScript bindings for the project model here when
+# `cargo test -p windfall-project export_bindings` runs.
+TS_RS_EXPORT_DIR = { value = "apps/desktop/src/bindings", relative = true }

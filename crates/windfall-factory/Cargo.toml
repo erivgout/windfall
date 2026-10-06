@@ -1,0 +1,20 @@
+[package]
+name = "windfall-factory"
+description = "Synthesizes Windfall's CC0 factory sounds from code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+
+[dev-dependencies]
+# Apache-2.0. An independent WAV reader, used only to check the files this
+# crate writes.
+hound = "3.5"
+
+[lints]
+workspace = true

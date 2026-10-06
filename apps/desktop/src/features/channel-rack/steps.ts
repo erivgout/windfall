@@ -1,0 +1,249 @@
+import type {
+  ChannelId,
+  Command,
+  Note,
+  NoteInit,
+  PatternId,
+  TimeSignature,
+} from "@/bindings"
+import {
+  clamp,
+  DEFAULT_KEY,
+  MAX_PATTERN_STEPS,
+  TICKS_PER_STEP,
+} from "@/lib/units"
+
+/*
+ * The step sequencer and the piano roll edit the same notes. These helpers
+ * turn a lane's notes into the row of steps the rack shows, and the rack's
+ * row edits back into commands. They are pure so they can be tested without
+ * a backend.
+ */
+
+/** The note a lit step stands for. */
+export function stepNote(step: number): NoteInit {
+  return {
+    start: step * TICKS_PER_STEP,
+    length: TICKS_PER_STEP,
+    key: DEFAULT_KEY,
+  }
+}
+
+/** True for a note that is exactly what clicking a step makes. */
+export function isStepNote(note: Note): boolean {
+  return (
+    note.start % TICKS_PER_STEP === 0 &&
+    note.key === DEFAULT_KEY &&
+    note.length === TICKS_PER_STEP
+  )
+}
+
+/** One entry per step: lit when a note starts exactly on it. */
+export function litSteps(
+  notes: readonly Note[] | undefined,
+  lengthSteps: number
+): boolean[] {
+  const steps = new Array<boolean>(lengthSteps).fill(false)
+  for (const note of notes ?? []) {
+    if (note.start % TICKS_PER_STEP !== 0) continue
+    const step = note.start / TICKS_PER_STEP
+    if (step < lengthSteps) steps[step] = true
+  }
+  return steps
+}
+
+/**
+ * Steps that hold something a step toggle cannot show or put back: a note
+ * off the grid, on another key, of another length, or several notes at once.
+ * Sorted, each step once.
+ */
+export function detailSteps(
+  notes: readonly Note[] | undefined,
+  lengthSteps: number
+): number[] {
+  const onGrid = new Map<number, number>()
+  const found = new Set<number>()
+  for (const note of notes ?? []) {
+    const step = Math.floor(note.start / TICKS_PER_STEP)
+    if (step >= lengthSteps) continue
+    if (!isStepNote(note)) found.add(step)
+    if (note.start % TICKS_PER_STEP === 0) {
+      const count = (onGrid.get(step) ?? 0) + 1
+      onGrid.set(step, count)
+      if (count > 1) found.add(step)
+    }
+  }
+  return [...found].sort((a, b) => a - b)
+}
+
+function notesInPattern(
+  notes: readonly Note[] | undefined,
+  lengthSteps: number
+): Note[] {
+  const end = lengthSteps * TICKS_PER_STEP
+  return (notes ?? []).filter((note) => note.start < end)
+}
+
+/** The steps "fill every N" lights: 0, N, 2N and so on. */
+export function fillSteps(every: number, lengthSteps: number): number[] {
+  const steps: number[] = []
+  for (let step = 0; step < lengthSteps; step += Math.max(1, every)) {
+    steps.push(step)
+  }
+  return steps
+}
+
+/**
+ * Replaces what the channel plays inside the pattern with a hit on every
+ * `every`th step. One undo step.
+ */
+export function fillCommand(
+  pattern: PatternId,
+  channel: ChannelId,
+  notes: readonly Note[] | undefined,
+  lengthSteps: number,
+  every: number
+): Command {
+  const old = notesInPattern(notes, lengthSteps).map((note) => note.id)
+  const commands: Command[] = []
+  if (old.length > 0) {
+    commands.push({ type: "removeNotes", pattern, channel, notes: old })
+  }
+  commands.push({
+    type: "addNotes",
+    pattern,
+    channel,
+    notes: fillSteps(every, lengthSteps).map(stepNote),
+  })
+  return {
+    type: "batch",
+    label: `Fill every ${every} steps`,
+    commands,
+  }
+}
+
+/** Where a note lands when the row moves by `by` steps and wraps around. */
+export function rotateStart(
+  start: number,
+  by: number,
+  lengthSteps: number
+): number {
+  const length = lengthSteps * TICKS_PER_STEP
+  return (((start + by * TICKS_PER_STEP) % length) + length) % length
+}
+
+/** A row of steps moved by `by` steps, wrapping around. */
+export function rotateSteps<T>(steps: readonly T[], by: number): T[] {
+  const count = steps.length
+  if (count === 0) return []
+  return steps.map((_, step) => steps[(((step - by) % count) + count) % count])
+}
+
+/**
+ * Moves every note inside the pattern one step left (-1) or right (1). Notes
+ * that fall off one end come back at the other, and each keeps its key,
+ * length and place between steps. Null when there is nothing to move.
+ */
+export function shiftCommand(
+  pattern: PatternId,
+  channel: ChannelId,
+  notes: readonly Note[] | undefined,
+  lengthSteps: number,
+  by: -1 | 1
+): Command | null {
+  const inside = notesInPattern(notes, lengthSteps)
+  if (inside.length === 0 || lengthSteps < 2) return null
+  return {
+    type: "batch",
+    label: by < 0 ? "Shift steps left" : "Shift steps right",
+    commands: [
+      {
+        type: "updateNotes",
+        pattern,
+        channel,
+        updates: inside.map((note) => ({
+          id: note.id,
+          patch: { start: rotateStart(note.start, by, lengthSteps) },
+        })),
+      },
+    ],
+  }
+}
+
+/** Sixteenth-note steps in one beat of the time signature. */
+export function stepsPerBeat(signature: TimeSignature): number {
+  return Math.max(1, Math.round(16 / signature.denominator))
+}
+
+export function stepsPerBar(signature: TimeSignature): number {
+  return stepsPerBeat(signature) * signature.numerator
+}
+
+export type RulerMark = {
+  step: number
+  /** The bar number on a bar line, "bar.beat" on the beats inside a bar. */
+  label: string
+  bar: boolean
+}
+
+/** One mark per beat. Bars and beats count from 1. */
+export function rulerMarks(
+  lengthSteps: number,
+  signature: TimeSignature
+): RulerMark[] {
+  const beat = stepsPerBeat(signature)
+  const bar = stepsPerBar(signature)
+  const marks: RulerMark[] = []
+  for (let step = 0; step < lengthSteps; step += beat) {
+    const inBar = step % bar
+    const number = Math.floor(step / bar) + 1
+    marks.push(
+      inBar === 0
+        ? { step, label: String(number), bar: true }
+        : { step, label: `${number}.${inBar / beat + 1}`, bar: false }
+    )
+  }
+  return marks
+}
+
+/** "1 bar", "2 bars", "1 bar and 4 steps", "12 steps". */
+export function describeLength(
+  lengthSteps: number,
+  signature: TimeSignature
+): string {
+  const bar = stepsPerBar(signature)
+  const bars = Math.floor(lengthSteps / bar)
+  const rest = lengthSteps % bar
+  const stepsText = `${rest} ${rest === 1 ? "step" : "steps"}`
+  if (bars === 0) return stepsText
+  const barsText = `${bars} ${bars === 1 ? "bar" : "bars"}`
+  return rest === 0 ? barsText : `${barsText} and ${stepsText}`
+}
+
+export function clampPatternLength(steps: number): number {
+  return clamp(Math.round(steps), 1, MAX_PATTERN_STEPS)
+}
+
+/**
+ * The index to give `moveChannel` when the row at `from` is dropped into the
+ * gap before row `gap` (0 is above the first row, `count` below the last).
+ * Null when the row would stay where it is.
+ */
+export function moveIndex(
+  from: number,
+  gap: number,
+  count: number
+): number | null {
+  const target = clamp(gap > from ? gap - 1 : gap, 0, Math.max(0, count - 1))
+  return target === from ? null : target
+}
+
+/** Splits a tuning into whole semitones and the cents left over. */
+export function splitTune(tune: number): { semitones: number; cents: number } {
+  const semitones = Math.round(tune)
+  return { semitones, cents: Math.round((tune - semitones) * 100) }
+}
+
+export function joinTune(semitones: number, cents: number, max: number) {
+  return clamp(semitones + cents / 100, -max, max)
+}

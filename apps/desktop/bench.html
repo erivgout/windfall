@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Windfall canvas benchmark</title>
+  </head>
+  <body>
+    <!--
+      Performance test page for src/lib/canvas. Not part of the app.
+      Query parameters: notes, renderer (auto, canvas2d, webgl2, webgpu),
+      theme (dark, light), auto=1, seconds, scenarios. See
+      docs/perf/canvas-10k-notes.md.
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/features/bench/main.tsx"></script>
+  </body>
+</html>

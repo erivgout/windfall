@@ -1,0 +1,17 @@
+[package]
+name = "windfall-ipc"
+description = "Types the Windfall engine, app shell and UI exchange at runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-project.workspace = true
+serde.workspace = true
+ts-rs.workspace = true
+
+[lints]
+workspace = true

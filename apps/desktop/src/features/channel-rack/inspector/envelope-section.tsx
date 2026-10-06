@@ -1,0 +1,193 @@
+import type { Channel, ChannelId, Envelope } from "@/bindings"
+import {
+  DEFAULT_ENVELOPE_LIMITS,
+  EnvelopeEditor,
+  Knob,
+  msUnit,
+  percentUnit,
+  powerScale,
+} from "@/components/audio"
+import { Switch } from "@/components/ui/switch"
+import { useHint } from "@/lib/store/hint"
+import { dispatch } from "@/lib/store/project"
+import { clamp, colorToCss } from "@/lib/units"
+
+import { useGestureValue } from "../use-gesture-value"
+import { Section } from "./parts"
+
+/** What a sampler gets when its envelope is first turned on. */
+export const DEFAULT_ENVELOPE: Envelope = {
+  attackMs: 1,
+  decayMs: 200,
+  sustain: 1,
+  releaseMs: 50,
+}
+
+const TIME_SCALE = powerScale(3)
+const { maxAttackMs, maxDecayMs, maxReleaseMs } = DEFAULT_ENVELOPE_LIMITS
+
+// Turning the envelope off and on again brings back the shape it had.
+const remembered = new Map<ChannelId, Envelope>()
+
+function withinLimits(envelope: Envelope): Envelope {
+  return {
+    attackMs: clamp(envelope.attackMs, 0, maxAttackMs),
+    decayMs: clamp(envelope.decayMs, 0, maxDecayMs),
+    sustain: clamp(envelope.sustain, 0, 1),
+    releaseMs: clamp(envelope.releaseMs, 0, maxReleaseMs),
+  }
+}
+
+function EnvelopeControls({
+  channel,
+  envelope: stored,
+}: {
+  channel: Channel
+  envelope: Envelope
+}) {
+  const { id } = channel
+  const envelope = useGestureValue(stored, (value, send) =>
+    send({ type: "setSamplerEnvelope", id, envelope: withinLimits(value) })
+  )
+  const value = envelope.value
+  const set = (patch: Partial<Envelope>) =>
+    envelope.onValueChange({ ...value, ...patch })
+  const gesture = {
+    onGestureStart: envelope.onGestureStart,
+    onGestureEnd: envelope.onGestureEnd,
+  }
+
+  const editorHint = useHint(
+    "Drag the nodes: attack, then decay and sustain level, then release. Double-click a node to reset it"
+  )
+  const attackHint = useHint("Attack: how long the sound takes to fade in")
+  const decayHint = useHint(
+    "Decay: how long it takes to fall to the sustain level"
+  )
+  const sustainHint = useHint(
+    "Sustain: the level held for as long as the note lasts"
+  )
+  const releaseHint = useHint(
+    "Release: how long the sound rings on after the note ends"
+  )
+
+  return (
+    <>
+      <EnvelopeEditor
+        role="group"
+        aria-label="Envelope shape"
+        {...value}
+        defaults={DEFAULT_ENVELOPE}
+        color={colorToCss(channel.color)}
+        onChange={set}
+        className="h-28"
+        {...gesture}
+        {...editorHint}
+      />
+      <div className="grid grid-cols-4 justify-items-center gap-1">
+        <Knob
+          label="Attack"
+          showValue
+          min={0}
+          max={maxAttackMs}
+          scale={TIME_SCALE}
+          defaultValue={DEFAULT_ENVELOPE.attackMs}
+          value={value.attackMs}
+          onValueChange={(attackMs) => set({ attackMs })}
+          {...msUnit}
+          {...gesture}
+          {...attackHint}
+        />
+        <Knob
+          label="Decay"
+          showValue
+          min={0}
+          max={maxDecayMs}
+          scale={TIME_SCALE}
+          defaultValue={DEFAULT_ENVELOPE.decayMs}
+          value={value.decayMs}
+          onValueChange={(decayMs) => set({ decayMs })}
+          {...msUnit}
+          {...gesture}
+          {...decayHint}
+        />
+        <Knob
+          label="Sustain"
+          showValue
+          min={0}
+          max={1}
+          defaultValue={DEFAULT_ENVELOPE.sustain}
+          value={value.sustain}
+          onValueChange={(sustain) => set({ sustain })}
+          {...percentUnit}
+          {...gesture}
+          {...sustainHint}
+        />
+        <Knob
+          label="Release"
+          showValue
+          min={0}
+          max={maxReleaseMs}
+          scale={TIME_SCALE}
+          defaultValue={DEFAULT_ENVELOPE.releaseMs}
+          value={value.releaseMs}
+          onValueChange={(releaseMs) => set({ releaseMs })}
+          {...msUnit}
+          {...gesture}
+          {...releaseHint}
+        />
+      </div>
+    </>
+  )
+}
+
+/** The sampler's volume envelope: on or off, and its shape when on. */
+export function EnvelopeSection({ channel }: { channel: Channel }) {
+  const { id } = channel
+  const envelope = channel.source.envelope
+  const hint = useHint(
+    "Envelope: when on, the note's length shapes the sound. When off, every hit plays the sample to its end"
+  )
+
+  function setOn(on: boolean) {
+    if (on) {
+      void dispatch({
+        type: "setSamplerEnvelope",
+        id,
+        envelope: remembered.get(id) ?? DEFAULT_ENVELOPE,
+      })
+    } else {
+      if (envelope) remembered.set(id, envelope)
+      void dispatch({ type: "setSamplerEnvelope", id })
+    }
+  }
+
+  return (
+    <Section
+      title="Envelope"
+      aside={
+        <span className="flex items-center gap-1.5" {...hint}>
+          {/* Not a label: the switch is named for what it does, not its state. */}
+          <span aria-hidden className="text-muted-foreground">
+            {envelope ? "On" : "Off"}
+          </span>
+          <Switch
+            size="sm"
+            aria-label="Volume envelope"
+            checked={envelope !== null}
+            onCheckedChange={(on) => setOn(on)}
+          />
+        </span>
+      }
+    >
+      {envelope ? (
+        <EnvelopeControls channel={channel} envelope={envelope} />
+      ) : (
+        <p className="text-muted-foreground">
+          Off. Every hit plays the sample to its end, which suits drums. Turn it
+          on to shape held notes.
+        </p>
+      )}
+    </Section>
+  )
+}

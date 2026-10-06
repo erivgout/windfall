@@ -1,0 +1,49 @@
+import type { ComponentType } from "react"
+
+import BrowserPanel from "@/features/browser"
+import ChannelRackPanel from "@/features/channel-rack"
+import MixerPanel from "@/features/mixer"
+import type { CenterTab, SidePanel } from "@/lib/store/ui"
+
+import { PianoRollPlaceholder, PlaylistPlaceholder } from "./empty-states"
+
+export type PanelId = SidePanel | CenterTab
+
+type PanelInfo = {
+  title: string
+  /** Registry action that shows the panel, or toggles it for side panels. */
+  action: string
+  /** Reads everything from the stores, so it can be mounted in any window. */
+  component: ComponentType
+}
+
+/** Every panel the workspace can show. */
+export const PANELS: Record<PanelId, PanelInfo> = {
+  browser: {
+    title: "Browser",
+    action: "view.browser",
+    component: BrowserPanel,
+  },
+  mixer: { title: "Mixer", action: "view.mixer", component: MixerPanel },
+  channelRack: {
+    title: "Channel rack",
+    action: "view.channelRack",
+    component: ChannelRackPanel,
+  },
+  playlist: {
+    title: "Playlist",
+    action: "view.playlist",
+    component: PlaylistPlaceholder,
+  },
+  pianoRoll: {
+    title: "Piano roll",
+    action: "view.pianoRoll",
+    component: PianoRollPlaceholder,
+  },
+}
+
+export const CENTER_TABS: CenterTab[] = ["channelRack", "playlist", "pianoRoll"]
+
+export function isPanelId(value: string | null): value is PanelId {
+  return value !== null && value in PANELS
+}

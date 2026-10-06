@@ -1,0 +1,41 @@
+[package]
+name = "windfall-desktop"
+description = "The Windfall desktop app shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "windfall_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+windfall-core.workspace = true
+windfall-project.workspace = true
+windfall-ipc.workspace = true
+windfall-engine.workspace = true
+windfall-codec.workspace = true
+windfall-factory.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log = "0.4"
+tauri = { version = "2.12.1", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+# MIT OR Apache-2.0. Local time for backup file names.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# CC0-1.0 OR MIT-0 OR Apache-2.0. Turns Windows' `\?\` paths into plain ones.
+dunce = "1"
+
+[dev-dependencies]
+# MIT OR Apache-2.0.
+tempfile = "3"
+
+[lints]
+workspace = true

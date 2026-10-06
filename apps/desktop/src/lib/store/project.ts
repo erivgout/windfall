@@ -1,0 +1,148 @@
+import { create } from "zustand"
+
+import type {
+  Command,
+  DispatchResult,
+  DocumentSnapshot,
+  Project,
+  ProjectPatch,
+} from "@/bindings"
+import { reportError } from "@/lib/errors"
+import { backend } from "@/lib/ipc"
+import { FORMAT_VERSION, MASTER_TRACK } from "@/lib/units"
+
+import { applyPatch, type DocumentState } from "./patch"
+
+/** Shown for the instant before the first snapshot arrives. */
+const BLANK_PROJECT: Project = {
+  formatVersion: FORMAT_VERSION,
+  nextId: 1,
+  settings: {
+    name: "",
+    tempoBpm: 140,
+    timeSignature: { numerator: 4, denominator: 4 },
+    swing: 0,
+  },
+  samples: [],
+  channels: [],
+  patterns: [],
+  mixer: {
+    tracks: [
+      {
+        id: MASTER_TRACK,
+        name: "Master",
+        color: 0x9ca3af,
+        volume: 1,
+        pan: 0,
+        muted: false,
+        solo: false,
+        output: null,
+        sends: [],
+      },
+    ],
+  },
+  playlist: { tracks: [], clips: [] },
+}
+
+export type ProjectState = DocumentState & {
+  /** False until the first snapshot has been loaded. */
+  ready: boolean
+}
+
+/**
+ * The UI's mirror of the document. Nothing writes to it except snapshots and
+ * patches from the backend; to change the project, call `dispatch`.
+ */
+export const useProjectStore = create<ProjectState>(() => ({
+  ready: false,
+  revision: 0,
+  project: BLANK_PROJECT,
+  history: { entries: [], cursor: 0 },
+  dirty: false,
+  path: null,
+}))
+
+export function loadSnapshot(snapshot: DocumentSnapshot) {
+  useProjectStore.setState({
+    ready: true,
+    revision: snapshot.revision,
+    project: snapshot.project,
+    history: snapshot.history,
+    dirty: snapshot.dirty,
+    path: snapshot.path,
+  })
+}
+
+let refetching: Promise<void> | null = null
+
+/** Replaces the whole copy. Used at startup and after a missed patch. */
+export function refetchSnapshot(): Promise<void> {
+  refetching ??= backend
+    .documentSnapshot()
+    .then(loadSnapshot)
+    .catch((error: unknown) => reportError(error, "Could not load the project"))
+    .finally(() => {
+      refetching = null
+    })
+  return refetching
+}
+
+/**
+ * Merges a patch from the backend. A patch that was already applied is
+ * ignored; a gap in the revisions means one was missed, so the snapshot is
+ * fetched again.
+ */
+export function receivePatch(patch: ProjectPatch) {
+  const outcome = applyPatch(useProjectStore.getState(), patch)
+  if (outcome.status === "applied") {
+    useProjectStore.setState(outcome.state)
+  } else if (outcome.status === "gap") {
+    void refetchSnapshot()
+  }
+}
+
+/**
+ * Sends an edit to the backend. Pass the same `gesture` id for every edit of
+ * one drag so they become a single undo step. Resolves to `null` when the
+ * command fails; the failure has already been shown to the user.
+ */
+export async function dispatch(
+  command: Command,
+  gesture?: number
+): Promise<DispatchResult | null> {
+  try {
+    const result = await backend.dispatch(command, gesture)
+    receivePatch(result.patch)
+    return result
+  } catch (error) {
+    reportError(error)
+    return null
+  }
+}
+
+async function runHistory(work: Promise<ProjectPatch | null>) {
+  try {
+    const patch = await work
+    if (patch) receivePatch(patch)
+  } catch (error) {
+    reportError(error)
+  }
+}
+
+export function undo(): Promise<void> {
+  return runHistory(backend.undo())
+}
+
+export function redo(): Promise<void> {
+  return runHistory(backend.redo())
+}
+
+/** Undoes or redoes until `cursor` history entries are applied. */
+export function historyJump(cursor: number): Promise<void> {
+  return runHistory(backend.historyJump(cursor))
+}
+
+/** Records the result of a save, which travels outside the patch stream. */
+export function markSaved(path: string) {
+  useProjectStore.setState({ path, dirty: false })
+}
