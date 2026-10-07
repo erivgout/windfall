@@ -562,7 +562,10 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       total: 0,
       current: null,
       error: "Native plugins require the Windows desktop app",
-      instances: [],
+      instances: (doc.project().plugins ?? []).map((plugin) => ({
+        target: plugin.target,
+        error: "Native plugins require the Windows desktop app",
+      })),
     }),
     pluginsScan: async () => {
       throw new Error("Native plugins require the Windows desktop app")
