@@ -72,10 +72,31 @@ waveform and rack/playlist/replacement imports. See
 The combined artifacts contain 155 TypeScript files and a 1,743,421-byte WASM
 module. Parent browser/rack/playlist-import UI checks passed all 403 tests
 across 20 files, followed by ESLint and the production TypeScript/Vite build.
-Native library and sample-cache checks passed 16 and 14 tests respectively;
-remaining shared/native checks are still running at this checkpoint.
+Native library and sample-cache checks passed 16 and 14 tests respectively.
+Shared IPC tests passed 52 tests and simulator tests passed 13. Strict all-target
+desktop/IPC/simulator Clippy and workspace formatting also passed.
 Independent library review is pending, so its three parity rows remain in
 progress. The matrix now has 60 done, 42 in progress, 238 todo and two won't-do
 rows. These are development-source counts, not release or platform readiness.
+
+## Independent follow-up findings
+
+Piano/transport review found late New/Open snapshots could bypass the shared
+store guards, and Chop could prune new IDs before revision-gap recovery.
+Parent reproduced seven initial failures, repaired event authority and dispatch
+recovery ordering, and passed 66 focused flow/store/note-tool tests including
+replacement during recovery. See [document replies](../DOCUMENT-REPLIES.md).
+
+Runtime review closed the original CLAP release and retirement findings but
+traced a further committed parameter loss when the adapter rejects enqueue
+under saturation. The existing runtime owner is adding retained desired values
+and a native regression; a competing runtime implementation was not started.
+
+Browser review reproduced delayed token lookup importing into a replacement
+project and refresh rebinding a pending tree selection; it also traced reuse of
+an older project audio buffer after a changed file is refreshed. A dedicated
+repair task owns all three paths, with targeted native/UI regressions and
+unchanged-source deduplication/undo checks. No claim of completed library parity
+is made while these findings remain open.
 
 Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.

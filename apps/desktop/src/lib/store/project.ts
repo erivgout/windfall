@@ -82,9 +82,9 @@ let refetching: Promise<void> | null = null
 let newestMissed = 0
 
 /**
- * Replaces the whole copy. Used at startup and after a missed patch. A
- * patch that arrives while the snapshot is on its way cannot be applied,
- * so when one was newer than the snapshot, the snapshot is fetched again.
+ * Replaces the whole copy at startup or after a missed patch. A newer
+ * patch can overtake the in-flight snapshot; never roll it back, and fetch
+ * again when that snapshot does not include the newest observed revision.
  */
 export function refetchSnapshot(): Promise<void> {
   if (refetching) return refetching
@@ -133,7 +133,9 @@ export function receivePatch(patch: ProjectPatch) {
 /**
  * Sends an edit to the backend. Pass the same `gesture` id for every edit of
  * one drag so they become a single undo step. Resolves to `null` when the
- * command fails or its document was replaced before the reply arrived.
+ * command fails, its document was replaced, or snapshot recovery fails.
+ * A successful reply waits until the mirror includes its patch, so callers
+ * can safely follow created ids even after a missed event.
  */
 export async function dispatch(
   command: Command,
@@ -144,6 +146,14 @@ export async function dispatch(
     const result = await backend.dispatch(command, gesture)
     if (generation !== getProjectGeneration()) return null
     receivePatch(result.patch)
+    if (useProjectStore.getState().revision < result.patch.revision) {
+      await refetchSnapshot()
+      if (
+        generation !== getProjectGeneration() ||
+        useProjectStore.getState().revision < result.patch.revision
+      )
+        return null
+    }
     return result
   } catch (error) {
     if (generation === getProjectGeneration()) reportError(error)

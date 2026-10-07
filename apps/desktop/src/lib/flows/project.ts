@@ -4,11 +4,7 @@ import { create } from "zustand"
 
 import { reportError } from "@/lib/errors"
 import { backend } from "@/lib/ipc"
-import {
-  loadSnapshot,
-  setProjectPath,
-  useProjectStore,
-} from "@/lib/store/project"
+import { setProjectPath, useProjectStore } from "@/lib/store/project"
 import { askConfirm } from "@/lib/store/prompts"
 import { projectDisplayName } from "@/lib/store/selectors"
 import { clearWarnings, samplesReloaded } from "@/lib/store/warnings"
@@ -88,7 +84,9 @@ export async function confirmDiscardChanges(): Promise<boolean> {
 export async function newProject(): Promise<void> {
   if (!(await confirmDiscardChanges())) return
   try {
-    loadSnapshot(await backend.projectNew())
+    // project:loaded owns replacement. Its event can precede this reply;
+    // loading the returned snapshot again could erase intervening edits.
+    await backend.projectNew()
   } catch (error) {
     reportError(error, "Could not start a new project")
   }
@@ -97,7 +95,7 @@ export async function newProject(): Promise<void> {
 export async function openProjectPath(path: string): Promise<void> {
   if (!(await confirmDiscardChanges())) return
   try {
-    loadSnapshot(await backend.projectOpen(path))
+    await backend.projectOpen(path)
     void refreshRecentProjects()
   } catch (error) {
     reportError(error, "Could not open the project")
@@ -109,7 +107,7 @@ export async function openProject(): Promise<void> {
   try {
     const path = await backend.pickProjectToOpen()
     if (path === null) return
-    loadSnapshot(await backend.projectOpen(path))
+    await backend.projectOpen(path)
     void refreshRecentProjects()
   } catch (error) {
     reportError(error, "Could not open the project")
