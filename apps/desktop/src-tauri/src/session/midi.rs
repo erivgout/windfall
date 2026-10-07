@@ -58,6 +58,7 @@ impl Session {
     /// Appends the reviewed plan as one checked undo step. Sample changes go
     /// through the ordinary pool loader, including factory drum mappings.
     pub fn import_midi(&self, token: u32) -> Result<DispatchResult, String> {
+        let _recording = self.recording_idle()?;
         let mut state = self.state();
         let prepared = state
             .midi_import

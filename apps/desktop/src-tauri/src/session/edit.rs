@@ -21,6 +21,7 @@ impl Session {
         command: Command,
         gesture: Option<u64>,
     ) -> Result<DispatchResult, String> {
+        let _recording = self.recording_idle()?;
         let mut state = self.state();
         let applied = state
             .document
@@ -43,6 +44,7 @@ impl Session {
     /// Creates, in this order: the automation, the playlist track and the
     /// clip. Fails when the project has nothing of that kind to automate.
     pub fn automate(&self, target: AutomationTarget) -> Result<DispatchResult, String> {
+        let _recording = self.recording_idle()?;
         let mut state = self.state();
         let project = state.document.project();
         let clips = project.playlist.clips.iter();
@@ -91,6 +93,7 @@ impl Session {
 
     /// Undoes the last edit. `None` when there is nothing to undo.
     pub fn undo(&self) -> Option<ProjectPatch> {
+        let _recording = self.recording_idle().ok()?;
         let mut state = self.state();
         let touched = state.document.undo()?;
         Some(self.publish(&mut state, &touched))
@@ -98,6 +101,7 @@ impl Session {
 
     /// Applies the last undone edit again. `None` when there is none.
     pub fn redo(&self) -> Option<ProjectPatch> {
+        let _recording = self.recording_idle().ok()?;
         let mut state = self.state();
         let touched = state.document.redo()?;
         Some(self.publish(&mut state, &touched))
@@ -105,7 +109,11 @@ impl Session {
 
     /// Undoes or redoes until `cursor` history entries are applied.
     pub fn history_jump(&self, cursor: u32) -> ProjectPatch {
+        let guard = self.recording_idle();
         let mut state = self.state();
+        if guard.is_err() {
+            return state.document.patch(&Touched::default());
+        }
         let touched = state.document.jump(cursor);
         self.publish(&mut state, &touched)
     }

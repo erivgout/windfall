@@ -644,6 +644,21 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     transportState: () => ipc(() => transport.state),
 
     engineStatus: () => ipc(() => currentEngine()),
+    recordingInputs: async () => [],
+    recordingState: async () => ({
+      active: false,
+      frames: 0,
+      sampleRate: 0,
+      startTick: 0,
+      error: null,
+    }),
+    recordingStart: async () => {
+      throw new Error("Audio recording requires the native desktop app.")
+    },
+    recordingStop: async () => {
+      throw new Error("No recording is active.")
+    },
+    recordingCancel: async () => {},
     engineDevices: () => ipc(() => HOSTS),
     engineConfigure: (settings) =>
       ipc(() => {

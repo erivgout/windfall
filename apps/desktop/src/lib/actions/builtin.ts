@@ -1,3 +1,10 @@
+import {
+  openRecording,
+  startRecording,
+  stopRecording,
+  cancelRecording,
+  useRecordingStore,
+} from "@/features/transport/recording-store"
 import { toast } from "sonner"
 
 import {
@@ -140,6 +147,41 @@ export const BUILTIN_ACTIONS: Action[] = [
     keywords: "mid notes tempo pattern song",
     run: () => ui().openDialog("midiExport"),
   },
+  {
+    id: "recording.open",
+    title: "Record audio input",
+    section: "Transport",
+    run: openRecording,
+  },
+  {
+    id: "recording.start",
+    title: "Start recording",
+    section: "Transport",
+    enabled: () =>
+      !useRecordingStore.getState().busy &&
+      !useRecordingStore.getState().state.active &&
+      useRecordingStore.getState().inputs.length > 0,
+    run: startRecording,
+  },
+  {
+    id: "recording.stop",
+    title: "Stop recording and keep take",
+    section: "Transport",
+    enabled: () =>
+      !useRecordingStore.getState().busy &&
+      useRecordingStore.getState().state.active,
+    run: stopRecording,
+  },
+  {
+    id: "recording.cancel",
+    title: "Discard recording",
+    section: "Transport",
+    enabled: () =>
+      !useRecordingStore.getState().busy &&
+      useRecordingStore.getState().state.active,
+    run: cancelRecording,
+  },
+
   {
     id: "file.new",
     title: "New project",
@@ -503,11 +545,15 @@ export function syncRecentActions(paths: string[]) {
 }
 
 export function registerBuiltinActions(): () => void {
+  const recordingSubscription = useRecordingStore.subscribe(() =>
+    registry.invalidate()
+  )
   const remove = registry.register(BUILTIN_ACTIONS, {
     presets: { fl: FL_KEYMAP },
   })
   return () => {
     remove()
+    recordingSubscription()
     removeRecent?.()
     removeRecent = null
   }

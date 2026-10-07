@@ -88,12 +88,16 @@ impl Session {
     }
 
     pub fn transport_seek(&self, tick: f64) {
+        let Ok(_recording) = self.recording_idle() else {
+            return;
+        };
         self.controller().seek(tick);
     }
 
     /// Changes the play mode, the pattern that plays in pattern mode, or
     /// song looping. Fails for a pattern the project does not have.
     pub fn transport_set(&self, patch: TransportPatch) -> Result<TransportState, String> {
+        let _recording = self.recording_idle()?;
         // Held across the change, so the pattern cannot be deleted between
         // the check and the engine hearing of it.
         let state = self.state();

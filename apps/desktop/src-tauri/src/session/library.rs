@@ -196,6 +196,22 @@ impl Session {
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
+        let _recording = self.recording_idle()?;
+        self.attach_audio_clip_import(import, place)
+    }
+    pub(super) fn attach_audio_clip_from_file(
+        &self,
+        path: &str,
+        place: ClipPlace,
+    ) -> Result<DispatchResult, String> {
+        let import = self.decode_for_project(path)?;
+        self.attach_audio_clip_import(import, place)
+    }
+    fn attach_audio_clip_import(
+        &self,
+        import: Import,
+        place: ClipPlace,
+    ) -> Result<DispatchResult, String> {
         let Import {
             file,
             buffer,
@@ -255,6 +271,7 @@ impl Session {
         sample: SampleId,
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
+        let _recording = self.recording_idle()?;
         let mut state = self.state();
         let project = state.document.project();
         let asset = project
@@ -312,6 +329,7 @@ impl Session {
         label: &str,
         then: impl FnOnce(SampleId) -> Command,
     ) -> Result<DispatchResult, String> {
+        let _recording = self.recording_idle()?;
         let Import {
             file,
             buffer,

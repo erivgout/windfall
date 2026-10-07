@@ -100,6 +100,12 @@ export function createTauriBackend(): Backend {
     transportState: () => call("transport_state"),
 
     engineStatus: () => call("engine_status"),
+    recordingInputs: () => call("recording_inputs"),
+    recordingState: () => call("recording_state"),
+    recordingStart: (source, start, track) =>
+      call("recording_start", { source, start, track }),
+    recordingStop: () => call("recording_stop"),
+    recordingCancel: () => call("recording_cancel"),
     engineDevices: () => call("engine_devices"),
     engineConfigure: (settings) => call("engine_configure", { settings }),
     engineSettings: () => call("engine_settings"),

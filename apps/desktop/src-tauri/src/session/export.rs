@@ -238,6 +238,7 @@ impl Session {
     /// Progress events carry the path as it was given here, which is what
     /// the UI matches them by.
     pub fn export_audio(&self, options: ExportOptions) -> Result<(), String> {
+        let _recording = self.recording_idle()?;
         if options.path.trim().is_empty() {
             return Err("Choose where to save the file.".to_owned());
         }

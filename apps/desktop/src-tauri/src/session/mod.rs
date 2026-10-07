@@ -65,6 +65,7 @@ mod files;
 mod library;
 mod midi;
 mod realtime;
+mod recording;
 mod samples;
 #[cfg(test)]
 mod tests;
@@ -163,6 +164,7 @@ struct Inner {
     events: Arc<dyn EventSink>,
     cache: SampleCache,
     factory_dir: PathBuf,
+    recording: Mutex<Option<recording::Take>>,
     exporting: AtomicBool,
     /// The export that is running has been asked to stop.
     export_cancelled: AtomicBool,
@@ -270,6 +272,7 @@ impl Session {
                 events,
                 cache,
                 factory_dir,
+                recording: Mutex::new(None),
                 exporting: AtomicBool::new(false),
                 export_cancelled: AtomicBool::new(false),
                 preview: Mutex::new(0),

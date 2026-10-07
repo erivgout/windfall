@@ -447,3 +447,7 @@ Vorbis uses `vorbis_rs` 0.5.6 (BSD-3-Clause), whose vendored libogg and aoTuV/La
 - No Image-Line samples, presets, artwork or plugin names in the repo.
 - FL names appear only as plain references, such as "FL equivalent: X" in docs.
 - Check every new dependency's license against GPL-3.0 before adding it. MIT, BSD, Apache-2.0, ISC, Zlib, MPL-2.0 and GPL-3.0-compatible licenses are fine.
+
+## Audio input recording
+
+Native capture, its callback queue and owning worker live in windfall-engine's recording module. The shell's session/recording module owns the take and streams through the codec's WAV writer, then imports it through the ordinary audio-clip command pipeline. The recording_inputs, recording_state, recording_start, recording_stop and recording_cancel commands serve the transport recording dialog. See [RECORDING.md](RECORDING.md) for timing, rate, ownership and cleanup semantics.

@@ -153,3 +153,6 @@ pub use voice::PREVIEW_GAIN_DB;
 #[cfg(test)]
 #[global_allocator]
 static ALLOCATOR: test_alloc::CountingAllocator = test_alloc::CountingAllocator;
+
+/// Bounded native audio input capture.
+pub mod recording;

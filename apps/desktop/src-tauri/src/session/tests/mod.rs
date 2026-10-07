@@ -11,6 +11,7 @@ mod import_formats;
 mod library;
 mod midi;
 mod playback;
+mod recording;
 mod song;
 
 use std::collections::HashMap;
