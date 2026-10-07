@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let latency = p.latency_samples();
         let tail = p.tail_samples();
         p.stop();
-        instance.deactivate(p);
+        instance.deactivate(p).map_err(|error| error.error)?;
         let after = instance.save_state()?;
         instance.load_state(&after)?;
         if peak <= 1e-6 || nonzero == 0 {

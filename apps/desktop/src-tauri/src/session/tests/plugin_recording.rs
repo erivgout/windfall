@@ -39,6 +39,187 @@ fn start_take(rig: &Rig) {
         )
         .unwrap();
 }
+
+#[cfg(windows)]
+#[test]
+fn session_worker_retries_coalesced_native_dirty_after_recording() {
+    use windfall_project::{Command, EffectId, PluginTarget, TrackId};
+    let mut rig = Rig::new();
+    let (runtime, binding) = crate::plugins::vst3_fixture(7);
+    let manager = crate::plugins::PluginManager::fixture_runtime(rig.folder.path(), runtime);
+    rig.session.install_plugins(manager.clone());
+    let added = rig
+        .session
+        .dispatch(
+            Command::AddPluginEffect {
+                track: TrackId(0),
+                plugin: binding,
+            },
+            None,
+        )
+        .unwrap();
+    let target = PluginTarget::Effect {
+        effect: EffectId(*added.created.last().unwrap()),
+    };
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id: 7,
+                value: 0.875,
+            },
+            None,
+        )
+        .unwrap();
+    rig.run(256);
+    start_take(&rig);
+    let before = rig.session.document_snapshot();
+    manager.attach(rig.session.downgrade());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !manager
+        .state()
+        .error
+        .is_some_and(|error| error.contains("recording"))
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "worker did not retain the dirty request"
+        );
+        rig.run(256);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(rig.session.document_snapshot(), before);
+    rig.session.recording_cancel();
+    loop {
+        rig.run(256);
+        if rig
+            .project()
+            .plugin(target)
+            .unwrap()
+            .parameters
+            .iter()
+            .any(|param| param.id == 7 && param.value == 0.375)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "retained dirty capture did not retry"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_ne!(
+        rig.project().plugin(target).unwrap().state,
+        before.project.plugin(target).unwrap().state
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn native_vst3_dirty_restart_and_deactivation_edits_wait_for_recording_then_capture() {
+    use windfall_project::{Command, EffectId, PluginTarget, TrackId};
+    let mut rig = Rig::new();
+    let (runtime, binding) = crate::plugins::vst3_fixture(7);
+    let manager =
+        crate::plugins::PluginManager::fixture_runtime(rig.folder.path(), runtime.clone());
+    rig.session.install_plugins(manager);
+    let added = rig
+        .session
+        .dispatch(
+            Command::AddPluginEffect {
+                track: TrackId(0),
+                plugin: binding,
+            },
+            None,
+        )
+        .unwrap();
+    let target = PluginTarget::Effect {
+        effect: EffectId(*added.created.last().unwrap()),
+    };
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id: 7,
+                value: 0.875,
+            },
+            None,
+        )
+        .unwrap();
+    rig.run(256);
+    start_take(&rig);
+    let before = rig.session.document_snapshot();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let request = loop {
+        if let Some(request) = runtime
+            .drain()
+            .into_iter()
+            .find(|request| matches!(request.update, crate::plugins::Update::Capture { .. }))
+        {
+            break request;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native dirty request was lost"
+        );
+        rig.run(256);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert!(
+        rig.session
+            .capture_plugin_update(&runtime, request.clone())
+            .unwrap_err()
+            .contains("recording")
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert!(
+        runtime.drain().is_empty(),
+        "coalesce the dirty identity while retained by session"
+    );
+    rig.session.recording_cancel();
+    let capture_runtime = runtime.clone();
+    let task = rig
+        .session
+        .background(move |session| session.capture_plugin_update(&capture_runtime, request));
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        rig.run(128);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        task.join().unwrap().unwrap(),
+        "restart is retained until captured"
+    );
+    let project = rig.project();
+    let plugin = project.plugin(target).unwrap();
+    assert_eq!(
+        plugin
+            .parameters
+            .iter()
+            .find(|param| param.id == 7)
+            .unwrap()
+            .value,
+        0.375,
+        "capture includes the native parameter rescan produced by deactivation"
+    );
+    assert_ne!(plugin.state, before.project.plugin(target).unwrap().state);
+    assert!(!rig.session.recording_state().active);
+    rig.run(512);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert!(
+        runtime.drain().is_empty(),
+        "deactivation dirty is covered, not rescheduled forever"
+    );
+    assert_eq!(
+        rig.session.controller().latency_frames(),
+        64,
+        "restart installs new compensation after capturing the deactivation latency change"
+    );
+    assert!(
+        runtime.errors().is_empty(),
+        "successful replacement clears the recovery error"
+    );
+}
 #[test]
 fn active_take_refuses_plugin_refresh_and_control_without_changing_document_or_take() {
     let rig = Rig::new();

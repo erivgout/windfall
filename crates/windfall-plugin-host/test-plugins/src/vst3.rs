@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        6
+        9
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..6).contains(&index) {
+        if info.is_null() || !(0..9).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -58,6 +58,9 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Mono",
                         "VST3 Process Error",
                         "VST3 NaN",
+                        "VST3 Deactivation Refusal",
+                        "VST3 Native Dirty",
+                        "VST3 Recovery Failure",
                     ][index as usize],
                 ),
             });
@@ -78,13 +81,20 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..6).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..9).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
                 absurd: class == cid(1),
                 instrument: class == cid(2),
                 mono: class == cid(3),
+                refuse: class == cid(6),
+                notify: class == cid(7),
+                recovery_failure: class == cid(8),
+                activations: std::sync::atomic::AtomicU32::new(0),
+                creator: std::thread::current().id(),
+                notified: std::sync::atomic::AtomicBool::new(false),
+                handler: std::cell::UnsafeCell::new(None),
                 fault: if class == cid(4) {
                     1
                 } else if class == cid(5) {
@@ -108,7 +118,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..6).contains(&index) {
+        if info.is_null() || !(0..9).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -125,6 +135,9 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Mono",
                         "VST3 Process Error",
                         "VST3 NaN",
+                        "VST3 Deactivation Refusal",
+                        "VST3 Native Dirty",
+                        "VST3 Recovery Failure",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -145,6 +158,13 @@ struct Component {
     absurd: bool,
     instrument: bool,
     mono: bool,
+    refuse: bool,
+    notify: bool,
+    recovery_failure: bool,
+    activations: std::sync::atomic::AtomicU32,
+    creator: std::thread::ThreadId,
+    notified: std::sync::atomic::AtomicBool,
+    handler: std::cell::UnsafeCell<Option<ComPtr<IComponentHandler>>>,
     fault: u8,
     initialized: std::sync::atomic::AtomicBool,
     active: std::sync::atomic::AtomicBool,
@@ -179,6 +199,11 @@ impl IPluginBaseTrait for Component {
         kResultOk
     }
     unsafe fn terminate(&self) -> tresult {
+        assert_eq!(
+            self.creator,
+            std::thread::current().id(),
+            "native destruction left the creating owner"
+        );
         kResultOk
     }
 }
@@ -242,8 +267,37 @@ impl IComponentTrait for Component {
         kResultOk
     }
     unsafe fn setActive(&self, state: TBool) -> tresult {
+        assert_eq!(
+            self.creator,
+            std::thread::current().id(),
+            "native lifecycle left the creating owner"
+        );
+        if state != 0
+            && self.recovery_failure
+            && self
+                .activations
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                > 0
+        {
+            return kResultFalse;
+        }
+        if state == 0
+            && self.refuse
+            && f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) >= 0.5
+        {
+            return kResultFalse;
+        }
         if self.processing.load(std::sync::atomic::Ordering::Relaxed) {
             return kResultFalse;
+        }
+        if state == 0 && self.notify {
+            if f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) == 0.625 {
+                self.gain
+                    .store(0.375_f64.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
+            unsafe {
+                self.notify_owner(4);
+            }
         }
         self.active
             .store(state != 0, std::sync::atomic::Ordering::Relaxed);
@@ -265,6 +319,18 @@ struct Audio {
     configured: bool,
 }
 impl Component {
+    unsafe fn notify_owner(&self, flags: i32) {
+        if let Some(handler) = unsafe { &*self.handler.get() } {
+            unsafe {
+                handler.restartComponent(flags);
+            }
+            if let Some(dirty) = handler.cast::<IComponentHandler2>() {
+                unsafe {
+                    dirty.setDirty(1);
+                }
+            }
+        }
+    }
     unsafe fn read_state(&self, state: *mut IBStream) -> tresult {
         let Some(stream) = (unsafe { vst3::ComRef::from_raw(state) }) else {
             return kInvalidArgument;
@@ -334,7 +400,12 @@ impl IAudioProcessorTrait for Component {
         if size == 0 { kResultOk } else { kResultFalse }
     }
     unsafe fn getLatencySamples(&self) -> u32 {
-        17
+        if self.notify && f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) < 0.5
+        {
+            64
+        } else {
+            17
+        }
     }
     unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
         if setup.is_null() || self.active.load(std::sync::atomic::Ordering::Relaxed) {
@@ -352,6 +423,12 @@ impl IAudioProcessorTrait for Component {
     }
     unsafe fn setProcessing(&self, state: TBool) -> tresult {
         if !self.active.load(std::sync::atomic::Ordering::Relaxed) {
+            return kResultFalse;
+        }
+        if state == 0
+            && self.refuse
+            && f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) == 0.75
+        {
             return kResultFalse;
         }
         self.processing
@@ -571,15 +648,30 @@ impl IEditControllerTrait for Component {
         }
         f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed))
     }
-    unsafe fn setParamNormalized(&self, id: u32, value: f64) -> tresult {
+    unsafe fn setParamNormalized(&self, id: u32, mut value: f64) -> tresult {
         if id != 7 || !value.is_finite() || !(0.0..=1.0).contains(&value) {
             return kInvalidArgument;
+        }
+        if self.notify
+            && value == 0.875
+            && !self
+                .notified
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            value = 0.625; // a native preset edit, independent of the host value
+            unsafe {
+                self.notify_owner(5);
+            }
         }
         self.gain
             .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
         kResultOk
     }
-    unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
+    unsafe fn setComponentHandler(&self, handler: *mut IComponentHandler) -> tresult {
+        unsafe {
+            *self.handler.get() =
+                vst3::ComRef::from_raw(handler).map(|handler| handler.to_com_ptr());
+        }
         kResultOk
     }
     unsafe fn createView(&self, _name: FIDString) -> *mut IPlugView {

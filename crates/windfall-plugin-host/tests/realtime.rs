@@ -92,7 +92,7 @@ fn saturated_adapter_releases_are_delivered_without_allocator_calls() {
             "{id}: queued notes sounded after panic"
         );
         assert_eq!(instrument.active_voices(), 0);
-        instance.release_instrument(instrument);
+        instance.release_instrument(instrument).unwrap();
     }
 }
 
@@ -126,7 +126,7 @@ fn saturated_adapter_note_off_preserves_an_independent_key_without_allocating() 
             left.iter().all(|sample| *sample == 0.0),
             "{id}: released key is still sounding"
         );
-        instance.release_instrument(instrument);
+        instance.release_instrument(instrument).unwrap();
     }
 }
 
@@ -168,7 +168,7 @@ fn saturated_release_storm_stays_bounded_and_preserves_accepted_parameters() {
         assert_eq!(instrument.active_voices(), 0);
         assert!(left.iter().all(|sample| *sample == 0.0), "{id}");
         assert_eq!(instance.param_value(common::SINE_LEVEL), Some(0.75));
-        instance.release_instrument(instrument);
+        instance.release_instrument(instrument).unwrap();
     }
 }
 
@@ -206,7 +206,7 @@ fn saturated_releases_keep_order_after_intervening_same_frame_notes() {
                 left.iter().all(|sample| *sample == 0.0),
                 "{id}, panic={panic}"
             );
-            instance.release_instrument(instrument);
+            instance.release_instrument(instrument).unwrap();
         }
     }
 }
@@ -232,7 +232,7 @@ fn accepted_main_thread_parameter_burst_waits_for_bounded_audio_admission() {
     assert_eq!(calls, 0);
     assert_eq!(left, [0.75; 64]);
     assert_eq!(processor.health().dropped_events, 0);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -257,7 +257,7 @@ fn vst3_ownership_boundaries_move_adapters_without_allocator_calls() {
         );
         assert!(audio.current().is_none());
         let adapter = owner.take_returned().unwrap();
-        instance.release_effect(adapter);
+        instance.release_effect(adapter).unwrap();
         let state = instance.save_state().unwrap();
         instance.load_state(&state).unwrap();
         owner
@@ -272,7 +272,48 @@ fn vst3_ownership_boundaries_move_adapters_without_allocator_calls() {
             0
         );
     }
-    instance.release_effect(audio.retire().unwrap());
+    instance.release_effect(audio.retire().unwrap()).unwrap();
+}
+
+#[test]
+fn vst3_reset_and_saturated_release_keep_every_admitted_note_off() {
+    let path = common::plugin_file("vst3-saturated-release", "fixture.vst3");
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let mut instance = module.create(&module.descriptors()[2].id).unwrap();
+    let mut instrument = instance.prepare_instrument(RATE as f32, 64).unwrap();
+    let mut left = [0.0; 64];
+    let mut right = left;
+    for first in [0, 8] {
+        for channel in first..first + 8 {
+            for key in 0..128 {
+                assert!(instrument.processor().push_event(HostEvent::NoteOn {
+                    time: 0,
+                    key,
+                    channel,
+                    velocity: 1.0
+                }));
+            }
+        }
+        instrument.process(&mut left, &mut right);
+    }
+    let calls = allocator_calls(|| {
+        instrument.processor().reset();
+        for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+            assert!(instrument.note_on(64, 1.0));
+        }
+        assert!(instrument.note_off(64));
+        instrument.process(&mut left, &mut right);
+        instrument.process(&mut left, &mut right);
+    });
+    assert_eq!(calls, 0);
+    assert!(
+        left.iter().all(|sample| *sample == 0.0),
+        "the reserved release was lost after reset expansion"
+    );
+    assert_eq!(instrument.health().dropped_events, 0);
+    instance.release_instrument(instrument).unwrap();
 }
 
 #[test]
@@ -301,7 +342,7 @@ fn vst3_effect_and_instrument_callbacks_allocate_and_free_nothing() {
         });
         assert_eq!(calls, 0, "VST3 fixture {index}");
         assert_eq!(p.health().dropped_events, 0);
-        instance.deactivate(p);
+        instance.deactivate(p).unwrap();
     }
 }
 
@@ -347,7 +388,7 @@ fn an_effect_processes_without_allocating() {
     });
     assert_eq!(calls, 0);
     assert_eq!(processor.health().dropped_events, 0);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -368,7 +409,7 @@ fn an_instrument_processes_without_allocating() {
             processor.process(&mut left, &mut right);
         });
         assert_eq!(calls, 0, "{id}");
-        instance.deactivate(processor);
+        instance.deactivate(processor).unwrap();
     }
 }
 
@@ -384,7 +425,7 @@ fn unusual_port_layouts_process_without_allocating() {
             }
         });
         assert_eq!(calls, 0, "{id}");
-        instance.deactivate(processor);
+        instance.deactivate(processor).unwrap();
     }
 }
 
@@ -404,7 +445,7 @@ fn a_full_event_queue_drops_events_without_allocating() {
         processor.health().dropped_events as usize,
         3_000 - windfall_plugin_host::EVENT_CAPACITY
     );
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -426,7 +467,7 @@ fn the_adapters_process_without_allocating() {
         effect.reset();
     });
     assert_eq!(calls, 0);
-    instance.release_effect(effect);
+    instance.release_effect(effect).unwrap();
 
     let (_sine_module, mut sine) = create(SINE);
     let mut instrument = sine.prepare_instrument(48_000.0, 256).unwrap();
@@ -442,7 +483,7 @@ fn the_adapters_process_without_allocating() {
         instrument.process(&mut left, &mut right);
     });
     assert_eq!(calls, 0);
-    sine.release_instrument(instrument);
+    sine.release_instrument(instrument).unwrap();
 }
 
 #[test]
@@ -459,5 +500,5 @@ fn translated_midi_panics_fit_the_bounded_list_without_allocating() {
     });
     assert_eq!(calls, 0);
     assert_eq!(processor.health().dropped_events, 0);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }

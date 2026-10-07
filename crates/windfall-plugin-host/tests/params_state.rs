@@ -34,7 +34,7 @@ fn retirement_flush(transfer_without_audio: bool) {
     if transfer_without_audio {
         processor.process(&mut [], &mut []);
     }
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
     assert_eq!(instance.param_value(gain::GAIN), Some(0.75));
     let saved = instance.save_state().unwrap();
 
@@ -46,7 +46,7 @@ fn retirement_flush(transfer_without_audio: bool) {
     processor.process(&mut left, &mut right);
     assert_eq!(left, [0.75; 64]);
     assert_eq!(right, left);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
     assert_eq!(instance.save_state().unwrap(), saved);
 }
 
@@ -156,7 +156,7 @@ fn a_parameter_set_while_active_arrives_with_the_next_block() {
     processor.process(&mut left, &mut right);
     assert!(left.iter().all(|&sample| sample == 0.25));
     assert_eq!(instance.param_value(gain::GAIN), Some(0.25));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn what_the_user_does_in_the_plugin_comes_back_as_a_gesture() {
     // A gesture made in the last block before deactivation is not lost.
     processor.note_on(0, 127, 0.5);
     processor.process(&mut left, &mut right);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
     assert_eq!(idle(&mut instance).len(), 3);
 }
 
@@ -232,7 +232,7 @@ fn state_moves_from_one_instance_to_another() {
     // State can be saved and loaded while the plugin runs.
     let while_active = second.save_state().unwrap();
     assert_eq!(while_active, saved);
-    second.deactivate(processor);
+    second.deactivate(processor).unwrap();
 }
 
 #[test]

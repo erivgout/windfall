@@ -49,8 +49,12 @@ pub(super) fn manager(rig: &Rig) -> (std::sync::Arc<crate::plugins::PluginManage
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("windfall-test.clap");
     std::fs::copy(library(), &path).unwrap();
-    let scanner =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/windfall-desktop.exe");
+    let scanner = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target"),
+            PathBuf::from,
+        )
+        .join("debug/windfall-desktop.exe");
     assert!(scanner.is_file(), "desktop scanner helper must be built");
     let manager = crate::plugins::PluginManager::fixture(rig.folder.path(), &path, &scanner);
     rig.session.install_plugins(manager.clone());
@@ -65,6 +69,271 @@ fn transport() -> PluginTransport {
         numerator: 4,
         denominator: 4,
     }
+}
+
+#[test]
+fn saturated_clap_parameter_edit_retries_without_replacing_playback_or_allocating() {
+    let mut rig = Rig::new();
+    let (manager, path) = manager(&rig);
+    let binding = manager
+        .binding(
+            &path,
+            "org.windfall.test.sine",
+            PluginTarget::Instrument {
+                channel: windfall_project::ChannelId(0),
+            },
+        )
+        .unwrap();
+    let added = rig
+        .session
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    let channel = windfall_project::ChannelId(added.created[0]);
+    let target = PluginTarget::Instrument { channel };
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id: 1,
+                value: 0.5,
+            },
+            None,
+        )
+        .unwrap();
+    rig.run(256);
+    let token = manager.runtime.selected_token(target).unwrap();
+    let epoch = rig.session.controller().hardware_epoch();
+    for _ in 0..1024 {
+        assert!(
+            rig.session
+                .controller()
+                .hardware_note(epoch, channel, 64, 100)
+        );
+    }
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+        0
+    );
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id: 1,
+                value: 0.75,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+        0
+    );
+    let mut out = [0.0; 256];
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            for _ in 0..8 {
+                rig.processor.process(&mut out);
+            }
+        }),
+        0
+    );
+    assert_eq!(manager.runtime.selected_token(target), Some(token));
+    assert_eq!(
+        rig.project()
+            .plugin(target)
+            .unwrap()
+            .parameters
+            .iter()
+            .find(|param| param.id == 1)
+            .unwrap()
+            .value,
+        0.75
+    );
+    let native = manager.runtime.capture(rig.project()).unwrap();
+    assert_eq!(
+        native
+            .plugin(target)
+            .unwrap()
+            .parameters
+            .iter()
+            .find(|param| param.id == 1)
+            .unwrap()
+            .value,
+        0.75,
+        "committed cached parameter must eventually reach native after saturation drains"
+    );
+    assert_eq!(manager.runtime.selected_token(target), Some(token));
+}
+
+#[test]
+fn production_vst3_catalog_enables_checked_roles_and_excludes_rejected_layouts() {
+    let rig = Rig::new();
+    let folder = rig.folder.path().join("vst3-scan");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("windfall-test.vst3");
+    std::fs::copy(library(), &path).unwrap();
+    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target"),
+        PathBuf::from,
+    );
+    let manager = crate::plugins::PluginManager::fixture(
+        rig.folder.path(),
+        &path,
+        &target.join("debug/windfall-desktop.exe"),
+    );
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let descriptors = module.descriptors();
+    let state = manager.state();
+    for (index, instrument) in [(0, false), (2, true)] {
+        let entry = state
+            .entries
+            .iter()
+            .find(|entry| entry.id == descriptors[index].id)
+            .unwrap();
+        assert!(entry.usable, "{:?}", entry.error);
+        assert_eq!(entry.format, "vst3");
+        assert_eq!(entry.instrument, instrument);
+        assert!(
+            manager
+                .binding(
+                    &entry.path,
+                    &entry.id,
+                    if instrument {
+                        PluginTarget::Instrument {
+                            channel: windfall_project::ChannelId(900),
+                        }
+                    } else {
+                        PluginTarget::Effect {
+                            effect: EffectId(900),
+                        }
+                    }
+                )
+                .is_ok()
+        );
+    }
+    // Layout rejection is omitted from the usable catalog. Only dangerous
+    // scanner failures enter its separate blocklist.
+    assert!(
+        state
+            .entries
+            .iter()
+            .all(|entry| entry.id != descriptors[1].id)
+    );
+    assert!(
+        manager
+            .binding(
+                &path.to_string_lossy(),
+                &descriptors[1].id,
+                PluginTarget::Effect {
+                    effect: EffectId(900)
+                }
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn native_vst3_session_save_backup_reopen_editor_routing_and_offline_export() {
+    let mut rig = Rig::new();
+    let (runtime, binding) = crate::plugins::vst3_fixture(2);
+    let manager =
+        crate::plugins::PluginManager::fixture_runtime(rig.folder.path(), runtime.clone());
+    rig.session.install_plugins(manager);
+    let added = rig
+        .session
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    let channel = windfall_project::ChannelId(added.created[0]);
+    let target = PluginTarget::Instrument { channel };
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel,
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.transport_play().unwrap();
+    assert!(rms(&rig.run(12_000)) > 0.01);
+    runtime
+        .editor_binding(
+            target,
+            Some(rig.project().plugin(target).unwrap().clone()),
+            false,
+        )
+        .unwrap();
+    assert!(runtime.editor(target, true).unwrap_err().contains("editor"));
+    let saved = rig.file("vst3.windfall");
+    let save_path = saved.clone();
+    let task = rig
+        .session
+        .background(move |session| session.project_save(Some(&save_path)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        rig.run(256);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    task.join().unwrap().unwrap();
+    let captured = windfall_project::file::load(Path::new(&saved))
+        .unwrap()
+        .plugins;
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id: 7,
+                value: 0.6,
+            },
+            None,
+        )
+        .unwrap();
+    rig.run(256);
+    let task = rig
+        .session
+        .background(|session| session.write_backup("2026-10-07_12-30-00"));
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        rig.run(256);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(task.join().unwrap().unwrap().is_some());
+    rig.session.project_open(&saved).unwrap();
+    rig.run(256);
+    assert_eq!(rig.project().plugins, captured);
+    rig.session.transport_play().unwrap();
+    assert!(rms(&rig.run(12_000)) > 0.01);
+    let options = ExportOptions {
+        path: rig.file("vst3.wav"),
+        format: ExportFormat::Wav,
+        bit_depth: BitDepth::Float32,
+        sample_rate: SAMPLE_RATE,
+        mode: PlayMode::Pattern,
+        tail_secs: 0.0,
+        ..Default::default()
+    };
+    let export_options = options.clone();
+    let task = rig
+        .session
+        .background(move |session| session.export_audio(export_options));
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        rig.run(256);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    task.join().unwrap().unwrap();
+    assert_eq!(rig.events.wait_for_export().error, None);
+    assert!(
+        rms(windfall_codec::decode_file(&options.path)
+            .unwrap()
+            .samples())
+            > 0.01
+    );
+    assert_eq!(rig.project().plugins, captured);
 }
 
 #[test]

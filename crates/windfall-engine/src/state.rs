@@ -716,6 +716,28 @@ impl PlanState {
             };
             let found = old_plan.channel(channel.id);
             let mut before = found.and_then(|found| old.instruments[found].as_mut());
+            if let (Some(unit), Some(before)) = (
+                &mut seat.unit,
+                before.as_ref().and_then(|seat| seat.unit.as_ref()),
+            ) {
+                let target = windfall_project::PluginTarget::Instrument {
+                    channel: channel.id,
+                };
+                let binding = plan.plugins.iter().find(|binding| binding.target == target);
+                let old_binding = old_plan
+                    .plugins
+                    .iter()
+                    .find(|binding| binding.target == target);
+                if !channel.leaving
+                    && binding.zip(old_binding).is_some_and(|(binding, old)| {
+                        binding.path == old.path
+                            && binding.id == old.id
+                            && binding.format == old.format
+                    })
+                {
+                    unit.inherit_plugin_notes(before);
+                }
+            }
             if seat.unit.is_none() {
                 seat.unit = before
                     .as_mut()

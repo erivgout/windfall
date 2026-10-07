@@ -1,9 +1,13 @@
 //! Fixed-capacity SDK event and parameter COM objects, allocated at activation.
-use crate::processor::EVENT_CAPACITY;
+use crate::processor::{EVENT_CAPACITY, IMMEDIATE_RELEASE_CAPACITY};
 use std::cell::{Cell, UnsafeCell};
 use std::rc::Rc;
 use vst3::Steinberg::Vst::*;
 use vst3::{Class, ComPtr, ComWrapper, Steinberg::*};
+
+// A reset can expand into every held channel/key before ordinary events and
+// guaranteed adapter releases. Allocate for all three on the creating owner.
+const NOTE_CAPACITY: usize = 2048 + EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY;
 
 #[derive(Clone, Copy)]
 struct Point {
@@ -257,7 +261,7 @@ impl Events {
         // SAFETY: Event is an SDK POD struct; a zeroed unused slot is valid storage.
         let zero = unsafe { std::mem::zeroed() };
         ComWrapper::new(Self {
-            data: UnsafeCell::new(vec![zero; EVENT_CAPACITY + 2048]),
+            data: UnsafeCell::new(vec![zero; NOTE_CAPACITY]),
             len: Cell::new(0),
             dropped: Cell::new(0),
         })
@@ -299,7 +303,7 @@ impl IEventListTrait for Events {
             return kInvalidArgument;
         }
         let at = self.len.get();
-        if at == EVENT_CAPACITY + 2048 {
+        if at == NOTE_CAPACITY {
             self.dropped.set(self.dropped.get().saturating_add(1));
             return kResultFalse;
         }

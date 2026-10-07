@@ -27,7 +27,7 @@ fn output_that_is_not_a_number_never_leaves_the_plugin() {
     assert_eq!(health.scrubbed_samples, 512);
     assert!(!health.failed);
     assert_eq!(instance.health(), health, "the main thread reads the same");
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn a_plugin_that_reports_a_failure_is_not_called_again() {
     }
     assert!(processor.health().failed);
     assert!(instance.health().failed);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 
     // Activating again gives the plugin another chance.
     let mut processor = instance.activate(RATE, 256).unwrap();
@@ -62,7 +62,7 @@ fn a_plugin_that_reports_a_failure_is_not_called_again() {
         processor.process(&mut left, &mut right),
         ProcessStatus::Continue
     );
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn a_slow_block_is_counted_on_a_live_device_and_not_in_a_render() {
     processor.set_realtime(false);
     processor.process(&mut left, &mut right);
     assert_eq!(processor.health().overruns, 1);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 
     // A plugin that keeps up sets nothing. The blocks are long, so that a
     // busy test machine cannot make one late by pausing the thread.
@@ -90,7 +90,7 @@ fn a_slow_block_is_counted_on_a_live_device_and_not_in_a_render() {
         processor.process(&mut left, &mut right);
     }
     assert_eq!(processor.health().overruns, 0);
-    fast.deactivate(processor);
+    fast.deactivate(processor).unwrap();
 }
 
 #[test]

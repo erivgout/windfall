@@ -116,6 +116,7 @@ pub(crate) trait ProcessorBackend: Send + 'static {
 
     /// Gives the backend back to the instance that made it.
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// What the main thread and the audio thread both see of an active plugin.
@@ -167,6 +168,9 @@ pub(crate) struct ProcessorParts {
 }
 
 impl PluginProcessor {
+    pub(crate) fn backend_mut(&mut self) -> &mut dyn ProcessorBackend {
+        self.backend.as_mut()
+    }
     pub(crate) fn new(parts: ProcessorParts) -> Self {
         let max_block = parts.max_block.max(1);
         Self {

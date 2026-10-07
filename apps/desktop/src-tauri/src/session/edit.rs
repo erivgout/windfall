@@ -9,6 +9,73 @@ use super::{Session, State};
 use crate::events::Event;
 
 impl Session {
+    /// Native notifications schedule here; neither State nor owner idle waits
+    /// for a processor. Recording exclusion covers the joined owner lifetime.
+    pub(crate) fn capture_plugin_update(
+        &self,
+        runtime: &crate::plugins::Runtime,
+        request: crate::plugins::PendingUpdate,
+    ) -> Result<bool, String> {
+        let crate::plugins::Update::Capture { target, .. } = request.update else {
+            return Err("Not a native state request".into());
+        };
+        let _recording = self.recording_idle()?;
+        let current = |state: &State| {
+            runtime.is_current(request.revision, request.token)
+                && state
+                    .document
+                    .project()
+                    .plugin(target)
+                    .is_some_and(|binding| {
+                        crate::plugins::binding_identity(binding) == request.binding
+                    })
+        };
+        {
+            let state = self.state();
+            if !current(&state) {
+                return Ok(false);
+            }
+        }
+        let Some(captured) = runtime.capture_pending(request.clone())? else {
+            return Ok(false);
+        };
+        let mut state = self.state();
+        if !current(&state) {
+            return Ok(false);
+        }
+        let binding = state
+            .document
+            .project()
+            .plugin(target)
+            .expect("checked binding");
+        let mut commands: Vec<_> = captured
+            .parameters
+            .into_iter()
+            .filter(|(id, _)| {
+                binding
+                    .parameters
+                    .iter()
+                    .any(|param| param.id == *id && !param.read_only)
+            })
+            .map(|(id, value)| Command::SetPluginParam { target, id, value })
+            .collect();
+        commands.push(Command::SetPluginState {
+            target,
+            state: captured.bytes,
+        });
+        let applied = state
+            .document
+            .dispatch(
+                Command::Batch {
+                    label: Some("Native plugin state".into()),
+                    commands,
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        self.publish(&mut state, &applied.touched);
+        Ok(captured.restart)
+    }
     pub fn document_snapshot(&self) -> DocumentSnapshot {
         let state = self.state();
         state.document.snapshot(state.path_text())

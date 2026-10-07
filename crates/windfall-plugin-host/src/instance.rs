@@ -70,6 +70,11 @@ impl From<PluginEvent> for PluginNotification {
 /// One plugin format's way of doing what a [`PluginInstance`] offers. Every
 /// method is called on the thread that created the instance.
 pub(crate) trait InstanceBackend {
+    /// Proves inactive native state without consuming a refused processor.
+    fn quiesce(&mut self, processor: &mut dyn ProcessorBackend) -> Result<(), PluginError> {
+        processor.stop();
+        Ok(())
+    }
     fn layout(&self) -> &PluginLayout;
     fn shape(&self) -> AudioShape;
     fn params(&self) -> &[PluginParam];
@@ -92,7 +97,7 @@ pub(crate) trait InstanceBackend {
     /// Deactivates the plugin. `processor` is what `activate` returned, or
     /// `None` if it was lost, in which case the plugin can only be torn
     /// down.
-    fn deactivate(&mut self, processor: Option<Box<dyn ProcessorBackend>>);
+    fn finish_deactivation(&mut self, processor: Option<Box<dyn ProcessorBackend>>);
     /// Does the plugin's main-thread chores. `active` is set while the
     /// plugin has a processor out.
     fn idle(
@@ -306,16 +311,34 @@ impl PluginInstance {
     /// activated again with other settings. What the plugin still had to
     /// say is kept for the next [`idle`](Self::idle).
     ///
-    /// A processor that came from another instance is refused and dropped.
-    pub fn deactivate(&mut self, processor: PluginProcessor) {
+    /// Refusal returns the exact processor; neither state nor ownership is lost.
+    // The error deliberately returns the exact processor without another
+    // allocation. This lifecycle API belongs on its creating owner.
+    #[allow(clippy::result_large_err)]
+    pub fn deactivate(
+        &mut self,
+        mut processor: PluginProcessor,
+    ) -> Result<(), crate::DeactivationError<PluginProcessor>> {
         let Some(active) = &self.active else {
-            return;
+            return Err(crate::DeactivationError {
+                error: PluginError::Deactivate("instance is not active".into()),
+                returned: processor,
+            });
         };
         if !Arc::ptr_eq(&active.shared, processor.shared()) {
-            return;
+            return Err(crate::DeactivationError {
+                error: PluginError::Deactivate("processor belongs to another instance".into()),
+                returned: processor,
+            });
+        }
+        if let Err(error) = self.backend.quiesce(processor.backend_mut()) {
+            return Err(crate::DeactivationError {
+                error,
+                returned: processor,
+            });
         }
         let (backend, pending) = processor.into_backend();
-        self.backend.deactivate(Some(backend));
+        self.backend.finish_deactivation(Some(backend));
         if let Some(mut active) = self.active.take() {
             while let Ok(event) = active.from_audio.pop() {
                 self.left_over.push(event.into());
@@ -325,6 +348,7 @@ impl PluginInstance {
         // native processing has stopped. No callback allocation is introduced.
         self.backend
             .flush_params(&pending, &mut |event| self.left_over.push(event.into()));
+        Ok(())
     }
 
     /// Samples by which the plugin's output lags its input. Plugins report
@@ -403,7 +427,7 @@ impl Drop for PluginInstance {
         if self.active.is_some() {
             // The processor is still out. The backend decides what is safe:
             // for CLAP that is to leave the plugin alive and unreachable.
-            self.backend.deactivate(None);
+            self.backend.finish_deactivation(None);
         }
     }
 }

@@ -1,144 +1,48 @@
-# VST3 desktop ownership exchange
+# VST3 desktop ownership and state
 
-VST3 additions remain **disabled**. The native backend's inactive-state
-contract is unchanged: the processor must return to its creating owner before
-state is saved or restored. This change implements and exercises that return
-path without claiming that the complete desktop integration is ready.
+Scanned, usable VST3 instruments and effects can now be added in the Windows desktop app. Loading independently verifies the scanned file stamp and plugin ID, declared format/path extension, and instrument/effect role. Failed or blocked scan entries remain unavailable. Offline rendering creates independent native instances; it cannot select the playback editor or state owner.
 
-## Implemented ownership path
+## Native lifecycle and ownership
 
-`windfall-plugin-host::ownership::exchange` allocates two single-item `rtrb`
-queues and an atomic request flag before handing an adapter to the engine.
-The engine calls `HostedEffect::control_boundary` for every installed effect
-and instrument, including stopped, bypassed and leaving units. Even an empty
-callback services the exchange before plan messages are applied.
+`windfall-plugin-host::ownership::exchange` allocates two single-item queues and an atomic request flag before installation. Every installed plugin receives a control boundary, including stopped, bypassed and leaving units. Empty callbacks also service the exchange before plan messages are applied.
 
-At a boundary, the audio endpoint moves its adapter into the return queue.
-There is no native stop/deactivation, allocation, destruction, lock, wait,
-file operation or owner-thread job submission in this operation. Unexpected
-queue fullness retains the adapter locally. While ownership is absent,
-instruments produce silence and effects pass through dry input. The wrapper
-keeps its installed latency and tail metadata throughout the pause.
+At the boundary, audio moves its adapter into the return queue. This operation performs no native lifecycle call, allocation, free, lock, wait, file operation or job submission. Queue fullness preserves local ownership. During absence, instruments are silent and effects pass dry input; installed latency and tail metadata remain available. Bypass and silence continue to follow engine policy.
 
-The desktop plugin owner waits up to 500 ms for each requested adapter,
-releases it through the matching instance, captures inactive state, prepares
-a new adapter on the same owner and publishes it into the resume queue.
-The next boundary reacquires it. State is never saved by the VST3 backend
-while its processor is active. A failed save still attempts reacquisition;
-preparation errors or changed latency/tail leave the slot silent/bypassed
-and return an error. Failed native processors are not silently reactivated.
+The creating native owner waits up to 500 ms for the returned adapter, then quiesces it and captures inactive state. VST3 `setProcessing(false)` and `setActive(false)` refusals propagate through fallible `deactivate`, `release_effect` and `release_instrument` APIs. The error owns the exact returned processor/adapter, including pending parameters and note metadata. The instance remains active until successful deactivation is proven. Inactive-state checks in the VST3 backend remain enforced.
 
-A callback that never arrives yields an explicit capture error and cancels
-the request without deactivating the outstanding processor. Cancellation
-can race a boundary, so the owner also drains late returns during normal
-maintenance and restores them. A second request before reacquisition can
-return the already queued adapter at the next boundary. These operations
-retain exactly one adapter owner throughout.
+On refusal, the exact active adapter is returned to audio. After successful capture the owner prepares a replacement adapter on the same native instance, checks latency/tail, and queues it for the next boundary. Save failures still attempt safe recovery. Failed processors, failed reactivation or changed latency/tail report an error and leave the old slot silent/dry. Save/backup/export propagate recovery errors. For a requested native restart, the session preserves proven inactive state even when the old slot cannot resume, reports the recovery error, and installs a replacement plan with correct compensation. Failed processors remain failed until explicit retry. Native teardown runs on the creating owner, including refusal and recovery failure retirement. An outstanding processor after API misuse or a failed owner channel is deliberately leaked to avoid wrong-thread teardown.
 
-Retirement sends the whole audio endpoint to the native owner through the
-existing controller-side destruction path. It drains adapters held locally,
-queued for resume or returned but not yet serviced, closes the editor and
-deactivates there. If the owner channel has failed, the retirement payload
-is deliberately leaked; native teardown must not run on the controller or
-callback thread after an owner failure. This contains wrong-thread teardown,
-not a plugin crash or a hung native call.
+A missing callback times out without deactivating an outstanding processor. The owner services a return racing cancellation by resuming the exact adapter; notification maintenance never quiesces it. A queued control job cancelled at the generic 15-second deadline cannot later execute. Once a job has started, cancellation is cooperative and the caller joins native work and recovery before returning. Thus its recording exclusion remains held throughout a late native operation. An in-process native call that hangs cannot safely be interrupted; this join can exceed the nominal deadline. Plugin crash/hang isolation is outside this ownership contract.
 
-## State and document identity
+## Deferred dirty state
 
-Capture retains the playback instance token. Offline factories still produce
-independent instances that cannot select an editor/state owner. Speculative
-preparation does not select an instance. The existing staged revision API
-is retained. Live capture checks playback role, token, installed revision,
-path, format, plugin ID and the original opaque-state fingerprint. It checks
-revision and token again after the exchange before accepting captured bytes.
+Owner maintenance turns native dirty/state, restart, parameter-rescan and latency notifications into coalesced capture tickets. Tickets carry playback token, installed revision and binding fingerprint. Native parameter gestures continue through the existing bounded document-update path. Non-gesture writable parameter changes schedule capture; read-only meters do not.
 
-Save, backup and export snapshots now carry the native document revision
-read alongside the project copy. A stale snapshot cannot capture a replacement
-document's live state merely because the replacement uses the same binding.
-Save and backup acquire recording exclusion for native capture. Export uses
-its already-held exclusion, preserving recording-before-state lock order
-without recursively locking recording. The document lock is released before
-any native capture request. CLAP retains its existing active-state save path.
+The session worker retains tickets during recording and transient failures, retrying after recording exclusion becomes available. It checks the document identity briefly under `State`, releases that lock before native capture, and checks the identity again before applying the result. Native state and current editable parameter values form one undoable document edit. Restart waits until these edits have been reconciled. Obsolete token/revision/binding tickets cannot change a replacement document. Temporary waiting status clears after recovery.
 
-Returning a processor also preserves parameter points that had not reached
-an audio block. The common wrapper gathers pending/main-queue parameter
-events on the owner and flushes their final values after deactivation.
-Their former sample offsets belong to the abandoned audio timeline; note
-events are discarded. VST3 retains pending controller edits as deferred
-state overrides before its native processor is destroyed. Normal callback
-processing still uses its fixed buffers and bounded queue drains.
+Deactivation-generated dirty, rescan, restart and leftover controller updates are serviced while inactive before serialization. Their final native parameter values and latency changes are included in the capture, so reopening cannot overwrite a captured preset with stale document values. Notifications already covered by capture do not schedule an endless dirty loop. Save/backup/export use the same ownership path and preserve their recording and stale-snapshot guards. CLAP still saves active state without pausing its processor.
 
-## Blockers before enabling additions
+## Controls during an ownership pause
 
-1. **Deferred native dirty-state capture.** The owner notification loop still
-   tries `save_state` directly for `StateChanged`. VST3 correctly refuses
-   active saves, and that notification is currently discarded. Enabling the
-   format would lose native preset/dirty edits from document history. The
-   replacement must enqueue a capture request for the session, retain the
-   exact token/revision/binding identity, wait for recording exclusion, and
-   reject it if those identities changed. It must coalesce/retry pending
-   requests while recording rather than quiescing audio from the owner loop.
-   This must also cover native restart/parameter-rescan ordering and updates
-   left over when the returned processor is deactivated. A queued request
-   must be cancelled if its control caller times out; the existing generic
-   15-second owner-job timeout does not cancel work already queued/running
-   and must not release recording exclusion while a later quiesce can start.
-2. **Events during the pause.** The desktop audio wrapper currently has no
-   adapter while capture runs. Parameter and note commands arriving during
-   that interval are ignored. Engine parameter caches can then suppress
-   their later resend, and sustained instrument notes are not reconstructed
-   on reacquisition. Before enablement, add bounded, preallocated pending
-   parameter storage and held-note reconciliation, including note-offs,
-   all-notes-off, removal and transport stop. Define the intended audible
-   pause policy and test it through live automation and native editor changes.
-3. **Native lifecycle rejection.** The backend's deactivation API returns
-   no result and does not propagate a native `setActive(false)` refusal.
-   The wrapper detects failure to release its instance ownership, failed
-   processors and reprepare errors, but cannot prove successful native
-   deactivation for an arbitrary rejecting plugin. Propagate and test that
-   failure before treating the inactive state contract as fully satisfied.
+The desktop wrapper preallocates one pending value per writable binding parameter and fixed 128-key held/replayed tables. Parameter changes arriving without an adapter retain their latest values even after engine caches mark them applied. Rejected admission also retains the latest value for bounded retry. Tempo and transport follow their latest state.
 
-The production catalog still sets VST3 entries to `usable: false`; runtime
-creation separately rejects VST3 even if a caller supplies a usable entry or
-saved binding. A test-only owner capability allows deterministic fixtures to
-exercise the exchange. It is absent from production builds and cannot be
-set through IPC, preferences or the project format. The plugin manager shows
-the scanned identity and why additions are unavailable. Scan failures keep
-their original error instead of being obscured by the integration message.
+Notes reconstruct from the current held state immediately before processing, after engine commands and sequencer expiry. Reconstruction first releases old native notes and then replays only currently held keys. Note-offs, UI releases, hardware epoch panic, sustain-translated releases, transport stop and removal therefore cannot replay an obsolete note. Partial admission retries remaining keys on later blocks. A native state/revision replacement on the same channel inherits engine live/hardware/sequence ownership and velocities; a removed channel or different plugin does not.
 
-## Verification scope
+The shared host retains the CLAP saturation fix: ordinary admission stays at 1024 events, immediate adapter releases use preallocated reserved capacity, and accepted main-thread parameter edits remain queued until admission has room. Inactive CLAP parameter flushes use ordered 1024-event chunks. The VST3 native event list also accommodates reset expansion and those reserved releases. Processing and reconciliation do not allocate or free host memory.
 
-Tests use the repository's independent VST3 DLL fixture on Windows/MSVC.
-They exercise real SDK processing/state calls through the desktop owner,
-engine instrument playback, `.windfall` save/reopen, independent offline
-rendering, WAV encoding/decoding, failed processors, no-callback timeout,
-late return, retirement before reacquisition, stale revisions and role
-separation. These are headless buffers, not audio-device or native-editor
-verification. No external Surge/OB-Xf, Linux or macOS run is claimed.
+## Verification and limits
 
-The calibrated host allocator test measures zero host allocations,
-reallocations or frees for callback ownership return/reacquisition and
-fixture processing. Engine boundary checks cover empty and stopped callbacks.
-The counter does not measure allocations inside an arbitrary plugin DLL.
-Validation on 2026-10-07 (every Cargo shell sourced `scripts/msvc-env.sh`,
-with `TS_RS_EXPORT_DIR=/tmp/windfall-vst3-desktop-bindings`):
+Windows/MSVC tests use the repository's independent VST3 and CLAP DLL fixtures. They exercise native processing, inactive capture, refusal/recovery, dirty notifications deferred through recording, deactivation-generated edits, song automation and note expiry during absence, UI/hardware ownership, replacement, stop/removal, queued cancellation, running-job join, late return, stale plans, independent offline instances, session save/backup/reopen, WAV export, scanner role/failure gating, and committed CLAP parameter edits during hardware saturation with unchanged playback tokens. Calibrated thread-local allocator counters measure zero host callback allocations, reallocations and frees through exchange and event reconciliation. They do not measure memory allocated inside an arbitrary external plugin DLL.
 
-- `cargo test -p windfall-plugin-host --all-features --all-targets`: 96 passed,
-  zero failed/ignored. This includes the calibrated ownership allocator test
-  and the pending-parameter save/restore regression.
-- `cargo test -p windfall-desktop --lib -- --test-threads=4`: 165 passed,
-  zero failed/ignored. After preserving live CLAP latency/tail reads in the
-  final wrapper refinement, `cargo test -p windfall-desktop --lib plugin --
-  --test-threads=4` passed all 12 plugin tests again.
-- `cargo test -p windfall-engine --lib plugins`: 7 passed, zero failed/ignored,
-  including callback allocation checks for stopped, empty, bypassed and
-  departing units.
-- Host all-features/all-target clippy and engine/desktop default-feature
-  all-target clippy, each with `-D warnings`: pass. ASIO was not enabled.
-- `cargo fmt --all -- --check` and `git diff --check`: pass.
-- Desktop `pnpm install --frozen-lockfile`, `pnpm test
-  src/features/plugins/plugins.test.tsx --maxWorkers=4` (5 tests),
-  `pnpm typecheck`, `pnpm lint` and the changed test's Prettier check: pass.
+Fixture editor routing and the explicit no-editor error are tested. A native editor window, installed external plugins and physical audio/MIDI devices remain unverified. These checks use headless buffers on Windows; no Linux or macOS execution is claimed. Test-only fixture helpers retain Windows gates.
 
-No generated bindings or wasm, parity files, README, publication metadata,
-tags, releases, pushes or pull requests are included in this feature.
+Final checks use `scripts/msvc-env.sh`, `CARGO_BUILD_JOBS=1`, worktree-local `CARGO_TARGET_DIR=target/vst3-enable-verification`, and a task-specific temporary `TS_RS_EXPORT_DIR`. UI checks use locally regenerated types and the actual WASM simulator with at most four workers. Generated bindings/WASM, plan/parity files and publication changes belong to the integrating parent and are excluded from this feature's commits.
+
+Verified on Windows on 2026-10-07:
+
+- `cargo test -p windfall-plugin-host --all-features --all-targets`: 106 passed, including native processing-stop and deactivation refusals, reserved releases, and ordered inactive parameter flushing.
+- `cargo test -p windfall-desktop --lib`: 202 passed. The final run uses `RUST_TEST_THREADS=1` so fixture build helpers run sequentially.
+- `cargo test -p windfall-engine --all-targets`: 314 passed.
+- Host all-feature/all-target and engine/desktop all-target Clippy checks with `-D warnings`, workspace and standalone fixture formatting checks, UI typecheck/lint, and six plugin UI tests with `--maxWorkers=4` passed.
+
+The committed CLAP parameter saturation regression was reproduced before its repair: 1024 hardware note-ons plus empty callbacks left the native value at `0.5` after the document committed `0.75`. Retaining rejected final values makes this same real-fixture regression pass with unchanged playback token and zero callback allocator calls. The native VST3 release regression also covers reset expansion plus saturated notes and a final reserved release without callback allocation. Deferred dirty-state tests capture the deactivation-generated `0.375` preset and its latency change from 17 to 64 samples before installing the replacement plan.
