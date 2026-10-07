@@ -178,7 +178,7 @@ impl ClapProcessor {
             processor: processor.into(),
             tail,
             tail_read: false,
-            events: EventList::new(),
+            events: EventList::new(dialect),
             dialect,
             inputs: PortSet::new(inputs, max_block, true),
             outputs: PortSet::new(outputs, max_block, false),

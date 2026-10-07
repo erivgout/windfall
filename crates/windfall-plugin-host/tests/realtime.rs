@@ -71,6 +71,171 @@ fn allocator_calls(work: impl FnOnce()) -> usize {
 const RATE: f64 = 48_000.0;
 
 #[test]
+fn saturated_adapter_releases_are_delivered_without_allocator_calls() {
+    for id in [SINE, MIDI_SINE] {
+        let (_module, mut instance) = create(id);
+        let mut instrument = instance.prepare_instrument(RATE as f32, 64).unwrap();
+        let mut left = [0.0; 256];
+        let mut right = left;
+        instrument.process(&mut left, &mut right);
+        let calls = allocator_calls(|| {
+            for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+                instrument.note_on(64, 1.0);
+            }
+            instrument.processor().process(&mut [], &mut []);
+            instrument.all_notes_off();
+            instrument.process(&mut left, &mut right);
+        });
+        assert_eq!(calls, 0, "{id}");
+        assert!(
+            left.iter().all(|sample| *sample == 0.0),
+            "{id}: queued notes sounded after panic"
+        );
+        assert_eq!(instrument.active_voices(), 0);
+        instance.release_instrument(instrument);
+    }
+}
+
+#[test]
+fn saturated_adapter_note_off_preserves_an_independent_key_without_allocating() {
+    for id in [SINE, MIDI_SINE] {
+        let (_module, mut instance) = create(id);
+        let mut instrument = instance.prepare_instrument(RATE as f32, 64).unwrap();
+        let mut left = [0.0; 256];
+        let mut right = left;
+        instrument.note_on(69, 1.0); // independently held UI key
+        instrument.note_on(64, 1.0);
+        instrument.process(&mut left, &mut right);
+        let calls = allocator_calls(|| {
+            for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+                assert!(instrument.processor().set_param(0, common::SINE_LEVEL, 0.5));
+            }
+            instrument.note_off(64);
+            instrument.process(&mut left, &mut right);
+        });
+        assert_eq!(calls, 0, "{id}");
+        assert_eq!(instrument.active_voices(), 1);
+        assert!(
+            left.iter().any(|sample| sample.abs() > 0.01),
+            "{id}: independent key was silenced"
+        );
+        instrument.note_off(69);
+        instrument.process(&mut left, &mut right);
+        instrument.process(&mut left, &mut right); // drain the fixture's latency
+        assert!(
+            left.iter().all(|sample| *sample == 0.0),
+            "{id}: released key is still sounding"
+        );
+        instance.release_instrument(instrument);
+    }
+}
+
+#[test]
+fn saturated_release_storm_stays_bounded_and_preserves_accepted_parameters() {
+    for id in [SINE, MIDI_SINE] {
+        let (_module, mut instance) = create(id);
+        let mut instrument = instance.prepare_instrument(RATE as f32, 64).unwrap();
+        let mut left = [0.0; 256];
+        let mut right = left;
+        for key in 0..128 {
+            instrument.note_on(key, 1.0);
+        }
+        instrument.process(&mut left, &mut right);
+        let calls = allocator_calls(|| {
+            for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+                assert!(
+                    instrument
+                        .processor()
+                        .set_param(0, common::SINE_LEVEL, 0.75)
+                );
+            }
+            for _ in 0..8 {
+                for key in 0..128 {
+                    instrument.note_off(key);
+                }
+                instrument.all_notes_off();
+            }
+            assert!(
+                !instrument
+                    .processor()
+                    .set_param(0, common::SINE_LEVEL, 0.25)
+            );
+            instrument.process(&mut left, &mut right);
+            instrument.process(&mut left, &mut right);
+        });
+        assert_eq!(calls, 0, "{id}");
+        assert_eq!(instrument.health().dropped_events, 1, "{id}");
+        assert_eq!(instrument.active_voices(), 0);
+        assert!(left.iter().all(|sample| *sample == 0.0), "{id}");
+        assert_eq!(instance.param_value(common::SINE_LEVEL), Some(0.75));
+        instance.release_instrument(instrument);
+    }
+}
+
+#[test]
+fn saturated_releases_keep_order_after_intervening_same_frame_notes() {
+    for id in [SINE, MIDI_SINE] {
+        for panic in [false, true] {
+            let (_module, mut instance) = create(id);
+            let mut instrument = instance.prepare_instrument(RATE as f32, 64).unwrap();
+            let mut left = [0.0; 256];
+            let mut right = left;
+            instrument.process(&mut left, &mut right);
+            let calls = allocator_calls(|| {
+                if panic {
+                    instrument.all_notes_off();
+                } else {
+                    instrument.note_off(64);
+                }
+                instrument.note_on(64, 1.0);
+                for _ in 0..windfall_plugin_host::EVENT_CAPACITY - 2 {
+                    assert!(instrument.processor().set_param(0, common::SINE_LEVEL, 0.5));
+                }
+                // The earlier release cannot cover the intervening note-on.
+                if panic {
+                    instrument.all_notes_off();
+                } else {
+                    instrument.note_off(64);
+                }
+                instrument.process(&mut left, &mut right);
+            });
+            assert_eq!(calls, 0, "{id}, panic={panic}");
+            assert_eq!(instrument.health().dropped_events, 0);
+            assert_eq!(instrument.active_voices(), 0);
+            assert!(
+                left.iter().all(|sample| *sample == 0.0),
+                "{id}, panic={panic}"
+            );
+            instance.release_instrument(instrument);
+        }
+    }
+}
+
+#[test]
+fn accepted_main_thread_parameter_burst_waits_for_bounded_audio_admission() {
+    let (_module, mut instance) = create(GAIN);
+    let mut processor = instance.activate(RATE, 64).unwrap();
+    for _ in 0..4095 {
+        assert!(instance.set_param(gain::GAIN, 0.25));
+    }
+    assert!(instance.set_param(gain::GAIN, 0.75));
+    let mut left = [1.0; 64];
+    let mut right = left;
+    let calls = allocator_calls(|| {
+        processor.process(&mut [], &mut []);
+        for _ in 0..4 {
+            left.fill(1.0);
+            right.fill(1.0);
+            processor.process(&mut left, &mut right);
+        }
+    });
+    assert_eq!(calls, 0);
+    assert_eq!(left, [0.75; 64]);
+    assert_eq!(processor.health().dropped_events, 0);
+    instance.deactivate(processor);
+}
+
+#[test]
 fn vst3_ownership_boundaries_move_adapters_without_allocator_calls() {
     use windfall_plugin_host::ownership::exchange;
     let path = common::plugin_file("vst3-ownership", "fixture.vst3");
@@ -281,7 +446,7 @@ fn the_adapters_process_without_allocating() {
 }
 
 #[test]
-fn translated_midi_overflow_is_bounded_and_reported_without_allocating() {
+fn translated_midi_panics_fit_the_bounded_list_without_allocating() {
     let (_module, mut instance) = create(MIDI_SINE);
     let mut processor = instance.activate(RATE, 64).unwrap();
     let mut left = [0.0; 64];
@@ -293,10 +458,6 @@ fn translated_midi_overflow_is_bounded_and_reported_without_allocating() {
         processor.process(&mut left, &mut right);
     });
     assert_eq!(calls, 0);
-    assert_eq!(
-        processor.health().dropped_events,
-        (windfall_plugin_host::EVENT_CAPACITY * 32 - (windfall_plugin_host::EVENT_CAPACITY + 32))
-            as u32
-    );
+    assert_eq!(processor.health().dropped_events, 0);
     instance.deactivate(processor);
 }

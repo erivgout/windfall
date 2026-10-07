@@ -25,9 +25,15 @@ use std::time::Instant;
 use crate::containment::{HealthCells, NoDenormals, PluginHealth, scrub};
 use crate::events::{HostEvent, PluginEvent, Transport};
 
-/// Events the processor can hold for one block. More are dropped and
-/// counted in [`PluginHealth::dropped_events`].
+/// Ordinary events admitted for one block. More are refused and counted in
+/// [`PluginHealth::dropped_events`]. Instrument adapter releases have a separate
+/// bounded reserve.
 pub const EVENT_CAPACITY: usize = 1024;
+
+/// The instrument adapter releases channel-zero keys at frame zero. Once
+/// ordinary admission stops, no new note-ons can intervene, so at most one
+/// release per key and one global panic need extra space.
+pub(crate) const IMMEDIATE_RELEASE_CAPACITY: usize = 128 + 1;
 
 /// A tail length that stands for "never ends".
 pub(crate) const ENDLESS_TAIL: u32 = u32::MAX;
@@ -169,7 +175,7 @@ impl PluginProcessor {
             shape: parts.shape,
             sample_rate: parts.sample_rate,
             max_block,
-            pending: Vec::with_capacity(EVENT_CAPACITY),
+            pending: Vec::with_capacity(EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY),
             from_main: parts.from_main,
             to_main: parts.to_main,
             transport: Transport::default(),
@@ -236,6 +242,61 @@ impl PluginProcessor {
             .partition_point(|queued| queued.time() <= event.time());
         self.pending.insert(at, event);
         true
+    }
+
+    /// Guaranteed admission for the adapter's immediate releases. The public
+    /// timed-event API keeps its ordinary capacity and rejection semantics.
+    /// Under pressure, a repeated release is redundant only if no matching
+    /// note-on follows the previous release at the same frame.
+    fn push_immediate_release(&mut self, event: HostEvent) {
+        let at = self.pending.partition_point(|queued| queued.time() == 0);
+        if self.pending.len() >= EVENT_CAPACITY {
+            let released =
+                self.pending[..at]
+                    .iter()
+                    .rev()
+                    .find_map(|queued| match (event, *queued) {
+                        (
+                            HostEvent::NoteOff { key, .. },
+                            HostEvent::NoteOn {
+                                key: other,
+                                channel: 0,
+                                ..
+                            },
+                        ) if key == other => Some(false),
+                        (
+                            HostEvent::NoteOff { key, .. },
+                            HostEvent::NoteOff {
+                                key: other,
+                                channel: 0,
+                                ..
+                            },
+                        ) if key == other => Some(true),
+                        (HostEvent::AllNotesOff { .. }, HostEvent::NoteOn { .. }) => Some(false),
+                        (_, HostEvent::AllNotesOff { .. }) => Some(true),
+                        _ => None,
+                    });
+            if released == Some(true) {
+                return;
+            }
+        }
+        // Every additional event is a distinct key release or a panic, and
+        // ordinary push_event cannot add note-ons while this reserve is used.
+        debug_assert!(self.pending.len() < EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY);
+        self.pending.insert(at, event);
+    }
+
+    pub(crate) fn release_note(&mut self, key: u8) {
+        self.push_immediate_release(HostEvent::NoteOff {
+            time: 0,
+            key: key.min(127),
+            channel: 0,
+            velocity: 0.0,
+        });
+    }
+
+    pub(crate) fn release_all_notes(&mut self) {
+        self.push_immediate_release(HostEvent::AllNotesOff { time: 0 });
     }
 
     /// Starts a note on frame `time` of the next block. `velocity` runs
@@ -337,8 +398,11 @@ impl PluginProcessor {
     }
 
     fn take_main_thread_events(&mut self) {
-        // Bound the work even if the producer keeps filling concurrently.
-        for _ in 0..crate::instance::QUEUE_CAPACITY {
+        // These parameter edits were already accepted by the main-thread
+        // queue. Leave excess there until a block has room, including after
+        // a zero-frame boundary or while immediate releases use the reserve.
+        // This also bounds work if the producer keeps filling concurrently.
+        for _ in 0..EVENT_CAPACITY.saturating_sub(self.pending.len()) {
             let Ok(event) = self.from_main.pop() else {
                 break;
             };

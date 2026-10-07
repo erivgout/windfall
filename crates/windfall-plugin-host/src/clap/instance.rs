@@ -252,7 +252,7 @@ impl ClapInstance {
             dialect,
             params,
             due: Vec::new(),
-            flush_list: EventList::new(),
+            flush_list: EventList::new(Dialect::None),
         })
     }
 
@@ -334,13 +334,22 @@ impl InstanceBackend for ClapInstance {
         let Some(mut plugin) = self.instance.inactive_plugin_handle() else {
             return;
         };
-        self.flush_list.fill(changes, Dialect::None);
         let mut outgoing = Outgoing { sink: out };
-        params.flush(
-            &mut plugin,
-            &InputEvents::from_buffer(&self.flush_list),
-            &mut OutputEvents::from_buffer(&mut outgoing),
-        );
+        let mut remaining = changes;
+        loop {
+            let (chunk, rest) =
+                remaining.split_at(remaining.len().min(crate::processor::EVENT_CAPACITY));
+            self.flush_list.fill(chunk, Dialect::None);
+            params.flush(
+                &mut plugin,
+                &InputEvents::from_buffer(&self.flush_list),
+                &mut OutputEvents::from_buffer(&mut outgoing),
+            );
+            remaining = rest;
+            if remaining.is_empty() {
+                break;
+            }
+        }
     }
 
     fn save_state(&mut self, limit: usize) -> Result<Option<Vec<u8>>, PluginError> {

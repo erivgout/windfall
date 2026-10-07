@@ -9,6 +9,48 @@ use windfall_plugin_host::{PluginError, PluginNotification, PluginState};
 const RATE: f64 = 48_000.0;
 
 #[test]
+fn retirement_flushes_more_parameter_edits_than_one_clap_list_can_hold() {
+    for transfer_without_audio in [false, true] {
+        retirement_flush(transfer_without_audio);
+    }
+}
+
+fn retirement_flush(transfer_without_audio: bool) {
+    let (_module, mut instance) = create(GAIN);
+    let mut processor = instance.activate(RATE, 64).unwrap();
+    // Include the audio-side pending list as well as the full main-thread
+    // queue. Retirement must preserve their order without truncating either.
+    for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+        assert!(processor.set_param(0, gain::GAIN, 0.125));
+    }
+    for _ in 0..4095 {
+        assert!(instance.set_param(gain::GAIN, 0.25));
+    }
+    assert!(instance.set_param(gain::GAIN, 0.75));
+    assert!(
+        !instance.set_param(gain::GAIN, 1.5),
+        "the queue stays bounded"
+    );
+    if transfer_without_audio {
+        processor.process(&mut [], &mut []);
+    }
+    instance.deactivate(processor);
+    assert_eq!(instance.param_value(gain::GAIN), Some(0.75));
+    let saved = instance.save_state().unwrap();
+
+    assert!(instance.set_param(gain::GAIN, 1.0));
+    instance.load_state(&saved).unwrap();
+    let mut processor = instance.activate(RATE, 64).unwrap();
+    let mut left = [1.0; 64];
+    let mut right = left;
+    processor.process(&mut left, &mut right);
+    assert_eq!(left, [0.75; 64]);
+    assert_eq!(right, left);
+    instance.deactivate(processor);
+    assert_eq!(instance.save_state().unwrap(), saved);
+}
+
+#[test]
 fn parameters_are_listed_with_their_ranges_and_flags() {
     let (_module, instance) = create(GAIN);
     let params = instance.params();
