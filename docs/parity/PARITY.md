@@ -14,13 +14,13 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**62 of 342 rows accounted for (18.1%).** A row is accounted for when it is done or won't do.
+**59 of 342 rows accounted for (17.3%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 238 |
-| In progress | 42 |
-| Done | 60 |
+| Todo | 231 |
+| In progress | 52 |
+| Done | 57 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
@@ -28,7 +28,7 @@ As of 2026-10-07. Sources:
 | Core features | 23 | 13 | 7 | 2 | 1 |
 | Main windows | 113 | 56 | 23 | 33 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 75 | 0 | 5 | 0 |
+| Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 18 | 4 | 14 | 0 |
@@ -38,10 +38,10 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 9 | 6 | 22 | 2 |
-| 2. Write a song | 99 | 50 | 23 | 26 | 0 |
+| 2. Write a song | 99 | 50 | 26 | 23 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
-| 5. The long tail | 129 | 129 | 0 | 0 | 0 |
+| 5. The long tail | 129 | 122 | 7 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -264,21 +264,21 @@ As of 2026-10-07. Sources:
 | Effector (12 FX) | TBD | 5 | todo |  |
 | EQUO | TBD | 5 | todo |  |
 | Frequency Splitter | TBD | 5 | todo |  |
-| Fruity Balance | TBD | 5 | todo |  |
+| Fruity Balance | Balance | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Blood Overdrive | TBD | 5 | todo |  |
 | Fruity Chorus | TBD | 5 | todo |  |
 | Fruity Compressor | Compressor | 2 | done | Phase-2 core compressor per the plan. |
 | Fruity Convolver | TBD | 5 | todo | Impulse responses shipped with FL are Image-Line content; needs own. |
 | Fruity Delay 2 | TBD | 5 | todo |  |
-| Fruity Delay 3 | Delay | 2 | done | Phase-2 core delay per the plan. |
+| Fruity Delay 3 | Delay | 2 | in-progress | Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row. |
 | Fruity Delay Bank | TBD | 5 | todo |  |
-| Fruity Fast Dist | TBD | 5 | todo |  |
+| Fruity Fast Dist | Drive distortion | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Filter | TBD | 5 | todo |  |
 | Fruity Flanger | TBD | 5 | todo |  |
 | Fruity Flangus | TBD | 5 | todo |  |
 | Fruity Formula Controller | TBD | 5 | todo |  |
 | Fruity HTML NoteBook | TBD | 5 | todo |  |
-| Fruity Limiter | Limiter | 2 | done | Phase-2 core limiter per the plan. |
+| Fruity Limiter | Limiter | 2 | in-progress | Lookahead peak limiting, latency compensation and gain-reduction readout are implemented. The row still requires compression/gate modes and scrolling level history; those are pending dynamics/analyzer work. |
 | Fruity Love Philter | TBD | 5 | todo |  |
 | Fruity LSD | TBD | 5 | todo | Windows only in FL (built on Microsoft DirectX). |
 | Fruity Multiband Compressor | TBD | 5 | todo |  |
@@ -286,15 +286,15 @@ As of 2026-10-07. Sources:
 | Fruity NoteBook 2 | TBD | 5 | todo |  |
 | Fruity PanOMatic | TBD | 5 | todo |  |
 | Fruity Parametric EQ | TBD | 5 | todo |  |
-| Fruity Parametric EQ2 | Parametric EQ | 2 | done | Phase-2 core EQ per the plan. |
+| Fruity Parametric EQ2 | Parametric EQ | 2 | in-progress | Seven-band EQ processing and interactive filter-response editing are implemented. The displayed response is calculated from parameters; a live audio spectrum is still pending. See roadmap T8. |
 | Fruity Phaser | TBD | 5 | todo |  |
 | Fruity Reeverb 2 | Reverb | 2 | done | Phase-2 core reverb per the plan. |
 | Fruity Scratcher | TBD | 5 | todo |  |
 | Fruity Send | TBD | 5 | todo |  |
-| Fruity Soft Clipper | TBD | 5 | todo |  |
+| Fruity Soft Clipper | Soft clipper | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Squeeze | TBD | 5 | todo |  |
 | Fruity Stereo Enhancer | TBD | 5 | todo |  |
-| Fruity Stereo Shaper | TBD | 5 | todo |  |
+| Fruity Stereo Shaper | Stereo matrix | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Vocoder | TBD | 5 | todo |  |
 | Fruity WaveShaper | TBD | 5 | todo |  |
 | Fruity X-Y Controller | TBD | 5 | todo |  |
@@ -314,12 +314,12 @@ As of 2026-10-07. Sources:
 | VFX Script | TBD | 6 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. Grouped with the plan's phase-6 scripting. |
 | Fruity 7 Band EQ | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
 | Fruity Bass Boost | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Center | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
+| Fruity Center | DC blocker | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Delay | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
 | Fruity Fast LP | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
 | Fruity Free Filter | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Mute 2 | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Phase Inverter | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
+| Fruity Mute 2 | Channel mute | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Phase Inverter | Polarity | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Reeverb | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. |
 
 ## Visual and video

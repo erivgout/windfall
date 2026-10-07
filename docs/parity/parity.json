@@ -2411,12 +2411,12 @@
       "area": "effect",
       "fl_feature": "Fruity Balance",
       "summary": "A plain volume and pan utility.",
-      "windfall_name": null,
+      "windfall_name": "Balance",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-blood-overdrive",
@@ -2485,10 +2485,10 @@
       "summary": "A tempo-synced echo with filtering, modulation and analog-style degradation.",
       "windfall_name": "Delay",
       "phase": 2,
-      "status": "done",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Phase-2 core delay per the plan."
+      "notes": "Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row."
     },
     {
       "id": "fx-fruity-delay-bank",
@@ -2507,12 +2507,12 @@
       "area": "effect",
       "fl_feature": "Fruity Fast Dist",
       "summary": "A simple distortion with low CPU cost.",
-      "windfall_name": null,
+      "windfall_name": "Drive distortion",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-filter",
@@ -2581,10 +2581,10 @@
       "summary": "Controls peaks on one band by limiting or compression, with a gate and a scrolling level display.",
       "windfall_name": "Limiter",
       "phase": 2,
-      "status": "done",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Phase-2 core limiter per the plan."
+      "notes": "Lookahead peak limiting, latency compensation and gain-reduction readout are implemented. The row still requires compression/gate modes and scrolling level history; those are pending dynamics/analyzer work."
     },
     {
       "id": "fx-fruity-love-philter",
@@ -2677,10 +2677,10 @@
       "summary": "A seven-band parametric equalizer with a live spectrum display.",
       "windfall_name": "Parametric EQ",
       "phase": 2,
-      "status": "done",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Phase-2 core EQ per the plan."
+      "notes": "Seven-band EQ processing and interactive filter-response editing are implemented. The displayed response is calculated from parameters; a live audio spectrum is still pending. See roadmap T8."
     },
     {
       "id": "fx-fruity-phaser",
@@ -2735,12 +2735,12 @@
       "area": "effect",
       "fl_feature": "Fruity Soft Clipper",
       "summary": "A soft-knee limiter that rounds off peaks instead of clipping them.",
-      "windfall_name": null,
+      "windfall_name": "Soft clipper",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-squeeze",
@@ -2771,12 +2771,12 @@
       "area": "effect",
       "fl_feature": "Fruity Stereo Shaper",
       "summary": "A left/right and mid/side mixing matrix with per-channel phase and delay controls.",
-      "windfall_name": null,
+      "windfall_name": "Stereo matrix",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-vocoder",
@@ -3011,12 +3011,12 @@
       "area": "effect",
       "fl_feature": "Fruity Center",
       "summary": "Removes DC offset from a signal in real time.",
-      "windfall_name": null,
+      "windfall_name": "DC blocker",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-delay",
@@ -3059,24 +3059,24 @@
       "area": "effect",
       "fl_feature": "Fruity Mute 2",
       "summary": "Mutes the left, right or both channels, for automating mutes inside an effect chain.",
-      "windfall_name": null,
+      "windfall_name": "Channel mute",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-phase-inverter",
       "area": "effect",
       "fl_feature": "Fruity Phase Inverter",
       "summary": "Inverts the phase of the left or right channel.",
-      "windfall_name": null,
+      "windfall_name": "Polarity",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
     },
     {
       "id": "fx-fruity-reeverb",

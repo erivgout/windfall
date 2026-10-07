@@ -99,4 +99,27 @@ repair task owns all three paths, with targeted native/UI regressions and
 unchanged-source deduplication/undo checks. No claim of completed library parity
 is made while these findings remain open.
 
+## Stable inspector ownership and utility effects
+
+Inspector lifetime repair `7bd55ed5` is merged through `4cb9287a`. Its own
+replacement publication no longer ends the dialog awaiting Apply; explicit
+selection changes, closure and project replacement still revoke ownership.
+The implementation task passed 496 editor/slicer/playlist/WASM UI tests,
+including 11 actual-inspector regressions, plus typecheck and focused lint.
+Independent editing round three and document-reply round two are pending.
+
+Seven measured utility effects `3181d87a` are merged through `5254a40e`.
+The parent regenerated 163 TypeScript files and the shared browser WASM to
+1,775,678 bytes. [Utility effects](../UTILITY-EFFECTS.md) records the worker's
+signal, smoothing, allocation, latency, aliasing and throughput evidence;
+combined parent validation and independent review remain pending.
+
+The roadmap's accounting audit was reconciled against source: existing EQ
+shows a parameter response rather than a live spectrum; existing limiter lacks
+the row's compression/gate/history display; existing delay lacks modulation.
+Those three rows now explicitly retain their implemented core processing while
+listing remaining behavior as in progress. Utility rows also remain in
+progress pending review. Current totals are 57 done, 52 in progress, 231 todo
+and two won't-do rows, preserving all 342 requirements.
+
 Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.

@@ -1,5 +1,69 @@
 {
   "effects": {
+    "balance": {
+      "defaults": {
+        "gain": 1.0,
+        "pan": 0.0,
+        "type": "balance"
+      },
+      "name": "Balance",
+      "params": [
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "gain",
+          "kind": "float",
+          "max": 4.0,
+          "min": 0.0,
+          "name": "Gain",
+          "scale": "linear",
+          "unit": "gain"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "pan",
+          "kind": "float",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "Pan",
+          "scale": "linear",
+          "unit": "pan"
+        }
+      ]
+    },
+    "channelMute": {
+      "defaults": {
+        "left": false,
+        "right": false,
+        "type": "channelMute"
+      },
+      "name": "Channel mute",
+      "params": [
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "left",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mute left",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "right",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mute right",
+          "scale": "linear",
+          "unit": "none"
+        }
+      ]
+    },
     "compressor": {
       "defaults": {
         "attackMs": 10.0,
@@ -122,6 +186,26 @@
           "name": "Mix",
           "scale": "linear",
           "unit": "fraction"
+        }
+      ]
+    },
+    "dcBlock": {
+      "defaults": {
+        "cutoffHz": 5.0,
+        "type": "dcBlock"
+      },
+      "name": "DC blocker",
+      "params": [
+        {
+          "choices": [],
+          "default": 5.0,
+          "id": "cutoffHz",
+          "kind": "float",
+          "max": 40.0,
+          "min": 1.0,
+          "name": "Cutoff",
+          "scale": "logarithmic",
+          "unit": "hertz"
         }
       ]
     },
@@ -316,6 +400,50 @@
           "name": "Mix",
           "scale": "linear",
           "unit": "fraction"
+        }
+      ]
+    },
+    "distortion": {
+      "defaults": {
+        "driveDb": 12.0,
+        "outputDb": -6.0,
+        "shape": 0.5,
+        "type": "distortion"
+      },
+      "name": "Drive distortion",
+      "params": [
+        {
+          "choices": [],
+          "default": 12.0,
+          "id": "driveDb",
+          "kind": "float",
+          "max": 36.0,
+          "min": 0.0,
+          "name": "Drive",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "shape",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Shape",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": -6.0,
+          "id": "outputDb",
+          "kind": "float",
+          "max": 0.0,
+          "min": -24.0,
+          "name": "Output",
+          "scale": "linear",
+          "unit": "decibels"
         }
       ]
     },
@@ -771,6 +899,38 @@
         }
       ]
     },
+    "polarity": {
+      "defaults": {
+        "left": false,
+        "right": false,
+        "type": "polarity"
+      },
+      "name": "Polarity",
+      "params": [
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "left",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Invert left",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "right",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Invert right",
+          "scale": "linear",
+          "unit": "none"
+        }
+      ]
+    },
     "reverb": {
       "defaults": {
         "damping": 0.5,
@@ -908,6 +1068,147 @@
           "name": "Mix",
           "scale": "linear",
           "unit": "fraction"
+        }
+      ]
+    },
+    "softClipper": {
+      "defaults": {
+        "ceilingDb": 0.0,
+        "knee": 0.5,
+        "type": "softClipper"
+      },
+      "name": "Soft clipper",
+      "params": [
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "ceilingDb",
+          "kind": "float",
+          "max": 0.0,
+          "min": -24.0,
+          "name": "Ceiling",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "knee",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.05000000074505806,
+          "name": "Knee",
+          "scale": "linear",
+          "unit": "fraction"
+        }
+      ]
+    },
+    "stereoMatrix": {
+      "defaults": {
+        "leftDelayMs": 0.0,
+        "ll": 1.0,
+        "lr": 0.0,
+        "mode": "stereo",
+        "rightDelayMs": 0.0,
+        "rl": 0.0,
+        "rr": 1.0,
+        "type": "stereoMatrix"
+      },
+      "name": "Stereo matrix",
+      "params": [
+        {
+          "choices": [
+            {
+              "label": "Stereo",
+              "value": "stereo"
+            },
+            {
+              "label": "Mid/side",
+              "value": "midSide"
+            },
+            {
+              "label": "Encode mid/side",
+              "value": "encodeMidSide"
+            },
+            {
+              "label": "Decode mid/side",
+              "value": "decodeMidSide"
+            }
+          ],
+          "default": 0.0,
+          "id": "mode",
+          "kind": "choice",
+          "max": 3.0,
+          "min": 0.0,
+          "name": "Routing",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "ll",
+          "kind": "float",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "Input 1 to output 1",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lr",
+          "kind": "float",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "Input 2 to output 1",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "rl",
+          "kind": "float",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "Input 1 to output 2",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "rr",
+          "kind": "float",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "Input 2 to output 2",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "leftDelayMs",
+          "kind": "float",
+          "max": 50.0,
+          "min": 0.0,
+          "name": "Left delay",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "rightDelayMs",
+          "kind": "float",
+          "max": 50.0,
+          "min": 0.0,
+          "name": "Right delay",
+          "scale": "linear",
+          "unit": "milliseconds"
         }
       ]
     }
