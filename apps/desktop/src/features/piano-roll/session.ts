@@ -61,6 +61,7 @@ export class PianoRollSession {
   private focusTarget: (() => HTMLElement | null) | null = null
   private laneKey: string | null = null
   private readonly epoch = savedEpoch
+  private stopProject: (() => void) | null = null
 
   constructor(editor: Editor) {
     this.editor = editor
@@ -79,6 +80,7 @@ export class PianoRollSession {
   }
 
   setEditing(patternId: PatternId, channelId: ChannelId): void {
+    this.stopProject ??= onProjectReplaced(() => this.editor.cancel())
     this.editing = { patternId, channelId }
   }
 
@@ -237,6 +239,8 @@ export class PianoRollSession {
   }
 
   dispose(): void {
+    this.stopProject?.()
+    this.stopProject = null
     this.saveView()
     this.stopView?.()
     this.stopView = null

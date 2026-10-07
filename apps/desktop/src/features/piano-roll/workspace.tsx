@@ -58,6 +58,7 @@ import { Ruler } from "./ruler"
 import { Scrollbar } from "./scrollbar"
 import { setCurrentSession } from "./session"
 import { gridSpecFor, snapTicks } from "./snap"
+import { scaleRows } from "./scales"
 import { usePianoRollStore } from "./store"
 import { PianoRollToolbar } from "./toolbar"
 import { ValueLane } from "./value-lane"
@@ -108,6 +109,9 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
     (state) => state.project.settings.timeSignature
   )
   const snapId = usePianoRollStore((state) => state.snap)
+  const scaleRoot = usePianoRollStore((state) => state.scaleRoot)
+  const scaleId = usePianoRollStore((state) => state.scaleId)
+  const highlightScale = usePianoRollStore((state) => state.highlightScale)
   const ghosts = usePianoRollStore((state) => state.ghosts)
   const laneKind = usePianoRollStore((state) => state.laneKind)
   const laneHeight = usePianoRollStore((state) => state.laneHeight)
@@ -227,6 +231,13 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   useEffect(() => {
     if (view) session.showLane(laneKey)
   }, [session, view, laneKey])
+
+  // Row shading is shared by Canvas 2D, WebGL2 and WebGPU.
+  useEffect(() => {
+    view?.setRows(
+      scaleRows(highlightScale ? { root: scaleRoot, id: scaleId } : null)
+    )
+  }, [view, scaleRoot, scaleId, highlightScale])
 
   // The finest grid lines follow the snap for as long as the zoom shows them.
   useEffect(() => {

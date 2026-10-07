@@ -54,6 +54,7 @@ const ACTIONS: Action[] = [
     enabled: inRoll,
     checked: () => roll().tool === tool,
     run: () => {
+      editor()?.cancel()
       roll().setTool(tool)
       currentSession()?.focusGrid()
     },
