@@ -214,6 +214,14 @@ export class TransportSim {
     for (const onset of onsets) {
       const channel = project.channels.find((item) => item.id === onset.channel)
       if (!channel || channel.muted || (anySolo && !channel.solo)) continue
+      if (
+        project.plugins?.some(
+          (plugin) =>
+            plugin.target.type === "instrument" &&
+            plugin.target.channel === channel.id
+        )
+      )
+        continue
       // A sampler has its sample gain, an instrument its output level.
       const gain =
         channel.source.type === "sampler"

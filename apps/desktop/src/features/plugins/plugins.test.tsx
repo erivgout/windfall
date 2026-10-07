@@ -6,6 +6,9 @@ import { targetState } from "@/lib/automation/targets"
 import { useProjectStore, useUiStore } from "@/lib/store"
 import { dispatch, undo } from "@/lib/store/project"
 import { startTestApp } from "@/test/harness"
+import { createMockBackend } from "@/lib/ipc/mock"
+import { simulatedLatencyFrames } from "@/lib/ipc/sim/effects"
+import { TransportSim } from "@/lib/ipc/sim/transport"
 import { useRackStore } from "@/features/channel-rack/rack-store"
 import { useEffectsUi } from "@/features/mixer/effects-ui"
 import { PluginControls } from "./controls"
@@ -103,6 +106,32 @@ beforeEach(async () => {
 afterEach(() => {
   app.stop()
   vi.restoreAllMocks()
+})
+it("retains unavailable native references and reports silent browser placeholders", async () => {
+  await act(async () => {
+    await dispatch({ type: "addPluginInstrument", plugin: binding() })
+  })
+  const project = (await app.backend.documentSnapshot()).project
+  const plugin = project.plugins![0]
+  const mock = createMockBackend({ project, storage: null })
+  try {
+    expect((await mock.pluginsState()).instances).toEqual([
+      {
+        target: plugin.target,
+        error: "Native plugins require the Windows desktop app",
+      },
+    ])
+    expect(simulatedLatencyFrames(project, 48000)).toBe(0)
+    const transport = new TransportSim(project.patterns[0].id)
+    if (plugin.target.type !== "instrument")
+      throw new Error("instrument expected")
+    transport.noteOn(plugin.target.channel, 60, 1)
+    expect(
+      transport.advance(project, 0.01).meters.every((level) => level === 0)
+    ).toBe(true)
+  } finally {
+    mock.dispose()
+  }
 })
 
 it("searches scanned identities, retries blocked files, and selects an added instrument", async () => {

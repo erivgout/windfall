@@ -24,7 +24,14 @@ export function simulatedLatencyFrames(
     const track = tracks.find((item) => item.id === id)
     if (!track || depth > tracks.length) return 0
     const own = track.effects.reduce(
-      (sum, slot) => sum + slotLatency(slot, sampleRate),
+      (sum, slot) =>
+        sum +
+        (project.plugins?.some(
+          (plugin) =>
+            plugin.target.type === "effect" && plugin.target.effect === slot.id
+        )
+          ? 0
+          : slotLatency(slot, sampleRate)),
       0
     )
     if (track.id === MASTER_TRACK || track.output === null) return own
@@ -37,6 +44,14 @@ export function simulatedLatencyFrames(
   }
   for (const channel of project.channels) {
     if (channel.source.type !== "instrument") continue
+    if (
+      project.plugins?.some(
+        (plugin) =>
+          plugin.target.type === "instrument" &&
+          plugin.target.channel === channel.id
+      )
+    )
+      continue
     longest = Math.max(
       longest,
       INSTRUMENT_LATENCY_FRAMES + toOutput(channel.mixerTrack, 0)
@@ -71,6 +86,13 @@ export function simulatedGainReductions(
   return project.mixer.tracks.flatMap((track, index) => {
     const levelDb = gainToDb(levelOf(index))
     return track.effects.flatMap((slot): GainReduction[] => {
+      if (
+        project.plugins?.some(
+          (plugin) =>
+            plugin.target.type === "effect" && plugin.target.effect === slot.id
+        )
+      )
+        return []
       const db = reductionDb(slot, levelDb)
       return db === null ? [] : [{ effect: slot.id, db }]
     })
