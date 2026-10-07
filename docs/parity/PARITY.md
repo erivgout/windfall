@@ -14,13 +14,13 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**52 of 342 rows accounted for (15.2%).** A row is accounted for when it is done or won't do.
+**55 of 342 rows accounted for (16.1%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 258 |
+| Todo | 255 |
 | In progress | 32 |
-| Done | 50 |
+| Done | 53 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
@@ -31,7 +31,7 @@ As of 2026-10-07. Sources:
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 3 | 0 | 0 | 0 |
-| File formats and plugin hosting | 36 | 21 | 6 | 9 | 0 |
+| File formats and plugin hosting | 36 | 18 | 6 | 12 | 0 |
 | Workflow, MIDI and settings | 39 | 30 | 5 | 4 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
@@ -39,7 +39,7 @@ As of 2026-10-07. Sources:
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
 | 2. Write a song | 99 | 60 | 14 | 25 | 0 |
-| 3. Record and edit audio | 34 | 25 | 4 | 5 | 0 |
+| 3. Record and edit audio | 34 | 22 | 4 | 8 | 0 |
 | 4. Plugins and files | 13 | 7 | 6 | 0 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
@@ -356,9 +356,9 @@ As of 2026-10-07. Sources:
 | State file (.fst) | Presets | 2 | todo | Windfall presets use its own format; FL's bundled presets cannot be shipped. |
 | Score file (.fsc) | Score files | 2 | todo | FL 2026 treats .mid and .fsc interchangeably for scores. |
 | Sample import: WAV | WAV import | 1 | done |  |
-| Sample import: MP3 | MP3 import | 3 | todo | The plan lists MP3 as a read format without naming a phase; placed with the other codecs in phase 3. |
-| Sample import: OGG | OGG import | 3 | todo | The plan lists OGG as a read format without naming a phase; placed with the other codecs in phase 3. |
-| Sample import: FLAC | FLAC import | 3 | todo | unverified: FLAC as an FL sample import format (the manual pages checked name WAV, MP3 and OGG). The plan lists FLAC as a read format. |
+| Sample import: MP3 | MP3 import | 3 | done | Native picker and browser support MP3; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection. |
+| Sample import: OGG | OGG import | 3 | done | Native picker and browser support OGG; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection. |
+| Sample import: FLAC | FLAC import | 3 | done | Native picker and browser support FLAC; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection. |
 | MIDI file import | MIDI import | 4 | in-progress | windfall-midi reads SMF formats 0/1/2, PPQ/SMPTE and creates checked project command batches with optional GM drums, tempo automation, bar splits and shared sections. Unsupported events are reported. Shell and desktop import workflow remain. |
 | Sample import: ReCycle loops (.rex, .rx2, .rcy) | REX loop import | 6 | todo | Not in the plan. REX decoding normally relies on a proprietary SDK; check its license against GPL-3.0 (may become wont-do). |
 | Sampler sources: DrumSynth (.ds), SimSynth (.syn) and speech (.speech) presets | Synth-preset sample sources | 6 | todo | Not in the plan; legacy formats. |

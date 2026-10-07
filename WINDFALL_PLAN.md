@@ -1,6 +1,6 @@
 # Windfall plan
 
-Windfall is a free, open-source alternative to FL Studio. It is a native desktop app with a UI built on shadcn. This document is the plan only. Nothing here has been built.
+Windfall is a free, open-source alternative to FL Studio. It is a native desktop app with a UI built on shadcn. This document is the guiding plan; current implementation status and known gaps are tracked in `docs/parity/PARITY.md`, with build and workflow instructions in `README.md`.
 
 Written 2026-10-06.
 

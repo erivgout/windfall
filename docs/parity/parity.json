@@ -3337,10 +3337,10 @@
       "summary": "Loads MP3 audio into samplers and audio clips.",
       "windfall_name": "MP3 import",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "The plan lists MP3 as a read format without naming a phase; placed with the other codecs in phase 3."
+      "notes": "Native picker and browser support MP3; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection."
     },
     {
       "id": "fmt-import-ogg",
@@ -3349,10 +3349,10 @@
       "summary": "Loads Ogg Vorbis audio into samplers and audio clips.",
       "windfall_name": "OGG import",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "The plan lists OGG as a read format without naming a phase; placed with the other codecs in phase 3."
+      "notes": "Native picker and browser support OGG; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection."
     },
     {
       "id": "fmt-import-flac",
@@ -3361,10 +3361,10 @@
       "summary": "Loads FLAC audio into samplers and audio clips.",
       "windfall_name": "FLAC import",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "unverified: FLAC as an FL sample import format (the manual pages checked name WAV, MP3 and OGG). The plan lists FLAC as a read format."
+      "notes": "Native picker and browser support FLAC; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection."
     },
     {
       "id": "fmt-import-midi",
