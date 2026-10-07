@@ -23,7 +23,7 @@ pub struct PluginManager {
     retry_requested: std::sync::atomic::AtomicBool,
 }
 impl PluginManager {
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn fixture(folder: &Path, file: &Path, scanner: &Path) -> Arc<Self> {
         let manager = Self::new(folder).unwrap();
         let files = paths::find_plugins(&[file.parent().unwrap().to_path_buf()]);

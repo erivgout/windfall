@@ -22,7 +22,11 @@ fn lifecycle_gain_offsets_transport_state_and_restart() {
     assert!(!instance.has_editor());
     assert_eq!(
         instance.open_editor(&EditorOptions::default()),
-        Err(EditorError::NoEditor)
+        Err(if cfg!(windows) {
+            EditorError::NoEditor
+        } else {
+            EditorError::UnsupportedPlatform
+        })
     );
     instance.set_param(7, 0.25);
     let state = instance.save_state().unwrap();

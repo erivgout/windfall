@@ -221,7 +221,7 @@ impl Runtime {
                 .values()
                 .any(|selected| selected.load(std::sync::atomic::Ordering::Relaxed) == token)
     }
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub(crate) fn selected_token(&self, target: PluginTarget) -> Option<u64> {
         selected(&self.selection, target)
     }
