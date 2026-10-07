@@ -2,6 +2,7 @@
 //! a [`Processor`] the tests run by hand.
 
 mod beat;
+mod clip_recording;
 mod document;
 mod effects;
 mod export;
