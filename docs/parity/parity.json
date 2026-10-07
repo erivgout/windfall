@@ -52,7 +52,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Audio clips with gain, pan, fades, reverse and tape-style pitch. Time-stretch and recording are not in yet."
+      "notes": "Audio clips have gain, pan, fades, reverse and tape-style pitch. Independent spectral stretch is available in windfall-stretch; engine/model/desktop integration and recording remain."
     },
     {
       "id": "core-loop-starter",
@@ -529,10 +529,10 @@
       "summary": "Stretches or repitches a sample to fit the tempo, with a choice of algorithms.",
       "windfall_name": "Sample time-stretch",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Candidate basis: Signalsmith Stretch (MIT). FL licenses a commercial stretch engine for this."
+      "notes": "windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sound and scheduling limits are documented in crates/windfall-stretch/VALIDATION.md."
     },
     {
       "id": "win-rack-layer-channel",
@@ -1249,10 +1249,10 @@
       "summary": "Stretches a clip to a new length or pitch on the timeline.",
       "windfall_name": "Audio clip stretch",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Candidate basis: Signalsmith Stretch (MIT)."
+      "notes": "windfall-stretch supplies streaming/offline processing, latency and seek helpers with independent pitch and time controls. Clip model, engine scheduling, compensation, cached rendering and desktop controls remain. See crates/windfall-stretch/VALIDATION.md."
     },
     {
       "id": "win-playlist-tempo-detect",
@@ -1261,10 +1261,10 @@
       "summary": "Estimates a sample's tempo and stretches it to match the project.",
       "windfall_name": "Tempo detection",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "windfall-stretch estimates loop tempo candidates and computes tempo/beat-length fitting ratios. Half/double-beat ambiguity is documented; candidate scores are not probabilities. Clip workflow and automatic stretching integration remain."
     },
     {
       "id": "win-playlist-consolidate",

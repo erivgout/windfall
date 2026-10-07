@@ -343,7 +343,7 @@ export function ExportDialog() {
         <DialogHeader>
           <DialogTitle>Export audio</DialogTitle>
           <DialogDescription>
-            The file sounds the same as playback: it is made by the same engine.
+            Save the selected pattern or song as a mix or separate mixer tracks.
           </DialogDescription>
         </DialogHeader>
         <ExportForm onDone={closeDialog} />

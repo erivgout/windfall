@@ -18,15 +18,15 @@ As of 2026-10-07. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 261 |
-| In progress | 29 |
+| Todo | 258 |
+| In progress | 32 |
 | Done | 50 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 16 | 5 | 1 | 1 |
-| Main windows | 113 | 70 | 12 | 30 | 1 |
+| Main windows | 113 | 67 | 15 | 30 | 1 |
 | Instruments | 41 | 39 | 1 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -39,7 +39,7 @@ As of 2026-10-07. Sources:
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
 | 2. Write a song | 99 | 60 | 14 | 25 | 0 |
-| 3. Record and edit audio | 34 | 28 | 1 | 5 | 0 |
+| 3. Record and edit audio | 34 | 25 | 4 | 5 | 0 |
 | 4. Plugins and files | 13 | 7 | 6 | 0 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ As of 2026-10-07. Sources:
 | Lifetime Free Updates | Free updates | 7 | todo | Windfall is free under GPL-3.0; this row closes when auto-update ships. |
 | Stem Separation | Stem separation | 5 | todo | unverified: lowest edition. The compare table ticks Producer, but the purchase box on the same page shows it locked below Signature. Candidate basis: Demucs (MIT). |
 | Audio Recording | Audio recording | 3 | todo |  |
-| Audio Clips | Audio clips | 2 | in-progress | Audio clips with gain, pan, fades, reverse and tape-style pitch. Time-stretch and recording are not in yet. |
+| Audio Clips | Audio clips | 2 | in-progress | Audio clips have gain, pan, fades, reverse and tape-style pitch. Independent spectral stretch is available in windfall-stretch; engine/model/desktop integration and recording remain. |
 | Loop Starter | Loop starter | 6 | todo | Needs Windfall's own CC0 loop content; FL's loops cannot be reused. |
 | FL Studio Mobile Rack + FX | TBD | 5 | todo | A Windfall equivalent would be a rack of Windfall's own modules. FL 2026 added a SoundFont player and a note arpeggiator module. |
 | Audio Logger | Audio logger | 3 | todo | unverified: edition availability (the compare page leaves every edition cell blank). New in FL Studio 2026. |
@@ -97,7 +97,7 @@ As of 2026-10-07. Sources:
 | Channel settings: echo delay | Note echo | 2 | todo |  |
 | Channel settings: polyphony and portamento | Channel polyphony and glide | 2 | todo |  |
 | Channel settings: gate, shift and swing mix | Channel note timing | 2 | todo |  |
-| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | todo | Candidate basis: Signalsmith Stretch (MIT). FL licenses a commercial stretch engine for this. |
+| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sound and scheduling limits are documented in crates/windfall-stretch/VALIDATION.md. |
 | Layer channel (Fruity Layer) | Layer channel | 5 | todo | Listed in the manual's plugin index, not on the compare page. The manual points to the modular rack as the more flexible alternative. |
 | Piano roll: Draw tool | Piano roll draw tool | 2 | done |  |
 | Piano roll: Paint tool and drum sequencer mode | Piano roll paint tool | 2 | in-progress | Paint tool is in. No drum sequencer mode yet. |
@@ -157,8 +157,8 @@ As of 2026-10-07. Sources:
 | Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Gain, pan, pitch and reverse. No normalize or independent time-stretch yet. |
 | Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
 | Event editor | Event automation editor | 2 | todo |  |
-| Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | todo | Candidate basis: Signalsmith Stretch (MIT). |
-| Playlist: detect tempo and fit to tempo | Tempo detection | 3 | todo |  |
+| Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | in-progress | windfall-stretch supplies streaming/offline processing, latency and seek helpers with independent pitch and time controls. Clip model, engine scheduling, compensation, cached rendering and desktop controls remain. See crates/windfall-stretch/VALIDATION.md. |
+| Playlist: detect tempo and fit to tempo | Tempo detection | 3 | in-progress | windfall-stretch estimates loop tempo candidates and computes tempo/beat-length fitting ratios. Half/double-beat ambiguity is documented; candidate scores are not probabilities. Clip workflow and automatic stretching integration remain. |
 | Playlist: consolidate (freeze) tracks | Bounce in place | 3 | todo |  |
 | Playlist: Deverb | Reverb removal | 5 | todo | Machine-learning feature not named in the plan; no candidate basis identified. |
 | Mixer: insert tracks, master track and current track | Mixer tracks | 1 | done | FL has 500 insert tracks, one master and one current track. |

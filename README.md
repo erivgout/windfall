@@ -8,6 +8,8 @@ It is early. `WINDFALL_PLAN.md` describes the whole plan, and `docs/parity/PARIT
 
 Windfall is not affiliated with Image-Line. It contains no FL Studio code, samples, presets or artwork.
 
+Audio export supports WAV, FLAC, OGG and MP3, with mixer stems and cancellation. MIDI and FL project import, CLAP hosting and independent time-stretch have backend libraries; their desktop workflows still need integration. VST3 currently supports discovery and scanning only.
+
 ## Run it
 
 You need Rust, Node 24 or newer, and pnpm. On Windows you also need the Visual Studio C++ build tools, and on Linux the WebKitGTK and ALSA development packages that the CI workflow installs.
@@ -31,7 +33,7 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 | `crates/windfall-project` | Project model, edit commands, undo history, `.windfall` file format |
 | `crates/windfall-engine` | Realtime audio engine and offline renderer |
 | `crates/windfall-flp` | Reads FL Studio projects and converts musical structure with an import report |
-| `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV |
+| `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV, FLAC, OGG and MP3 |
 | `crates/windfall-midi` | Reads and writes MIDI files; project import plans and playlist export |
 | `crates/windfall-dsp` | Effects and synth DSP |
 | `crates/windfall-plugin-host` | CLAP hosting, isolated CLAP/VST3 scanning and native plugin editors |
