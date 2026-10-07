@@ -4815,6 +4815,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "windfall-stretch"
+version = "0.1.0"
+dependencies = [
+ "rustfft",
+ "windfall-core",
+]
+
+[[package]]
 name = "window-vibrancy"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

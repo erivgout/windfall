@@ -14,6 +14,7 @@ crates/
   windfall-engine/         Realtime audio engine, offline renderer, soak-test CLI.
   windfall-dsp/            Effects and instruments: the internal plugin interface, shared DSP blocks,
                            EQ, compressor, limiter, reverb, delay and a subtractive synth.
+  windfall-stretch/        Streaming/offline time-stretch, independent pitch-shift and loop tempo estimation.
   windfall-factory/        Generates the CC0 factory drum samples.
   windfall-sim/            The Document behind a C ABI, compiled to WebAssembly for the UI's mock backend.
 content/factory/           Factory content shipped with the app (generated, checked in).
