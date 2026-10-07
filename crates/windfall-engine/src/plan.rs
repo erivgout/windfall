@@ -20,6 +20,7 @@ use windfall_project::{
 use crate::automation::{self, Lane};
 use crate::pool::SamplePool;
 use crate::tempo::TempoMap;
+use crate::voice::LoopRegion;
 
 /// Tempo used when a project carries one that is not a number.
 const FALLBACK_TEMPO_BPM: f64 = 120.0;
@@ -131,6 +132,7 @@ pub(crate) struct PlanSampler {
     /// there is a sample.
     pub end: usize,
     pub reverse: bool,
+    pub loop_region: Option<LoopRegion>,
     /// Semitones added to a note's key to get its pitch relative to the
     /// recorded pitch: the tuning minus the root key.
     pub key_offset: f32,
@@ -504,19 +506,54 @@ fn compile_sampler(settings: &SamplerSettings, pool: &SamplePool) -> PlanSampler
     } else {
         0.0
     };
+    let region_frames = end - start;
+    let loop_region = (settings.loop_mode != windfall_project::SamplerLoopMode::Off
+        && region_frames > 0)
+        .then(|| {
+            let first = ((f64::from(unit(settings.loop_start)) * region_frames as f64).round()
+                as usize)
+                .min(region_frames - 1);
+            let end_fraction = if settings.loop_end.is_finite() {
+                unit(settings.loop_end)
+            } else {
+                1.0
+            };
+            let end = ((f64::from(end_fraction) * region_frames as f64).round() as usize)
+                .clamp(first + 1, region_frames);
+            LoopRegion {
+                first: if settings.reverse {
+                    region_frames - end
+                } else {
+                    first
+                },
+                frames: end - first,
+                mode: settings.loop_mode,
+            }
+        });
     PlanSampler {
         sample,
         start,
         end,
         reverse: settings.reverse,
+        loop_region,
         key_offset: tune - f32::from(settings.root_key),
         gain: gain(settings.gain),
-        envelope: settings.envelope.map(|envelope| Envelope {
-            attack_ms: duration(envelope.attack_ms),
-            decay_ms: duration(envelope.decay_ms),
-            sustain: unit(envelope.sustain),
-            release_ms: duration(envelope.release_ms),
-        }),
+        envelope: settings
+            .envelope
+            .or_else(|| {
+                loop_region.map(|_| Envelope {
+                    attack_ms: 0.0,
+                    decay_ms: 0.0,
+                    sustain: 1.0,
+                    release_ms: 4.0,
+                })
+            })
+            .map(|envelope| Envelope {
+                attack_ms: duration(envelope.attack_ms),
+                decay_ms: duration(envelope.decay_ms),
+                sustain: unit(envelope.sustain),
+                release_ms: duration(envelope.release_ms),
+            }),
         cut_self: settings.cut_self,
         cut_group: settings.cut_group,
     }

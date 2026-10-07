@@ -639,6 +639,11 @@ impl Transaction<'_> {
                     "Change sample range",
                 ),
                 (patch.reverse.is_some(), "Reverse sample"),
+                (patch.loop_mode.is_some(), "Change sample loop mode"),
+                (
+                    patch.loop_start.is_some() || patch.loop_end.is_some(),
+                    "Change sample loop range",
+                ),
                 (patch.cut_self.is_some(), "Toggle cut itself"),
                 (patch.cut_group.is_some(), "Change cut group"),
             ],
@@ -669,6 +674,26 @@ impl Transaction<'_> {
         }
         if let Some(reverse) = patch.reverse {
             sampler.reverse = reverse;
+        }
+        if let Some(mode) = patch.loop_mode {
+            sampler.loop_mode = mode;
+        }
+        if let Some(start) = patch.loop_start {
+            if !start.is_finite() {
+                return Err(CommandError::invalid("the loop start is not a number"));
+            }
+            sampler.loop_start = clamped("the loop start", start, 0.0, 1.0)?;
+        }
+        if let Some(end) = patch.loop_end {
+            if !end.is_finite() {
+                return Err(CommandError::invalid("the loop end is not a number"));
+            }
+            sampler.loop_end = clamped("the loop end", end, 0.0, 1.0)?;
+        }
+        if sampler.loop_start >= sampler.loop_end {
+            return Err(CommandError::invalid(
+                "the loop start must come before its end",
+            ));
         }
         if let Some(cut_self) = patch.cut_self {
             sampler.cut_self = cut_self;

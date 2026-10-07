@@ -1261,6 +1261,7 @@ fn update_sampler_changes_each_field() {
                 reverse: Some(true),
                 cut_self: Some(true),
                 cut_group: Some(3),
+                ..SamplerPatch::default()
             },
         ),
     );
@@ -1279,8 +1280,67 @@ fn update_sampler_changes_each_field() {
             envelope: None,
             cut_self: true,
             cut_group: 3,
+            ..SamplerSettings::default()
         }
     );
+}
+
+#[test]
+fn sampler_loops_validate_and_undo_as_sampler_edits() {
+    let mut doc = document();
+    let (id, _) = add_channel(&mut doc, "Loop");
+    let change = |loop_mode, loop_start, loop_end| {
+        update_sampler(
+            id,
+            SamplerPatch {
+                loop_mode,
+                loop_start,
+                loop_end,
+                ..SamplerPatch::default()
+            },
+        )
+    };
+    let applied = run(&mut doc, change(Some(SamplerLoopMode::Forward), None, None));
+    assert_eq!(applied.label, "Change sample loop mode");
+    assert_eq!(sampler(&doc, id).loop_mode, SamplerLoopMode::Forward);
+    let applied = run(&mut doc, change(None, Some(0.25), Some(0.75)));
+    assert_eq!(applied.label, "Change sample loop range");
+    assert_eq!(sampler(&doc, id).loop_start, 0.25);
+    assert_eq!(sampler(&doc, id).loop_end, 0.75);
+    run(
+        &mut doc,
+        change(Some(SamplerLoopMode::PingPong), None, None),
+    );
+    run(&mut doc, change(Some(SamplerLoopMode::Off), None, None));
+    assert_eq!(
+        sampler(&doc, id).loop_start,
+        0.25,
+        "disabling keeps the points"
+    );
+    for (start, end) in [
+        (0.8, 0.2),
+        (0.5, 0.5),
+        (f32::NAN, 1.0),
+        (0.0, f32::INFINITY),
+    ] {
+        let message = if start.is_finite() && end.is_finite() {
+            "before its end"
+        } else {
+            "not a number"
+        };
+        assert_invalid(
+            fail(&mut doc, change(None, Some(start), Some(end))),
+            message,
+        );
+    }
+    run(&mut doc, change(None, Some(-2.0), Some(2.0)));
+    assert_eq!(
+        (sampler(&doc, id).loop_start, sampler(&doc, id).loop_end),
+        (0.0, 1.0)
+    );
+    // Both points can be changed atomically even when either alone would cross.
+    run(&mut doc, change(None, Some(0.8), Some(0.9)));
+    run(&mut doc, change(None, Some(0.1), Some(0.2)));
 }
 
 #[test]

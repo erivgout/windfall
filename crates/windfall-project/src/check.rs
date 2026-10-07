@@ -384,6 +384,12 @@ fn check_sampler(project: &Project, owner: &str, sampler: &SamplerSettings) -> R
             sampler.start, sampler.end
         ));
     }
+    if !within(sampler.loop_start, 0.0, 1.0) || !within(sampler.loop_end, 0.0, 1.0) {
+        return Err(format!("{owner} has loop points outside 0 to 1"));
+    }
+    if sampler.loop_start >= sampler.loop_end {
+        return Err(format!("{owner} has a loop start not before its end"));
+    }
     match &sampler.envelope {
         Some(envelope) => check_envelope(owner, envelope),
         None => Ok(()),

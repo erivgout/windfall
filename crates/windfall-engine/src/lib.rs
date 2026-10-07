@@ -60,7 +60,7 @@
 //! - Swing delays the second sixteenth-note step of each pair of steps. At
 //!   full swing that step lands two thirds of the way through the pair.
 //! - Stopping returns the playhead to where playback last started.
-//! - A note on a sampler with an envelope ends on its own tick, wherever a
+//! - A note on a sampler with an envelope or loop ends on its own tick, wherever a
 //!   tempo change moves that. The attack is a straight line, and decay and
 //!   release are exponential curves that reach their target exactly when
 //!   their time is up.

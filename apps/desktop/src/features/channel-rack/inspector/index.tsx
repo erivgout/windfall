@@ -13,6 +13,7 @@ import { INSPECTOR_MENU } from "../menus"
 import { EnvelopeSection } from "./envelope-section"
 import { InstrumentSection } from "./instrument-section"
 import { KeyboardSection } from "./keyboard-section"
+import { LoopSection } from "./loop-section"
 import { RoutingSection } from "./routing-section"
 import { SampleSection } from "./sample-section"
 import { SoundSection } from "./sound-section"
@@ -77,6 +78,7 @@ export function ChannelInspector() {
             {isSamplerChannel(channel) ? (
               <>
                 <SampleSection channel={channel} />
+                <LoopSection channel={channel} />
                 <SoundSection channel={channel} />
                 <EnvelopeSection channel={channel} />
               </>

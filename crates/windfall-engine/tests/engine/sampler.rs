@@ -3,7 +3,7 @@
 
 use windfall_core::{AudioBuffer, TICKS_PER_STEP, db_to_gain};
 use windfall_engine::{PREVIEW_GAIN_DB, Processor};
-use windfall_project::{ChannelId, Envelope, MAX_ENVELOPE_MS, MAX_PATTERN_STEPS};
+use windfall_project::{ChannelId, Envelope, MAX_ENVELOPE_MS, MAX_PATTERN_STEPS, SamplerLoopMode};
 
 use crate::support::{
     Rig, fall, frequency, impulse, largest_step, left, level, peak, run, sine, sounding_frames,
@@ -13,6 +13,242 @@ const RATE: u32 = 48_000;
 
 /// Frames a cut, stolen or stopped voice takes to fade out: 4 ms.
 const FADE_FRAMES: usize = 192;
+
+#[test]
+fn sampler_loops_repeat_the_selected_trimmed_frames_in_both_directions() {
+    for reverse in [false, true] {
+        for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+            let mut rig = Rig::new();
+            let channel = rig.channel(AudioBuffer::from_interleaved(
+                RATE,
+                1,
+                vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+            ));
+            let sampler = rig.sampler_mut(channel);
+            sampler.start = 0.25;
+            sampler.end = 0.75;
+            sampler.reverse = reverse;
+            sampler.loop_mode = mode;
+            sampler.loop_start = 0.25;
+            sampler.loop_end = 0.75;
+            rig.note(channel, 0, TICKS_PER_STEP);
+            let got = left(&rig.play(RATE, 12, 7));
+            let expected = if reverse {
+                vec![0.5, 0.4, 0.3, 0.4, 0.3, 0.4, 0.3, 0.4, 0.3, 0.4, 0.3, 0.4]
+            } else {
+                vec![0.2, 0.3, 0.4, 0.3, 0.4, 0.3, 0.4, 0.3, 0.4, 0.3, 0.4, 0.3]
+            };
+            assert_eq!(got, expected, "{mode:?}, reverse {reverse}");
+        }
+    }
+}
+
+#[test]
+fn sampler_loop_fractional_rates_wrap_and_reflect_without_silent_edges() {
+    for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+        for tune in [-12.0, 0.0, 12.0, 47.5] {
+            let mut rig = Rig::new();
+            let channel = rig.channel(AudioBuffer::from_interleaved(
+                44_100,
+                2,
+                vec![0.25, -0.5, 0.25, -0.5, 0.25, -0.5],
+            ));
+            let sampler = rig.sampler_mut(channel);
+            sampler.loop_mode = mode;
+            sampler.tune = tune;
+            sampler.gain = 0.5;
+            rig.note(channel, 0, 240).velocity = 0.5;
+            let got = rig.play(RATE, 3000, 17);
+            assert!(
+                got.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .all(|frame| *frame == [0.0625, -0.125]),
+                "{mode:?}, {tune}"
+            );
+            assert_eq!(got, rig.play(RATE, 3000, 1024));
+        }
+    }
+}
+
+#[test]
+fn sampler_ping_pong_bounces_where_forward_wraps() {
+    for (mode, expected) in [
+        (
+            SamplerLoopMode::Forward,
+            vec![0.0, 0.1, 0.2, 0.3, 0.1, 0.2, 0.3, 0.1, 0.2],
+        ),
+        (
+            SamplerLoopMode::PingPong,
+            vec![0.0, 0.1, 0.2, 0.3, 0.2, 0.1, 0.2, 0.3, 0.2],
+        ),
+    ] {
+        let mut rig = Rig::new();
+        let channel = rig.channel(AudioBuffer::from_interleaved(
+            RATE,
+            1,
+            vec![0.0, 0.1, 0.2, 0.3, 0.4],
+        ));
+        let sampler = rig.sampler_mut(channel);
+        sampler.loop_mode = mode;
+        sampler.loop_start = 0.2;
+        sampler.loop_end = 0.8;
+        rig.note(channel, 0, 240);
+        assert_eq!(left(&rig.play(RATE, 9, 2)), expected);
+    }
+}
+
+#[test]
+fn sampler_single_frame_and_subframe_loops_hold_the_selected_frame() {
+    for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+        for frames in [1, 2, 4] {
+            let mut rig = Rig::new();
+            let channel = rig.channel(AudioBuffer::from_interleaved(RATE, 1, vec![0.25; frames]));
+            let sampler = rig.sampler_mut(channel);
+            sampler.loop_mode = mode;
+            sampler.loop_start = 0.5;
+            sampler.loop_end = 0.50001;
+            sampler.tune = -7.5;
+            rig.note(channel, 0, 240);
+            assert!(rig.play(RATE, 1000, 19).iter().all(|value| *value == 0.25));
+        }
+    }
+}
+
+#[test]
+fn sampler_loops_follow_note_lengths_and_envelope_releases() {
+    for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+        for release in [None, Some(10.0)] {
+            let mut rig = Rig::new();
+            let channel = rig.channel(AudioBuffer::from_interleaved(RATE, 1, vec![0.5; 2]));
+            let sampler = rig.sampler_mut(channel);
+            sampler.loop_mode = mode;
+            sampler.envelope = release.map(gate);
+            rig.note(channel, 0, TICKS_PER_STEP);
+            let frames = if release.is_some() { 480 } else { 192 };
+            let audio = left(&rig.play(RATE, 7000, 251));
+            assert!(audio[..=6000].iter().all(|sample| *sample == 0.5));
+            assert!((audio[6000 + frames / 2] - 0.5 * fall(frames / 2, frames)).abs() < 1e-6);
+            assert!(audio[6000 + frames - 1] > 0.0);
+            assert!(audio[6000 + frames..].iter().all(|sample| *sample == 0.0));
+            assert_eq!(audio, left(&rig.play(RATE, 7000, 1)));
+        }
+    }
+}
+
+#[test]
+fn sampler_live_loops_release_on_note_off_and_keep_polyphony_and_cut_rules() {
+    let mut rig = Rig::new();
+    let channel = rig.channel(AudioBuffer::from_interleaved(RATE, 1, vec![0.25; 2]));
+    rig.sampler_mut(channel).loop_mode = SamplerLoopMode::PingPong;
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.note_on(channel, 60, 1.0);
+    controller.note_on(channel, 72, 1.0);
+    assert!(
+        run(&mut processor, 500, 64)
+            .iter()
+            .all(|value| *value == 0.5)
+    );
+    controller.note_off(channel, 60);
+    let released = left(&run(&mut processor, 500, 64));
+    assert_eq!(released[0], 0.5);
+    assert!(released[FADE_FRAMES..].iter().all(|value| *value == 0.25));
+    rig.sampler_mut(channel).cut_self = true;
+    controller.set_project(&rig.project, &rig.pool);
+    run(&mut processor, 256, 64);
+    controller.note_on(channel, 60, 1.0);
+    assert!(
+        run(&mut processor, 500, 64)[FADE_FRAMES * 2..]
+            .iter()
+            .all(|value| *value == 0.25)
+    );
+    controller.note_off(channel, 60);
+    assert!(
+        run(&mut processor, 500, 64)[FADE_FRAMES * 2..]
+            .iter()
+            .all(|value| *value == 0.0)
+    );
+}
+
+#[test]
+fn sampler_loop_edits_and_source_reload_keep_sounding_notes_immutable() {
+    let mut rig = Rig::new();
+    let channel = rig.channel(AudioBuffer::from_interleaved(RATE, 1, vec![0.25; 2]));
+    rig.sampler_mut(channel).loop_mode = SamplerLoopMode::Forward;
+    let sample = rig.sampler_mut(channel).sample.unwrap();
+    let old = rig.pool.get(sample).unwrap().clone();
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.note_on(channel, 60, 1.0);
+    assert!(
+        run(&mut processor, 256, 64)
+            .iter()
+            .all(|value| *value == 0.25)
+    );
+    rig.pool
+        .insert(sample, AudioBuffer::from_interleaved(RATE, 1, vec![0.5; 3]));
+    let sampler = rig.sampler_mut(channel);
+    sampler.loop_mode = SamplerLoopMode::PingPong;
+    sampler.loop_start = 0.5;
+    sampler.reverse = true;
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        run(&mut processor, 256, 64)
+            .iter()
+            .all(|value| *value == 0.25)
+    );
+    controller.note_on(channel, 72, 1.0);
+    assert!(
+        run(&mut processor, 256, 64)
+            .iter()
+            .all(|value| *value == 0.75)
+    );
+    controller.note_off(channel, 60);
+    assert!(
+        run(&mut processor, 500, 64)[FADE_FRAMES * 2..]
+            .iter()
+            .all(|value| *value == 0.5)
+    );
+    assert_eq!(old.samples(), [0.25, 0.25]);
+    controller.stop();
+    assert!(
+        run(&mut processor, 500, 64)[FADE_FRAMES * 2..]
+            .iter()
+            .all(|value| *value == 0.0)
+    );
+}
+
+#[test]
+fn sampler_loops_missing_empty_sources_and_malformed_bounds_are_safe() {
+    for source in [
+        AudioBuffer::from_interleaved(RATE, 1, vec![]),
+        level(RATE, 0.5, 0.01),
+    ] {
+        let mut rig = Rig::new();
+        let channel = rig.channel(source);
+        let sample = rig.sampler_mut(channel).sample.unwrap();
+        if rig.pool.get(sample).unwrap().frames() > 0 {
+            rig.pool.remove(sample);
+        }
+        let sampler = rig.sampler_mut(channel);
+        sampler.loop_mode = SamplerLoopMode::Forward;
+        sampler.loop_start = f32::NAN;
+        sampler.loop_end = f32::INFINITY;
+        rig.note(channel, 0, 240);
+        assert!(rig.play(RATE, 500, 64).iter().all(|value| *value == 0.0));
+    }
+    let mut rig = Rig::new();
+    let channel = rig.channel(AudioBuffer::from_interleaved(RATE, 1, vec![0.25; 4]));
+    let sampler = rig.sampler_mut(channel);
+    sampler.loop_mode = SamplerLoopMode::PingPong;
+    sampler.loop_start = 7.0;
+    sampler.loop_end = -4.0;
+    rig.note(channel, 0, 240);
+    assert!(
+        rig.play(RATE, 500, 64)
+            .iter()
+            .all(|value| value.is_finite())
+    );
+}
 
 /// An envelope that is fully open while the note is held and closes over
 /// `release_ms` after it.

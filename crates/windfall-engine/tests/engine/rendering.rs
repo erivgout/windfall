@@ -204,6 +204,64 @@ fn rendering_twice_gives_the_same_bits() {
 }
 
 #[test]
+fn sampler_loops_reload_and_export_exactly_what_playback_hears() {
+    for mode in [
+        windfall_project::SamplerLoopMode::Forward,
+        windfall_project::SamplerLoopMode::PingPong,
+    ] {
+        for reverse in [false, true] {
+            let mut rig = Rig::new();
+            let channel = rig.channel(sine(44_100, 440.0, 0.007));
+            let sampler = rig.sampler_mut(channel);
+            sampler.start = 0.1;
+            sampler.end = 0.9;
+            sampler.loop_start = 0.2;
+            sampler.loop_end = 0.8;
+            sampler.loop_mode = mode;
+            sampler.reverse = reverse;
+            sampler.tune = -3.25;
+            sampler.envelope = Some(Envelope {
+                attack_ms: 1.0,
+                decay_ms: 2.0,
+                sustain: 0.5,
+                release_ms: 10.0,
+            });
+            rig.note(channel, 0, 240);
+            rig.note(channel, 30, 300).key = 67;
+            let lane = rig.playlist_track();
+            rig.clip(lane, rig.first_pattern(), 0, 480);
+            let sample = rig.sampler_mut(channel).sample.unwrap();
+            let source = rig.pool.get(sample).unwrap().clone();
+            let original = source.samples().to_vec();
+            let options = RenderOptions {
+                mode: PlayMode::Song,
+                tail_secs: 0.05,
+                block_frames: 7,
+                ..RenderOptions::default()
+            };
+            let rendered = render_all(&rig, &options);
+            assert_eq!(
+                rendered.samples(),
+                rig.play_song(RATE, rendered.frames(), 251)
+            );
+            let json = windfall_project::file::to_json(&rig.project).unwrap();
+            rig.project = windfall_project::file::from_json(&json).unwrap();
+            assert!(same_bits(&rendered, &render_all(&rig, &options)));
+            let other = RenderOptions {
+                block_frames: 1024,
+                ..options
+            };
+            assert!(same_bits(&rendered, &render_all(&rig, &other)));
+            assert_eq!(source.samples(), original);
+            assert!(
+                peak(&rendered.samples()[2000..6000]) > 0.01,
+                "the short source must loop"
+            );
+        }
+    }
+}
+
+#[test]
 fn the_block_size_does_not_change_a_render() {
     let rigs = [
         ("song", song()),
