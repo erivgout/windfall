@@ -71,6 +71,46 @@ fn allocator_calls(work: impl FnOnce()) -> usize {
 const RATE: f64 = 48_000.0;
 
 #[test]
+fn vst3_ownership_boundaries_move_adapters_without_allocator_calls() {
+    use windfall_plugin_host::ownership::exchange;
+    let path = common::plugin_file("vst3-ownership", "fixture.vst3");
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let mut instance = module.create(&module.descriptors()[0].id).unwrap();
+    let adapter = instance.prepare_effect(RATE as f32, 64).unwrap();
+    let (mut owner, mut audio) = exchange(adapter);
+    let mut left = [0.25; 64];
+    let mut right = left;
+    for _ in 0..20 {
+        owner.request();
+        assert_eq!(
+            allocator_calls(|| {
+                audio.boundary();
+            }),
+            0
+        );
+        assert!(audio.current().is_none());
+        let adapter = owner.take_returned().unwrap();
+        instance.release_effect(adapter);
+        let state = instance.save_state().unwrap();
+        instance.load_state(&state).unwrap();
+        owner
+            .resume(instance.prepare_effect(RATE as f32, 64).unwrap())
+            .ok()
+            .unwrap();
+        assert_eq!(
+            allocator_calls(|| {
+                audio.boundary();
+                audio.current_mut().unwrap().process(&mut left, &mut right);
+            }),
+            0
+        );
+    }
+    instance.release_effect(audio.retire().unwrap());
+}
+
+#[test]
 fn vst3_effect_and_instrument_callbacks_allocate_and_free_nothing() {
     for index in [0, 2, 3] {
         let path = common::plugin_file("vst3", "fixture.vst3");

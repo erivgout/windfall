@@ -143,6 +143,13 @@ impl EffectUnit {
             external.apply(binding);
         }
     }
+    pub fn plugin_control_boundary(&mut self) {
+        if let Some(external) = &mut self.external
+            && let Some(unit) = &mut external.unit
+        {
+            unit.control_boundary();
+        }
+    }
     pub fn plugin_transport(&mut self, transport: crate::plugins::PluginTransport) {
         if let Some(external) = &mut self.external
             && let Some(unit) = &mut external.unit
@@ -382,6 +389,11 @@ impl InstrumentUnit {
             .map(|param| (param.id, f32::NAN))
             .collect();
         self.apply_plugin(binding);
+    }
+    pub fn plugin_control_boundary(&mut self) {
+        if let Some(Some(unit)) = &mut self.external {
+            unit.control_boundary();
+        }
     }
     pub fn plugin_transport(&mut self, transport: crate::plugins::PluginTransport) {
         if let Some(Some(unit)) = &mut self.external {

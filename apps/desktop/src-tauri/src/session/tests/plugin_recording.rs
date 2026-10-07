@@ -77,6 +77,49 @@ fn active_take_refuses_plugin_refresh_and_control_without_changing_document_or_t
 
 #[cfg(windows)]
 #[test]
+fn owned_take_refuses_save_and_backup_native_state_capture() {
+    let rig = Rig::new();
+    let path = rig.file("recording-state.windfall");
+    rig.session.project_save(Some(&path)).unwrap();
+    rig.session
+        .dispatch(
+            windfall_project::Command::UpdateSettings {
+                patch: windfall_project::SettingsPatch {
+                    tempo_bpm: Some(137.0),
+                    ..Default::default()
+                },
+            },
+            None,
+        )
+        .unwrap();
+    start_take(&rig);
+    let snapshot = rig.session.document_snapshot();
+    let take = rig.session.recording_state();
+    assert!(
+        rig.session
+            .project_save(None)
+            .unwrap_err()
+            .contains("recording")
+    );
+    assert!(
+        rig.session
+            .write_backup("2026-10-07_12-00-00")
+            .unwrap_err()
+            .contains("recording")
+    );
+    assert_eq!(rig.session.document_snapshot(), snapshot);
+    assert_eq!(rig.session.recording_state(), take);
+    rig.session.recording_cancel();
+    assert!(
+        rig.session
+            .write_backup("2026-10-07_12-00-01")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn refused_refresh_preserves_live_clap_revision_and_captured_state_until_discard() {
     use windfall_engine::plugins::PluginFactory;
     use windfall_project::{Command, EffectId, PluginTarget, TrackId};

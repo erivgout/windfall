@@ -9,6 +9,7 @@ use std::{
 use windfall_engine::plugins::{HostedEffect, HostedInstrument, PluginFactory};
 use windfall_plugin_host::{
     PluginEffect, PluginHost, PluginInstance, PluginInstrument, PluginNotification, PluginState,
+    ownership::{AudioOwnership, ControlOwnership, exchange},
 };
 use windfall_project::{PluginBinding, PluginTarget, Project};
 
@@ -50,6 +51,86 @@ struct Instance {
     binding: PluginBinding,
     revision: u64,
     playback: bool,
+    ownership: ControlOwnership<Adapter>,
+    rate: u32,
+    block: usize,
+    instrument: bool,
+    latency: usize,
+    tail: usize,
+}
+
+impl Instance {
+    fn release(&mut self, adapter: Adapter) -> Result<(), String> {
+        match adapter {
+            Adapter::Effect(adapter) => self.plugin.release_effect(adapter),
+            Adapter::Instrument(adapter) => self.plugin.release_instrument(adapter),
+        }
+        if self.plugin.is_active() {
+            Err("The plugin refused returned processor ownership".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        let adapter = if self.instrument {
+            Adapter::Instrument(
+                self.plugin
+                    .prepare_instrument(self.rate as f32, self.block)
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            Adapter::Effect(
+                self.plugin
+                    .prepare_effect(self.rate as f32, self.block)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        if adapter.latency() != self.latency || adapter.tail() != self.tail {
+            self.release(adapter)?;
+            return Err(
+                "Plugin latency/tail changed during state capture; retry the plugin".into(),
+            );
+        }
+        if let Err(adapter) = self.ownership.resume(adapter) {
+            self.release(adapter)?;
+            return Err("The plugin resume queue is unexpectedly full".into());
+        }
+        Ok(())
+    }
+
+    /// Owner-thread wait only. Audio returns at a boundary without waiting on
+    /// this thread or any session lock. A timeout leaves active state untouched.
+    fn capture(&mut self) -> Result<PluginState, String> {
+        if self.binding.format == "clap" {
+            return self.plugin.save_state().map_err(|error| error.to_string());
+        }
+        self.ownership.request();
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        let adapter = loop {
+            if let Some(adapter) = self.ownership.take_returned() {
+                break adapter;
+            }
+            if std::time::Instant::now() >= deadline {
+                self.ownership.cancel();
+                return Err("Plugin state capture needs a live audio block boundary; the processor was not returned".into());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let failed = adapter.failed();
+        self.release(adapter)?;
+        if failed {
+            self.ownership.cancel();
+            return Err(
+                "A failed plugin remains bypassed/silent; retry before capturing state".into(),
+            );
+        }
+        let state = self.plugin.save_state().map_err(|error| error.to_string());
+        // Even a failed save must give the sounding instance back when safe.
+        let restore = self.restore();
+        restore?;
+        state
+    }
 }
 pub(crate) fn binding_identity(binding: &PluginBinding) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -66,6 +147,8 @@ struct Owner {
     instances: BTreeMap<u64, Instance>,
     next: u64,
     approved: Approved,
+    #[cfg(test)]
+    vst3_fixture: bool,
 }
 
 /// Control-side handle; synchronous requests are never made by audio processing.
@@ -92,6 +175,8 @@ impl Runtime {
             return Err("Native plugin integration currently requires Windows".into());
         }
         let (jobs, receiver) = mpsc::channel::<Job>();
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let owner_errors = errors.clone();
         let approved: Approved = Default::default();
         let owner_approved = approved.clone();
         let (updates, update_receiver) = mpsc::sync_channel(4096);
@@ -108,6 +193,8 @@ impl Runtime {
                     instances: BTreeMap::new(),
                     next: 0,
                     approved: owner_approved,
+                    #[cfg(test)]
+                    vst3_fixture: false,
                 };
                 let mut gestures = std::collections::HashMap::new();
                 let mut gesture = 1_u64 << 63;
@@ -120,6 +207,25 @@ impl Runtime {
                     windfall_plugin_host::gui::pump_events(Some(Duration::ZERO));
                     let selection = owner.selection.clone();
                     for (token, record) in &mut owner.instances {
+                        // A cancellation can race the callback's return. Always
+                        // service late returns, including unselected/stale units.
+                        if let Some(adapter) = record.ownership.take_returned() {
+                            let failed = adapter.failed();
+                            let result = record.release(adapter).and_then(|()| {
+                                if failed {
+                                    record.ownership.cancel();
+                                    Err("A failed plugin remains bypassed/silent".into())
+                                } else {
+                                    record.restore()
+                                }
+                            });
+                            if let Err(error) = result {
+                                owner_errors
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .push((record.target, error));
+                            }
+                        }
                         let target = &record.target;
                         let instance = &mut record.plugin;
                         let current = record.playback
@@ -179,7 +285,7 @@ impl Runtime {
         Ok(Self {
             selection,
             jobs,
-            errors: Arc::new(Mutex::new(Vec::new())),
+            errors,
             approved,
             updates: Arc::new(Mutex::new(update_receiver)),
             revision,
@@ -220,6 +326,9 @@ impl Runtime {
                 .unwrap_or_else(|error| error.into_inner())
                 .values()
                 .any(|selected| selected.load(std::sync::atomic::Ordering::Relaxed) == token)
+    }
+    pub fn document_revision(&self) -> u64 {
+        self.revision.load(std::sync::atomic::Ordering::Relaxed)
     }
     #[cfg(test)]
     pub(crate) fn selected_token(&self, target: PluginTarget) -> Option<u64> {
@@ -286,8 +395,20 @@ impl Runtime {
     }
     fn create(owner: &mut Owner, binding: &PluginBinding) -> Result<PluginInstance, String> {
         binding.validate().map_err(str::to_owned)?;
-        if binding.format != "clap" {
-            return Err("VST3 desktop hosting requires safe inactive-instance state capture and is not enabled".into());
+        let enabled = binding.format == "clap" || {
+            #[cfg(test)]
+            {
+                owner.vst3_fixture && binding.format == "vst3"
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+        if !enabled {
+            return Err(
+                "VST3 loading is not enabled while safe desktop state saving is completed".into(),
+            );
         }
         let stamp = std::fs::metadata(&binding.path)
             .map(|metadata| (metadata.len(), metadata.modified().ok()))
@@ -350,23 +471,51 @@ impl Runtime {
         })
     }
     /// Captures live opaque state into a save copy, leaving document history alone.
-    pub fn capture(&self, mut project: Project) -> Result<Project, String> {
+    pub fn capture(&self, project: Project) -> Result<Project, String> {
         let revision = self.revision.load(std::sync::atomic::Ordering::Relaxed);
+        self.capture_at(project, revision)
+    }
+    /// Captures only from the document revision paired with the save snapshot.
+    pub fn capture_at(&self, mut project: Project, revision: u64) -> Result<Project, String> {
+        let current_revision = self.revision.clone();
+        let errors = self.errors.clone();
         self.call(move |owner| {
+            if current_revision.load(std::sync::atomic::Ordering::Relaxed) != revision {
+                return Ok(project);
+            }
             for binding in &mut project.plugins {
-                if let Some(record) = selected(&owner.selection, binding.target)
-                    .and_then(|token| owner.instances.get_mut(&token))
+                let selected_token = selected(&owner.selection, binding.target);
+                if let Some(record) =
+                    selected_token.and_then(|token| owner.instances.get_mut(&token))
+                    && record.playback
                     && record.revision == revision
                     && record.binding.path == binding.path
                     && record.binding.id == binding.id
                     && record.binding.format == binding.format
                     && record.binding.state == binding.state
                 {
-                    binding.state = record
-                        .plugin
-                        .save_state()
-                        .map_err(|error| error.to_string())?
-                        .into_bytes();
+                    let state = match record.capture() {
+                        Ok(state) => state.into_bytes(),
+                        Err(error) => {
+                            let mut errors =
+                                errors.lock().unwrap_or_else(|error| error.into_inner());
+                            errors.retain(|(target, _)| *target != binding.target);
+                            errors.push((binding.target, error.clone()));
+                            return Err(error);
+                        }
+                    };
+                    if current_revision.load(std::sync::atomic::Ordering::Relaxed) != revision
+                        || selected(&owner.selection, binding.target) != selected_token
+                    {
+                        return Err(
+                            "Plugin ownership changed during state capture; save again".into()
+                        );
+                    }
+                    binding.state = state;
+                    errors
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .retain(|(target, _)| *target != binding.target);
                 }
             }
             Ok(project)
@@ -435,12 +584,44 @@ enum Adapter {
     Effect(PluginEffect),
     Instrument(PluginInstrument),
 }
+impl Adapter {
+    fn failed(&self) -> bool {
+        match self {
+            Self::Effect(adapter) => adapter.health().failed,
+            Self::Instrument(adapter) => adapter.health().failed,
+        }
+    }
+    fn latency(&self) -> usize {
+        match self {
+            Self::Effect(adapter) => adapter.latency_samples(),
+            Self::Instrument(adapter) => adapter.latency_samples(),
+        }
+    }
+    fn tail(&self) -> usize {
+        match self {
+            Self::Effect(adapter) => adapter.tail_samples(),
+            Self::Instrument(adapter) => adapter.tail_samples(),
+        }
+    }
+}
 struct Audio {
     instrument: bool,
     selection: Option<Arc<std::sync::atomic::AtomicU64>>,
-    adapter: Option<Adapter>,
+    ownership: Option<AudioOwnership<Adapter>>,
+    latency: usize,
+    tail: usize,
     token: u64,
     jobs: mpsc::Sender<Job>,
+}
+impl Audio {
+    fn adapter(&self) -> Option<&Adapter> {
+        self.ownership.as_ref().and_then(AudioOwnership::current)
+    }
+    fn adapter_mut(&mut self) -> Option<&mut Adapter> {
+        self.ownership
+            .as_mut()
+            .and_then(AudioOwnership::current_mut)
+    }
 }
 impl Drop for Audio {
     fn drop(&mut self) {
@@ -452,22 +633,37 @@ impl Drop for Audio {
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
-        if let Some(adapter) = self.adapter.take() {
+        if let Some(mut ownership) = self.ownership.take() {
             let token = self.token;
-            let _ = self.jobs.send(Box::new(move |owner| {
-                if let Some(record) = owner.instances.remove(&token) {
-                    let mut instance = record.plugin;
-                    instance.close_editor();
-                    match adapter {
-                        Adapter::Effect(adapter) => instance.release_effect(adapter),
-                        Adapter::Instrument(adapter) => instance.release_instrument(adapter),
+            let job: Job = Box::new(move |owner| {
+                if let Some(mut record) = owner.instances.remove(&token) {
+                    record.plugin.close_editor();
+                    if let Some(adapter) = ownership.retire() {
+                        let _ = record.release(adapter);
+                    }
+                    if let Some(adapter) = record.ownership.take_returned() {
+                        let _ = record.release(adapter);
                     }
                 }
-            }));
+            });
+            if let Err(error) = self.jobs.send(job) {
+                // The native owner has failed. Leaking is preferable to COM
+                // teardown/deactivation on a controller or audio thread.
+                std::mem::forget(error.0);
+            }
         }
     }
 }
 impl HostedEffect for Audio {
+    fn control_boundary(&mut self) {
+        if let Some(ownership) = &mut self.ownership {
+            if let Some(adapter) = ownership.current() {
+                self.latency = adapter.latency();
+                self.tail = adapter.tail();
+            }
+            ownership.boundary();
+        }
+    }
     fn transport(&mut self, transport: windfall_engine::plugins::PluginTransport) {
         if let Some(selection) = &self.selection {
             selection.store(self.token, std::sync::atomic::Ordering::Relaxed);
@@ -480,17 +676,18 @@ impl HostedEffect for Audio {
             numerator: transport.numerator,
             denominator: transport.denominator,
         };
-        match self.adapter.as_mut() {
+        match self.adapter_mut() {
             Some(Adapter::Effect(adapter)) => adapter.set_transport(transport),
             Some(Adapter::Instrument(adapter)) => adapter.set_transport(transport),
             None => {}
         }
     }
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        match self.adapter.as_mut() {
+        let instrument = self.instrument;
+        match self.adapter_mut() {
             Some(Adapter::Effect(adapter)) => adapter.process(left, right),
             Some(Adapter::Instrument(adapter)) => adapter.process(left, right),
-            None if self.instrument => {
+            None if instrument => {
                 left.fill(0.0);
                 right.fill(0.0);
             }
@@ -498,7 +695,7 @@ impl HostedEffect for Audio {
         }
     }
     fn set_param(&mut self, id: u32, value: f32) {
-        match self.adapter.as_mut() {
+        match self.adapter_mut() {
             Some(Adapter::Effect(adapter)) => {
                 adapter.processor().set_param(0, id, f64::from(value));
             }
@@ -509,45 +706,41 @@ impl HostedEffect for Audio {
         }
     }
     fn set_tempo(&mut self, bpm: f32) {
-        match self.adapter.as_mut() {
+        match self.adapter_mut() {
             Some(Adapter::Effect(adapter)) => adapter.set_tempo(bpm),
             Some(Adapter::Instrument(adapter)) => adapter.set_tempo(bpm),
             None => {}
         }
     }
     fn latency(&self) -> usize {
-        match self.adapter.as_ref() {
-            Some(Adapter::Effect(adapter)) => adapter.latency_samples(),
-            Some(Adapter::Instrument(adapter)) => adapter.latency_samples(),
-            None => 0,
-        }
+        self.adapter().map_or(self.latency, Adapter::latency)
     }
     fn tail(&self) -> usize {
-        match self.adapter.as_ref() {
-            Some(Adapter::Effect(adapter)) => adapter.tail_samples(),
-            Some(Adapter::Instrument(adapter)) => adapter.tail_samples(),
-            None => 0,
-        }
+        self.adapter().map_or(self.tail, Adapter::tail)
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "ownership_tests.rs"]
+mod ownership_tests;
 impl HostedInstrument for Audio {
     fn note_on(&mut self, key: u8, velocity: f32) {
-        if let Some(Adapter::Instrument(adapter)) = &mut self.adapter {
+        if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() {
             adapter.note_on(key, velocity);
         }
     }
     fn note_off(&mut self, key: u8) {
-        if let Some(Adapter::Instrument(adapter)) = &mut self.adapter {
+        if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() {
             adapter.note_off(key);
         }
     }
     fn all_notes_off(&mut self) {
-        if let Some(Adapter::Instrument(adapter)) = &mut self.adapter {
+        if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() {
             adapter.all_notes_off();
         }
     }
     fn voices(&self) -> usize {
-        match &self.adapter {
+        match self.adapter() {
             Some(Adapter::Instrument(adapter)) => adapter.active_voices(),
             _ => 0,
         }
@@ -591,6 +784,10 @@ impl PluginFactory for Runtime {
                 }
                 owner.next += 1;
                 let token = owner.next;
+                let adapter = Adapter::Effect(adapter);
+                let latency = adapter.latency();
+                let tail = adapter.tail();
+                let (ownership, audio) = exchange(adapter);
                 owner.instances.insert(
                     token,
                     Instance {
@@ -600,13 +797,21 @@ impl PluginFactory for Runtime {
                         binding,
                         revision,
                         playback,
+                        ownership,
+                        rate,
+                        block,
+                        instrument: false,
+                        latency,
+                        tail,
                     },
                 );
 
                 Ok(Box::new(Audio {
                     instrument: false,
                     selection,
-                    adapter: Some(Adapter::Effect(adapter)),
+                    ownership: Some(audio),
+                    latency,
+                    tail,
                     token,
                     jobs,
                 }) as Box<dyn HostedEffect>)
@@ -616,7 +821,9 @@ impl PluginFactory for Runtime {
             Ok(Box::new(Audio {
                 instrument: false,
                 selection: fallback_selection,
-                adapter: None,
+                ownership: None,
+                latency: 0,
+                tail: 0,
                 token: 0,
                 jobs: self.jobs.clone(),
             }) as Box<dyn HostedEffect>)
@@ -648,6 +855,10 @@ impl PluginFactory for Runtime {
                 }
                 owner.next += 1;
                 let token = owner.next;
+                let adapter = Adapter::Instrument(adapter);
+                let latency = adapter.latency();
+                let tail = adapter.tail();
+                let (ownership, audio) = exchange(adapter);
                 owner.instances.insert(
                     token,
                     Instance {
@@ -657,13 +868,21 @@ impl PluginFactory for Runtime {
                         binding,
                         revision,
                         playback,
+                        ownership,
+                        rate,
+                        block,
+                        instrument: true,
+                        latency,
+                        tail,
                     },
                 );
 
                 Ok(Box::new(Audio {
                     instrument: true,
                     selection,
-                    adapter: Some(Adapter::Instrument(adapter)),
+                    ownership: Some(audio),
+                    latency,
+                    tail,
                     token,
                     jobs,
                 }) as Box<dyn HostedInstrument>)
@@ -673,7 +892,9 @@ impl PluginFactory for Runtime {
             Ok(Box::new(Audio {
                 instrument: true,
                 selection: fallback_selection,
-                adapter: None,
+                ownership: None,
+                latency: 0,
+                tail: 0,
                 token: 0,
                 jobs: self.jobs.clone(),
             }) as Box<dyn HostedInstrument>)

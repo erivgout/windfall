@@ -76,6 +76,27 @@ fn lifecycle_gain_offsets_transport_state_and_restart() {
 }
 
 #[test]
+fn returning_before_the_next_block_preserves_control_and_scheduled_parameter_edits() {
+    let (_module, mut instance) = create(0);
+    let mut processor = instance.activate(48_000.0, 64).unwrap();
+    // Neither point has reached native process. Main-thread points precede
+    // scheduled audio points at an equal frame, just as in normal processing.
+    assert!(instance.set_param(7, 0.25));
+    assert!(processor.set_param(3, 7, 0.75));
+    instance.deactivate(processor);
+    let state = instance.save_state().unwrap();
+    assert_eq!(instance.param_value(7), Some(0.75));
+    instance.set_param(7, 0.1);
+    instance.load_state(&state).unwrap();
+    let mut processor = instance.activate(48_000.0, 64).unwrap();
+    let mut left = [1.0; 64];
+    let mut right = left;
+    processor.process(&mut left, &mut right);
+    assert_eq!(left, [1.5; 64]);
+    instance.deactivate(processor);
+}
+
+#[test]
 fn dropping_an_instance_with_its_processor_out_keeps_the_plugin_alive() {
     let (module, mut instance) = create(0);
     let mut processor = instance.activate(48_000.0, 64).unwrap();

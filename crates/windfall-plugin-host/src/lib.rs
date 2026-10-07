@@ -83,6 +83,7 @@
 
 pub mod containment;
 pub mod gui;
+pub mod ownership;
 pub mod paths;
 pub mod scan;
 
