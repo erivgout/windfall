@@ -24,13 +24,15 @@ import type { PatternId } from "./PatternId";
 import type { PatternPatch } from "./PatternPatch";
 import type { PlaylistTrackId } from "./PlaylistTrackId";
 import type { PlaylistTrackPatch } from "./PlaylistTrackPatch";
+import type { PluginBinding } from "./PluginBinding";
+import type { PluginTarget } from "./PluginTarget";
 import type { SampleId } from "./SampleId";
 import type { SamplePath } from "./SamplePath";
 import type { SamplerPatch } from "./SamplerPatch";
 import type { SettingsPatch } from "./SettingsPatch";
 import type { TrackId } from "./TrackId";
 
-export type Command = { "type": "updateSettings", patch: SettingsPatch, } | { "type": "addSample", name: string, path: SamplePath, } | { "type": "removeSample", id: SampleId, } | { "type": "addChannel", 
+export type Command = { "type": "addPluginInstrument", plugin: PluginBinding, } | { "type": "addPluginEffect", track: TrackId, plugin: PluginBinding, } | { "type": "setPluginParam", target: PluginTarget, id: number, value: number, } | { "type": "setPluginState", target: PluginTarget, state: Array<number>, } | { "type": "updateSettings", patch: SettingsPatch, } | { "type": "addSample", name: string, path: SamplePath, } | { "type": "removeSample", id: SampleId, } | { "type": "addChannel", 
 /**
  * Defaults to the sample name, the instrument's name, or "Sampler".
  */

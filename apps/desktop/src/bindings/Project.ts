@@ -4,6 +4,7 @@ import type { Channel } from "./Channel";
 import type { Mixer } from "./Mixer";
 import type { Pattern } from "./Pattern";
 import type { Playlist } from "./Playlist";
+import type { PluginBinding } from "./PluginBinding";
 import type { ProjectSettings } from "./ProjectSettings";
 import type { RetainedPluginState } from "./RetainedPluginState";
 import type { SampleAsset } from "./SampleAsset";
@@ -30,6 +31,10 @@ patterns: Array<Pattern>, mixer: Mixer, playlist: Playlist,
  * where a clip on the playlist puts it.
  */
 automations: Array<Automation>, 
+/**
+ * Native plugin instances, saved even when their files are unavailable.
+ */
+plugins?: Array<PluginBinding>, 
 /**
  * Opaque states from imported plugins, kept even before a compatible host exists.
  */

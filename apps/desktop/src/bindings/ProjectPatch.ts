@@ -6,6 +6,7 @@ import type { Mixer } from "./Mixer";
 import type { Pattern } from "./Pattern";
 import type { PatternId } from "./PatternId";
 import type { Playlist } from "./Playlist";
+import type { PluginBinding } from "./PluginBinding";
 import type { ProjectSettings } from "./ProjectSettings";
 import type { SampleAsset } from "./SampleAsset";
 
@@ -18,7 +19,7 @@ export type ProjectPatch = {
  * Counts up by one for every patch the document produces. A UI that
  * sees a gap has missed a patch and must fetch the whole project again.
  */
-revision: number, settings?: ProjectSettings, samples?: Array<SampleAsset>, channels?: Array<Channel>, mixer?: Mixer, playlist?: Playlist, 
+revision: number, settings?: ProjectSettings, plugins?: Array<PluginBinding>, samples?: Array<SampleAsset>, channels?: Array<Channel>, mixer?: Mixer, playlist?: Playlist, 
 /**
  * Every automation of the project, in order.
  */
