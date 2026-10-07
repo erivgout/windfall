@@ -14,7 +14,7 @@ The Windows app supports live MIDI input with sustain, an explicit audition chan
 
 Selected audio clips can be trimmed, extracted, normalized, reversed, faded, silenced or cut in the native audio editor. Edits create a new WAV and one undo step. Reviewed grid/transient slicing creates clips linked to the original source; playable slice mapping remains unfinished. See `docs/AUDIO-EDITOR.md` and `docs/SLICER.md`.
 
-The piano roll includes selected-note quantize, legato/staccato, grid chop, compatible glue, strum, time/pitch flip, pitch-range and velocity tools with atomic undo. The transport includes reviewed tap tempo. Portamento and further piano tools remain unfinished. See `docs/PIANO-TOOLS.md` and `docs/TAP-TEMPO.md`.
+The piano roll includes selected-note quantize, legato/staccato, grid chop, compatible glue, strum, time/pitch flip, pitch-range and velocity tools with atomic undo. Opt-in scale guidance and pitch snap accompany one-click chord/scale stamps; stamp cancellation repairs remain in progress. The transport includes reviewed tap tempo. Portamento, custom chopping patterns and further piano tools remain unfinished. See `docs/PIANO-TOOLS.md`, `docs/PIANO-SCALES.md` and `docs/TAP-TEMPO.md`.
 
 The sample browser indexes bounded folder trees, searches paths with Boolean and wildcard queries, and stores local favorites and tags. Refreshed file imports use checked source tokens. Delayed-import and changed-source repair work is still in progress. See `docs/BROWSER-LIBRARY.md`.
 
@@ -22,7 +22,7 @@ Channel samplers support forward and ping-pong loops with editable points, note 
 
 Mixer chains include balance, DC removal, channel mute, polarity, stereo matrix with channel delays, soft clipping and oversampled distortion. Matrix transition and latency-display repairs remain in progress. See `docs/UTILITY-EFFECTS.md`.
 
-The Windows app hosts CLAP and VST3 instruments and effects with a plugin manager, parameter automation and saved state. Native state capture defers during recording, preserves current note/parameter intent during ownership exchange, and reports native lifecycle refusal. The VST3 delivery is undergoing independent review and combined validation; native VST3 editor windows and installed external plugins remain unverified. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md` and `docs/plugins/vst3-desktop.md`.
+The Windows app hosts CLAP and VST3 instruments and effects with a plugin manager, parameter automation and saved state. Native state capture defers during recording, preserves current note/parameter intent during ownership exchange, and reports native lifecycle refusal. Repairs remain in progress for save-before-drain parameter capture, bundle binary validation and multi-channel panic expansion. Native VST3 editor windows and installed external plugins remain unverified. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md` and `docs/plugins/vst3-desktop.md`.
 
 Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.
 

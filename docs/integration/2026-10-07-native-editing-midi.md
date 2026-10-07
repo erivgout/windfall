@@ -197,10 +197,50 @@ reconciliation also fixes the independently reproduced committed CLAP parameter
 loss under saturation. The worker passed 106 host, 202 desktop, 314 engine and
 six plugin UI tests, plus scoped strict Clippy, formatting, types and lint.
 These are worker results at the feature commit. Independent runtime review round
-three and a fresh combined native suite at `72718071` are pending.
+three found three additional P2 issues: save-before-drain capture can replace a
+committed parameter with an older native value, bundle validation stamps the
+directory rather than its inner binary, and full multi-channel panic expansion
+can exceed native event capacity. The same runtime owner is reproducing and
+repairing them in its existing isolated T3 worktree. Live parameter delivery and
+the original CLAP panic/retirement findings remain closed. A fresh combined
+native suite at `72718071` is still running.
 
 The generated 163 bindings and 1,775,678-byte WASM remain current: no exported
 model/IPC/DSP descriptor or simulator dependency changed in the recovery/VST3
 repairs. Parent parity and simulator freshness checks passed. No new release,
 tag, visibility or access change was made. The batch remains local pending
 open review repairs and appropriate combined checks.
+
+## Scale and stamp integration
+
+Scale/stamp source `46de77e3` merged cleanly as `73149138`. Root/scale preferences,
+opt-in highlighting and pitch snap, rigid-group pitch policy, and atomic chord/
+single-octave scale stamps use existing project commands. No exported field or
+renderer shader changed. The worker passed 265 focused tests and browser/
+Canvas 2D/WebGL2 checks; WebGPU hardware and native Tauri windows remain untested.
+
+Parent checks at the merged source passed 281 tests in 15 piano/canvas/playlist/
+flow/store files, ESLint and the production TypeScript/Vite build. Six plugin UI
+tests and their focused lint also passed after the VST3 integration. Independent
+review passed 23 focused tests and additional real-WASM selection/lifetime
+checks, then reproduced two stamp defects: a choice awaiting menu exit can arm
+after blur/tool-change cancellation, and modifier keys can restore a preview
+after the pointer leaves the grid. The original scale/stamp owner is adding
+focused regressions and repairs. Scale guidance/snap has no actionable finding
+and is accepted; the stamp row remains in progress.
+
+The parent T3 preview reconnected on port 5190. At the merged source, the scale
+menu and chord choices were present, and Escape cancelled an armed major-triad
+stamp with Undo still disabled. Tap tempo showed four taps and 43.74 BPM while
+the project remained at 128 BPM with Undo disabled. Apply changed the displayed
+tempo to 43.74 and marked the document dirty; one Undo restored 128, the clean
+title and disabled Undo, with Redo available. This is browser/real-WASM UI
+evidence, not a physical device or native-window check.
+
+Six accepted piano rows are now done: quantize, glue, strum, key limit, flip and
+velocity scaling. Articulation retains pending portamento; chopping retains
+pending custom patterns despite its reviewed grid workflow. A new isolated T3
+task owns custom chopping, arpeggio, flam and rhythm-reshape transforms. Current
+accounting is 64 done, 49 in progress, 227 todo and two won't-do rows, preserving
+all 342 requirements. Open native/library/archive/utility findings still prevent
+publishing this batch as verified progress.

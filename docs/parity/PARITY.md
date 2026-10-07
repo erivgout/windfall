@@ -14,19 +14,19 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**65 of 342 rows accounted for (19.0%).** A row is accounted for when it is done or won't do.
+**66 of 342 rows accounted for (19.3%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 229 |
-| In progress | 48 |
-| Done | 63 |
+| Todo | 227 |
+| In progress | 49 |
+| Done | 64 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 13 | 7 | 2 | 1 |
-| Main windows | 113 | 56 | 17 | 39 | 1 |
+| Main windows | 113 | 54 | 18 | 40 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,7 +38,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 7 | 8 | 22 | 2 |
-| 2. Write a song | 99 | 50 | 20 | 29 | 0 |
+| 2. Write a song | 99 | 48 | 21 | 30 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
 | 5. The long tail | 129 | 122 | 7 | 0 | 0 |
@@ -107,13 +107,13 @@ As of 2026-10-07. Sources:
 | Piano roll: Select tool | Piano roll select tool | 2 | done |  |
 | Piano roll: Zoom tool | Piano roll zoom tool | 2 | todo |  |
 | Piano roll: Playback (scrub) tool | Piano roll scrub tool | 2 | todo |  |
-| Piano roll: Chord stamp | Chord stamp | 2 | todo |  |
+| Piano roll: Chord stamp | Chord stamp | 2 | in-progress | One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Combined focused tests, lint and build pass. Independent review reproduced pending-menu cancellation and outside-grid modifier-preview bugs; repairs are in progress. See docs/PIANO-SCALES.md. |
 | Piano roll: preview keyboard and key labels | Preview keyboard | 2 | done |  |
 | Piano roll: event editor lane and note properties | Note property lane | 2 | in-progress | Velocity and pan lanes. Other note properties are not in the model yet. |
 | Piano roll: slide and portamento notes | Slide notes | 2 | todo |  |
 | Piano roll: note colors (16 color groups) | Note colors | 2 | todo |  |
 | Piano roll: ghost notes | Ghost notes | 2 | done |  |
-| Piano roll: scale highlighting and snap to scale | Scale highlighting | 2 | todo |  |
+| Piano roll: scale highlighting and snap to scale | Scale highlighting | 2 | done | Validated root/scale preferences, opt-in row highlighting and deterministic pitch snap are implemented. Group moves preserve intervals through a documented anchor policy; enabling guidance leaves existing notes unchanged. Combined focused tests, lint and build pass; independent review found no actionable scale/snap issue. See docs/PIANO-SCALES.md. |
 | Piano roll: snap to grid | Piano roll snap | 2 | done |  |
 | Piano roll: time markers and per-pattern time signatures | Pattern markers | 2 | todo |  |
 | Piano roll: waveform helper view | Waveform helper | 2 | todo |  |

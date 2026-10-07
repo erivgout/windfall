@@ -649,10 +649,10 @@
       "summary": "Places whole chords or scale patterns from a menu with one click.",
       "windfall_name": "Chord stamp",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Combined focused tests, lint and build pass. Independent review reproduced pending-menu cancellation and outside-grid modifier-preview bugs; repairs are in progress. See docs/PIANO-SCALES.md."
     },
     {
       "id": "win-piano-keyboard",
@@ -721,10 +721,10 @@
       "summary": "Shades the grid for a chosen key and scale and can hold notes to it.",
       "windfall_name": "Scale highlighting",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Validated root/scale preferences, opt-in row highlighting and deterministic pitch snap are implemented. Group moves preserve intervals through a documented anchor policy; enabling guidance leaves existing notes unchanged. Combined focused tests, lint and build pass; independent review found no actionable scale/snap issue. See docs/PIANO-SCALES.md."
     },
     {
       "id": "win-piano-snap",
