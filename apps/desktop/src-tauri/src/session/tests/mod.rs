@@ -8,6 +8,7 @@ mod export;
 mod export_formats;
 mod files;
 mod library;
+mod midi;
 mod playback;
 mod song;
 

@@ -1,0 +1,143 @@
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { useProjectStore } from "@/lib/store/project"
+import { useUiStore } from "@/lib/store/ui"
+import { startTestApp } from "@/test/harness"
+import { MidiDialogs } from "./dialogs"
+import { midiFixture } from "./fixture"
+
+let app: Awaited<ReturnType<typeof startTestApp>>
+beforeEach(async () => {
+  app = await startTestApp({
+    midiFile: async () => ({ name: "authored.mid", bytes: midiFixture() }),
+  })
+})
+afterEach(() => app.stop())
+
+function open(dialog: "midiImport" | "midiExport") {
+  useUiStore.getState().openDialog(dialog)
+  render(<MidiDialogs />)
+}
+
+async function prepare() {
+  vi.spyOn(app.backend, "pickMidiFile").mockResolvedValue("fixture.mid")
+  vi.spyOn(app.backend, "midiPreview").mockResolvedValue({
+    token: 42,
+    channels: ["Lead"],
+    notes: 1,
+    patterns: 1,
+    clips: 1,
+    length: 3840,
+    adjustments: ["Markers are not imported."],
+  })
+  open("midiImport")
+  const user = userEvent.setup()
+  await user.click(screen.getByRole("button", { name: "Choose MIDI file…" }))
+  await screen.findByText(
+    "1 channel, 1 pattern, 1 clip and 1 note will be added."
+  )
+  return user
+}
+
+describe("MIDI dialogs", () => {
+  it("imports synthetic MIDI through the dialog and removes it with one undo", async () => {
+    const before = useProjectStore.getState().project
+    open("midiImport")
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "Choose MIDI file…" }))
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Import" })).toBeEnabled()
+    )
+    await user.click(screen.getByRole("button", { name: "Import" }))
+    await waitFor(() => expect(useUiStore.getState().dialog).toBeNull())
+    expect(useProjectStore.getState().project.channels).toHaveLength(
+      before.channels.length + 1
+    )
+    await app.backend.undo()
+    expect({
+      ...useProjectStore.getState().project,
+      nextId: before.nextId,
+    }).toEqual(before)
+  })
+  it("shows the append behavior and reports unsupported content before import", async () => {
+    await prepare()
+    expect(screen.getByText("Markers are not imported.")).toBeVisible()
+    expect(screen.getByRole("button", { name: "Import" })).toBeEnabled()
+    expect(screen.getByText(/Append notes and arrangement/)).toBeVisible()
+  })
+
+  it("refreshes the reviewed plan when import options change", async () => {
+    const user = await prepare()
+    await user.click(
+      screen.getByRole("checkbox", { name: "Use factory drum samples" })
+    )
+    await waitFor(() =>
+      expect(app.backend.midiPreview).toHaveBeenLastCalledWith(
+        "fixture.mid",
+        expect.objectContaining({ factoryDrums: true })
+      )
+    )
+  })
+
+  it("releases a review on cancel without dispatching", async () => {
+    const discard = vi.spyOn(app.backend, "midiDiscard")
+    const imported = vi.spyOn(app.backend, "importMidi")
+    const user = await prepare()
+    await user.click(screen.getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(discard).toHaveBeenCalledWith(42))
+    expect(imported).not.toHaveBeenCalled()
+  })
+
+  it("disables import and preserves the project after a parse failure", async () => {
+    const before = useProjectStore.getState().project
+    vi.spyOn(app.backend, "pickMidiFile").mockResolvedValue("broken.mid")
+    vi.spyOn(app.backend, "midiPreview").mockRejectedValue(
+      new Error("The MIDI track is truncated.")
+    )
+    open("midiImport")
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Choose MIDI file…" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("truncated")
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled()
+    expect(useProjectStore.getState().project).toBe(before)
+  })
+
+  it("shows an import refusal and leaves the review open", async () => {
+    const user = await prepare()
+    vi.spyOn(app.backend, "importMidi").mockRejectedValue(
+      new Error("This MIDI preview has expired.")
+    )
+    await user.click(screen.getByRole("button", { name: "Import" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("expired")
+    expect(useUiStore.getState().dialog).toBe("midiImport")
+  })
+
+  it("cancelled export writes nothing and keeps its options open", async () => {
+    vi.spyOn(app.backend, "pickMidiExportPath").mockResolvedValue(null)
+    const exported = vi.spyOn(app.backend, "exportMidi")
+    open("midiExport")
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Choose file and export…" }))
+    expect(exported).not.toHaveBeenCalled()
+    expect(useUiStore.getState().dialog).toBe("midiExport")
+    expect(screen.getByText(/This exports no audio/)).toBeVisible()
+  })
+
+  it("reports write failures and allows retry", async () => {
+    vi.spyOn(app.backend, "exportMidi").mockRejectedValue(
+      new Error("The file is locked.")
+    )
+    open("midiExport")
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Choose file and export…" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("locked")
+    expect(
+      screen.getByRole("button", { name: "Choose file and export…" })
+    ).toBeEnabled()
+  })
+})

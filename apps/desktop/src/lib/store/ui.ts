@@ -21,7 +21,8 @@ export type InnerScope =
   "rackInspector" | "effectInspector" | "effect" | "clipInspector"
 /** Anywhere keyboard shortcuts can be scoped to. */
 export type ScopeId = PanelId | InnerScope
-export type AppDialog = "palette" | "settings" | "export"
+export type AppDialog =
+  "palette" | "settings" | "export" | "midiImport" | "midiExport"
 /**
  * Something that takes the place of the center tab for a while. The tab
  * stays chosen underneath and comes back when the overlay goes.

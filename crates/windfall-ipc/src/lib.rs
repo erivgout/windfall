@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+mod midi;
+pub use midi::*;
 pub use windfall_project::PlayMode;
 use windfall_project::{AutomationId, EffectId, PatternId, TrackId};
 

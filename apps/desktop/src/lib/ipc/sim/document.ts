@@ -5,6 +5,9 @@ import type {
   Pattern,
   Project,
   ProjectPatch,
+  MidiImportOptions,
+  MidiExportOptions,
+  MidiImportPreview,
 } from "@/bindings"
 
 import { sim } from "./wasm"
@@ -91,6 +94,24 @@ export class SimDocument {
 
   undo(): ProjectPatch | null {
     return this.follow(this.call<ProjectPatch | null>("doc_undo"))
+  }
+
+  importMidi(bytes: number[], options: MidiImportOptions): DispatchResult {
+    const result = this.call<DispatchResult>("doc_midi_import", {
+      bytes,
+      options,
+    })
+    this.follow(result.patch)
+    this.mirror.nextId = this.call<number>("doc_next_id")
+    return result
+  }
+
+  previewMidi(bytes: number[], options: MidiImportOptions): MidiImportPreview {
+    return this.call<MidiImportPreview>("midi_preview", { bytes, options })
+  }
+
+  exportMidi(options: MidiExportOptions): number[] {
+    return this.call<number[]>("doc_midi_export", options)
   }
 
   redo(): ProjectPatch | null {

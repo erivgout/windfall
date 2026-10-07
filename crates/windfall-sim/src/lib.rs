@@ -39,6 +39,7 @@ use std::sync::{Mutex, MutexGuard, Once, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use windfall_project::Document;
+mod midi;
 
 /// The JSON of the value a call produced, or the message of its failure.
 pub type Reply = Result<String, String>;
@@ -110,6 +111,7 @@ fn json(value: &impl Serialize) -> Reply {
 
 /// The operations, as plain functions over JSON text.
 pub mod ops {
+    pub use crate::midi::{doc_midi_export, doc_midi_import, midi_preview};
     use serde::Deserialize;
     use windfall_project::file;
     use windfall_project::{Command, DispatchResult, Document, Project, SaveError, Touched};
@@ -368,6 +370,9 @@ export_ops! {
     doc_next_id
     doc_to_file_json
     sim_panic
+    midi_preview
+    doc_midi_import
+    doc_midi_export
 }
 
 #[cfg(test)]

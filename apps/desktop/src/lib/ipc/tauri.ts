@@ -39,6 +39,7 @@ function on<T>(event: string, handler: (payload: T) => void): Unsubscribe {
 }
 
 const PROJECT_FILTER = [{ name: "Windfall project", extensions: ["windfall"] }]
+const MIDI_FILTER = [{ name: "MIDI file", extensions: ["mid", "midi"] }]
 
 export function createTauriBackend(): Backend {
   const realtimeHandlers = new Set<(frame: RealtimeFrame) => void>()
@@ -72,6 +73,24 @@ export function createTauriBackend(): Backend {
     projectOpen: (path) => call("project_open", { path }),
     projectSave: (path) => call("project_save", { path }),
     recentProjects: () => call("recent_projects"),
+    midiPreview: (path, options) => call("midi_preview", { path, options }),
+    importMidi: (token) => call("import_midi", { token }),
+    midiDiscard: (token) => call("midi_discard", { token }),
+    exportMidi: (path, options) => call("export_midi", { path, options }),
+    async pickMidiFile() {
+      const result = await open({
+        title: "Import MIDI",
+        multiple: false,
+        filters: MIDI_FILTER,
+      })
+      return typeof result === "string" ? result : null
+    },
+    pickMidiExportPath: (suggestedName) =>
+      save({
+        title: "Export MIDI",
+        defaultPath: `${suggestedName}.mid`,
+        filters: MIDI_FILTER,
+      }),
 
     transportPlay: () => call("transport_play"),
     transportStop: () => call("transport_stop"),
