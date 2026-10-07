@@ -41,6 +41,7 @@ import { SimDocument } from "./sim/document"
 import { simulatedLatencyFrames } from "./sim/effects"
 import { demoProject, starterProject } from "./sim/project"
 import { TransportSim } from "./sim/transport"
+import { createMidiMock, type MockMidiOptions } from "./sim/midi"
 
 /** Stand-ins for the native file dialogs. Each resolves to null on cancel. */
 export type MockDialogs = {
@@ -51,7 +52,7 @@ export type MockDialogs = {
   audioFile(): Promise<string | null>
 }
 
-export type MockOptions = {
+export type MockOptions = MockMidiOptions & {
   /** Where "saved" projects live. Pass null to keep them in memory only. */
   storage?: Pick<Storage, "getItem" | "setItem"> | null
   dialogs?: MockDialogs
@@ -553,6 +554,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    ...createMidiMock(options, () => doc, publish, dialogs.exportPath),
 
     documentSnapshot: () => ipc(() => doc.snapshot(path)),
     dispatch: (command, gesture) => ipc(() => dispatchNow(command, gesture)),

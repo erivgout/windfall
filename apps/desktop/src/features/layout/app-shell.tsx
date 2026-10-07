@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { ValueContextMenus } from "@/components/value-context-menu"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ExportDialog } from "@/features/export/export-dialog"
+import { MidiDialogs } from "@/features/midi/dialogs"
 import { CommandPalette } from "@/features/palette/command-palette"
 import { SettingsDialog } from "@/features/settings/settings-dialog"
 import { TransportBar } from "@/features/transport/transport-bar"
@@ -77,6 +78,7 @@ export function AppShell() {
         <CommandPalette />
         <SettingsDialog />
         <ExportDialog />
+        <MidiDialogs />
         <Overlays />
       </ValueContextMenus>
     </TooltipProvider>

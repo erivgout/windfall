@@ -63,6 +63,7 @@ mod edit;
 mod export;
 mod files;
 mod library;
+mod midi;
 mod realtime;
 mod samples;
 #[cfg(test)]
@@ -202,6 +203,9 @@ struct State {
     /// Counts the requests to replace the document, whether or not they got
     /// to. Only the last one made may still do it.
     replacements: u64,
+    /// Only the latest MIDI review is retained, bounded by the reader's limits.
+    midi_import: Option<midi::Prepared>,
+    midi_ticket: u32,
 }
 
 impl State {
@@ -253,6 +257,8 @@ impl Session {
                     generation: 0,
                     edits: 0,
                     replacements: 0,
+                    midi_import: None,
+                    midi_ticket: 0,
                 }),
                 transport: Mutex::new(controller.transport()),
                 configuring: Mutex::new(()),

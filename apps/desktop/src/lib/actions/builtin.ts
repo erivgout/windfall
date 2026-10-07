@@ -127,6 +127,20 @@ function patternIndex(state: AppState): number {
 /** The actions the shell itself provides. Panels register their own. */
 export const BUILTIN_ACTIONS: Action[] = [
   {
+    id: "file.importMidi",
+    title: "Import MIDI…",
+    section: "File",
+    keywords: "mid append notes arrangement",
+    run: () => ui().openDialog("midiImport"),
+  },
+  {
+    id: "file.exportMidi",
+    title: "Export MIDI…",
+    section: "File",
+    keywords: "mid notes tempo pattern song",
+    run: () => ui().openDialog("midiExport"),
+  },
+  {
     id: "file.new",
     title: "New project",
     section: "File",

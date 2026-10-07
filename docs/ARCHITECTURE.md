@@ -356,6 +356,10 @@ Tauri commands. Arguments are camelCase. A failed call rejects with a plain stri
 | `add_audio_clip_from_sample` | `sample: SampleId`, `track?: PlaylistTrackId`, `start: number`, `mixerTrack?: TrackId` | `DispatchResult`. The same for a sample already in the pool, with the same rule for an absent `mixerTrack`. `created` holds the playlist track if one was made, the mixer track if one was made, and last the clip. Rejects a sample whose audio is not loaded. |
 | `export_audio` | `options: ExportOptions` | Returns at once. Progress arrives as events. Writes one file, or with `stems` one file for each stem. Adds the format's extension to a path with none and rejects any other extension. `autoTail` ends the file when the sound has rung out, at most `tailSecs` after the end. Rejects what the format cannot be, with a message for each case; see Export below. |
 | `export_cancel` | | Stops the export that is running, if one is. It ends with a last `export:progress` event that has `cancelled` set, and leaves no file. |
+| `midi_preview` | `path: string`, `options: MidiImportOptions` | `MidiImportPreview`: names, counts and adjustment sentences, with a token for the exact prepared plan. Only the latest review is retained; another document or newer preview invalidates it. Does not edit the project. |
+| `import_midi` | `token: number` | `DispatchResult`. Appends the reviewed channels, patterns, playlist and optional tempo automation as one checked "Import MIDI" undo step. Allocates against the current document, so intervening edits are preserved. Rejects expired reviews and invalid batches without changing the project or history. Factory drum samples use the normal sample loader. |
+| `midi_discard` | `token: number` | Releases a cancelled review, if still current. Does not edit the document. |
+| `export_midi` | `path: string`, `options: MidiExportOptions` | `string`, the saved path. Writes pattern or song MIDI atomically from a checked snapshot; adds `.mid` if absent and accepts `.mid`/`.midi`. Supports formats 0/1, 480/960 PPQ, running status and swing. No audio is rendered. |
 
 Events the shell emits to every window:
 

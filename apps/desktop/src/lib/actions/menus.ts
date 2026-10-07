@@ -40,8 +40,10 @@ export const MENUS: MenuSpec[] = [
       "file.saveAs",
       separator,
       "file.reloadSamples",
+      "file.importMidi",
       separator,
       "file.export",
+      "file.exportMidi",
     ],
   },
   {

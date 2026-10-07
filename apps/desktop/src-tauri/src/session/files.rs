@@ -390,6 +390,8 @@ impl Session {
             generation: state.generation + 1,
             edits: 0,
             replacements: state.replacements,
+            midi_import: None,
+            midi_ticket: state.midi_ticket,
         };
         controller.set_project(state.document.project(), &state.pool);
         controller.set_transport(transport);

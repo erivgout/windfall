@@ -16,6 +16,17 @@ and `write` also work in WebAssembly. Recommended IPC operations are
 `import_midi(path, options)` and `export_midi(path, options)`; an optional
 preview endpoint can return the import plan without dispatching it.
 
+The desktop now exposes these operations through File > Import MIDI and
+File > Export MIDI. Import options automatically refresh a names/counts review
+and adjustment report; the confirmed import appends one undo step without
+changing the current project path. Its `midi_preview(path, options)` IPC holds
+the exact prepared plan under a token; `import_midi(token)` validates and applies
+it, and `midi_discard(token)` releases cancellation. New previews and project
+replacement expire old tokens. `export_midi(path, options)` snapshots the selected
+pattern or song and atomically writes the file. File dialogs filter `.mid` and
+`.midi`. The browser mock uses this Rust converter through `windfall-sim`, with
+real browser file selection and MIDI downloads.
+
 No external parser or writer dependency is used. Runtime dependencies are the
 workspace's `windfall-core` and `windfall-project`, both GPL-3.0-or-later.
 Test dependencies `proptest` 1.11.0 and `tempfile` 3.27.0 are dual licensed

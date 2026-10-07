@@ -20,6 +20,7 @@ use windfall_project::{
 };
 
 use crate::session::{ClipPlace, Session};
+use windfall_ipc::{MidiExportOptions, MidiImportOptions, MidiImportPreview};
 
 /// Runs slow work off the async runtime's own threads.
 async fn blocking<T, F>(work: F) -> Result<T, String>
@@ -306,6 +307,37 @@ fn export_cancel(session: State<'_, Session>) {
     session.export_cancel();
 }
 
+#[tauri::command]
+async fn midi_preview(
+    session: State<'_, Session>,
+    path: String,
+    options: MidiImportOptions,
+) -> Result<MidiImportPreview, String> {
+    let session = session.inner().clone();
+    blocking(move || session.midi_preview(&path, options)).await
+}
+
+#[tauri::command]
+async fn import_midi(session: State<'_, Session>, token: u32) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.import_midi(token)).await
+}
+
+#[tauri::command]
+fn midi_discard(session: State<'_, Session>, token: u32) {
+    session.midi_discard(token);
+}
+
+#[tauri::command]
+async fn export_midi(
+    session: State<'_, Session>,
+    path: String,
+    options: MidiExportOptions,
+) -> Result<String, String> {
+    let session = session.inner().clone();
+    blocking(move || session.export_midi(&path, options)).await
+}
+
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -347,5 +379,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         add_audio_clip_from_sample,
         export_audio,
         export_cancel,
+        midi_preview,
+        import_midi,
+        midi_discard,
+        export_midi,
     ]
 }

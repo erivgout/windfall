@@ -1,4 +1,3 @@
-import type { Project } from "@/bindings"
 import { installKeymap } from "@/lib/actions"
 import { registerBuiltinActions } from "@/lib/actions/builtin"
 import { setBackend } from "@/lib/ipc"
@@ -6,6 +5,7 @@ import {
   createMockBackend,
   type MockBackend,
   type MockDialogs,
+  type MockOptions,
 } from "@/lib/ipc/mock"
 import { connectStores } from "@/lib/store/connect"
 import { useEngineStore } from "@/lib/store/engine"
@@ -32,11 +32,11 @@ export async function settle() {
  * A fresh mock backend with the stores, the actions and the keymap wired to
  * it, the way the app starts. Call the returned `stop` when the test is done.
  */
-export async function startTestApp(options: { project?: Project } = {}) {
+export async function startTestApp(options: MockOptions = {}) {
   const backend: MockBackend = createMockBackend({
     storage: null,
     dialogs: TEST_DIALOGS,
-    project: options.project,
+    ...options,
   })
   setBackend(backend)
   useProjectStore.setState(useProjectStore.getInitialState(), true)

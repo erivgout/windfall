@@ -20,6 +20,9 @@ import type {
   TrackId,
   TransportPatch,
   TransportState,
+  MidiImportOptions,
+  MidiImportPreview,
+  MidiExportOptions,
 } from "@/bindings"
 
 export type Unsubscribe = () => void
@@ -67,6 +70,13 @@ export interface Backend {
   /** Resolves to the saved path. Rejects when there is no path yet. */
   projectSave(path?: string): Promise<string>
   recentProjects(): Promise<string[]>
+  midiPreview(
+    path: string,
+    options: MidiImportOptions
+  ): Promise<MidiImportPreview>
+  importMidi(token: number): Promise<DispatchResult>
+  midiDiscard(token: number): Promise<void>
+  exportMidi(path: string, options: MidiExportOptions): Promise<string>
 
   transportPlay(): Promise<TransportState>
   transportStop(): Promise<TransportState>
@@ -169,6 +179,8 @@ export interface Backend {
   ): Promise<string | null>
   pickFolder(): Promise<string | null>
   pickAudioFile(): Promise<string | null>
+  pickMidiFile(): Promise<string | null>
+  pickMidiExportPath(suggestedName: string): Promise<string | null>
 
   setWindowTitle(title: string): Promise<void>
   /**
