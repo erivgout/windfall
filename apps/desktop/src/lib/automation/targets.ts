@@ -278,7 +278,7 @@ export function automationsOf(
 
 /**
  * Why a target cannot be automated, or null when it can. The engine leaves
- * a limiter's look-ahead alone: it changes the effect's latency, and the
+ * latency-changing controls alone: limiter look-ahead and matrix delays. The
  * delays that line the other paths up with it are made for the stored
  * value.
  */
@@ -290,6 +290,12 @@ export function automationBlocked(
   const found = findEffect(project, target.effect)
   const info = targetState(project, target)?.info
   if (found?.slot.params.type === "limiter" && info?.id === "lookaheadMs") {
+    return "Changes the latency"
+  }
+  if (
+    found?.slot.params.type === "stereoMatrix" &&
+    (info?.id === "leftDelayMs" || info?.id === "rightDelayMs")
+  ) {
     return "Changes the latency"
   }
   return null

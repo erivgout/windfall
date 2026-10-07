@@ -5,8 +5,10 @@ use std::cell::Cell;
 
 use windfall_dsp::blocks::noise::Rng;
 use windfall_dsp::{
-    AnyEffect, AnyInstrument, CompressorParams, DelayParams, EffectKind, EffectParams, EffectSlot,
-    EqParams, InstrumentKind, InstrumentParams, LimiterParams, ReverbParams, SynthParams,
+    AnyEffect, AnyInstrument, BalanceParams, ChannelMuteParams, CompressorParams, DcBlockParams,
+    DelayParams, DistortionParams, EffectKind, EffectParams, EffectSlot, EqParams, InstrumentKind,
+    InstrumentParams, LimiterParams, PolarityParams, ReverbParams, SoftClipperParams,
+    StereoMatrixParams, SynthParams,
 };
 
 use crate::support::{noise, random_params};
@@ -82,6 +84,19 @@ fn random_effect_params(kind: EffectKind, rng: &mut Rng) -> EffectParams {
         EffectKind::Limiter => EffectParams::Limiter(random_params::<LimiterParams>(rng)),
         EffectKind::Reverb => EffectParams::Reverb(random_params::<ReverbParams>(rng)),
         EffectKind::Delay => EffectParams::Delay(random_params::<DelayParams>(rng)),
+        EffectKind::Balance => EffectParams::Balance(random_params::<BalanceParams>(rng)),
+        EffectKind::DcBlock => EffectParams::DcBlock(random_params::<DcBlockParams>(rng)),
+        EffectKind::ChannelMute => {
+            EffectParams::ChannelMute(random_params::<ChannelMuteParams>(rng))
+        }
+        EffectKind::Polarity => EffectParams::Polarity(random_params::<PolarityParams>(rng)),
+        EffectKind::StereoMatrix => {
+            EffectParams::StereoMatrix(random_params::<StereoMatrixParams>(rng))
+        }
+        EffectKind::SoftClipper => {
+            EffectParams::SoftClipper(random_params::<SoftClipperParams>(rng))
+        }
+        EffectKind::Distortion => EffectParams::Distortion(random_params::<DistortionParams>(rng)),
     }
 }
 

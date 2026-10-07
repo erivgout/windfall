@@ -5,6 +5,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::balance::{Balance, BalanceParams};
+use crate::channel_mute::{ChannelMute, ChannelMuteParams};
+use crate::dc_block::{DcBlock, DcBlockParams};
+use crate::distortion::{DISTORTION_LATENCY_SAMPLES, Distortion, DistortionParams};
+use crate::polarity::{Polarity, PolarityParams};
+use crate::soft_clipper::{SoftClipper, SoftClipperParams};
+use crate::stereo_matrix::{StereoMatrix, StereoMatrixParams};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -134,15 +141,29 @@ pub enum EffectKind {
     Limiter,
     Reverb,
     Delay,
+    Balance,
+    DcBlock,
+    ChannelMute,
+    Polarity,
+    StereoMatrix,
+    SoftClipper,
+    Distortion,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 5] = [
+    pub const ALL: [EffectKind; 12] = [
         EffectKind::Eq,
         EffectKind::Compressor,
         EffectKind::Limiter,
         EffectKind::Reverb,
         EffectKind::Delay,
+        EffectKind::Balance,
+        EffectKind::DcBlock,
+        EffectKind::ChannelMute,
+        EffectKind::Polarity,
+        EffectKind::StereoMatrix,
+        EffectKind::SoftClipper,
+        EffectKind::Distortion,
     ];
 
     /// The effect's name as shown to the user.
@@ -153,6 +174,13 @@ impl EffectKind {
             EffectKind::Limiter => LimiterParams::NAME,
             EffectKind::Reverb => ReverbParams::NAME,
             EffectKind::Delay => DelayParams::NAME,
+            EffectKind::Balance => BalanceParams::NAME,
+            EffectKind::DcBlock => DcBlockParams::NAME,
+            EffectKind::ChannelMute => ChannelMuteParams::NAME,
+            EffectKind::Polarity => PolarityParams::NAME,
+            EffectKind::StereoMatrix => StereoMatrixParams::NAME,
+            EffectKind::SoftClipper => SoftClipperParams::NAME,
+            EffectKind::Distortion => DistortionParams::NAME,
         }
     }
 
@@ -164,6 +192,13 @@ impl EffectKind {
             EffectKind::Limiter => LimiterParams::descriptors(),
             EffectKind::Reverb => ReverbParams::descriptors(),
             EffectKind::Delay => DelayParams::descriptors(),
+            EffectKind::Balance => BalanceParams::descriptors(),
+            EffectKind::DcBlock => DcBlockParams::descriptors(),
+            EffectKind::ChannelMute => ChannelMuteParams::descriptors(),
+            EffectKind::Polarity => PolarityParams::descriptors(),
+            EffectKind::StereoMatrix => StereoMatrixParams::descriptors(),
+            EffectKind::SoftClipper => SoftClipperParams::descriptors(),
+            EffectKind::Distortion => DistortionParams::descriptors(),
         }
     }
 
@@ -172,7 +207,17 @@ impl EffectKind {
     pub fn max_latency_samples(self, sample_rate: f32) -> usize {
         match self {
             EffectKind::Limiter => Limiter::max_latency_samples(sample_rate.max(1.0)),
-            EffectKind::Eq | EffectKind::Compressor | EffectKind::Reverb | EffectKind::Delay => 0,
+            EffectKind::StereoMatrix => StereoMatrix::max_latency_samples(sample_rate),
+            EffectKind::Distortion => DISTORTION_LATENCY_SAMPLES,
+            EffectKind::Eq
+            | EffectKind::Compressor
+            | EffectKind::Reverb
+            | EffectKind::Delay
+            | EffectKind::Balance
+            | EffectKind::DcBlock
+            | EffectKind::ChannelMute
+            | EffectKind::Polarity
+            | EffectKind::SoftClipper => 0,
         }
     }
 
@@ -184,6 +229,13 @@ impl EffectKind {
             EffectKind::Limiter => EffectParams::Limiter(LimiterParams::default()),
             EffectKind::Reverb => EffectParams::Reverb(ReverbParams::default()),
             EffectKind::Delay => EffectParams::Delay(DelayParams::default()),
+            EffectKind::Balance => EffectParams::Balance(BalanceParams::default()),
+            EffectKind::DcBlock => EffectParams::DcBlock(DcBlockParams::default()),
+            EffectKind::ChannelMute => EffectParams::ChannelMute(ChannelMuteParams::default()),
+            EffectKind::Polarity => EffectParams::Polarity(PolarityParams::default()),
+            EffectKind::StereoMatrix => EffectParams::StereoMatrix(StereoMatrixParams::default()),
+            EffectKind::SoftClipper => EffectParams::SoftClipper(SoftClipperParams::default()),
+            EffectKind::Distortion => EffectParams::Distortion(DistortionParams::default()),
         }
     }
 }
@@ -199,6 +251,13 @@ pub enum EffectParams {
     Limiter(LimiterParams),
     Reverb(ReverbParams),
     Delay(DelayParams),
+    Balance(BalanceParams),
+    DcBlock(DcBlockParams),
+    ChannelMute(ChannelMuteParams),
+    Polarity(PolarityParams),
+    StereoMatrix(StereoMatrixParams),
+    SoftClipper(SoftClipperParams),
+    Distortion(DistortionParams),
 }
 
 /// Runs `$body` with `$params` bound to the settings inside an
@@ -211,6 +270,13 @@ macro_rules! each_params {
             EffectParams::Limiter($params) => $body,
             EffectParams::Reverb($params) => $body,
             EffectParams::Delay($params) => $body,
+            EffectParams::Balance($params) => $body,
+            EffectParams::DcBlock($params) => $body,
+            EffectParams::ChannelMute($params) => $body,
+            EffectParams::Polarity($params) => $body,
+            EffectParams::StereoMatrix($params) => $body,
+            EffectParams::SoftClipper($params) => $body,
+            EffectParams::Distortion($params) => $body,
         }
     };
 }
@@ -223,6 +289,13 @@ impl EffectParams {
             EffectParams::Limiter(_) => EffectKind::Limiter,
             EffectParams::Reverb(_) => EffectKind::Reverb,
             EffectParams::Delay(_) => EffectKind::Delay,
+            EffectParams::Balance(_) => EffectKind::Balance,
+            EffectParams::DcBlock(_) => EffectKind::DcBlock,
+            EffectParams::ChannelMute(_) => EffectKind::ChannelMute,
+            EffectParams::Polarity(_) => EffectKind::Polarity,
+            EffectParams::StereoMatrix(_) => EffectKind::StereoMatrix,
+            EffectParams::SoftClipper(_) => EffectKind::SoftClipper,
+            EffectParams::Distortion(_) => EffectKind::Distortion,
         }
     }
 
@@ -234,6 +307,13 @@ impl EffectParams {
             EffectParams::Limiter(params) => EffectParams::Limiter(params.sanitized()),
             EffectParams::Reverb(params) => EffectParams::Reverb(params.sanitized()),
             EffectParams::Delay(params) => EffectParams::Delay(params.sanitized()),
+            EffectParams::Balance(params) => EffectParams::Balance(params.sanitized()),
+            EffectParams::DcBlock(params) => EffectParams::DcBlock(params.sanitized()),
+            EffectParams::ChannelMute(params) => EffectParams::ChannelMute(params.sanitized()),
+            EffectParams::Polarity(params) => EffectParams::Polarity(params.sanitized()),
+            EffectParams::StereoMatrix(params) => EffectParams::StereoMatrix(params.sanitized()),
+            EffectParams::SoftClipper(params) => EffectParams::SoftClipper(params.sanitized()),
+            EffectParams::Distortion(params) => EffectParams::Distortion(params.sanitized()),
         }
     }
 
@@ -245,10 +325,17 @@ impl EffectParams {
     pub fn latency_samples(&self, sample_rate: f32) -> usize {
         match self {
             EffectParams::Limiter(params) => params.latency_samples(sample_rate),
+            EffectParams::StereoMatrix(params) => params.latency_samples(sample_rate),
+            EffectParams::Distortion(_) => DISTORTION_LATENCY_SAMPLES,
             EffectParams::Eq(_)
             | EffectParams::Compressor(_)
             | EffectParams::Reverb(_)
-            | EffectParams::Delay(_) => 0,
+            | EffectParams::Delay(_)
+            | EffectParams::Balance(_)
+            | EffectParams::DcBlock(_)
+            | EffectParams::ChannelMute(_)
+            | EffectParams::Polarity(_)
+            | EffectParams::SoftClipper(_) => 0,
         }
     }
 
@@ -279,6 +366,13 @@ pub enum AnyEffect {
     Limiter(Box<Limiter>),
     Reverb(Box<Reverb>),
     Delay(Box<Delay>),
+    Balance(Box<Balance>),
+    DcBlock(Box<DcBlock>),
+    ChannelMute(Box<ChannelMute>),
+    Polarity(Box<Polarity>),
+    StereoMatrix(Box<StereoMatrix>),
+    SoftClipper(Box<SoftClipper>),
+    Distortion(Box<Distortion>),
 }
 
 /// Runs `$body` with `$effect` bound to the effect inside an [`AnyEffect`].
@@ -290,6 +384,13 @@ macro_rules! each_effect {
             AnyEffect::Limiter($effect) => $body,
             AnyEffect::Reverb($effect) => $body,
             AnyEffect::Delay($effect) => $body,
+            AnyEffect::Balance($effect) => $body,
+            AnyEffect::DcBlock($effect) => $body,
+            AnyEffect::ChannelMute($effect) => $body,
+            AnyEffect::Polarity($effect) => $body,
+            AnyEffect::StereoMatrix($effect) => $body,
+            AnyEffect::SoftClipper($effect) => $body,
+            AnyEffect::Distortion($effect) => $body,
         }
     };
 }
@@ -304,6 +405,13 @@ impl AnyEffect {
             EffectKind::Limiter => AnyEffect::Limiter(Box::default()),
             EffectKind::Reverb => AnyEffect::Reverb(Box::default()),
             EffectKind::Delay => AnyEffect::Delay(Box::default()),
+            EffectKind::Balance => AnyEffect::Balance(Box::default()),
+            EffectKind::DcBlock => AnyEffect::DcBlock(Box::default()),
+            EffectKind::ChannelMute => AnyEffect::ChannelMute(Box::default()),
+            EffectKind::Polarity => AnyEffect::Polarity(Box::default()),
+            EffectKind::StereoMatrix => AnyEffect::StereoMatrix(Box::default()),
+            EffectKind::SoftClipper => AnyEffect::SoftClipper(Box::default()),
+            EffectKind::Distortion => AnyEffect::Distortion(Box::default()),
         };
         effect.set_params(params);
         effect
@@ -316,6 +424,13 @@ impl AnyEffect {
             AnyEffect::Limiter(_) => EffectKind::Limiter,
             AnyEffect::Reverb(_) => EffectKind::Reverb,
             AnyEffect::Delay(_) => EffectKind::Delay,
+            AnyEffect::Balance(_) => EffectKind::Balance,
+            AnyEffect::DcBlock(_) => EffectKind::DcBlock,
+            AnyEffect::ChannelMute(_) => EffectKind::ChannelMute,
+            AnyEffect::Polarity(_) => EffectKind::Polarity,
+            AnyEffect::StereoMatrix(_) => EffectKind::StereoMatrix,
+            AnyEffect::SoftClipper(_) => EffectKind::SoftClipper,
+            AnyEffect::Distortion(_) => EffectKind::Distortion,
         }
     }
 
@@ -343,6 +458,27 @@ impl AnyEffect {
             }
             (AnyEffect::Reverb(effect), EffectParams::Reverb(params)) => effect.set_params(params),
             (AnyEffect::Delay(effect), EffectParams::Delay(params)) => effect.set_params(params),
+            (AnyEffect::Balance(effect), EffectParams::Balance(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::DcBlock(effect), EffectParams::DcBlock(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::ChannelMute(effect), EffectParams::ChannelMute(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Polarity(effect), EffectParams::Polarity(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::StereoMatrix(effect), EffectParams::StereoMatrix(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::SoftClipper(effect), EffectParams::SoftClipper(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Distortion(effect), EffectParams::Distortion(params)) => {
+                effect.set_params(params)
+            }
             _ => return false,
         }
         true
@@ -626,6 +762,12 @@ impl EffectSlot {
         if latency == 0 && self.dry_fade_left == 0 {
             dry_left.copy_from_slice(left);
             dry_right.copy_from_slice(right);
+            // A matrix can acquire latency from an initial zero-delay state.
+            // Keep its dry history primed for that first crossfade too.
+            for (&l, &r) in left.iter().zip(right.iter()) {
+                self.dry_left.push(l);
+                self.dry_right.push(r);
+            }
         } else {
             let (from, fade_len) = (self.dry_from, self.dry_fade_len as f32);
             let delays = [
@@ -674,8 +816,16 @@ impl EffectSlot {
             } else {
                 self.wet.tick()
             };
-            left[index] = dry_left[index] + (left[index] - dry_left[index]) * wet;
-            right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
+            if wet == 0.0 {
+                left[index] = dry_left[index];
+                right[index] = dry_right[index];
+            } else if wet != 1.0 {
+                left[index] = dry_left[index] + (left[index] - dry_left[index]) * wet;
+                right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
+            }
         }
+        // A fade can finish inside this piece. Waking must clear stale state
+        // even if no subsequent fully dry block arrived before re-enabling.
+        self.dormant = self.wet.is_settled() && self.wet.value() == 0.0;
     }
 }

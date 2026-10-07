@@ -204,12 +204,14 @@ macro_rules! param_set {
                 false
             }
 
+            #[allow(unused_mut)] // A struct containing only toggles needs no cleaning.
             fn sanitized(&self) -> Self {
                 let mut clean = *self;
                 $( $crate::param::param_row!(@clean $kind (clean.$($path)+) { $($args)* }); )+
                 clean
             }
 
+            #[allow(unused_mut, unused_variables)] // Toggle-only structs jump without interpolation.
             fn approach(&mut self, target: &Self, amount: f32) -> bool {
                 let mut moving = false;
                 $(

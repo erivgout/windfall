@@ -47,27 +47,41 @@
 //! from -1 to 1. Each field's doc comment gives its unit, range and
 //! default.
 
+mod balance;
 pub mod blocks;
+mod channel_mute;
 mod compressor;
+mod dc_block;
 mod delay;
+mod distortion;
 mod effect;
 mod eq;
 mod instrument;
 mod limiter;
 mod param;
+mod polarity;
 mod reverb;
+mod soft_clipper;
+mod stereo_matrix;
 mod synth;
 
+pub use balance::{Balance, BalanceParams};
 pub use blocks::lfo::LfoShape;
 pub use blocks::oscillator::Waveform;
+pub use channel_mute::{ChannelMute, ChannelMuteParams};
 pub use compressor::{COMPRESSOR_MAX_RATIO, Compressor, CompressorParams, DetectorMode};
+pub use dc_block::{DcBlock, DcBlockParams};
 pub use delay::{Delay, DelayMode, DelayParams, NoteDivision};
+pub use distortion::{DISTORTION_LATENCY_SAMPLES, Distortion, DistortionParams};
 pub use effect::{AnyEffect, Effect, EffectKind, EffectParams, EffectSlot, GainReductionMeter};
 pub use eq::{CutSlope, EqBand, EqCutBand, EqParams, ParametricEq};
 pub use instrument::{AnyInstrument, Instrument, InstrumentKind, InstrumentParams};
 pub use limiter::{Limiter, LimiterParams};
 pub use param::{ParamChoice, ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit};
+pub use polarity::{Polarity, PolarityParams};
 pub use reverb::{Reverb, ReverbParams};
+pub use soft_clipper::{SoftClipper, SoftClipperParams};
+pub use stereo_matrix::{MATRIX_MAX_DELAY_MS, MatrixMode, StereoMatrix, StereoMatrixParams};
 pub use synth::{
     EnvelopeParams, FilterMode, FilterParams, FilterSlope, LfoParams, MAX_POLYPHONY, MAX_UNISON,
     OscillatorParams, SubtractiveSynth, SynthParams, VoiceMode,

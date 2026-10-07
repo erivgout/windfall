@@ -513,6 +513,19 @@ fn effect_at(kind: EffectKind, step: u32) -> EffectParams {
             feedback: turn * 0.6,
             ..DelayParams::default()
         }),
+        EffectKind::Balance
+        | EffectKind::DcBlock
+        | EffectKind::ChannelMute
+        | EffectKind::Polarity
+        | EffectKind::StereoMatrix
+        | EffectKind::SoftClipper
+        | EffectKind::Distortion => {
+            let mut params = kind.default_params();
+            for (index, info) in kind.descriptors().iter().enumerate() {
+                params.set(index, info.min + turn * (info.max - info.min));
+            }
+            params
+        }
     }
 }
 
@@ -536,12 +549,22 @@ fn effects_and_instruments_never_allocate_or_free_on_the_audio_path() {
     let second = rig.project.patterns[1].id;
     rig.note_in(second, synth, 0, 1_500).key = 52;
 
-    // A chain with every kind of effect on one track, a limiter that looks
+    // Every kind of effect, spread over tracks to respect the slot limit; a limiter that looks
     // ahead on another and on the master, so latency is compensated on
     // several paths at once.
     let mut chain: Vec<EffectId> = EffectKind::ALL
         .into_iter()
-        .map(|kind| rig.effect(space, effect_at(kind, 0)))
+        .enumerate()
+        .map(|(index, kind)| {
+            rig.effect(
+                if index < windfall_project::MAX_EFFECT_SLOTS {
+                    space
+                } else {
+                    keys
+                },
+                effect_at(kind, 0),
+            )
+        })
         .collect();
     rig.effect(drums, limiter(-3.0));
     let master = rig.effect(TrackId::MASTER, idle_limiter(5.0));
