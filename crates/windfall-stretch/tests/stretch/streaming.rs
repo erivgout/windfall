@@ -686,3 +686,29 @@ fn the_latency_is_half_a_block_each_way_at_any_rate() {
         }
     }
 }
+
+#[test]
+fn changing_ratio_near_the_tail_does_not_close_the_gate_abruptly() {
+    let input = [sine(440.0, 0.5, RATE as usize, RATE)];
+    for quality in Quality::ALL {
+        let mut processor = stretcher(1, 1.0, 0.0, quality);
+        let lead = processor.latency().output_frames(1.0) as usize;
+        let mut position = 0;
+        let mut output = run(
+            &mut processor,
+            &input,
+            &mut position,
+            lead + RATE as usize - 240,
+            &[512],
+        )
+        .remove(0);
+        processor.set_time_ratio(4.0);
+        processor.set_pitch_semitones(7.0);
+        output.extend(run(&mut processor, &input, &mut position, 12_000, &[64]).remove(0));
+        assert!(
+            steepest(&output[lead..]) < 0.08,
+            "{quality:?}: tail step {}",
+            steepest(&output[lead..])
+        );
+    }
+}

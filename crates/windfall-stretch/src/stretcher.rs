@@ -53,14 +53,14 @@ const SILENCE: f32 = 1e-10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Quality {
     /// Blocks of 100 ms every 15 ms. The cheapest, for many clips at once
-    /// and for modest changes of length, up to half as long again.
+    /// and for modest changes of length.
     Fast,
     /// Blocks of 120 ms every 15 ms.
     #[default]
     Standard,
     /// Blocks of 120 ms every 10 ms. More frequent updates than
-    /// [`Quality::Standard`], and at home with low chords and long
-    /// stretches. For rendering, and for the clips that matter.
+    /// [`Quality::Standard`], with the same analysis resolution. Useful for
+    /// rendering and closer tracking of changing material.
     High,
 }
 
@@ -640,8 +640,9 @@ impl Stretcher {
             // Advancing the silence gate on the sample clock makes tails and
             // automation independent of the host block partition.
             let chunk = 1;
-            let after_end = self.silent_run as f64 * self.time_ratio
-                - self.latency().output_frames(self.time_ratio);
+            let current_ratio = 1.0 / self.clock.rate.value;
+            let after_end = self.silent_run as f64 * current_ratio
+                - self.latency().output_frames(current_ratio);
             let tail_gain = (1.0 - after_end.max(0.0) / (f64::from(self.sample_rate) * 0.008))
                 .clamp(0.0, 1.0) as f32;
             if let Some(output) = output.as_deref_mut() {
