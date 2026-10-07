@@ -4783,6 +4783,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "windfall-flp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "thiserror 2.0.21",
+ "ts-rs",
+ "windfall-core",
+ "windfall-dsp",
+ "windfall-project",
+]
+
+[[package]]
 name = "windfall-ipc"
 version = "0.1.0"
 dependencies = [

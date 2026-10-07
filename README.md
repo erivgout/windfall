@@ -30,6 +30,7 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 | `crates/windfall-core` | Audio buffer and unit helpers shared by everything |
 | `crates/windfall-project` | Project model, edit commands, undo history, `.windfall` file format |
 | `crates/windfall-engine` | Realtime audio engine and offline renderer |
+| `crates/windfall-flp` | Reads FL Studio projects and converts musical structure with an import report |
 | `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV |
 | `crates/windfall-midi` | Reads and writes MIDI files; project import plans and playlist export |
 | `crates/windfall-dsp` | Effects and synth DSP |

@@ -1,0 +1,188 @@
+//! Notes retain their timing at the source PPQ. Rounding and unsupported
+//! note expression are reported rather than hidden.
+use super::{Builder, ChannelRole, chosen_color, name_or};
+use crate::{
+    report::{Outcome, ReportSection},
+    units,
+};
+use std::collections::BTreeSet;
+use windfall_core::TICKS_PER_STEP;
+use windfall_project::{
+    ChannelId, Command, MAX_PATTERN_STEPS, MAX_PATTERN_TICKS, NoteInit, PatternId, PatternPatch,
+};
+
+impl Builder<'_> {
+    pub(super) fn note_channels(&self, iid: u16) -> Vec<ChannelId> {
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![iid];
+        let mut result = BTreeSet::new();
+        while let Some(iid) = pending.pop() {
+            if !seen.insert(iid) {
+                continue;
+            }
+            if let Some(&id) = self.note_fallbacks.get(&iid) {
+                result.insert(id);
+            }
+            match self.channels.get(&iid) {
+                Some(ChannelRole::Plays(id)) => {
+                    result.insert(*id);
+                }
+                Some(ChannelRole::Layer(children)) => pending.extend(children),
+                _ => {}
+            }
+        }
+        result.into_iter().collect()
+    }
+
+    pub(super) fn patterns(&mut self) {
+        for (index, pattern) in self.flp.patterns.iter().enumerate() {
+            let id = if index == 0 {
+                self.project().patterns[0].id
+            } else {
+                let Some(id) = self.create(
+                    ReportSection::Patterns,
+                    "A pattern",
+                    Command::AddPattern { name: None },
+                ) else {
+                    continue;
+                };
+                PatternId(id)
+            };
+            let notes_end = pattern
+                .notes
+                .iter()
+                .map(|n| {
+                    u64::from(n.position) + u64::from(n.length.max(u32::from(self.ppq) / 4).max(1))
+                })
+                .max()
+                .unwrap_or(u64::from(self.ppq) * 4);
+            let source_length = pattern
+                .length
+                .filter(|l| *l != 0)
+                .map(u64::from)
+                .unwrap_or(notes_end);
+            let scaled = units::rescale(source_length.min(u64::from(u32::MAX)) as u32, self.ppq);
+            let steps = scaled
+                .ticks
+                .div_ceil(u64::from(TICKS_PER_STEP))
+                .clamp(1, u64::from(MAX_PATTERN_STEPS)) as u32;
+            self.apply(
+                ReportSection::Patterns,
+                "Pattern settings",
+                Command::UpdatePattern {
+                    id,
+                    patch: PatternPatch {
+                        name: Some(name_or(pattern.name.as_deref(), || {
+                            format!("Pattern {}", pattern.iid)
+                        })),
+                        color: chosen_color(pattern.color),
+                        length_steps: Some(steps),
+                    },
+                },
+            );
+            self.patterns
+                .insert(pattern.iid, (id, steps * TICKS_PER_STEP));
+            let outcome = if scaled.exact && scaled.ticks == u64::from(steps * TICKS_PER_STEP) {
+                Outcome::Exact
+            } else {
+                Outcome::Approximated
+            };
+            self.report.count(ReportSection::Patterns, outcome, 1);
+            if outcome != Outcome::Exact {
+                self.report.say(
+                    ReportSection::Patterns,
+                    outcome,
+                    "Pattern length was rounded to Windfall's step grid or limited to 1024 steps.",
+                );
+            }
+            for note in &pattern.notes {
+                let targets = self.note_channels(note.channel);
+                let start = units::rescale(note.position, self.ppq);
+                let length = if note.length == 0 {
+                    units::Rescaled {
+                        ticks: u64::from(TICKS_PER_STEP),
+                        exact: true,
+                    }
+                } else {
+                    units::rescale(note.length, self.ppq)
+                };
+                if targets.is_empty()
+                    || start.ticks >= u64::from(MAX_PATTERN_TICKS)
+                    || note.key > 127
+                {
+                    self.report.count(ReportSection::Notes, Outcome::Dropped, 1);
+                    self.report.say(ReportSection::Notes, Outcome::Dropped, "A note has no playable channel, an unsupported key, or starts past the longest pattern.");
+                    continue;
+                }
+                let mut outcome = if start.exact
+                    && length.exact
+                    && length.ticks <= u64::from(MAX_PATTERN_TICKS)
+                    && targets.len() == 1
+                {
+                    Outcome::Exact
+                } else {
+                    Outcome::Approximated
+                };
+                if note.fine_pitch != 120
+                    || note.flags & 8 != 0
+                    || note.mod_x != 128
+                    || note.mod_y != 128
+                    || note.release != 64
+                    || note.midi_channel != 0
+                    || note.group != 0
+                    || note.velocity > 128
+                    || note.pan > 128
+                {
+                    outcome = Outcome::Approximated;
+                    self.report.say(ReportSection::Notes, outcome, "Per-note fine pitch, slide, modulation, release, MIDI channels or grouping have no Windfall equivalent; out-of-range levels were clamped.");
+                }
+                for channel in targets {
+                    let init = NoteInit {
+                        start: start.ticks as u32,
+                        length: length.ticks.clamp(1, u64::from(MAX_PATTERN_TICKS)) as u32,
+                        key: note.key as u8,
+                        velocity: Some(units::note_velocity(note.velocity)),
+                        pan: Some(units::note_pan(note.pan)),
+                    };
+                    if self
+                        .apply(
+                            ReportSection::Notes,
+                            "A note",
+                            Command::AddNotes {
+                                pattern: id,
+                                channel,
+                                notes: vec![init],
+                            },
+                        )
+                        .is_none()
+                    {
+                        outcome = Outcome::Dropped;
+                    }
+                }
+                self.report.count(ReportSection::Notes, outcome, 1);
+            }
+            for step in &pattern.legacy_steps {
+                let targets = self.note_channels(step.channel);
+                for channel in targets {
+                    self.apply(
+                        ReportSection::Notes,
+                        "A legacy step",
+                        Command::AddNotes {
+                            pattern: id,
+                            channel,
+                            notes: vec![NoteInit {
+                                start: u32::from(step.step()) * TICKS_PER_STEP,
+                                length: TICKS_PER_STEP,
+                                key: 60,
+                                velocity: None,
+                                pan: None,
+                            }],
+                        },
+                    );
+                }
+                self.report
+                    .count(ReportSection::Notes, Outcome::Approximated, 1);
+            }
+        }
+    }
+}

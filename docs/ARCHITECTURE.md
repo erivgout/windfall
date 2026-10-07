@@ -10,6 +10,7 @@ crates/
   windfall-core/           AudioBuffer, PPQ, gain and pan helpers. No dependencies.
   windfall-project/        Project model, Command, Document (undo history), .windfall file format.
   windfall-ipc/            Runtime types the engine, shell and UI exchange (transport, meters, devices, browser, export).
+  windfall-flp/            Bounded FL Studio project reader, checked conversion and import reports.
   windfall-codec/          Decode WAV, FLAC, MP3, OGG. Encode WAV. Waveform overviews.
   windfall-midi/           Standard MIDI File reader/writer, import plans and playlist export.
   windfall-engine/         Realtime audio engine, offline renderer, soak-test CLI.
