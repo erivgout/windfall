@@ -15,3 +15,10 @@ pub use model::*;
 pub use parse::parse;
 pub use plugin::{HostedPlugin, PluginFormat};
 pub use target::{ChannelParam, ControlTarget, InsertParam, MainParam, SlotParam};
+
+pub mod convert;
+pub mod paths;
+pub mod report;
+pub mod units;
+pub use convert::{Conversion, ConvertOptions, PluginPlace, PluginPlaceholder, convert, import};
+pub use report::{ImportReport, Outcome, ReportSection};
