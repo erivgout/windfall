@@ -1,3 +1,4 @@
+import { ImportedSoundsButton } from "@/features/flp-import/retained-dialog"
 import { ContextActions } from "@/components/context-actions"
 import { runAction } from "@/lib/actions"
 import { useEngineStore } from "@/lib/store/engine"
@@ -138,6 +139,7 @@ export function StatusBar() {
       <footer className="flex h-6 shrink-0 items-center border-t bg-chassis text-[0.6875rem] text-muted-foreground">
         <EngineStatus />
         <Hint />
+        <ImportedSoundsButton />
         <SaveState />
       </footer>
     </ContextActions>

@@ -179,8 +179,43 @@ pub struct Project {
     /// where a clip on the playlist puts it.
     #[serde(default)]
     pub automations: Vec<Automation>,
+    /// Opaque states from imported plugins, kept even before a compatible host exists.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_plugins: Vec<RetainedPluginState>,
 }
 
+/// A plugin state the importer understands only as opaque bytes. Source ids
+/// remain descriptive metadata after a channel or track is removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RetainedPluginState {
+    pub source: String,
+    pub internal_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub channel: Option<ChannelId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub track: Option<TrackId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub slot: Option<u8>,
+    /// The original wrapper/state; it is not executable code.
+    pub state: Vec<u8>,
+}
 impl Project {
     /// An empty project: 120 bpm in 4/4, one empty pattern, and a mixer that
     /// holds only the master track.
@@ -226,6 +261,7 @@ impl Project {
                 clips: Vec::new(),
             },
             automations: Vec::new(),
+            retained_plugins: Vec::new(),
         }
     }
 

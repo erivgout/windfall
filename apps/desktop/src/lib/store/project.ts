@@ -44,6 +44,7 @@ const BLANK_PROJECT: Project = {
   },
   playlist: { tracks: [], clips: [] },
   automations: [],
+  retainedPlugins: [],
 }
 
 export type ProjectState = DocumentState & {

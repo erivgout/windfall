@@ -1,0 +1,162 @@
+import { act, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { PromptHost } from "@/features/layout/prompt-host"
+import type { MockBackend } from "@/lib/ipc/mock"
+import { dispatch, useProjectStore } from "@/lib/store/project"
+import { useUiStore } from "@/lib/store/ui"
+import { startTestApp } from "@/test/harness"
+import { FlpImportDialog } from "./import-dialog"
+import { ImportedSoundsButton, RetainedSoundsDialog } from "./retained-dialog"
+import { flpFixture } from "./fixture"
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
+}))
+let backend: MockBackend
+let stop: () => void
+beforeEach(async () => {
+  ;({ backend, stop } = await startTestApp({
+    flpFiles: {
+      "/projects/source.flp": flpFixture(),
+      "/projects/bad.flp": new Uint8Array([1, 2]),
+    },
+  }))
+  vi.spyOn(backend, "pickFlpFile").mockResolvedValue("/projects/source.flp")
+  useUiStore.getState().openDialog("flpImport")
+  render(
+    <>
+      <FlpImportDialog />
+      <PromptHost />
+      <ImportedSoundsButton />
+      <RetainedSoundsDialog />
+    </>
+  )
+})
+afterEach(() => {
+  stop()
+  vi.restoreAllMocks()
+})
+async function choose() {
+  await userEvent.click(
+    screen.getByRole("button", { name: /Choose FL project/ })
+  )
+  await screen.findByRole("region", { name: "Import report" })
+}
+it("reviews original bytes without replacement, then opens an unsaved checked project and saves retained data", async () => {
+  const before = await backend.documentSnapshot()
+  await choose()
+  expect(await backend.documentSnapshot()).toEqual(before)
+  expect(screen.getByText("1 missing samples")).toBeVisible()
+  expect(screen.getByText("1 retained plugin states")).toBeVisible()
+  await userEvent.click(
+    screen.getByRole("button", { name: /Diagnostics and missing samples/ })
+  )
+  expect(screen.getByText(/Missing sample:/)).toBeVisible()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Open converted project" })
+  )
+  await waitFor(() => expect(useUiStore.getState().dialog).toBeNull())
+  const converted = await backend.documentSnapshot()
+  expect(converted.dirty).toBe(true)
+  expect(converted.path).toBeNull()
+  expect(converted.project.patterns[0]?.lanes[0]?.notes).toHaveLength(1)
+  expect(converted.project.retainedPlugins?.[0]?.state).toEqual([
+    0, 255, 17, 90,
+  ])
+  const saved = await backend.projectSave("/projects/converted.windfall")
+  await backend.projectNew()
+  const reloaded = await backend.projectOpen(saved)
+  expect(reloaded.project.retainedPlugins).toEqual(
+    converted.project.retainedPlugins
+  )
+  await userEvent.click(
+    screen.getByRole("button", { name: "Imported sounds (1)" })
+  )
+  await userEvent.click(screen.getByRole("button", { name: "Unknown synth" }))
+  expect(screen.getByText("4 original state bytes retained.")).toBeVisible()
+})
+it("cancels a review and an FL picker without changing the active document", async () => {
+  const before = await backend.documentSnapshot()
+  vi.mocked(backend.pickFlpFile).mockResolvedValueOnce(null)
+  await userEvent.click(
+    screen.getByRole("button", { name: /Choose FL project/ })
+  )
+  expect(screen.queryByRole("region", { name: "Import report" })).toBeNull()
+  await choose()
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await waitFor(() => expect(useUiStore.getState().dialog).toBeNull())
+  expect(await backend.documentSnapshot()).toEqual(before)
+})
+it("reports malformed files and preserves the active project", async () => {
+  const before = await backend.documentSnapshot()
+  vi.mocked(backend.pickFlpFile).mockResolvedValueOnce("/projects/bad.flp")
+  await userEvent.click(
+    screen.getByRole("button", { name: /Choose FL project/ })
+  )
+  expect(await screen.findByRole("alert")).toHaveTextContent(/FL/)
+  expect(await backend.documentSnapshot()).toEqual(before)
+  expect(
+    screen.getByRole("button", { name: "Open converted project" })
+  ).toBeDisabled()
+})
+it("uses the existing unsaved prompt and leaves edits intact when replacement is declined", async () => {
+  await act(async () => {
+    await dispatch({ type: "updateSettings", patch: { name: "Keep me" } })
+  })
+  await choose()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Open converted project" })
+  )
+  await screen.findByRole("alertdialog")
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  expect(useProjectStore.getState().project.settings.name).toBe("Keep me")
+  expect(
+    screen.getByRole("button", { name: "Open converted project" })
+  ).toBeEnabled()
+})
+it("rejects a stale preview after intervening edits", async () => {
+  await choose()
+  const preview = await backend.flpPreview("/projects/source.flp", {
+    factoryDataDir: null,
+    userDataDir: null,
+    sampleSearchFolders: [],
+  })
+  await backend.dispatch({
+    type: "updateSettings",
+    patch: { name: "New edit" },
+  })
+  const before = await backend.documentSnapshot()
+  await expect(backend.flpOpen(preview.token)).rejects.toThrow(/changed/)
+  expect(await backend.documentSnapshot()).toEqual(before)
+})
+
+it("adds and removes search folders while keeping the active document intact", async () => {
+  const before = await backend.documentSnapshot()
+  await choose()
+  const previews = vi.spyOn(backend, "flpPreview")
+  vi.spyOn(backend, "pickFolder").mockResolvedValue("/samples/Test")
+  await userEvent.click(
+    screen.getByRole("button", { name: "Sample folders (optional)" })
+  )
+  await userEvent.click(
+    screen.getByRole("button", { name: /Add sample search folder/ })
+  )
+  await waitFor(() =>
+    expect(previews).toHaveBeenLastCalledWith(
+      "/projects/source.flp",
+      expect.objectContaining({ sampleSearchFolders: ["/samples/Test"] })
+    )
+  )
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Remove Test" })).toBeEnabled()
+  )
+  await userEvent.click(screen.getByRole("button", { name: "Remove Test" }))
+  await waitFor(() =>
+    expect(previews).toHaveBeenLastCalledWith(
+      "/projects/source.flp",
+      expect.objectContaining({ sampleSearchFolders: [] })
+    )
+  )
+  expect(await backend.documentSnapshot()).toEqual(before)
+})

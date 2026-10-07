@@ -4866,6 +4866,7 @@ dependencies = [
  "windfall-core",
  "windfall-engine",
  "windfall-factory",
+ "windfall-flp",
  "windfall-ipc",
  "windfall-project",
 ]
@@ -4919,6 +4920,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "ts-rs",
+ "windfall-flp",
  "windfall-project",
 ]
 
@@ -4969,6 +4971,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "windfall-flp",
  "windfall-project",
 ]
 

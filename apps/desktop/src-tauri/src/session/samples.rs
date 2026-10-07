@@ -35,6 +35,9 @@ pub(super) fn decode_all(
         failed: HashSet::new(),
         warnings: Vec::new(),
     };
+    if !project.retained_plugins.is_empty() {
+        decoded.warnings.push(format!("{} imported plugin states are retained; unsupported instruments stay silent and effects bypassed. Use the source FL project with a compatible host to recover those sounds.", project.retained_plugins.len()));
+    }
     for sample in &project.samples {
         let buffer = locate(sample, project_dir, factory_dir).and_then(|file| decode(cache, &file));
         match buffer {

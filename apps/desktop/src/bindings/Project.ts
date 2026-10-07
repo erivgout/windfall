@@ -5,6 +5,7 @@ import type { Mixer } from "./Mixer";
 import type { Pattern } from "./Pattern";
 import type { Playlist } from "./Playlist";
 import type { ProjectSettings } from "./ProjectSettings";
+import type { RetainedPluginState } from "./RetainedPluginState";
 import type { SampleAsset } from "./SampleAsset";
 
 /**
@@ -28,4 +29,8 @@ patterns: Array<Pattern>, mixer: Mixer, playlist: Playlist,
  * The automation curves, in the order they were made. A curve plays
  * where a clip on the playlist puts it.
  */
-automations: Array<Automation>, };
+automations: Array<Automation>, 
+/**
+ * Opaque states from imported plugins, kept even before a compatible host exists.
+ */
+retainedPlugins?: Array<RetainedPluginState>, };

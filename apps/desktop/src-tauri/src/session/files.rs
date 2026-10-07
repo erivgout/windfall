@@ -37,9 +37,9 @@ const COMPARE_CHUNK: usize = 1 << 16;
 
 /// What a request to replace the document notes down before its slow work,
 /// to tell afterwards whether it may still go ahead.
-struct Replacement {
+pub(super) struct Replacement {
     /// Its place among all such requests.
-    request: u64,
+    pub(super) request: u64,
     /// The document it set out to replace.
     generation: u64,
     /// How many edits that document had seen.
@@ -48,7 +48,7 @@ struct Replacement {
 
 /// Why a project that was ready was not swapped in after all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Refusal {
+pub(super) enum Refusal {
     /// A later request to replace the document was made, or one got there
     /// first.
     Superseded,
@@ -59,7 +59,7 @@ enum Refusal {
 impl Refusal {
     /// The message for the UI. `what` says what did not happen, as in
     /// `"song.windfall" was not opened`.
-    fn message(self, what: &str) -> String {
+    pub(super) fn message(self, what: &str) -> String {
         match self {
             Refusal::Superseded => {
                 format!("{what} because another project was opened or started after it.")
@@ -80,7 +80,7 @@ impl Session {
         let decoded = decode_all(&self.inner.cache, &project, None, &self.inner.factory_dir);
         #[cfg(test)]
         self.pause("new:install");
-        self.install(&ticket, project, None, None, None, decoded)
+        self.install(&ticket, Document::new(project), None, None, None, decoded)
             .map_err(|refusal| refusal.message("The new project was not started"))
     }
 
@@ -137,7 +137,14 @@ impl Session {
         #[cfg(test)]
         self.pause("open:install");
         let snapshot = self
-            .install(&ticket, project, save_to, played, sample_dir, decoded)
+            .install(
+                &ticket,
+                Document::new(project),
+                save_to,
+                played,
+                sample_dir,
+                decoded,
+            )
             .map_err(|refusal| {
                 refusal.message(&format!("\"{}\" was not opened", paths::name(&file)))
             })?;
@@ -323,7 +330,7 @@ impl Session {
 
     /// Registers a request to replace the document. Call it before the
     /// slow work, and hand the result to [`install`](Self::install).
-    fn begin_replacement(&self) -> Replacement {
+    pub(super) fn begin_replacement(&self) -> Replacement {
         let mut state = self.state();
         state.replacements += 1;
         Replacement {
@@ -342,10 +349,10 @@ impl Session {
     /// the folder the project's own samples are in. `played` is how the
     /// project's file says it was being played, which the transport is set
     /// to; with none it is set to pattern mode on the first pattern.
-    fn install(
+    pub(super) fn install(
         &self,
         ticket: &Replacement,
-        project: Project,
+        document: Document,
         save_to: Option<PathBuf>,
         played: Option<ProjectSession>,
         sample_dir: Option<PathBuf>,
@@ -361,6 +368,7 @@ impl Session {
         let controller = self.controller();
         controller.stop();
 
+        let project = document.project();
         let first_pattern = project.patterns.first().map(|pattern| pattern.id);
         let transport = match played {
             Some(played) => TransportPatch {
@@ -380,7 +388,7 @@ impl Session {
             },
         };
         *state = State {
-            document: Document::new(project),
+            document,
             path: save_to,
             sample_dir,
             pool: decoded.pool,

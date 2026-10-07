@@ -77,6 +77,13 @@ impl Document {
         }
     }
 
+    /// Wraps a checked imported project that has not yet been saved.
+    pub fn new_unsaved(project: Project) -> Self {
+        let mut document = Self::new(project);
+        document.saved = None;
+        document
+    }
+
     pub fn project(&self) -> &Project {
         &self.project
     }

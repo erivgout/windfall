@@ -7,6 +7,7 @@ mod effects;
 mod export;
 mod export_formats;
 mod files;
+mod flp;
 mod library;
 mod playback;
 mod song;

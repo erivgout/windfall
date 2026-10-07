@@ -3,6 +3,8 @@ import type { CSSProperties } from "react"
 import { Toaster } from "@/components/ui/sonner"
 import { ValueContextMenus } from "@/components/value-context-menu"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { RetainedSoundsDialog } from "@/features/flp-import/retained-dialog"
+import { FlpImportDialog } from "@/features/flp-import/import-dialog"
 import { ExportDialog } from "@/features/export/export-dialog"
 import { CommandPalette } from "@/features/palette/command-palette"
 import { SettingsDialog } from "@/features/settings/settings-dialog"
@@ -77,6 +79,8 @@ export function AppShell() {
         <CommandPalette />
         <SettingsDialog />
         <ExportDialog />
+        <FlpImportDialog />
+        <RetainedSoundsDialog />
         <Overlays />
       </ValueContextMenus>
     </TooltipProvider>

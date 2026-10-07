@@ -1,4 +1,6 @@
 import type {
+  FlpImportOptions,
+  FlpImportPreview,
   AudioHost,
   AudioSettings,
   AutomationTarget,
@@ -61,6 +63,12 @@ export interface Backend {
   undo(): Promise<ProjectPatch | null>
   redo(): Promise<ProjectPatch | null>
   historyJump(cursor: number): Promise<ProjectPatch>
+
+  /** Prepares a checked FL import for review without replacing the project. */
+  flpPreview(path: string, options: FlpImportOptions): Promise<FlpImportPreview>
+  flpOpen(token: number): Promise<DocumentSnapshot>
+  flpCancel(token: number): Promise<void>
+  pickFlpFile(): Promise<string | null>
 
   projectNew(): Promise<DocumentSnapshot>
   projectOpen(path: string): Promise<DocumentSnapshot>

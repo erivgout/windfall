@@ -32,11 +32,14 @@ export async function settle() {
  * A fresh mock backend with the stores, the actions and the keymap wired to
  * it, the way the app starts. Call the returned `stop` when the test is done.
  */
-export async function startTestApp(options: { project?: Project } = {}) {
+export async function startTestApp(
+  options: { project?: Project; flpFiles?: Record<string, Uint8Array> } = {}
+) {
   const backend: MockBackend = createMockBackend({
     storage: null,
     dialogs: TEST_DIALOGS,
     project: options.project,
+    flpFiles: options.flpFiles,
   })
   setBackend(backend)
   useProjectStore.setState(useProjectStore.getInitialState(), true)

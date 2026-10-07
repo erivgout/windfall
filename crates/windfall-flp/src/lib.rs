@@ -42,7 +42,8 @@
 //! Native processor mappings approximate sound. Sample references remain
 //! external, and unresolved folders are reported. Markers, additional
 //! arrangements, recorded control events, unsupported automation targets and
-//! sample stretching are reported as losses. No shell or UI is wired here.
+//! sample stretching are reported as losses. The desktop shell stages this
+//! conversion for review before replacing the current document.
 
 pub mod error;
 pub mod event;
