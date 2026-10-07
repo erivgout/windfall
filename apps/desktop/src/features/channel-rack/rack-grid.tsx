@@ -193,9 +193,9 @@ export function RackGrid() {
     const sample = readSampleDrag(event)
     if (sample) {
       if (target.kind === "replace") {
-        void replaceSampleFromFile(target.channel, sample.path)
+        void replaceSampleFromFile(target.channel, sample.path, sample.browser)
       } else {
-        void addChannelFromFile(sample.path, target.index)
+        void addChannelFromFile(sample.path, target.index, sample.browser)
       }
       return
     }

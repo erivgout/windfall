@@ -45,15 +45,18 @@ export function rowMenu(
 
   if (row.kind === "audio") {
     return [
-      { title: "Preview", run: () => requestPreview(row.path) },
+      {
+        title: "Preview",
+        run: () => requestPreview(row.path, { browser: row.library }),
+      },
       {
         title: "Add to new channel",
         shortcut: "Enter",
-        run: () => addToRack(row.path),
+        run: () => addToRack(row.path, row.library),
       },
       {
         title: "Add to playlist",
-        run: () => addToPlaylist(row.path),
+        run: () => addToPlaylist(row.path, row.library),
       },
       {
         title: channel
@@ -63,7 +66,7 @@ export function rowMenu(
         disabled: channel?.source.type !== "sampler",
         shortcut:
           channel?.source.type === "instrument" ? "samplers only" : undefined,
-        run: () => replaceChannelSample(row.path),
+        run: () => replaceChannelSample(row.path, row.library),
       },
       contextSeparator,
       copy,

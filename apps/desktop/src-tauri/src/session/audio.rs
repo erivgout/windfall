@@ -139,13 +139,39 @@ impl Session {
     /// finishes decoding after a newer preview was asked for, or after
     /// [`preview_stop`](Self::preview_stop), is not played.
     pub fn preview_play(&self, path: &str) -> Result<(), String> {
+        self.preview_play_checked(path, None)
+    }
+
+    pub fn browser_preview(
+        &self,
+        path: &str,
+        token: &windfall_ipc::LibraryFileToken,
+    ) -> Result<(), String> {
+        self.preview_play_checked(path, Some(token))
+    }
+
+    fn preview_play_checked(
+        &self,
+        path: &str,
+        browser: Option<&windfall_ipc::LibraryFileToken>,
+    ) -> Result<(), String> {
         let file = paths::absolute(path)?;
         let ticket = {
             let mut latest = lock(&self.inner.preview);
             *latest += 1;
             *latest
         };
+        // Pinning a network-drive file can be slow too. It belongs to this
+        // request's original ticket, so a later preview/stop still wins.
+        let pinned = browser
+            .map(|t| self.inner.library.pin_file(t, path))
+            .transpose()?;
+        let browser = pinned.as_ref();
         let buffer = self.inner.cache.decode(&file)?;
+        if let Some(token) = browser {
+            self.inner.library.check_file(token, path)?;
+        }
+        let _library = browser.map(|t| self.inner.library.guard(t)).transpose()?;
         // Held from the check until the engine has the preview. A stop or
         // a newer preview either came before, and this one is dropped, or
         // comes after it and wins. Neither can land in between.

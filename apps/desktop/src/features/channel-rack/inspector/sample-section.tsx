@@ -180,7 +180,8 @@ export function SampleSection({ channel }: { channel: SamplerChannel }) {
     event.stopPropagation()
     setOver(false)
     const dropped = readSampleDrag(event)
-    if (dropped) void replaceSampleFromFile(channel.id, dropped.path)
+    if (dropped)
+      void replaceSampleFromFile(channel.id, dropped.path, dropped.browser)
   }
 
   const info = state?.status === "ready" ? state.info : null

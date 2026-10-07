@@ -11,6 +11,178 @@ use crate::samples::PEAK_BUCKETS;
 use crate::session::PROJECT_REPLACED;
 
 #[test]
+fn library_results_audition_import_undo_and_metadata_restart_use_the_existing_loader() {
+    let rig = Rig::new();
+    let file = factory_file("Drums/Kicks/Kick Punch.wav");
+    let token = rig.session.library_file(&file).unwrap();
+    let before = rig.project();
+    rig.session.browser_sample_info(&file, &token).unwrap();
+    rig.session.browser_preview(&file, &token).unwrap();
+    let result = rig
+        .session
+        .browser_add_channel(&file, None, token.clone())
+        .unwrap();
+    assert_eq!(result.created.len(), 3);
+    assert_eq!(rig.project().channels.len(), before.channels.len() + 1);
+    rig.session.undo().unwrap();
+    let mut current = rig.project();
+    current.next_id = before.next_id;
+    assert_eq!(current, before);
+    let metadata = windfall_ipc::LibraryMetadata {
+        favorite: true,
+        tags: vec!["punchy".into()],
+    };
+    rig.session
+        .library_set_metadata(&file, metadata.clone())
+        .unwrap();
+    // Favorites and tags never dirty the project or add history.
+    let mut current = rig.project();
+    current.next_id = before.next_id;
+    assert_eq!(current, before);
+    let rig = rig.restart();
+    assert_eq!(rig.session.library_metadata(&file).unwrap(), metadata);
+    // Cached decoded audio cannot rescue a deleted library file.
+    let samples = rig.folder.path().join("Samples");
+    fs::create_dir(&samples).unwrap();
+    let copied = samples.join("kick.wav");
+    fs::copy(&file, &copied).unwrap();
+    rig.session
+        .browser_add_root(&paths::display(&samples))
+        .unwrap();
+    let path = paths::display(&copied);
+    let token = rig.session.library_file(&path).unwrap();
+    rig.session.browser_preview(&path, &token).unwrap();
+    fs::remove_file(&copied).unwrap();
+    assert!(rig.session.browser_add_channel(&path, None, token).is_err());
+    let mut current = rig.project();
+    current.next_id = before.next_id;
+    assert_eq!(current, before);
+}
+
+#[test]
+fn root_removal_during_decode_prevents_library_import_even_when_audio_is_cached() {
+    let rig = Rig::new();
+    let samples = rig.folder.path().join("Samples");
+    fs::create_dir(&samples).unwrap();
+    let file = samples.join("kick.wav");
+    fs::copy(factory_file("Drums/Kicks/Kick Punch.wav"), &file).unwrap();
+    let root = paths::display(&samples);
+    let path = paths::display(&file);
+    rig.session.browser_add_root(&root).unwrap();
+    let token = rig.session.library_file(&path).unwrap();
+    let before = rig.project();
+    let hold = rig.session.hold("import:decoded");
+    let session = rig.session.clone();
+    let job = std::thread::spawn(move || session.browser_add_channel(&path, None, token));
+    hold.wait();
+    rig.session.browser_remove_root(&root).unwrap();
+    drop(hold);
+    assert!(job.join().unwrap().is_err());
+    let mut current = rig.project();
+    current.next_id = before.next_id;
+    assert_eq!(current, before);
+}
+
+#[test]
+fn guarded_library_clip_and_replace_imports_preserve_document_guards() {
+    let rig = Rig::new();
+    let file = factory_file("Drums/Kicks/Kick Punch.wav");
+    let token = rig.session.library_file(&file).unwrap();
+    let channel = rig.project().channels[0].id;
+    rig.session
+        .browser_replace_sample(channel, &file, token.clone())
+        .unwrap();
+    let before = rig.project();
+    rig.session
+        .browser_add_clip(
+            &file,
+            crate::session::ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+            token,
+        )
+        .unwrap();
+    assert_eq!(
+        rig.project().playlist.clips.len(),
+        before.playlist.clips.len() + 1
+    );
+    rig.session.undo().unwrap();
+    let mut current = rig.project();
+    current.next_id = before.next_id;
+    assert_eq!(current, before);
+    let token = rig.session.library_file(&file).unwrap();
+    let hold = rig.session.hold("import:decoded");
+    let session = rig.session.clone();
+    let job = std::thread::spawn(move || session.browser_add_channel(&file, None, token));
+    hold.wait();
+    rig.session.project_new().unwrap();
+    drop(hold);
+    assert!(job.join().unwrap().is_err());
+}
+
+#[test]
+fn checked_library_imports_refuse_an_active_synthetic_take_without_changing_it() {
+    struct Capture;
+    impl crate::session::recording::CaptureHandle for Capture {
+        fn frames(&self) -> u64 {
+            0
+        }
+        fn failed(&self) -> bool {
+            false
+        }
+        fn finish(self: Box<Self>) -> Result<u64, String> {
+            Ok(0)
+        }
+    }
+    let rig = Rig::new();
+    let file = factory_file("Drums/Kicks/Kick Punch.wav");
+    let token = rig.session.library_file(&file).unwrap();
+    let before = rig.project();
+    let capture = rig
+        .session
+        .recording_start_with(
+            windfall_ipc::RecordingSource {
+                host: "Synthetic".into(),
+                device: "Synthetic".into(),
+                left: 0,
+                right: None,
+            },
+            0,
+            None,
+            |_, _, _| Ok(Box::new(Capture)),
+        )
+        .unwrap();
+    assert!(
+        rig.session
+            .browser_add_channel(&file, None, token.clone())
+            .is_err()
+    );
+    assert!(
+        rig.session
+            .browser_replace_sample(before.channels[0].id, &file, token.clone())
+            .is_err()
+    );
+    assert!(
+        rig.session
+            .browser_add_clip(
+                &file,
+                crate::session::ClipPlace {
+                    track: None,
+                    start: 0,
+                    mixer_track: None
+                },
+                token
+            )
+            .is_err()
+    );
+    assert_eq!(rig.project(), before);
+    assert_eq!(rig.session.recording_state(), capture);
+    rig.session.recording_cancel();
+}
+
+#[test]
 fn the_factory_content_is_the_first_root_and_lists_as_folders_of_sounds() {
     let rig = Rig::new();
     let roots = rig.session.browser_roots();

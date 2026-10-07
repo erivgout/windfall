@@ -4,6 +4,7 @@ import type {
   Command,
   InstrumentKind,
   InstrumentParams,
+  LibraryFileToken,
   Note,
   PatternId,
   SampleId,
@@ -261,12 +262,15 @@ export function showInMixer(id: ChannelId) {
 /** Adds a channel that plays an audio file, at a position in the rack. */
 export async function addChannelFromFile(
   path: string,
-  index?: number
+  index?: number,
+  browser?: LibraryFileToken
 ): Promise<void> {
   const count = project().channels.length
   const at = index === undefined ? undefined : clamp(index, 0, count)
   const result = await attempt(
-    backend.addChannelFromFile(path, at),
+    browser
+      ? backend.addChannelFromFile(path, at, browser)
+      : backend.addChannelFromFile(path, at),
     "Could not add the sample"
   )
   if (!result) return
@@ -333,10 +337,13 @@ export async function replaceSampleFromPickedFile(
 
 export async function replaceSampleFromFile(
   id: ChannelId,
-  path: string
+  path: string,
+  browser?: LibraryFileToken
 ): Promise<void> {
   const result = await attempt(
-    backend.setChannelSampleFromFile(id, path),
+    browser
+      ? backend.setChannelSampleFromFile(id, path, browser)
+      : backend.setChannelSampleFromFile(id, path),
     "Could not change the sample"
   )
   if (result) receivePatch(result.patch)

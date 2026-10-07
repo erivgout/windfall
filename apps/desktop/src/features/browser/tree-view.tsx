@@ -17,6 +17,7 @@ import { useUiStore } from "@/lib/store/ui"
 import { activateRow, refresh, selectRow } from "./commands"
 import { TreeFooter } from "./empty-states"
 import { rowMenu } from "./row-menu"
+import { useLibraryStore } from "./library-store"
 import {
   collapseFolder,
   expandFolder,
@@ -30,6 +31,8 @@ import {
   findByPrefix,
   firstIndex,
   flattenTree,
+  flattenLibrary,
+  parseRowId,
   isNavigable,
   lastIndex,
   stemOf,
@@ -62,7 +65,9 @@ function titleWhenCut(event: React.MouseEvent) {
   const line = event.target.closest<HTMLElement>("[data-index]")
   const label = line?.querySelector<HTMLElement>("[data-name]")
   if (!line || !label) return
-  if (label.scrollWidth > label.clientWidth) {
+  if (line.dataset.libraryPath) {
+    line.title = line.dataset.libraryPath
+  } else if (label.scrollWidth > label.clientWidth) {
     line.title = label.textContent ?? ""
   } else {
     line.removeAttribute("title")
@@ -79,6 +84,10 @@ export function TreeView() {
   const listings = useBrowserStore((state) => state.listings)
   const expanded = useBrowserStore((state) => state.expanded)
   const filter = useBrowserStore((state) => state.filter)
+  const library = useLibraryStore((state) => state.results)
+  const favoritesOnly = useLibraryStore((state) => state.favoritesOnly)
+  const tags = useLibraryStore((state) => state.tags)
+  const filtering = filter.trim() !== "" || favoritesOnly || tags.length > 0
   const selectedId = useBrowserStore((state) => state.selected?.id ?? null)
   const restoring = useBrowserStore((state) => state.restoring)
   const revealRequest = useBrowserStore((state) => state.reveal)
@@ -86,8 +95,11 @@ export function TreeView() {
   const channel = useChannel(useUiStore((state) => state.selectedChannel))
 
   const tree = useMemo(
-    () => flattenTree({ roots, listings, expanded, filter }),
-    [roots, listings, expanded, filter]
+    () =>
+      filtering
+        ? flattenLibrary(library)
+        : flattenTree({ roots, listings, expanded, filter: "" }),
+    [roots, listings, expanded, filtering, library]
   )
   const { rows, indexOf } = tree
   const selectedIndex =
@@ -264,7 +276,21 @@ export function TreeView() {
       return
     }
     const name = stemOf(row.name, row.kind)
-    setSampleDrag(event, { path: row.path, name })
+    const browser =
+      row.library ??
+      (library
+        ? {
+            path: row.path,
+            rootPath: parseRowId(row.id)?.root ?? "",
+            generation: library.generation,
+            fingerprint: "",
+          }
+        : undefined)
+    if (!browser) {
+      event.preventDefault()
+      return
+    }
+    setSampleDrag(event, { path: row.path, name, browser })
     showDragImage(event, name)
   }
 
@@ -285,7 +311,7 @@ export function TreeView() {
     virtual.onScroll()
     // Rows change hands while scrolling, and a tooltip must not go along.
     for (const line of treeRef.current?.querySelectorAll("[title]") ?? []) {
-      line.removeAttribute("title")
+      if (!line.hasAttribute("data-library-path")) line.removeAttribute("title")
     }
     const element = scrollRef.current
     if (element && pendingScroll.current === null) {

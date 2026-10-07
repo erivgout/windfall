@@ -1,4 +1,10 @@
-import type { BrowserEntry, BrowserEntryKind, BrowserRoot } from "@/bindings"
+import type {
+  BrowserEntry,
+  BrowserEntryKind,
+  BrowserRoot,
+  LibraryFileToken,
+  LibraryResults,
+} from "@/bindings"
 
 /** What is known about the contents of one folder. */
 export type Listing =
@@ -13,6 +19,8 @@ export type Listings = Readonly<Record<string, Listing | undefined>>
 export type MatchRange = { start: number; end: number }
 
 export type EntryRow = {
+  library?: LibraryFileToken
+  relativePath?: string
   type: "entry"
   id: string
   path: string
@@ -38,6 +46,41 @@ export type EntryRow = {
   /** Place among the rows of the same folder, counting from 1. */
   position: number
   setSize: number
+}
+
+/** Indexed results retain the same row identity, selection, keyboard and drag semantics. */
+export function flattenLibrary(results: LibraryResults | null): FlatTree {
+  const entries = results?.entries ?? []
+  const rows: EntryRow[] = entries.map((held, index) => ({
+    ...held.entry,
+    library: held.token,
+    relativePath: held.relativePath,
+    type: "entry",
+    id: rowId(held.token.rootPath, held.entry.path),
+    depth: 0,
+    parent: null,
+    parentPath: held.entry.path.slice(
+      0,
+      Math.max(
+        held.entry.path.lastIndexOf("/"),
+        held.entry.path.lastIndexOf("\\")
+      )
+    ),
+    root: null,
+    open: false,
+    forced: false,
+    busy: false,
+    failed: false,
+    match: null,
+    position: index + 1,
+    setSize: entries.length,
+  }))
+  return {
+    rows,
+    indexOf: new Map(rows.map((r, i) => [r.id, i])),
+    filtering: true,
+    matchCount: rows.length,
+  }
 }
 
 /** A line under an open folder that has nothing to list. */

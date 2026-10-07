@@ -6,6 +6,10 @@ import type {
   AutomationTarget,
   BrowserEntry,
   BrowserRoot,
+  LibraryFileToken,
+  LibraryMetadata,
+  LibraryResults,
+  LibrarySearch,
   ChannelId,
   Command,
   DispatchResult,
@@ -154,22 +158,36 @@ export interface Backend {
     velocity: number
   ): Promise<void>
   auditionNoteOff(channel: ChannelId, key: number): Promise<void>
-  previewPlay(path: string): Promise<void>
+  previewPlay(path: string, browser?: LibraryFileToken): Promise<void>
   previewStop(): Promise<void>
 
   browserRoots(): Promise<BrowserRoot[]>
+  librarySearch(search: LibrarySearch): Promise<LibraryResults>
+  libraryRefresh(): Promise<void>
+  libraryCancel(generation: number): Promise<void>
+  libraryFile(path: string): Promise<LibraryFileToken>
+  libraryMetadata(path: string): Promise<LibraryMetadata>
+  librarySetMetadata(
+    path: string,
+    metadata: LibraryMetadata
+  ): Promise<LibraryMetadata>
   browserAddRoot(path: string): Promise<BrowserRoot[]>
   browserRemoveRoot(path: string): Promise<BrowserRoot[]>
   /** Folders first, then by name. */
   browserList(path: string): Promise<BrowserEntry[]>
-  sampleInfo(path: string): Promise<SampleInfo>
+  sampleInfo(path: string, browser?: LibraryFileToken): Promise<SampleInfo>
   /** Facts and waveform of a sample in the project's pool. */
   sampleInfoById(sample: SampleId): Promise<SampleInfo>
   /** One undo step: adds the sample to the pool and a channel that plays it. */
-  addChannelFromFile(path: string, index?: number): Promise<DispatchResult>
+  addChannelFromFile(
+    path: string,
+    index?: number,
+    browser?: LibraryFileToken
+  ): Promise<DispatchResult>
   setChannelSampleFromFile(
     channel: ChannelId,
-    path: string
+    path: string,
+    browser?: LibraryFileToken
   ): Promise<DispatchResult>
 
   /**
@@ -181,7 +199,8 @@ export interface Backend {
    */
   addAudioClipFromFile(
     path: string,
-    place: AudioClipPlace
+    place: AudioClipPlace,
+    browser?: LibraryFileToken
   ): Promise<DispatchResult>
   /**
    * The same for a sample the project already has. `created` holds the

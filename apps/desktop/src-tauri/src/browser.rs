@@ -86,7 +86,7 @@ pub fn list_folder(folder: &Path) -> Result<Vec<BrowserEntry>, String> {
     Ok(listed)
 }
 
-fn file_kind(path: &Path) -> BrowserEntryKind {
+pub(crate) fn file_kind(path: &Path) -> BrowserEntryKind {
     let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
         return BrowserEntryKind::Other;
     };

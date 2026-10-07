@@ -4952,6 +4952,7 @@ dependencies = [
  "chrono",
  "dunce",
  "log",
+ "same-file",
  "serde",
  "serde_json",
  "tauri",
@@ -5021,6 +5022,7 @@ name = "windfall-ipc"
 version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
+ "serde_json",
  "ts-rs",
  "windfall-flp",
  "windfall-midi",
