@@ -1,0 +1,20 @@
+[package]
+name = "windfall-midi"
+description = "Reads and writes Standard MIDI Files and turns them into Windfall projects and back"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+windfall-project.workspace = true
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3"
+
+[lints]
+workspace = true
