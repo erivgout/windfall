@@ -38,6 +38,26 @@ use crate::model::{
 )]
 #[ts(export)]
 pub enum Command {
+    /// Adds an instrument channel and binds its hosted plugin in one undo step.
+    AddPluginInstrument {
+        plugin: crate::PluginBinding,
+    },
+    /// Adds a hosted effect to the track in one undo step.
+    AddPluginEffect {
+        track: TrackId,
+        plugin: crate::PluginBinding,
+    },
+    /// Moves one discovered parameter in native units, by stable id.
+    SetPluginParam {
+        target: crate::PluginTarget,
+        id: u32,
+        value: f32,
+    },
+    /// Stores a complete host snapshot, preserving instance identity.
+    SetPluginState {
+        target: crate::PluginTarget,
+        state: Vec<u8>,
+    },
     // Project
     UpdateSettings {
         patch: SettingsPatch,

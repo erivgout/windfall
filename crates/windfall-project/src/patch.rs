@@ -15,6 +15,7 @@ use crate::model::{
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Touched {
     pub settings: bool,
+    pub plugins: bool,
     pub samples: bool,
     pub channels: bool,
     pub mixer: bool,
@@ -31,6 +32,7 @@ impl Touched {
     pub fn all(project: &Project) -> Self {
         Self {
             settings: true,
+            plugins: true,
             samples: true,
             channels: true,
             mixer: true,
@@ -48,6 +50,7 @@ impl Touched {
     /// Adds everything `other` touched to `self`.
     pub fn merge(&mut self, other: &Touched) {
         self.settings |= other.settings;
+        self.plugins |= other.plugins;
         self.samples |= other.samples;
         self.channels |= other.channels;
         self.mixer |= other.mixer;
@@ -75,6 +78,9 @@ pub struct ProjectPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub settings: Option<ProjectSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plugins: Option<Vec<crate::PluginBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub samples: Option<Vec<SampleAsset>>,

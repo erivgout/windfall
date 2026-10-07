@@ -49,6 +49,25 @@ impl Project {
         check_samples(self)?;
         check_mixer(self)?;
         check_channels(self)?;
+        let mut targets = HashSet::new();
+        for plugin in &self.plugins {
+            plugin.validate().map_err(str::to_owned)?;
+            let exists = match plugin.target {
+                crate::PluginTarget::Instrument { channel } => {
+                    self.channel(channel).is_some_and(|channel| {
+                        matches!(channel.source, ChannelSource::Instrument { .. })
+                    })
+                }
+                crate::PluginTarget::Effect { effect } => self
+                    .mixer
+                    .tracks
+                    .iter()
+                    .any(|track| track.effect(effect).is_some()),
+            };
+            if !exists || !targets.insert(plugin.target) {
+                return Err("a plugin binding has a missing or repeated owner".to_owned());
+            }
+        }
         check_patterns(self)?;
         check_automations(self)?;
         check_playlist(self)

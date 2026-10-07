@@ -13,6 +13,8 @@ pub mod file;
 mod lower;
 pub mod model;
 pub mod patch;
+pub mod plugin;
+pub use plugin::*;
 
 pub use automation::{AutomationRange, AutomationTaper, curve_shape, curve_value};
 pub use command::*;

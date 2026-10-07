@@ -269,6 +269,7 @@ impl Document {
         ProjectPatch {
             revision: self.revision,
             settings: touched.settings.then(|| project.settings.clone()),
+            plugins: touched.plugins.then(|| project.plugins.clone()),
             samples: touched.samples.then(|| project.samples.clone()),
             channels: touched.channels.then(|| project.channels.clone()),
             mixer: touched.mixer.then(|| project.mixer.clone()),

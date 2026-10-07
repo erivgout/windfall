@@ -179,6 +179,9 @@ pub struct Project {
     /// where a clip on the playlist puts it.
     #[serde(default)]
     pub automations: Vec<Automation>,
+    /// Native plugin instances, saved even when their files are unavailable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<crate::PluginBinding>,
 }
 
 impl Project {
@@ -226,6 +229,7 @@ impl Project {
                 clips: Vec::new(),
             },
             automations: Vec::new(),
+            plugins: Vec::new(),
         }
     }
 
