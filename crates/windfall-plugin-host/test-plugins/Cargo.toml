@@ -1,0 +1,39 @@
+# Plugins that exist only to test windfall-plugin-host. They are not part of
+# the Windfall workspace and are never shipped: the host's tests build this
+# crate into the target directory and load the result.
+
+[workspace]
+
+[package]
+name = "windfall-test-plugins"
+description = "CLAP and VST3 plugins that behave well, and badly, for the plugin host's tests"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# MIT OR Apache-2.0. Written against the raw C API on purpose: the host is
+# built on clack, and plugins built on clack too would share its reading of
+# the ABI.
+clap-sys = "0.5.0"
+# MIT OR Apache-2.0; generated SDK bindings for scanner fixtures.
+vst3 = "0.3.0"
+
+[target.'cfg(windows)'.dependencies]
+# MIT OR Apache-2.0.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.dev]
+opt-level = 1

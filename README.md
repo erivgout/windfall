@@ -34,6 +34,7 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 | `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV |
 | `crates/windfall-midi` | Reads and writes MIDI files; project import plans and playlist export |
 | `crates/windfall-dsp` | Effects and synth DSP |
+| `crates/windfall-plugin-host` | CLAP hosting, isolated CLAP/VST3 scanning and native plugin editors |
 | `crates/windfall-ipc` | Types the engine, shell and interface exchange |
 | `crates/windfall-factory` | Generates the factory sounds |
 | `crates/windfall-sim` | The project document compiled to WebAssembly, which the simulated backend runs |

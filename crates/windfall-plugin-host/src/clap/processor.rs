@@ -1,0 +1,356 @@
+//! Running one block of a CLAP plugin.
+//!
+//! CLAP hands a plugin an array of buffers per port, each an array of
+//! channel pointers. The host feeds one stereo signal through the plugin's
+//! main ports and has to give every other port something too: a plugin
+//! with a sidechain reads its second input whether the host has one or
+//! not. So at activation this module builds a complete set of buffers for
+//! every port the plugin declared, pointing at memory it owns. Per block it
+//! only changes the two pointers of each main port, to where the caller's
+//! audio is.
+//!
+//! The raw pointers are why this file has `unsafe` in it. Clack's safe
+//! buffer builder cannot express the same memory used as input and output,
+//! which is what in-place processing is.
+
+use std::any::Any;
+use std::ptr;
+
+use clack_extensions::tail::{PluginTail, TailLength};
+use clack_host::events::EventFlags;
+use clack_host::events::EventHeader;
+use clack_host::events::event_types::{TransportEvent, TransportFlags};
+use clack_host::prelude::*;
+use clack_host::process::ProcessStatus as ClapStatus;
+use clack_host::utils::{BeatTime, SecondsTime};
+use clap_sys::audio_buffer::clap_audio_buffer;
+
+use super::events::{Dialect, EventList, Outgoing};
+use super::handlers::{AudioCall, WindfallHost, flag};
+use crate::events::{HostEvent, PluginEvent, Transport};
+use crate::processor::{
+    AudioIo, BlockResult, ENDLESS_TAIL, ProcessFailed, ProcessStatus, ProcessorBackend,
+};
+
+/// One audio port as the plugin declared it.
+#[derive(Debug, Clone)]
+pub(crate) struct PortDesc {
+    pub id: u32,
+    pub name: String,
+    pub channels: u32,
+    /// The port the track's sound goes through.
+    pub main: bool,
+    /// The id of the port on the other side that may share this one's
+    /// memory.
+    pub in_place_pair: Option<u32>,
+}
+
+/// Where the main port's channel pointers are, and how the host's two
+/// channels map onto them.
+struct MainPort {
+    /// Index of the port's first pointer in `PortSet::pointers`.
+    first: usize,
+    /// The buffer that stands in for a one-channel port, as an index into
+    /// `PortSet::owned`. A port with two or more channels takes the
+    /// caller's buffers directly.
+    mono: Option<usize>,
+}
+
+/// The buffers of every input port, or of every output port.
+struct PortSet {
+    buffers: Vec<clap_audio_buffer>,
+    /// The channel pointers of all ports, one port after the other. The
+    /// `data32` of each buffer points into this.
+    pointers: Vec<*mut f32>,
+    /// The memory behind every pointer that is not the caller's.
+    owned: Vec<Box<[f32]>>,
+    main: Option<MainPort>,
+}
+
+impl PortSet {
+    /// Builds buffers of `frames` frames for `ports`.
+    ///
+    /// Input ports other than the main one read silence, all from one
+    /// shared buffer. Output ports other than the main one each get memory
+    /// of their own that nobody reads.
+    fn new(ports: &[PortDesc], frames: usize, is_input: bool) -> Self {
+        let buffer = || vec![0.0_f32; frames].into_boxed_slice();
+        let mut owned = vec![buffer()];
+        let mut pointers = Vec::new();
+        let mut firsts = Vec::new();
+        let mut main = None;
+
+        for port in ports {
+            let first = pointers.len();
+            firsts.push(first);
+            let mut main_port = MainPort { first, mono: None };
+            for channel in 0..port.channels {
+                // The caller's audio goes in the first two channels of the
+                // main port, or in its only one.
+                let callers = port.main && port.channels >= 2 && channel < 2;
+                let index = if port.main && port.channels == 1 {
+                    owned.push(buffer());
+                    main_port.mono = Some(owned.len() - 1);
+                    owned.len() - 1
+                } else if callers || is_input {
+                    0
+                } else {
+                    owned.push(buffer());
+                    owned.len() - 1
+                };
+                pointers.push(owned[index].as_mut_ptr());
+            }
+            if port.main && port.channels > 0 && main.is_none() {
+                main = Some(main_port);
+            }
+        }
+
+        let buffers = ports
+            .iter()
+            .zip(&firsts)
+            .map(|(port, &first)| {
+                let silent = is_input && !port.main;
+                clap_audio_buffer {
+                    // SAFETY: `first` is at most the length of `pointers`.
+                    // The vector is not touched again, so the address holds.
+                    data32: unsafe { pointers.as_mut_ptr().add(first) },
+                    data64: ptr::null_mut(),
+                    channel_count: port.channels,
+                    latency: 0,
+                    constant_mask: if silent { u64::MAX } else { 0 },
+                }
+            })
+            .collect();
+
+        Self {
+            buffers,
+            pointers,
+            owned,
+            main,
+        }
+    }
+
+    /// Points the main port at the caller's two channels, if it takes them
+    /// directly.
+    fn aim(&mut self, left: *mut f32, right: *mut f32) {
+        if let Some(main) = &self.main
+            && main.mono.is_none()
+        {
+            self.pointers[main.first] = left;
+            self.pointers[main.first + 1] = right;
+        }
+    }
+
+    /// The one-channel stand-in of the main port, if it has one.
+    fn mono(&mut self, frames: usize) -> Option<&mut [f32]> {
+        let index = self.main.as_ref()?.mono?;
+        Some(&mut self.owned[index][..frames])
+    }
+}
+
+/// The audio-thread half of a CLAP plugin.
+pub(crate) struct ClapProcessor {
+    processor: PluginAudioProcessor<WindfallHost>,
+    tail: Option<PluginTail>,
+    tail_read: bool,
+    events: EventList,
+    dialect: Dialect,
+    inputs: PortSet,
+    outputs: PortSet,
+}
+
+// SAFETY: the raw pointers in the port sets point into memory the port sets
+// own, or are overwritten with the caller's buffers before every use. None
+// of it is shared with another thread: the processor is used by one thread
+// at a time, which `&mut self` on every method enforces.
+unsafe impl Send for ClapProcessor {}
+
+impl ClapProcessor {
+    pub fn new(
+        processor: StoppedPluginAudioProcessor<WindfallHost>,
+        tail: Option<PluginTail>,
+        dialect: Dialect,
+        inputs: &[PortDesc],
+        outputs: &[PortDesc],
+        max_block: usize,
+    ) -> Self {
+        Self {
+            processor: processor.into(),
+            tail,
+            tail_read: false,
+            events: EventList::new(),
+            dialect,
+            inputs: PortSet::new(inputs, max_block, true),
+            outputs: PortSet::new(outputs, max_block, false),
+        }
+    }
+
+    /// Gives back clack's processor, stopped, for deactivation.
+    pub fn into_stopped(self) -> StoppedPluginAudioProcessor<WindfallHost> {
+        self.processor.into_stopped()
+    }
+}
+
+fn transport_event(transport: &Transport) -> TransportEvent {
+    let mut flags = TransportFlags::HAS_TEMPO
+        | TransportFlags::HAS_BEATS_TIMELINE
+        | TransportFlags::HAS_SECONDS_TIMELINE
+        | TransportFlags::HAS_TIME_SIGNATURE;
+    if transport.playing {
+        flags |= TransportFlags::IS_PLAYING;
+    }
+    let beats_per_bar =
+        f64::from(transport.numerator) * 4.0 / f64::from(transport.denominator.max(1));
+    let bar = if beats_per_bar > 0.0 {
+        (transport.position_beats / beats_per_bar).floor()
+    } else {
+        0.0
+    };
+    TransportEvent {
+        header: EventHeader::new_core(0, EventFlags::empty()),
+        flags,
+        song_pos_beats: BeatTime::from_float(transport.position_beats),
+        song_pos_seconds: SecondsTime::from_float(transport.position_seconds),
+        tempo: transport.tempo_bpm,
+        tempo_inc: 0.0,
+        loop_start_beats: BeatTime::from_int(0),
+        loop_end_beats: BeatTime::from_int(0),
+        loop_start_seconds: SecondsTime::from_int(0),
+        loop_end_seconds: SecondsTime::from_int(0),
+        bar_start: BeatTime::from_float(bar * beats_per_bar),
+        bar_number: bar as i32,
+        time_signature_numerator: transport.numerator,
+        time_signature_denominator: transport.denominator,
+    }
+}
+
+impl ProcessorBackend for ClapProcessor {
+    fn process(
+        &mut self,
+        audio: AudioIo<'_>,
+        events: &[HostEvent],
+        transport: &Transport,
+        steady_time: u64,
+        out: &mut dyn FnMut(PluginEvent),
+    ) -> Result<BlockResult, ProcessFailed> {
+        let frames = audio.frames();
+        self.events.fill(events, self.dialect);
+
+        // The caller's slices become raw pointers here and are not used as
+        // slices again until the plugin has returned.
+        let (in_left, in_right, out_left, out_right) = match audio {
+            AudioIo::InPlace { left, right } => {
+                let (left, right) = (left.as_mut_ptr(), right.as_mut_ptr());
+                (left, right, left, right)
+            }
+            AudioIo::Separate {
+                in_left,
+                in_right,
+                out_left,
+                out_right,
+            } => {
+                if let Some(mono) = self.inputs.mono(frames) {
+                    for (index, sample) in mono.iter_mut().enumerate() {
+                        *sample = (in_left[index] + in_right[index]) * 0.5;
+                    }
+                }
+                (
+                    in_left.as_mut_ptr(),
+                    in_right.as_mut_ptr(),
+                    out_left.as_mut_ptr(),
+                    out_right.as_mut_ptr(),
+                )
+            }
+        };
+        self.inputs.aim(in_left, in_right);
+        self.outputs.aim(out_left, out_right);
+
+        let transport = transport_event(transport);
+        let status = {
+            let _audio_call = AudioCall::enter();
+            let started = self
+                .processor
+                .ensure_processing_started()
+                .map_err(|_| ProcessFailed)?;
+            let input_events = InputEvents::from_buffer(&self.events);
+            let mut outgoing = Outgoing { sink: out };
+            let mut output_events = OutputEvents::from_buffer(&mut outgoing);
+            // SAFETY: every buffer of both sets points at `channel_count`
+            // channels of at least `frames` samples each. The owned ones
+            // were allocated for the largest block, which `frames` does not
+            // exceed, and the main ports' were just aimed at the caller's
+            // slices of exactly `frames` samples, which stay borrowed until
+            // this function returns.
+            let (inputs, mut outputs) = unsafe {
+                (
+                    InputAudioBuffers::from_raw_buffers(&self.inputs.buffers, frames as u32),
+                    OutputAudioBuffers::from_raw_buffers(&mut self.outputs.buffers, frames as u32),
+                )
+            };
+            let status = started
+                .process(
+                    &inputs,
+                    &mut outputs,
+                    &input_events,
+                    &mut output_events,
+                    Some(steady_time),
+                    Some(&transport),
+                )
+                .map_err(|_| ProcessFailed)?;
+
+            // The tail is read once, and again when the plugin says it
+            // changed.
+            let tail_changed = started.access_shared_handler(|shared| shared.take(flag::TAIL)) != 0;
+            let mut tail = None;
+            if let Some(extension) = self.tail
+                && (tail_changed || !self.tail_read)
+            {
+                self.tail_read = true;
+                tail = Some(match extension.get(&started.plugin_handle()) {
+                    TailLength::Finite(frames) => frames.min(ENDLESS_TAIL - 1),
+                    TailLength::Infinite => ENDLESS_TAIL,
+                });
+            }
+            (status, tail)
+        };
+
+        if let Some(mono) = self.outputs.mono(frames) {
+            // SAFETY: the output pointers are the caller's two slices of
+            // `frames` samples, and the plugin is done with them.
+            let (left, right) = unsafe {
+                (
+                    std::slice::from_raw_parts_mut(out_left, frames),
+                    std::slice::from_raw_parts_mut(out_right, frames),
+                )
+            };
+            left.copy_from_slice(mono);
+            right.copy_from_slice(mono);
+        }
+
+        let (status, tail) = status;
+        Ok(BlockResult {
+            status: match status {
+                ClapStatus::Continue => ProcessStatus::Continue,
+                ClapStatus::ContinueIfNotQuiet => ProcessStatus::ContinueIfNotQuiet,
+                ClapStatus::Tail => ProcessStatus::Tail,
+                ClapStatus::Sleep => ProcessStatus::Sleep,
+            },
+            tail,
+            dropped_events: self.events.dropped(),
+        })
+    }
+
+    fn reset(&mut self) {
+        let _audio_call = AudioCall::enter();
+        self.processor.reset();
+    }
+
+    fn stop(&mut self) {
+        let _audio_call = AudioCall::enter();
+        self.processor.ensure_processing_stopped();
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
