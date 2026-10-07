@@ -4792,6 +4792,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "windfall-midi"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "tempfile",
+ "windfall-core",
+ "windfall-project",
+]
+
+[[package]]
 name = "windfall-project"
 version = "0.1.0"
 dependencies = [

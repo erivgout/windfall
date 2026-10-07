@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc be1926a7645ad2d79f4e5bcd9eb2cd93c5c467dc8695a18f20d7c0e4326662ae # shrinks to song = MidiSong { name: None, tracks: [], tempos: [TempoChange { tick: 17071, micros_per_quarter: 0 }, TempoChange { tick: 0, micros_per_quarter: 0 }], time_signatures: [], key_signatures: [], markers: [], length: 0 }, running_status = false
+cc 57cebfa97a6e32cc525b1820e60252f05b698559696be78af0beb50b13b35033 # shrinks to song = MidiSong { name: None, tracks: [], tempos: [TempoChange { tick: 23070, micros_per_quarter: 0 }, TempoChange { tick: 0, micros_per_quarter: 0 }], time_signatures: [], key_signatures: [], markers: [], length: 0 }, running_status = false
+cc 51b208efb52a02c056e85993ab1f2a53cfc495fcc0430193c45ae6869bf0d76f # shrinks to song = MidiSong { name: None, tracks: [], tempos: [TempoChange { tick: 15847, micros_per_quarter: 1 }, TempoChange { tick: 0, micros_per_quarter: 1 }], time_signatures: [], key_signatures: [], markers: [], length: 0 }, running_status = false
