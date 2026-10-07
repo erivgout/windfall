@@ -44,7 +44,7 @@ fn library() -> &'static Path {
         target.join("debug/windfall_test_plugins.dll")
     })
 }
-fn manager(rig: &Rig) -> (std::sync::Arc<crate::plugins::PluginManager>, String) {
+pub(super) fn manager(rig: &Rig) -> (std::sync::Arc<crate::plugins::PluginManager>, String) {
     let folder = rig.folder.path().join("plugins");
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join("windfall-test.clap");

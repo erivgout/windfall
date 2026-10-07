@@ -223,8 +223,13 @@ impl Session {
             .set_plugin_factory(manager.runtime.clone());
         *lock(&self.inner.plugins) = Some(manager);
     }
-    pub fn refresh_plugins(&self) {
-        self.push_project(&self.state());
+    pub fn refresh_plugins(&self) -> Result<(), String> {
+        let state = self.state();
+        if let Some(manager) = &*lock(&self.inner.plugins) {
+            manager.runtime.retry();
+        }
+        self.push_project(&state);
+        Ok(())
     }
     fn plugin_pool(&self, mut pool: SamplePool) -> SamplePool {
         if let Some(manager) = &*lock(&self.inner.plugins) {

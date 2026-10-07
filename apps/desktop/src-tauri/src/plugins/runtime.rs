@@ -221,6 +221,10 @@ impl Runtime {
                 .values()
                 .any(|selected| selected.load(std::sync::atomic::Ordering::Relaxed) == token)
     }
+    #[cfg(test)]
+    pub(crate) fn selected_token(&self, target: PluginTarget) -> Option<u64> {
+        selected(&self.selection, target)
+    }
     fn selection(&self, target: PluginTarget) -> Option<Arc<std::sync::atomic::AtomicU64>> {
         if self.rendering {
             None

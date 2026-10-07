@@ -10,6 +10,8 @@ mod files;
 mod library;
 mod playback;
 #[cfg(windows)]
+mod plugin_update;
+#[cfg(windows)]
 mod plugins;
 mod song;
 

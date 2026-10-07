@@ -1,6 +1,7 @@
 //! Cached, isolated discovery and a native owner thread for audio instances.
 mod runtime;
 pub use runtime::Runtime;
+pub(crate) use runtime::binding_identity;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -19,6 +20,7 @@ pub struct PluginManager {
     folders_file: PathBuf,
     pub runtime: Arc<Runtime>,
     session: Mutex<Option<crate::session::WeakSession>>,
+    retry_requested: std::sync::atomic::AtomicBool,
 }
 impl PluginManager {
     #[cfg(test)]
@@ -60,6 +62,7 @@ impl PluginManager {
             folders_file,
             runtime: Arc::new(Runtime::new()?),
             session: Mutex::new(None),
+            retry_requested: std::sync::atomic::AtomicBool::new(false),
         });
         manager.update_entries();
         Ok(manager)
@@ -129,29 +132,23 @@ impl PluginManager {
                             ));
                         }
                         runtime::Update::Restart => {
-                            manager.runtime.retry();
-                            session.refresh_plugins();
+                            manager
+                                .retry_requested
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                 }
-                let project = (!pending.is_empty()).then(|| session.document_snapshot().project);
+                // Reconcile values before opaque state changes its fingerprint.
+                pending.sort_by_key(|(_, _, _, command, _)| {
+                    matches!(command, windfall_project::Command::SetPluginState { .. })
+                });
                 pending.retain(|(before, token, binding, command, gesture)| {
-                    let target = match command {
-                        windfall_project::Command::SetPluginParam { target, .. }
-                        | windfall_project::Command::SetPluginState { target, .. } => *target,
-                        _ => return false,
-                    };
-                    if !project
-                        .as_ref()
-                        .and_then(|project| project.plugin(target))
-                        .is_some_and(|current| runtime::binding_identity(current) == *binding)
-                    {
-                        return false;
-                    }
-                    if !manager.runtime.is_current(*before, *token) {
-                        return false;
-                    }
-                    match session.dispatch(command.clone(), *gesture) {
+                    match session.dispatch_plugin_update(
+                        &manager.runtime,
+                        (*before, *token, *binding),
+                        command.clone(),
+                        *gesture,
+                    ) {
                         Ok(_) => false,
                         Err(error) => {
                             manager
@@ -166,6 +163,18 @@ impl PluginManager {
                 if pending.len() > 4096 {
                     pending.drain(..pending.len() - 4096);
                     manager.status.lock().unwrap_or_else(|error| error.into_inner()).error = Some("Too many pending native plugin edits; reopen the plugin to reconcile its state".into());
+                }
+                // Preserve native edits before replacing their current owner. A
+                // take can refuse refresh; one flag retains the request until idle.
+                if pending.is_empty()
+                    && manager
+                        .retry_requested
+                        .swap(false, std::sync::atomic::Ordering::Relaxed)
+                    && session.refresh_plugins().is_err()
+                {
+                    manager
+                        .retry_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });
@@ -304,16 +313,9 @@ impl PluginManager {
                 if result.is_ok() {
                     manager.runtime.approve(&manager.state().entries);
                 }
-                manager.runtime.retry();
-                if let Some(session) = manager
-                    .session
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .as_ref()
-                    .and_then(crate::session::WeakSession::upgrade)
-                {
-                    session.refresh_plugins();
-                }
+                manager
+                    .retry_requested
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 let mut state = manager
                     .status
                     .lock()
