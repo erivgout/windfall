@@ -331,7 +331,9 @@ impl Connection {
     fn new(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) -> Self {
         let pair = component
             .cast::<IConnectionPoint>()
-            .zip(controller.cast::<IConnectionPoint>());
+            .zip(controller.cast::<IConnectionPoint>())
+            // Combined component/controllers need no self-connection.
+            .filter(|(component, controller)| component.as_ptr() != controller.as_ptr());
         if let Some((component, controller)) = &pair {
             // SAFETY: both initialized objects stay alive until disconnect.
             unsafe {

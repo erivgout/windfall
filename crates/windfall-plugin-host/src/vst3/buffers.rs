@@ -81,17 +81,30 @@ impl IParamValueQueueTrait for Queue {
         if offset < 0 || !value.is_finite() || !(0.0..=1.0).contains(&value) {
             return kInvalidArgument;
         }
-        let at = self.arena.used.get();
-        if at == EVENT_CAPACITY {
-            self.arena.drop_point();
-            return kResultFalse;
-        }
         // SAFETY: audio-call-exclusive arena, fixed storage and bounded index.
         let points = unsafe { &mut *self.arena.points.get() };
         if let Some(last) = self.last.get() {
             if points[last].offset > offset {
                 return kInvalidArgument;
             }
+            // SDK queues have one value per offset. Main-thread edits,
+            // deferred edits and automation may all target sample zero.
+            if points[last].offset == offset {
+                points[last].value = value;
+                if !index.is_null() {
+                    unsafe {
+                        index.write(self.count.get() as i32 - 1);
+                    }
+                }
+                return kResultOk;
+            }
+        }
+        let at = self.arena.used.get();
+        if at == EVENT_CAPACITY {
+            self.arena.drop_point();
+            return kResultFalse;
+        }
+        if let Some(last) = self.last.get() {
             points[last].next = Some(at);
         } else {
             self.first.set(Some(at));
@@ -347,6 +360,11 @@ mod tests {
             assert_eq!(queue.addPoint(0, f64::NAN, &mut index), kInvalidArgument);
             assert_eq!(queue.addPoint(0, 1.5, &mut index), kInvalidArgument);
             assert_eq!(queue.addPoint(4, 0.5, &mut index), kResultOk);
+            assert_eq!(queue.addPoint(4, 0.75, &mut index), kResultOk);
+            assert_eq!(queue.getPointCount(), 1);
+            let (mut time, mut value) = (0, 0.0);
+            assert_eq!(queue.getPoint(0, &mut time, &mut value), kResultOk);
+            assert_eq!((time, value), (4, 0.75));
             assert_eq!(queue.addPoint(2, 0.25, &mut index), kInvalidArgument);
             assert_eq!(
                 queue.getPoint(0, std::ptr::null_mut(), std::ptr::null_mut()),
