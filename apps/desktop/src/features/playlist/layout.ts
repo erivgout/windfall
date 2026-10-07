@@ -7,7 +7,12 @@ export const SCROLLBAR_SIZE = 10
 
 export const DEFAULT_ROW_HEIGHT = 38
 export const MIN_ROW_HEIGHT = 18
-export const MAX_ROW_HEIGHT = 96
+export const MAX_ROW_HEIGHT = 160
+/**
+ * A row tall enough to draw an automation curve in: the curve's whole
+ * range gets about seventy pixels under the clip's title bar.
+ */
+export const TALL_ROW_HEIGHT = 92
 
 /** A bar is this wide when the playlist first opens. */
 export const DEFAULT_BAR_WIDTH = 72
@@ -28,6 +33,8 @@ export const EDGE_PX = 6
 /** A press that moves less than this is a click, not a drag. */
 export const DRAG_THRESHOLD_PX = 3
 export const DOUBLE_CLICK_MS = 400
+/** Two presses further apart than this are two clicks, however quick. */
+export const DOUBLE_CLICK_SLOP_PX = 4
 
 /**
  * How many rows the grid has: every track, some spare ones below, and never

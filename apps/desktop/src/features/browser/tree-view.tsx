@@ -209,12 +209,6 @@ export function TreeView() {
         // Holding Enter must not add the same sound over and over.
         if (!event.repeat) activateRow(current)
         return
-      case "Delete":
-      case "Backspace":
-        // Nothing here can be deleted, and the key must not reach the
-        // rack's "delete channel" while the browser has the keyboard.
-        event.preventDefault()
-        return
       default:
     }
 

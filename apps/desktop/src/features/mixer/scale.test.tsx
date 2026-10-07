@@ -186,7 +186,7 @@ describe("panel heights", () => {
 
   it("moves routing behind a button at a medium height", async () => {
     const user = userEvent.setup()
-    sizeMixer(800, 220)
+    sizeMixer(800, 260)
     render(<MixerPanel />)
     expect(mode()).toBe("compact")
     const kick = within(strip("Kick"))
@@ -221,7 +221,7 @@ describe("panel heights", () => {
   })
 
   it("keeps the fader upright as long as it can", () => {
-    sizeMixer(800, 160)
+    sizeMixer(800, 210)
     render(<MixerPanel />)
     expect(mode()).toBe("tight")
     const kick = within(strip("Kick"))
@@ -234,12 +234,12 @@ describe("panel heights", () => {
     expect(kick.getByRole("button", { name: "Routing" })).toBeVisible()
     // The clip light stays on the meter.
     expect(
-      kick.getByRole("button", { name: /^Clip light/, hidden: true })
+      strip("Kick").querySelector("[data-slot=level-meter-clip]")
     ).toBeInTheDocument()
   })
 
   it("lays the fader flat with its readouts when it cannot stand", () => {
-    sizeMixer(800, 120)
+    sizeMixer(800, 150)
     render(<MixerPanel />)
     expect(mode()).toBe("flat")
     const kick = within(strip("Kick"))
@@ -286,7 +286,7 @@ describe("panel heights", () => {
   })
 
   it("goes back to the popover when send rows would squeeze the fader", async () => {
-    sizeMixer(800, 300)
+    sizeMixer(800, 340)
     render(<MixerPanel />)
     expect(mode()).toBe("full")
     await dispatch({

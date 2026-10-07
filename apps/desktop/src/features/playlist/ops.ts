@@ -1,5 +1,12 @@
-import type { ClipId, Command, PatternId, PlaylistTrackId } from "@/bindings"
+import type {
+  ClipContent,
+  ClipId,
+  Command,
+  PatternId,
+  PlaylistTrackId,
+} from "@/bindings"
 import { runAction } from "@/lib/actions"
+import { refuse } from "@/lib/errors"
 import { newGestureId } from "@/lib/store/gesture"
 import { dispatch } from "@/lib/store/project"
 import { askConfirm, askText } from "@/lib/store/prompts"
@@ -16,14 +23,13 @@ import {
 import {
   clampNudge,
   clipboardFrom,
-  clipFollowUps,
   clipInits,
   clipUpdates,
   duplicateRight,
-  insertTrackCommands,
   moveChanges,
   pasteAt,
   rowIndex,
+  spanFits,
   tracksNeeded,
   type ClipChange,
   type NewClip,
@@ -83,12 +89,28 @@ async function ensureTracks(
   return playlist().tracks.map((track) => track.id)
 }
 
+/**
+ * Turns down an edit that would put a clip past the last tick the timeline
+ * can count. Without this the clip would be pulled back to that tick, and
+ * a few rounds of duplicating would pile clips up there.
+ */
+function refusePastEnd() {
+  refuse(
+    "Clips cannot go past the end of the timeline",
+    "The song is as long as it can get."
+  )
+}
+
 /** Adds clips, with the tracks they need. Resolves to the new clip ids. */
 export async function addClips(
   clips: readonly NewClip[],
   label: string
 ): Promise<ClipId[] | null> {
   if (clips.length === 0) return []
+  if (!clips.every((clip) => spanFits(clip.start, clip.length))) {
+    refusePastEnd()
+    return null
+  }
   const gesture = newGestureId()
   const tracks = await ensureTracks(
     clips.map((clip) => clip.row),
@@ -100,12 +122,7 @@ export async function addClips(
     labelled(label, { type: "addClips", clips: clipInits(clips, tracks) }),
     gesture
   )
-  if (!added) return null
-  const followUps = clipFollowUps(clips, added.created)
-  if (followUps.length > 0) {
-    await dispatch({ type: "updateClips", updates: followUps }, gesture)
-  }
-  return added.created
+  return added?.created ?? null
 }
 
 /** Changes clips, adding tracks for any that move below the last one. */
@@ -114,6 +131,19 @@ export async function changeClips(
   label: string
 ): Promise<boolean> {
   if (changes.length === 0) return true
+  const byId = new Map(playlist().clips.map((clip) => [clip.id, clip]))
+  const fits = changes.every((change) => {
+    const clip = byId.get(change.id)
+    if (!clip) return true
+    const start = change.start ?? clip.start
+    const length = change.length ?? clip.length
+    // A clip may always come back towards the start.
+    return spanFits(start, length) || start + length <= clip.start + clip.length
+  })
+  if (!fits) {
+    refusePastEnd()
+    return false
+  }
   const gesture = newGestureId()
   const tracks = await ensureTracks(
     changes.flatMap((change) => change.row ?? []),
@@ -203,12 +233,45 @@ export function songTick(): number {
     : ui().cursorTick
 }
 
+/** Whether what a clip plays is still in the project. */
+export function contentExists(content: ClipContent): boolean {
+  const current = project()
+  switch (content.type) {
+    case "pattern":
+      return current.patterns.some((item) => item.id === content.pattern)
+    case "audio":
+      return current.samples.some((item) => item.id === content.sample)
+    case "automation":
+      return current.automations.some((item) => item.id === content.automation)
+    default: {
+      const _exhaustive: never = content
+      return _exhaustive
+    }
+  }
+}
+
+/**
+ * A copy of an audio clip plays into the track the original did. If that
+ * track is gone by the time of the paste, the copy plays into the master,
+ * as the clips that were on the track do.
+ */
+function withLiveMixerTrack(clip: NewClip): NewClip {
+  const content = clip.content
+  if (content.type !== "audio") return clip
+  const live = project().mixer.tracks.some(
+    (track) => track.id === content.mixerTrack
+  )
+  return live ? clip : { ...clip, content: { ...content, mixerTrack: 0 } }
+}
+
 /** Pastes at the song position and selects what was pasted. */
 export async function paste(): Promise<void> {
-  const patterns = new Set(project().patterns.map((pattern) => pattern.id))
-  const clips = pasteAt(ui().clipboard, songTick(), currentSnapTicks(), (id) =>
-    patterns.has(id)
-  )
+  const clips = pasteAt(
+    ui().clipboard,
+    songTick(),
+    currentSnapTicks(),
+    contentExists
+  ).map(withLiveMixerTrack)
   const created = await addClips(clips, plural(clips.length, "Paste clip"))
   if (created && created.length > 0) ui().select(created)
 }
@@ -258,21 +321,29 @@ export async function addTrack(): Promise<void> {
 
 /** Puts a new empty track at `index`, pushing the tracks from there down. */
 export async function insertTrack(index: number): Promise<void> {
-  const before = playlist()
-  if (index >= before.tracks.length) return addTrack()
-  const gesture = newGestureId()
-  const label = "Insert track"
+  if (index >= playlist().tracks.length) return addTrack()
   const added = await dispatch(
-    labelled(label, { type: "addPlaylistTrack" }),
-    gesture
+    labelled("Insert track", { type: "addPlaylistTrack", index })
   )
-  const track = playlist().tracks.find((item) => item.id === added?.created[0])
-  if (!track) return
-  const commands = insertTrackCommands(before, index, track)
-  if (commands.length > 0) {
-    await dispatch(labelled(label, ...commands), gesture)
-  }
-  ui().setTargetTrack(before.tracks[index].id)
+  if (added) ui().setTargetTrack(added.created[0])
+}
+
+/** Moves a track, with its clips, to another place among the tracks. */
+export async function moveTrack(
+  id: PlaylistTrackId,
+  index: number
+): Promise<void> {
+  const tracks = playlist().tracks
+  const from = tracks.findIndex((track) => track.id === id)
+  const to = Math.min(Math.max(0, index), tracks.length - 1)
+  if (from < 0 || to === from) return
+  await dispatch({ type: "movePlaylistTrack", id, index: to })
+}
+
+/** Moves a track one place up (-1) or down (1). */
+export function moveTrackBy(id: PlaylistTrackId, step: -1 | 1): Promise<void> {
+  const from = playlist().tracks.findIndex((track) => track.id === id)
+  return from < 0 ? Promise.resolve() : moveTrack(id, from + step)
 }
 
 export async function setTrackName(

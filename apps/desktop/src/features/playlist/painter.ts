@@ -1,4 +1,14 @@
-import type { Clip, ClipId, Pattern, PatternId } from "@/bindings"
+import type {
+  AutomationId,
+  AutomationPoint,
+  Clip,
+  ClipContent,
+  ClipId,
+  PlaylistTrackId,
+  SampleId,
+} from "@/bindings"
+import type { HoldSegment } from "@/lib/automation/lanes"
+import type { ViewRange } from "@/lib/automation/view-range"
 import {
   BORDER_SHADE,
   deviceX,
@@ -17,9 +27,30 @@ import {
   type Rgba,
 } from "@/lib/canvas"
 
-import { clipBodyColor, ORPHAN_COLOR } from "./clip-batch"
+import {
+  GAIN_HANDLE_INSET,
+  GAIN_HANDLE_WIDTH,
+  MIN_WIDTH_FOR_GAIN,
+} from "./audio/handles"
+import { paintAudio, paintMissing } from "./audio/paint"
+import type { SamplePeaks } from "./audio/peaks"
+import { paintAutomation, paintHolds, paintLinkGlyph } from "./automation/paint"
+import { clipBodyColor } from "./clip-batch"
+import {
+  BAND_HEIGHT,
+  CONTENT_PAD,
+  MIN_HEIGHT_FOR_BAND,
+  type Box,
+} from "./clip-box"
 import { patternTicks, type NewClip } from "./edit"
+import {
+  contentColor,
+  contentName,
+  ORPHAN_COLOR,
+  type ClipLookups,
+} from "./look"
 import { loopPoints, previewOf, previewSpans, type ClipSpan } from "./preview"
+import type { ClipSprite, ClipStyle } from "./sprite"
 
 /** How a drag in progress displaces the selected clips. */
 export type DragState = {
@@ -38,12 +69,44 @@ export const NO_DRAG: DragState = {
   minLength: 0,
 }
 
+/** A value shown beside the pointer while something is dragged. */
+export type Badge = {
+  /** CSS pixels from the grid's top left corner. */
+  x: number
+  y: number
+  text: string
+}
+
+/** Where a file dragged in from the browser would land. */
+export type DropPreview = {
+  row: number
+  start: number
+  length: number
+  name: string
+}
+
+/** A curve as it is being edited, before the edit has gone to the project. */
+export type CurveDraft = {
+  automation: AutomationId
+  points: readonly AutomationPoint[]
+}
+
+export type AudioContent = Extract<ClipContent, { type: "audio" }>
+
+/** An audio clip's settings as a drag has them, before it is released. */
+export type AudioDraft = { clip: ClipId; content: AudioContent }
+
 /** What the painter draws from. Whoever owns it calls `invalidate` after a change. */
 export interface PaintSource {
   readonly items: IndexedBatch | null
   readonly clipById: ReadonlyMap<ClipId, Clip>
-  readonly patterns: ReadonlyMap<PatternId, Pattern>
+  readonly lookups: ClipLookups
   isMuted(clip: Clip): boolean
+  /** The row of a playlist track, or undefined for a track that is gone. */
+  trackRow(track: PlaylistTrackId): number | undefined
+  /** The waveform of a sample, or null when the project has no such sample. */
+  peaksOf(sample: SampleId): SamplePeaks | null
+  readonly tempoBpm: number
   readonly drag: DragState
   /** Clips that will exist once the button is released. */
   readonly ghosts: readonly NewClip[]
@@ -52,6 +115,21 @@ export interface PaintSource {
   /** Show where the dragged clips came from, because they will stay there. */
   readonly cloneHint: boolean
   readonly songEnd: number
+  /** The curve being edited, shown in every clip of its automation. */
+  readonly draft: CurveDraft | null
+  readonly audioDraft: AudioDraft | null
+  /** Where targets stay on the value an automation clip left. */
+  readonly holds: readonly HoldSegment[]
+  /** Automations more than one clip shows. */
+  readonly shared: ReadonlySet<AutomationId>
+  /** The part of its range an automation's clips show, bottom to top. */
+  viewOf(automation: AutomationId): ViewRange
+  /** The two ends of that view in the unit of what the automation moves. */
+  viewLabelsOf(automation: AutomationId): { top: string; bottom: string } | null
+  /** The clip under the pointer. */
+  readonly hover: ClipId | null
+  readonly badge: Badge | null
+  readonly dropPreview: DropPreview | null
 }
 
 export type PaintStats = {
@@ -59,6 +137,8 @@ export type PaintStats = {
   clips: number
   /** Note rects drawn for the previews. */
   notes: number
+  /** Columns of waveform drawn for the audio clips. */
+  columns: number
   /** Main-thread time of the last full repaint, in milliseconds. */
   ms: number
   /** Full repaints so far. A frame that only moves the playhead is not one. */
@@ -69,14 +149,14 @@ export type PaintStats = {
 const MIN_CLIP_WIDTH = 5
 const MIN_LABEL_WIDTH = 22
 const MIN_LABEL_HEIGHT = 12
-const BAND_HEIGHT = 13
-const MIN_HEIGHT_FOR_BAND = 25
 const MIN_PREVIEW_HEIGHT = 6
 const MIN_PASS_WIDTH = 10
 const MAX_NOTE_HEIGHT = 4
 const TEXT_PAD = 4
 const FONT_SIZE = 10.5
 const FIT_BUCKET = 4
+/** An automation clip narrower than this has no room for the link glyph. */
+const MIN_LINK_WIDTH = 48
 
 /** Pixels of width a pass of the pattern needs per note before it is drawn. */
 const NOTE_SPACING = 1.5
@@ -86,30 +166,13 @@ const NOTE_SPACING = 1.5
  */
 const NOTE_BUDGET = 20000
 const DIVIDER_BUDGET = 1500
+/** Columns of waveform per repaint: about thirty screens' width. */
+const COLUMN_BUDGET = 60000
+/** Points and bend handles of automation curves per repaint. */
+const MARK_BUDGET = 6000
 
 const DARK_INK = "rgba(0,0,0,0.84)"
 const LIGHT_INK = "rgba(255,255,255,0.96)"
-
-type Style = {
-  body: string
-  border: string
-  band: string
-  bandInk: string
-  bodyInk: string
-  note: string
-}
-
-type Sprite = {
-  id: ClipId
-  style: number
-  pattern: Pattern | undefined
-  span: ClipSpan
-  x0: number
-  x1: number
-  y0: number
-  y1: number
-  ghost: boolean
-}
 
 function luminance(color: Rgba): number {
   return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
@@ -119,17 +182,34 @@ function inkOn(color: Rgba): string {
   return luminance(color) > 150 ? DARK_INK : LIGHT_INK
 }
 
+/** A CSS variable of the theme, for the few colors the grid's theme lacks. */
+function themeColor(name: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim()
+  return value === "" ? fallback : value
+}
+
 /**
- * Draws what the rect renderer cannot: each clip's title bar, name and note
- * preview, the loop dividers, and the previews of a gesture in progress.
+ * Draws what the rect renderer cannot: each clip's title bar and name, and
+ * what is inside it: a pattern's notes, an audio clip's waveform and fades,
+ * an automation clip's curve. Also the loop dividers, the previews of a
+ * gesture in progress and the lines that show a held automation value.
  *
  * The grid's overlay is repainted for every playhead move, 60 times a second
- * while the song plays. Names and previews do not change then, so they are
- * painted into a canvas of their own and that is copied into the overlay.
- * It is repainted only when the view, the clips or a gesture change.
+ * while the song plays. None of this changes then, so it is painted into a
+ * canvas of its own and that is copied into the overlay. It is repainted
+ * only when the view, the clips or a gesture change.
  */
 export class ClipPainter {
-  readonly stats: PaintStats = { clips: 0, notes: 0, ms: 0, repaints: 0 }
+  readonly stats: PaintStats = {
+    clips: 0,
+    notes: 0,
+    columns: 0,
+    ms: 0,
+    repaints: 0,
+  }
 
   private readonly source: PaintSource
   private layer: HTMLCanvasElement | null = null
@@ -137,8 +217,8 @@ export class ClipPainter {
   private stale = true
   private key = ""
   private theme: GridTheme | null = null
-  private styles = new Map<number, Style>()
-  private stylePatterns: ReadonlyMap<PatternId, Pattern> | null = null
+  private styles = new Map<number, ClipStyle>()
+  private warn = ""
   private font = ""
   private widths = new Map<string, number>()
   private fits = new Map<string, string>()
@@ -183,14 +263,12 @@ export class ClipPainter {
 
   private styleFor(
     theme: GridTheme,
-    pattern: Pattern | undefined,
+    color: number,
     selected: boolean,
     muted: boolean
   ): number {
-    const key =
-      (pattern?.id ?? 0) * 4 + (selected ? 1 : 0) + (muted ? 2 : 0) + 4
+    const key = color * 4 + (selected ? 1 : 0) + (muted ? 2 : 0)
     if (this.styles.has(key)) return key
-    const color = pattern?.color ?? ORPHAN_COLOR
     const select = (fill: Rgba) =>
       selected ? mix(fill, theme.selectionFill, theme.selectionMix) : fill
     const body = select(clipBodyColor(theme, color, muted))
@@ -217,9 +295,15 @@ export class ClipPainter {
     return key
   }
 
-  private collect(frame: OverlayFrame): Sprite[] {
+  /** A clip's content, as a drag of one of its handles has it. */
+  private contentOf(clip: Clip): ClipContent {
+    const draft = this.source.audioDraft
+    return draft && draft.clip === clip.id ? draft.content : clip.content
+  }
+
+  private collect(frame: OverlayFrame): ClipSprite[] {
     const { viewport, transform, theme } = frame
-    const { items, clipById, patterns, drag } = this.source
+    const { items, clipById, lookups, drag } = this.source
     const lw = transform.lineWidth
     const minWidth = MIN_CLIP_WIDTH * viewport.dpr
     const ticks = visibleTicks(viewport)
@@ -227,13 +311,13 @@ export class ClipPainter {
     const lastRow = Math.ceil(
       viewport.scrollRow + viewport.height / viewport.rowHeight
     )
-    const sprites: Sprite[] = []
+    const sprites: ClipSprite[] = []
 
     const add = (
       id: ClipId,
       span: ClipSpan,
       row: number,
-      pattern: Pattern | undefined,
+      content: ClipContent,
       selected: boolean,
       muted: boolean,
       ghost: boolean
@@ -247,14 +331,26 @@ export class ClipPainter {
       if (x1 - x0 < minWidth && !ghost && !this.source.marked.has(id)) return
       sprites.push({
         id,
-        style: this.styleFor(theme, pattern, selected, muted),
-        pattern,
+        style: this.styleFor(
+          theme,
+          contentColor(content, lookups),
+          selected,
+          muted
+        ),
+        content,
+        name: contentName(content, lookups),
+        pattern:
+          content.type === "pattern"
+            ? lookups.patterns.get(content.pattern)
+            : undefined,
         span,
         x0,
         x1,
         y0: deviceY(transform, row) + lw,
         y1: deviceY(transform, row + 1),
         ghost,
+        selected,
+        muted,
       })
     }
 
@@ -295,8 +391,11 @@ export class ClipPainter {
             drag.resizeEnd,
             drag.minLength
           )
-          // Moving the start edge leaves the notes where they were.
+          // Moving the start edge leaves what is inside where it was. A
+          // pattern loops, so its offset may go round; audio and curves
+          // have nothing before their start.
           offset += resized.start - start
+          if (clip.content.type !== "pattern") offset = Math.max(0, offset)
           start = resized.start + drag.ticks
           length = resized.length
           row += drag.rows
@@ -305,7 +404,7 @@ export class ClipPainter {
           id,
           { start, length, offset },
           row,
-          patterns.get(clip.content.pattern),
+          this.contentOf(clip),
           selected,
           this.source.isMuted(clip),
           false
@@ -314,25 +413,17 @@ export class ClipPainter {
     }
 
     for (const ghost of this.source.ghosts) {
-      add(
-        -1,
-        ghost,
-        ghost.row,
-        patterns.get(ghost.pattern),
-        false,
-        ghost.muted,
-        true
-      )
+      add(-1, ghost, ghost.row, ghost.content, false, ghost.muted, true)
     }
     return sprites.sort((a, b) => a.style - b.style)
   }
 
   private repaint(ctx: CanvasRenderingContext2D, frame: OverlayFrame): void {
     const { viewport, transform, theme } = frame
-    if (theme !== this.theme || this.source.patterns !== this.stylePatterns) {
+    if (theme !== this.theme) {
       this.styles.clear()
       this.theme = theme
-      this.stylePatterns = this.source.patterns
+      this.warn = themeColor("--wf-warn", "rgb(214,150,40)")
     }
     const dpr = viewport.dpr
     const lw = transform.lineWidth
@@ -342,10 +433,12 @@ export class ClipPainter {
     ctx.globalAlpha = 1
     ctx.clearRect(0, 0, width, height)
 
+    this.paintHeldValues(ctx, frame)
+
     const sprites = this.collect(frame)
-    const styleOf = (sprite: Sprite) => this.styles.get(sprite.style)
+    const styleOf = (sprite: ClipSprite) => this.styles.get(sprite.style)
     const bandHeight = Math.round(BAND_HEIGHT * dpr)
-    const hasBand = (sprite: Sprite) =>
+    const hasBand = (sprite: ClipSprite) =>
       sprite.y1 - sprite.y0 >= MIN_HEIGHT_FOR_BAND * dpr &&
       sprite.x1 - sprite.x0 > 2 * lw
 
@@ -448,29 +541,107 @@ export class ClipPainter {
       }
     }
 
+    const columns = { columns: COLUMN_BUDGET }
+    const marks = { marks: MARK_BUDGET }
+    const missing = new Set<ClipSprite>()
+    const inset = Math.round(CONTENT_PAD * dpr)
+    for (const sprite of sprites) {
+      const style = styleOf(sprite)
+      if (!style) continue
+      const area: Box = {
+        left: sprite.x0 + lw,
+        right: sprite.x1 - lw,
+        top: sprite.y0 + lw + (hasBand(sprite) ? bandHeight : 0),
+        bottom: sprite.y1 - lw,
+      }
+      const content = sprite.content
+      if (content.type === "audio") {
+        const peaks = this.source.peaksOf(content.sample)
+        if (!peaks || peaks.status === "missing") {
+          missing.add(sprite)
+          paintMissing(ctx, frame, sprite, this.warn)
+        }
+        paintAudio(ctx, frame, sprite, style, {
+          peaks,
+          tempoBpm: this.source.tempoBpm,
+          area,
+          box: {
+            left: sprite.x0 / dpr,
+            right: sprite.x1 / dpr,
+            top: sprite.y0 / dpr,
+            bottom: sprite.y1 / dpr,
+          },
+          budget: columns,
+        })
+      } else if (content.type === "automation") {
+        const draft = this.source.draft
+        const points =
+          draft && draft.automation === content.automation
+            ? draft.points
+            : this.source.lookups.automations.get(content.automation)?.points
+        if (!points) continue
+        paintAutomation(ctx, frame, sprite, style, {
+          points,
+          area: { ...area, top: area.top + inset, bottom: area.bottom - inset },
+          range: this.source.viewOf(content.automation),
+          labels: this.source.viewLabelsOf(content.automation),
+          active: sprite.selected || sprite.id === this.source.hover,
+          budget: marks,
+        })
+      }
+    }
+
     this.setFont(ctx, dpr)
     ctx.textBaseline = "middle"
     const textPad = Math.round(TEXT_PAD * dpr)
     let named = 0
-    let ink = ""
     for (const sprite of sprites) {
-      const pattern = sprite.pattern
       const style = styleOf(sprite)
-      if (!pattern || !style) continue
+      const gone = missing.has(sprite)
+      const name = !gone
+        ? sprite.name
+        : sprite.name === ""
+          ? "Missing sample"
+          : `Missing: ${sprite.name}`
+      if (name === "" || !style) continue
       const h = sprite.y1 - sprite.y0
       if (h < MIN_LABEL_HEIGHT * dpr) continue
       if (sprite.x1 - sprite.x0 < MIN_LABEL_WIDTH * dpr) continue
+      const band = hasBand(sprite)
+      const linked =
+        band &&
+        sprite.content.type === "automation" &&
+        this.source.shared.has(sprite.content.automation) &&
+        sprite.x1 - sprite.x0 >= MIN_LINK_WIDTH * dpr
       // A clip that starts off-screen keeps its name at the left edge.
       const x = Math.max(sprite.x0, 0) + textPad
-      const text = this.fit(ctx, pattern.name, sprite.x1 - textPad - x, dpr)
-      if (text === "") continue
-      const band = hasBand(sprite)
-      const wanted = band ? style.bandInk : style.bodyInk
-      if (wanted !== ink) {
-        ink = wanted
-        ctx.fillStyle = ink
-      }
+      // What sits at the right end of a title bar: the link glyph of a
+      // shared curve, the gain handle of an audio clip.
+      const handled =
+        band &&
+        !sprite.ghost &&
+        sprite.content.type === "audio" &&
+        sprite.x1 - sprite.x0 >= MIN_WIDTH_FOR_GAIN * dpr
+      const glyphRoom = linked
+        ? Math.round(14 * dpr)
+        : handled
+          ? Math.round((GAIN_HANDLE_WIDTH + GAIN_HANDLE_INSET) * dpr)
+          : 0
       const middle = band ? sprite.y0 + lw + bandHeight / 2 : sprite.y0 + h / 2
+      if (linked) {
+        paintLinkGlyph(
+          ctx,
+          Math.min(sprite.x1, width) - Math.round(9 * dpr),
+          Math.round(middle),
+          dpr,
+          style.bandInk
+        )
+      }
+      const text = this.fit(ctx, name, sprite.x1 - textPad - x - glyphRoom, dpr)
+      if (text === "") continue
+      // A missing sample is said in the warning color where there is no
+      // title bar to carry it.
+      ctx.fillStyle = band ? style.bandInk : gone ? this.warn : style.bodyInk
       ctx.fillText(text, x, Math.round(middle) + 0.5 * dpr)
       named++
     }
@@ -491,12 +662,36 @@ export class ClipPainter {
 
     if (this.source.cloneHint) this.paintOrigins(ctx, frame)
     this.paintSongEnd(ctx, frame)
+    this.paintDropPreview(ctx, frame)
+    this.paintBadge(ctx, frame)
 
     this.stats.clips = named
     this.stats.notes = NOTE_BUDGET - notesLeft
+    this.stats.columns = COLUMN_BUDGET - columns.columns
   }
 
-  /** Outlines of the selected clips where they are stored, under a drag. */
+  /** The dashed lines that show a target staying where a clip left it. */
+  private paintHeldValues(
+    ctx: CanvasRenderingContext2D,
+    frame: OverlayFrame
+  ): void {
+    const { holds } = this.source
+    if (holds.length === 0) return
+    const automations = this.source.lookups.automations
+    paintHolds(
+      ctx,
+      frame,
+      holds,
+      (track) => this.source.trackRow(track),
+      (hold) => automations.get(hold.automation)?.color ?? ORPHAN_COLOR,
+      (hold) => this.source.viewOf(hold.automation)
+    )
+  }
+
+  /**
+   * The selected clips where they are stored, as faint boxes under a drag.
+   * With Shift held they will stay there, and this is what says so.
+   */
   private paintOrigins(
     ctx: CanvasRenderingContext2D,
     frame: OverlayFrame
@@ -507,13 +702,17 @@ export class ClipPainter {
     const lw = transform.lineWidth
     const ticks = visibleTicks(viewport)
     const range = visibleRange(items, ticks.start, ticks.end)
-    ctx.fillStyle = rgbaToCss(withAlpha(theme.foreground, 0.55))
+    const wash = rgbaToCss(withAlpha(theme.foreground, 0.14))
+    const outline = rgbaToCss(withAlpha(theme.foreground, 0.55))
     for (let index = range.first; index < range.last; index++) {
       if (!items.batch.isSelected(index)) continue
       const x0 = deviceX(transform, items.batch.start(index))
       const x1 = Math.max(x0 + lw, deviceX(transform, items.batch.end(index)))
       const y0 = deviceY(transform, items.batch.row(index)) + lw
       const y1 = deviceY(transform, items.batch.row(index) + 1)
+      ctx.fillStyle = wash
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
+      ctx.fillStyle = outline
       ctx.fillRect(x0, y0, x1 - x0, lw)
       ctx.fillRect(x0, y1 - lw, x1 - x0, lw)
       ctx.fillRect(x0, y0, lw, y1 - y0)
@@ -536,6 +735,66 @@ export class ClipPainter {
     for (let y = 0; y < transform.heightDev; y += dash * 2) {
       ctx.fillRect(x, y, transform.lineWidth, dash)
     }
+  }
+
+  /** Where a file dragged over the timeline would land, with its name. */
+  private paintDropPreview(
+    ctx: CanvasRenderingContext2D,
+    frame: OverlayFrame
+  ): void {
+    const preview = this.source.dropPreview
+    if (!preview) return
+    const { viewport, transform, theme } = frame
+    const dpr = viewport.dpr
+    const lw = transform.lineWidth
+    const x0 = deviceX(transform, preview.start)
+    const x1 = Math.max(
+      x0 + Math.round(24 * dpr),
+      deviceX(transform, preview.start + preview.length)
+    )
+    const y0 = deviceY(transform, preview.row) + lw
+    const y1 = deviceY(transform, preview.row + 1)
+    ctx.fillStyle = rgbaToCss(withAlpha(theme.playhead, 0.2))
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
+    ctx.fillStyle = rgbaToCss(theme.playhead)
+    const edge = Math.max(lw, Math.round(1.5 * dpr))
+    ctx.fillRect(x0, y0, x1 - x0, edge)
+    ctx.fillRect(x0, y1 - edge, x1 - x0, edge)
+    ctx.fillRect(x0, y0, edge, y1 - y0)
+    ctx.fillRect(x1 - edge, y0, edge, y1 - y0)
+    if (y1 - y0 < MIN_LABEL_HEIGHT * dpr) return
+    this.setFont(ctx, dpr)
+    ctx.textBaseline = "middle"
+    const pad = Math.round(TEXT_PAD * dpr)
+    const text = this.fit(ctx, preview.name, x1 - x0 - 2 * pad, dpr)
+    ctx.fillStyle = rgbaToCss(theme.foreground)
+    ctx.fillText(text, x0 + pad + edge, Math.round((y0 + y1) / 2))
+  }
+
+  /** The value of what is being dragged, in a small box by the pointer. */
+  private paintBadge(ctx: CanvasRenderingContext2D, frame: OverlayFrame): void {
+    const badge = this.source.badge
+    if (!badge) return
+    const { viewport, transform, theme } = frame
+    const dpr = viewport.dpr
+    this.setFont(ctx, dpr)
+    ctx.textBaseline = "middle"
+    const padX = Math.round(6 * dpr)
+    const boxHeight = Math.round(18 * dpr)
+    const boxWidth = Math.ceil(ctx.measureText(badge.text).width) + 2 * padX
+    // Up and to the right of the pointer, and kept inside the grid.
+    const x = Math.round(badge.x * dpr)
+    const y = Math.round(badge.y * dpr)
+    const left = Math.min(
+      Math.max(0, x + Math.round(12 * dpr)),
+      Math.max(0, transform.widthDev - boxWidth)
+    )
+    const above = y - boxHeight - Math.round(10 * dpr)
+    const top = above < 0 ? y + Math.round(14 * dpr) : above
+    ctx.fillStyle = rgbaToCss(theme.foreground)
+    ctx.fillRect(left, top, boxWidth, boxHeight)
+    ctx.fillStyle = rgbaToCss(theme.background)
+    ctx.fillText(badge.text, left + padX, top + boxHeight / 2 + 0.5 * dpr)
   }
 
   private setFont(ctx: CanvasRenderingContext2D, dpr: number): void {

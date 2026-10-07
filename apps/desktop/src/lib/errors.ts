@@ -12,6 +12,14 @@ export function reportError(error: unknown, what?: string) {
   else toast.error(message)
 }
 
+/**
+ * Tells the user that an edit was not made, and why. For an edit the UI
+ * turns down itself, before anything is sent to the backend.
+ */
+export function refuse(what: string, why: string) {
+  toast.error(what, { description: why })
+}
+
 /** Awaits a backend call. A failure is shown and turned into `null`. */
 export async function attempt<T>(
   work: Promise<T>,

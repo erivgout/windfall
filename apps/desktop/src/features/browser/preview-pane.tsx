@@ -9,9 +9,10 @@ import { useHint } from "@/lib/store/hint"
 import { useChannel } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 
-import { addToRack, replaceChannelSample } from "./commands"
+import { addToPlaylist, addToRack, replaceChannelSample } from "./commands"
 import { formatChannels, formatDuration, formatSampleRate } from "./format"
 import { previewEnded, requestPreview, stopPreview } from "./preview"
+import { PREVIEW_WAVE } from "./preview-colors"
 import { useBrowserStore, type Selection } from "./store"
 import { extensionStart } from "./tree-model"
 
@@ -34,18 +35,25 @@ function channelColor(color: number): string {
 /** Sets the selected channel's sample. Says which channel that is. */
 function ReplaceButton({ path }: { path: string }) {
   const channel = useChannel(useUiStore((state) => state.selectedChannel))
-  const explanation = channel
-    ? `Make the channel ${channel.name} play this sound instead`
-    : "Select a channel in the rack to replace its sample"
+  const instrument = channel?.source.type === "instrument"
+  const explanation = !channel
+    ? "Select a channel in the rack to replace its sample"
+    : instrument
+      ? `${channel.name} plays an instrument, so it has no sample to replace. Add this sound as a new channel instead`
+      : `Make the channel ${channel.name} play this sound instead`
   const hint = useHint(explanation)
 
   return (
     // A disabled button takes no pointer events, so the wrapper explains it.
-    <span className="flex min-w-0" title={explanation} {...hint}>
+    <span
+      className="flex min-w-0 @[232px]/browser:col-span-2"
+      title={explanation}
+      {...hint}
+    >
       <Button
         variant="outline"
         size="sm"
-        disabled={!channel}
+        disabled={!channel || instrument}
         aria-label={
           channel
             ? `Replace the sample of ${channel.name}`
@@ -71,12 +79,45 @@ function ReplaceButton({ path }: { path: string }) {
   )
 }
 
+/** Puts the sound on the song's timeline as an audio clip. */
+function PlaylistButton({ path }: { path: string }) {
+  const hint = useHint(
+    "Put this sound on the playlist as an audio clip, at the song position on a new track. Or drag it onto the timeline"
+  )
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="min-w-0"
+      onClick={() => void addToPlaylist(path)}
+      {...hint}
+    >
+      <span className="truncate">Add to playlist</span>
+    </Button>
+  )
+}
+
 function Facts({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-4 items-center gap-2.5 overflow-hidden font-readout text-[10.5px] whitespace-nowrap text-muted-foreground">
       {children}
     </div>
   )
+}
+
+/**
+ * A backend message about the selected file, with the file's whole path cut
+ * down to its name. The pane is narrow, and the name is already above it.
+ */
+function withoutFolder(message: string, selection: Selection): string {
+  const { path, name } = selection
+  const otherSlashes = path.includes("\\")
+    ? path.replaceAll("\\", "/")
+    : path.replaceAll("/", "\\")
+  return message
+    .replaceAll("\\\\?\\", "")
+    .replaceAll(path, name)
+    .replaceAll(otherSlashes, name)
 }
 
 function SoundPane({ selection }: { selection: Selection }) {
@@ -87,9 +128,17 @@ function SoundPane({ selection }: { selection: Selection }) {
   const startedAt = useBrowserStore((state) =>
     state.playing?.path === path ? state.playing.startedAt : null
   )
-  const playError = useBrowserStore((state) =>
+  const previewError = useBrowserStore((state) =>
     state.previewError?.path === path ? state.previewError.message : null
   )
+  const readError =
+    info?.status === "error" ? withoutFolder(info.message, selection) : null
+  // A file that cannot be read cannot be played either, for the same
+  // reason. It is said once, where the waveform would be.
+  const playError =
+    readError === null && previewError !== null
+      ? withoutFolder(previewError, selection)
+      : null
   const waveform = useRef<WaveformHandle>(null)
   const duration = info?.status === "ready" ? info.info.durationSecs : null
 
@@ -145,18 +194,18 @@ function SoundPane({ selection }: { selection: Selection }) {
           role="img"
           aria-label={`Waveform of ${selection.name}`}
           peaks={info.info.peaks}
-          color="var(--wf-display-foreground)"
+          color={PREVIEW_WAVE}
           className="h-12 shrink-0 cursor-pointer bg-display"
           onClick={() => requestPreview(path)}
         />
-      ) : info?.status === "error" ? (
+      ) : readError !== null ? (
         <p
           role="alert"
-          title={info.message}
+          title={readError}
           className="flex h-12 shrink-0 items-center overflow-hidden rounded-sm border border-dashed border-destructive/50 px-2 text-destructive"
         >
           <span className="line-clamp-2">
-            Could not read this sound. {info.message}
+            Could not read this sound. {readError}
           </span>
         </p>
       ) : (
@@ -193,6 +242,7 @@ function SoundPane({ selection }: { selection: Selection }) {
         >
           <span className="truncate">Add to rack</span>
         </Button>
+        <PlaylistButton path={path} />
         <ReplaceButton path={path} />
       </div>
     </>
@@ -224,7 +274,7 @@ function PaneHint() {
   return (
     <p className="m-auto max-w-56 text-center text-balance text-muted-foreground">
       Select a sound to hear it. Double-click it to add it to the channel rack,
-      or drag it there.
+      or drag it there or onto the playlist.
     </p>
   )
 }
@@ -240,7 +290,7 @@ export function PreviewPane() {
   return (
     <section
       aria-label="Preview"
-      className="flex h-[164px] shrink-0 flex-col gap-1 border-t bg-chassis/60 p-1.5 @[232px]/browser:h-[136px]"
+      className="flex h-[192px] shrink-0 flex-col gap-1 border-t bg-chassis/60 p-1.5 @[232px]/browser:h-[164px]"
     >
       {selection?.kind === "audio" ? (
         <SoundPane key={selection.path} selection={selection} />

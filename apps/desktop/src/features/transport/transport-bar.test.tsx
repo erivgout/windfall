@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Backend } from "@/lib/ipc"
 import { useProjectStore } from "@/lib/store/project"
 import { useTransportStore } from "@/lib/store/transport"
+import { useUiStore } from "@/lib/store/ui"
 import { settle, startTestApp } from "@/test/harness"
 
 import { TransportBar } from "./transport-bar"
@@ -105,6 +106,58 @@ describe("TransportBar", () => {
     await user.keyboard("9000{Enter}")
     await settle()
     expect(tempo()).toBe(522)
+  })
+
+  it("leaves a digit typed with Alt, Ctrl or Cmd to the shortcuts", async () => {
+    render(<TransportBar />)
+    tempoField().focus()
+    expect(useUiStore.getState().centerTab).toBe("channelRack")
+    for (const modifier of ["altKey", "ctrlKey", "metaKey"] as const) {
+      fireEvent.keyDown(tempoField(), {
+        key: "2",
+        code: "Digit2",
+        [modifier]: true,
+      })
+      expect(screen.queryByRole("textbox", { name: /tempo/i })).toBeNull()
+    }
+    // Alt+2 went to the shortcut it is: it showed the playlist.
+    expect(useUiStore.getState().centerTab).toBe("playlist")
+    // Neither are the stepping keys taken with a modifier held.
+    fireEvent.keyDown(tempoField(), { key: "ArrowUp", ctrlKey: true })
+    await settle()
+    expect(tempo()).toBe(128)
+  })
+
+  it("sets no tempo when the entry is left without Enter or Tab", async () => {
+    const user = userEvent.setup()
+    render(<TransportBar />)
+    tempoField().focus()
+    // A stray digit opens the entry, and a click elsewhere leaves it.
+    await user.keyboard("2")
+    expect(screen.getByRole("textbox", { name: /tempo/i })).toHaveValue("2")
+    await user.click(screen.getByRole("button", { name: "Stop" }))
+    await settle()
+    expect(screen.queryByRole("textbox", { name: /tempo/i })).toBeNull()
+    expect(tempo()).toBe(128)
+    expect(history().entries).toEqual([])
+
+    // A whole tempo that was typed but not confirmed is dropped as well.
+    await user.click(tempoField())
+    await user.clear(screen.getByRole("textbox", { name: /tempo/i }))
+    await user.keyboard("95")
+    await user.click(screen.getByRole("button", { name: "Stop" }))
+    await settle()
+    expect(tempo()).toBe(128)
+
+    // Tab confirms, like Enter, and Escape gives the field the keys back.
+    await user.click(tempoField())
+    await user.clear(screen.getByRole("textbox", { name: /tempo/i }))
+    await user.keyboard("95{Tab}")
+    await settle()
+    expect(tempo()).toBe(95)
+    await user.click(tempoField())
+    await user.keyboard("{Escape}")
+    expect(tempoField()).toHaveFocus()
   })
 
   it("makes one undo step of a tempo drag", async () => {

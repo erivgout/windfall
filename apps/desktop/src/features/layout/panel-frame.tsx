@@ -2,6 +2,7 @@ import { Cancel01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Component, type ErrorInfo, type ReactNode } from "react"
 
+import { ContextActions } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import {
@@ -12,6 +13,8 @@ import {
 import { runAction, useShortcutLabel } from "@/lib/actions"
 import { errorMessage } from "@/lib/ipc"
 import { cn } from "@/lib/utils"
+
+import { panelMenu } from "./chrome-menus"
 
 type BoundaryProps = { name: string; children: ReactNode }
 type BoundaryState = { error: unknown }
@@ -100,13 +103,15 @@ export function PanelFrame({
       aria-label={title}
       className="flex h-full min-h-0 min-w-0 flex-col bg-background"
     >
-      <header className="flex h-7 shrink-0 items-center gap-1 border-b bg-chassis/60 pr-1 pl-2.5">
-        <h2 className="truncate text-xs font-medium">{title}</h2>
-        <div className="ml-auto flex items-center gap-0.5">
-          {actions}
-          {hideAction && <HideButton title={title} action={hideAction} />}
-        </div>
-      </header>
+      <ContextActions items={panelMenu(hideAction)}>
+        <header className="flex h-7 shrink-0 items-center gap-1 border-b bg-chassis/60 pr-1 pl-2.5">
+          <h2 className="truncate text-xs font-medium">{title}</h2>
+          <div className="ml-auto flex items-center gap-0.5">
+            {actions}
+            {hideAction && <HideButton title={title} action={hideAction} />}
+          </div>
+        </header>
+      </ContextActions>
       <div className={cn("min-h-0 flex-1 overflow-auto", className)}>
         <PanelBoundary name={title.toLowerCase()}>{children}</PanelBoundary>
       </div>

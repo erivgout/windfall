@@ -180,6 +180,136 @@ describe("Canvas 2D renderer", () => {
     ])
   })
 
+  it("frames a see-through selected rect with a border just as see-through", () => {
+    const batch = new RectBatch()
+    batch.push(1, 960, 960, 3, 1, rgba(200, 100, 50, 128), RECT_SELECTED)
+    const fills = draw(batch, viewportAt(1))
+    const border = rgbaToCss({ ...theme.selectionBorder, a: 128 })
+    // The four sides, so the border does not show through the fill.
+    expect(fills).toEqual([
+      { style: border, rect: [60, 49, 60, 1] },
+      { style: border, rect: [60, 63, 60, 1] },
+      { style: border, rect: [60, 50, 1, 13] },
+      { style: border, rect: [119, 50, 1, 13] },
+      { style: "rgba(220,160,130,0.5020)", rect: [61, 50, 58, 13] },
+    ])
+  })
+
+  // Solid rects are painted as the pieces of them that show, in any order.
+  const painted = (fills: Fill[]) =>
+    fills.map((fill) => `${fill.style} ${fill.rect.join()}`).sort()
+
+  it("leaves the part of a rect that a later one covers unpainted, whatever the colors", () => {
+    const other = rgba(10, 200, 10)
+    const batch = new RectBatch()
+    // The first rect only puts its color first in the palette.
+    batch.push(1, 0, 240, 5, 1, NOTE)
+    batch.push(2, 960, 960, 3, 1, other)
+    batch.push(3, 1440, 960, 3, 1, NOTE)
+    expect(painted(draw(batch, viewportAt(1)))).toEqual(
+      [
+        "rgb(124,62,31) 0,81,15,15",
+        "rgb(200,100,50) 1,82,13,13",
+        // The green rect up to where the later one starts, at x = 90.
+        "rgb(6,124,6) 60,49,30,15",
+        "rgb(10,200,10) 61,50,29,13",
+        // The later one whole, on top as its later start says.
+        "rgb(124,62,31) 90,49,60,15",
+        "rgb(200,100,50) 91,50,58,13",
+      ].sort()
+    )
+  })
+
+  it("keeps the border of a later rect where it lies on one of its own color", () => {
+    const batch = new RectBatch()
+    batch.push(1, 960, 960, 3, 1, NOTE)
+    batch.push(2, 1440, 960, 3, 1, NOTE)
+    expect(painted(draw(batch, viewportAt(1)))).toEqual(
+      [
+        "rgb(124,62,31) 60,49,30,15",
+        "rgb(200,100,50) 61,50,29,13",
+        "rgb(124,62,31) 90,49,60,15",
+        "rgb(200,100,50) 91,50,58,13",
+      ].sort()
+    )
+  })
+
+  it("shows a long rect on both sides of the short ones that lie on it", () => {
+    const other = rgba(10, 200, 10)
+    const batch = new RectBatch()
+    // One bar from x = 0 to 240, with two steps on it at 60 and at 150.
+    batch.push(1, 0, 3840, 3, 1, NOTE)
+    batch.push(2, 960, 240, 3, 1, other)
+    batch.push(3, 2400, 240, 3, 1, other)
+    expect(painted(draw(batch, viewportAt(1)))).toEqual(
+      [
+        "rgb(124,62,31) 0,49,60,15",
+        "rgb(200,100,50) 1,50,59,13",
+        "rgb(124,62,31) 75,49,75,15",
+        "rgb(200,100,50) 75,50,75,13",
+        "rgb(124,62,31) 165,49,75,15",
+        "rgb(200,100,50) 165,50,74,13",
+        "rgb(6,124,6) 60,49,15,15",
+        "rgb(10,200,10) 61,50,13,13",
+        "rgb(6,124,6) 150,49,15,15",
+        "rgb(10,200,10) 151,50,13,13",
+      ].sort()
+    )
+  })
+
+  it("paints nothing of a rect that later ones cover completely", () => {
+    const other = rgba(10, 200, 10)
+    const batch = new RectBatch()
+    batch.push(1, 960, 480, 3, 1, NOTE)
+    batch.push(2, 960, 240, 3, 1, other)
+    batch.push(3, 1200, 480, 3, 1, other)
+    const fills = draw(batch, viewportAt(1))
+    expect(fills.every((fill) => !fill.style.includes("200,100,50"))).toBe(true)
+    expect(fills).toHaveLength(4)
+  })
+
+  it("paints see-through rects that overlap whole, the earlier one first", () => {
+    const glass = rgba(200, 100, 50, 128)
+    const other = rgba(10, 200, 10, 128)
+    const batch = new RectBatch()
+    batch.push(1, 0, 240, 5, 1, glass)
+    batch.push(2, 960, 960, 3, 1, other)
+    batch.push(3, 1440, 960, 3, 1, glass)
+    const fills = draw(batch, viewportAt(1))
+    // Four sides and a fill each. The last rect comes last although its
+    // color is the first in the palette.
+    expect(fills).toHaveLength(15)
+    expect(fills.slice(10).map((fill) => fill.rect)).toEqual([
+      [90, 49, 60, 1],
+      [90, 63, 60, 1],
+      [90, 50, 1, 13],
+      [149, 50, 1, 13],
+      [91, 50, 58, 13],
+    ])
+  })
+
+  it("still groups by color the rects that touch but do not overlap", () => {
+    const other = rgba(10, 200, 10)
+    const batch = new RectBatch()
+    // Back to back on one row, and stacked in the rows above and below.
+    for (let i = 0; i < 12; i++) {
+      batch.push(
+        i,
+        i * 240,
+        240,
+        1 + (i % 3 === 0 ? 1 : 0),
+        1,
+        i % 2 ? NOTE : other
+      )
+    }
+    const fills = draw(batch, viewportAt(1))
+    let changes = 0
+    for (let i = 1; i < fills.length; i++) {
+      if (fills[i].style !== fills[i - 1].style) changes++
+    }
+    expect(changes).toBe(3)
+  })
+
   it("stretches the end of selected rects and leaves the others alone", () => {
     const batch = new RectBatch()
     batch.push(1, 960, 960, 3, 1, NOTE, RECT_SELECTED)

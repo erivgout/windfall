@@ -1,5 +1,6 @@
 import type { RectBatch } from "./rect-batch"
 import {
+  BORDER_ROUNDING,
   BORDER_SHADE,
   RendererUnavailableError,
   isSoftwareGpu,
@@ -77,7 +78,8 @@ void main() {
   vec2 position = vec2(x0, y0) + corner * size;
 
   vec3 fill = a_color.rgb;
-  vec3 border = fill * ${BORDER_SHADE};
+  // shadeChannel in renderer.ts.
+  vec3 border = floor(fill * 255.0 * ${BORDER_SHADE} + ${BORDER_ROUNDING}) / 255.0;
   if (selected) {
     fill = mix(fill, u_selectionFill.rgb, u_selectionFill.a);
     border = u_selectionBorder;
@@ -145,6 +147,13 @@ const PASS_ALL = 0
 const PASS_UNSELECTED = 1
 const PASS_SELECTED = 2
 
+/**
+ * How long a lost context gets to come back. The browser restores one it
+ * lost to a GPU reset within moments. One it took away for good, as when a
+ * page holds too many, never comes back.
+ */
+export const CONTEXT_RESTORE_WAIT_MS = 2000
+
 function compile(
   gl: WebGL2RenderingContext,
   type: number,
@@ -165,10 +174,11 @@ function compile(
 class WebGL2Renderer implements RectRenderer {
   readonly info: RendererInfo
   onRestored: (() => void) | null = null
+  onLost: (() => void) | null = null
 
   private readonly canvas: HTMLCanvasElement
   private readonly gl: WebGL2RenderingContext
-  private readonly timerExtension: TimerQueryExtension | null
+  private timerExtension: TimerQueryExtension | null = null
   private program: WebGLProgram | null = null
   private uniforms: Uniforms | null = null
   private batches = new Map<RectBatch, GpuBatch>()
@@ -178,6 +188,7 @@ class WebGL2Renderer implements RectRenderer {
   private activeQuery: WebGLQuery | null = null
   private pendingQueries: WebGLQuery[] = []
   private lost = false
+  private restoreTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(canvas: HTMLCanvasElement, rejectSoftware: boolean) {
     const gl = canvas.getContext("webgl2", {
@@ -193,19 +204,24 @@ class WebGL2Renderer implements RectRenderer {
     if (!gl) throw new RendererUnavailableError("webgl2", "no webgl2 context")
     this.canvas = canvas
     this.gl = gl
-    this.timerExtension = gl.getExtension("EXT_disjoint_timer_query_webgl2")
     const debugInfo: DebugRendererInfo | null = gl.getExtension(
       "WEBGL_debug_renderer_info"
     )
     const device: unknown = gl.getParameter(
       debugInfo ? debugInfo.UNMASKED_RENDERER_WEBGL : gl.RENDERER
     )
+    try {
+      this.initialize()
+    } catch (error) {
+      // A context that cannot be used still counts against the page's limit.
+      this.releaseContext()
+      throw error
+    }
     this.info = {
       kind: "webgl2",
       device: typeof device === "string" ? device : "unknown",
       gpuTiming: this.timerExtension ? "timer-query" : "none",
     }
-    this.initialize()
     canvas.addEventListener("webglcontextlost", this.handleLost)
     canvas.addEventListener("webglcontextrestored", this.handleRestored)
   }
@@ -220,10 +236,13 @@ class WebGL2Renderer implements RectRenderer {
   }
 
   beginFrame(transform: DeviceTransform): void {
-    this.transform = transform
     const gl = this.gl
     const uniforms = this.uniforms
-    if (this.lost || !uniforms) return
+    // A context is lost a moment before its event says so. Drawing into
+    // it then would fail on the first buffer it tried to make.
+    this.transform = null
+    if (this.lost || !uniforms || gl.isContextLost()) return
+    this.transform = transform
     if (this.timing && this.timerExtension && !this.activeQuery) {
       const query = gl.createQuery()
       if (query) {
@@ -375,6 +394,7 @@ class WebGL2Renderer implements RectRenderer {
   dispose(): void {
     this.canvas.removeEventListener("webglcontextlost", this.handleLost)
     this.canvas.removeEventListener("webglcontextrestored", this.handleRestored)
+    this.stopWaiting()
     const gl = this.gl
     for (const gpu of this.batches.values()) this.destroyGpuBatch(gpu)
     this.batches.clear()
@@ -382,13 +402,27 @@ class WebGL2Renderer implements RectRenderer {
     this.pendingQueries = []
     gl.deleteProgram(this.program)
     this.program = null
-    // Browsers cap live WebGL contexts per page, so give this one back now
-    // instead of waiting for garbage collection.
-    gl.getExtension("WEBGL_lose_context")?.loseContext()
+    this.uniforms = null
+    this.releaseContext()
   }
 
+  // Browsers cap live WebGL contexts per page, so one that is done with is
+  // given back at once instead of waiting for garbage collection.
+  private releaseContext(): void {
+    this.gl.getExtension("WEBGL_lose_context")?.loseContext()
+  }
+
+  private stopWaiting(): void {
+    if (this.restoreTimer === null) return
+    clearTimeout(this.restoreTimer)
+    this.restoreTimer = null
+  }
+
+  /** Builds everything a fresh or restored context needs before it can draw. */
   private initialize(): void {
     const gl = this.gl
+    // Extension objects belong to the context they came from.
+    this.timerExtension = gl.getExtension("EXT_disjoint_timer_query_webgl2")
     const program = gl.createProgram()
     if (!program) throw new RendererUnavailableError("webgl2", "no program")
     const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER)
@@ -494,14 +528,31 @@ class WebGL2Renderer implements RectRenderer {
     // Without preventDefault the browser never restores the context.
     event.preventDefault()
     this.lost = true
+    // Everything made with the context went with it. Deleting is not
+    // possible any more, so the handles are just dropped.
     this.batches.clear()
     this.pendingQueries = []
     this.activeQuery = null
+    this.program = null
+    this.uniforms = null
+    this.transform = null
+    this.stopWaiting()
+    this.restoreTimer = setTimeout(() => {
+      this.restoreTimer = null
+      this.onLost?.()
+    }, CONTEXT_RESTORE_WAIT_MS)
   }
 
   private readonly handleRestored = (): void => {
+    this.stopWaiting()
+    try {
+      this.initialize()
+    } catch {
+      // A restored context that cannot be set up is as good as gone.
+      this.onLost?.()
+      return
+    }
     this.lost = false
-    this.initialize()
     this.onRestored?.()
   }
 }

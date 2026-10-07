@@ -10,7 +10,20 @@ export const DEFAULT_VELOCITY = 0.8
 export const DEFAULT_CHANNEL_VOLUME = 0.8
 export const DEFAULT_PATTERN_STEPS = 16
 export const MAX_PATTERN_STEPS = 1024
+/** The end of the longest song: a million quarter notes. No clip ends past it. */
+export const MAX_SONG_TICKS = 1_000_000 * PPQ
+/** Furthest an audio clip can be pitched up or down, in semitones. */
+export const MAX_TUNE_SEMITONES = 48
+/**
+ * Audio clips the engine can sound at once. One more is not started and
+ * stays silent for its whole length.
+ */
+export const MAX_AUDIO_CLIPS = 64
+/** Most points one automation curve can have. */
+export const MAX_AUTOMATION_POINTS = 4096
 
+/** The tempo of an empty project. */
+export const DEFAULT_TEMPO_BPM = 120
 export const MIN_TEMPO_BPM = 10
 export const MAX_TEMPO_BPM = 522
 

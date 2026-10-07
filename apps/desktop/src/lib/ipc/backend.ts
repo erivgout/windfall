@@ -1,6 +1,7 @@
 import type {
   AudioHost,
   AudioSettings,
+  AutomationTarget,
   BrowserEntry,
   BrowserRoot,
   ChannelId,
@@ -10,15 +11,39 @@ import type {
   EngineStatus,
   ExportOptions,
   ExportProgress,
+  PlaylistTrackId,
   ProjectPatch,
   RealtimeFrame,
   SampleId,
   SampleInfo,
+  TrackId,
   TransportPatch,
   TransportState,
 } from "@/bindings"
 
 export type Unsubscribe = () => void
+
+/**
+ * `AudioSettings` as the shell sends it back. Rust writes an unset field as
+ * `null`, where the generated type says the field is left out, so whatever
+ * reads these must take both to mean "the default".
+ */
+export type StoredAudioSettings = {
+  [Field in keyof AudioSettings]?: AudioSettings[Field] | null
+}
+
+/** Where a new audio clip goes. */
+export type AudioClipPlace = {
+  /** The playlist track. Left out, a new one is added at the end. */
+  track?: PlaylistTrackId
+  /** The tick the clip starts on. */
+  start: number
+  /**
+   * The mixer track the clip plays into. Left out, a new one named after
+   * the file is added, or the master is used when the mixer is full.
+   */
+  mixerTrack?: TrackId
+}
 
 /**
  * Everything the UI can ask of the app shell. One method per IPC command in
@@ -52,6 +77,12 @@ export interface Backend {
   engineStatus(): Promise<EngineStatus>
   engineDevices(): Promise<AudioHost[]>
   engineConfigure(settings: AudioSettings): Promise<EngineStatus>
+  /**
+   * The audio output the user asked for, as stored. A field that is null or
+   * missing means "the default"; what the engine made of it is in
+   * `engineStatus`.
+   */
+  engineSettings(): Promise<StoredAudioSettings>
 
   auditionNoteOn(
     channel: ChannelId,
@@ -77,6 +108,42 @@ export interface Backend {
     path: string
   ): Promise<DispatchResult>
 
+  /**
+   * One undo step, "Add audio clip": puts an audio file on the playlist as
+   * a clip as long as the file lasts at the tempo the project has now.
+   * `created` holds the sample (the one the project already had for the
+   * file, if it had one), then the playlist track if one was made, then the
+   * mixer track if one was made, and last the clip.
+   */
+  addAudioClipFromFile(
+    path: string,
+    place: AudioClipPlace
+  ): Promise<DispatchResult>
+  /**
+   * The same for a sample the project already has. `created` holds the
+   * playlist track if one was made, the mixer track if one was made, and
+   * last the clip. Rejects a sample whose audio is not loaded.
+   */
+  addAudioClipFromSample(
+    sample: SampleId,
+    place: AudioClipPlace
+  ): Promise<DispatchResult>
+  /**
+   * One undo step, "Create automation clip": an automation of `target`
+   * with one point at the value it has now, a new playlist track at the
+   * end, and a clip of the automation on it from tick 0 for the length of
+   * the song, at least four bars. `created` holds the automation, the
+   * playlist track and the clip, in that order.
+   */
+  automate(target: AutomationTarget): Promise<DispatchResult>
+
+  /**
+   * Tries again to load the samples whose files were missing. Resolves to
+   * how many still have no audio; which ones arrives through
+   * `onProjectWarnings`.
+   */
+  samplesReload(): Promise<number>
+
   /** Returns at once. Progress arrives through `onExportProgress`. */
   exportAudio(options: ExportOptions): Promise<void>
 
@@ -95,6 +162,7 @@ export interface Backend {
   pickProjectSavePath(suggestedName: string): Promise<string | null>
   pickExportPath(suggestedName: string): Promise<string | null>
   pickFolder(): Promise<string | null>
+  pickAudioFile(): Promise<string | null>
 
   setWindowTitle(title: string): Promise<void>
   /**
@@ -113,8 +181,20 @@ export const EVENTS = {
   projectWarnings: "project:warnings",
 } as const
 
-/** Turns whatever a backend call rejected with into a readable message. */
-export function errorMessage(error: unknown): string {
+/** The audio files the engine can read, by extension. */
+export const AUDIO_EXTENSIONS = [
+  "wav",
+  "wave",
+  "aif",
+  "aiff",
+  "aifc",
+  "flac",
+  "mp3",
+  "ogg",
+  "oga",
+]
+
+function rejectionText(error: unknown): string {
   if (typeof error === "string") return error
   if (error instanceof Error) return error.message
   if (
@@ -126,4 +206,14 @@ export function errorMessage(error: unknown): string {
     return error.message
   }
   return "Something went wrong."
+}
+
+/**
+ * Turns whatever a backend call rejected with into a readable message. The
+ * document words a refused command as a phrase, such as "channel 7 does not
+ * exist", so the message is given its capital here.
+ */
+export function errorMessage(error: unknown): string {
+  const text = rejectionText(error)
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }

@@ -13,12 +13,56 @@ export interface Hit {
 export interface HitOptions {
   /** Width of the resize handle at each end, in CSS pixels. */
   readonly edgePx?: number
-  /** How far outside a rect narrower than this a click still counts. */
+  /**
+   * How far outside its ends a rect too narrow to press still takes a
+   * press, in CSS pixels. A rect is too narrow when it is drawn narrower
+   * than twice this. Wider rects are hit only inside their bounds, and a
+   * press inside any rect goes to that rect.
+   */
   readonly slopPx?: number
 }
 
 const DEFAULT_EDGE_PX = 6
 const DEFAULT_SLOP_PX = 2
+
+/**
+ * The narrow rect nearest to a point that lies in its row but beside it,
+ * or -1. Zoomed out, a note can be under a pixel wide but is drawn as one
+ * pixel. Without this it could be seen and not clicked.
+ */
+function nearestSliver(
+  items: IndexedBatch,
+  tick: number,
+  row: number,
+  slopTicks: number
+): number {
+  const batch = items.batch
+  const near = queryRect(
+    items,
+    tick - slopTicks,
+    tick + slopTicks,
+    Math.floor(row),
+    Math.floor(row) + 1
+  )
+  let best = -1
+  let bestDistance = Infinity
+  for (const index of near) {
+    if (batch.length(index) >= 2 * slopTicks) continue
+    const start = batch.start(index)
+    const distance = tick < start ? start - tick : tick - batch.end(index)
+    // At the same distance a selected rect wins, then the one drawn last,
+    // as where rects overlap.
+    const wins =
+      distance < bestDistance ||
+      (distance === bestDistance &&
+        (batch.isSelected(index) || !batch.isSelected(best)))
+    if (wins) {
+      best = index
+      bestDistance = distance
+    }
+  }
+  return best
+}
 
 /** The rect under a point given in CSS pixels, or null. */
 export function hitTestPoint(
@@ -35,17 +79,7 @@ export function hitTestPoint(
 
   let index = queryPoint(items, tick, row)
   if (index < 0 && slopPx > 0) {
-    // Zoomed out, a note can be under a pixel wide but is drawn as one
-    // pixel. Without slop it could be seen and not clicked.
-    const slop = slopPx / viewport.pxPerTick
-    const near = queryRect(
-      items,
-      tick - slop,
-      tick + slop,
-      Math.floor(row),
-      Math.floor(row) + 1
-    )
-    index = near.length > 0 ? near[near.length - 1] : -1
+    index = nearestSliver(items, tick, row, slopPx / viewport.pxPerTick)
   }
   if (index < 0) return null
 

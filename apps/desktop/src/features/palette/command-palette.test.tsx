@@ -2,6 +2,8 @@ import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { registerMixerActions } from "@/features/mixer/actions"
+import { registerPlaylistActions } from "@/features/playlist/actions"
 import { installKeymap, registry } from "@/lib/actions"
 import { useProjectStore } from "@/lib/store/project"
 import { useTransportStore } from "@/lib/store/transport"
@@ -90,6 +92,37 @@ describe("CommandPalette", () => {
     await user.clear(input)
     await user.type(input, "zzzz")
     expect(screen.getByText("No action matches that.")).toBeVisible()
+  })
+
+  it("lists what a search finds best first, in one list across the sections", async () => {
+    const user = userEvent.setup()
+    const offs = [registerPlaylistActions(), registerMixerActions()]
+    const unregister = () => offs.forEach((off) => off())
+    render(<CommandPalette />)
+    const input = await openPalette(user)
+
+    await user.type(input, "tall")
+    expect(options()[0]).toHaveTextContent("Tall tracks")
+    // Each says where it is from, now that the headings are gone.
+    expect(options()[0]).toHaveTextContent("Playlist")
+    expect(document.querySelector("[cmdk-group-heading]")).toBeNull()
+    const tall = options().map((option) => option.textContent)
+    expect(tall.some((text) => text?.startsWith("Select all"))).toBe(true)
+
+    await user.type(input, " tracks")
+    expect(options()[0]).toHaveTextContent("Tall tracks")
+    expect(options()[1]).toHaveTextContent("Unmute all tracks")
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(useUiStore.getState().dialog).toBeNull())
+
+    // Opened again, the palette starts over with every section.
+    await openPalette(user)
+    expect(screen.getByRole("combobox")).toHaveValue("")
+    expect(
+      screen.getByText("Edit", { selector: "[cmdk-group-heading]" })
+    ).toBeVisible()
+    unregister()
   })
 
   it("runs the chosen action and closes", async () => {

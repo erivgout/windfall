@@ -10,6 +10,7 @@ import {
   type ContextItem,
 } from "@/components/context-actions"
 import { runAction } from "@/lib/actions"
+import { useHint } from "@/lib/store/hint"
 import {
   usePattern,
   usePatternIds,
@@ -21,9 +22,12 @@ import { ticksPerBar } from "@/lib/time"
 import { colorToCss, TICKS_PER_STEP } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
+import { AudioSection } from "./audio/picker-section"
+import { AutomationSection } from "./automation/picker-section"
 import { PICKER_WIDTH } from "./layout"
+import { PickerSection } from "./picker-section"
 import { useClipCounts } from "./selectors"
-import { useLiveHint } from "./use-live-hint"
+import { usePlaylistStore } from "./store"
 
 /** The row's menu acts on the selected pattern; a right press selects the row first. */
 const PATTERN_MENU: ContextItem[] = [
@@ -45,6 +49,12 @@ export function describePatternLength(
   return lengthSteps === 1 ? "1 step" : `${lengthSteps} steps`
 }
 
+/** Makes a pattern the brush, and the pattern selected everywhere else. */
+function pickPattern(id: PatternId) {
+  usePlaylistStore.getState().setBrush({ type: "pattern" })
+  return setTransportPattern(id)
+}
+
 type PatternRowProps = {
   id: PatternId
   selected: boolean
@@ -64,7 +74,7 @@ const PatternRow = memo(function PatternRow({
     clips === 0
       ? "not on the timeline yet"
       : `on the timeline ${clips === 1 ? "once" : `${clips} times`}`
-  const hint = useLiveHint(
+  const hint = useHint(
     selected
       ? `${name} is the pattern Draw and Paint place. It is ${used}. Double-click to rename`
       : `Click to place ${name} with Draw and Paint. It is ${used}`
@@ -79,12 +89,12 @@ const PatternRow = memo(function PatternRow({
         data-pattern={id}
         onPointerDown={(event) => {
           // The menu's actions work on the selected pattern.
-          if (event.button === 2 && !selected) void setTransportPattern(id)
+          if (event.button === 2 && !selected) void pickPattern(id)
         }}
-        onClick={() => void setTransportPattern(id)}
+        onClick={() => void pickPattern(id)}
         onDoubleClick={() => void runAction("pattern.rename")}
         className={cn(
-          "group flex h-7 w-full shrink-0 items-center gap-2 border-l-2 border-transparent pr-2 pl-1.5 text-left outline-none hover:bg-accent/60 focus-visible:bg-accent",
+          "group flex h-7 w-full shrink-0 items-center gap-2 border-l-2 border-transparent pr-2 pl-1.5 text-left outline-none hover:bg-accent/60 focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           selected && "border-brand bg-accent text-accent-foreground"
         )}
         {...hint}
@@ -111,13 +121,18 @@ const PatternRow = memo(function PatternRow({
 })
 
 /**
- * The patterns of the project, at the left of the timeline. The selected
- * one is the brush: Draw and Paint place it. Selecting here selects the
- * pattern everywhere, so the channel rack shows it too.
+ * What can be placed on the timeline, at its left: the project's patterns,
+ * its sounds and its automations. The one that is picked is the brush:
+ * Draw and Paint place it. Picking a pattern selects it everywhere, so the
+ * channel rack shows it too.
  */
 export function PatternPicker() {
   const ids = usePatternIds()
-  const selected = useSelectedPatternId()
+  const selectedPattern = useSelectedPatternId()
+  const patternBrush = usePlaylistStore(
+    (state) => state.brush.type === "pattern"
+  )
+  const selected = patternBrush ? selectedPattern : null
   const counts = useClipCounts(ids)
   const barTicks = ticksPerBar(useSettings().timeSignature)
 
@@ -132,37 +147,42 @@ export function PatternPicker() {
 
   return (
     <aside
-      aria-label="Patterns"
-      className="flex shrink-0 flex-col border-r bg-chassis/30"
+      aria-label="Clips to place"
+      className="flex min-h-0 shrink-0 flex-col overflow-y-auto border-r bg-chassis/30"
       style={{ width: PICKER_WIDTH }}
     >
-      <div className="flex h-6 shrink-0 items-center border-b pr-0.5 pl-2 text-muted-foreground">
-        <span className="flex-1 text-[0.6875rem] font-medium">Patterns</span>
-        <ActionButton
-          action="pattern.add"
-          variant="ghost"
-          size="icon-xs"
-          tooltipSide="right"
-        >
-          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-        </ActionButton>
-      </div>
-      <div
-        role="group"
-        aria-label="Pattern to place"
-        onKeyDown={onKeyDown}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto py-0.5"
+      <PickerSection
+        title="Patterns"
+        action={
+          <ActionButton
+            action="pattern.add"
+            variant="ghost"
+            size="icon-xs"
+            tooltipSide="right"
+          >
+            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+          </ActionButton>
+        }
       >
-        {ids.map((id, index) => (
-          <PatternRow
-            key={id}
-            id={id}
-            selected={id === selected}
-            clips={counts[index] ?? 0}
-            barTicks={barTicks}
-          />
-        ))}
-      </div>
+        <div
+          role="group"
+          aria-label="Pattern to place"
+          onKeyDown={onKeyDown}
+          className="flex flex-col py-0.5"
+        >
+          {ids.map((id, index) => (
+            <PatternRow
+              key={id}
+              id={id}
+              selected={id === selected}
+              clips={counts[index] ?? 0}
+              barTicks={barTicks}
+            />
+          ))}
+        </div>
+      </PickerSection>
+      <AudioSection />
+      <AutomationSection />
     </aside>
   )
 }

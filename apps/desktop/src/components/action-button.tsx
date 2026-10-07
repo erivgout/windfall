@@ -21,7 +21,10 @@ type ActionButtonProps = Omit<
 > & {
   /** Id of the registry action the button runs. */
   action: string
-  /** Usually an icon. Leave out to show the action's title as text. */
+  /**
+   * Usually an icon. Leave out to show the action's title as text. Text
+   * given here is the button's name; an icon is named after the action.
+   */
   children?: ReactNode
   tooltipSide?: "top" | "bottom" | "left" | "right"
 }
@@ -43,13 +46,17 @@ export function ActionButton({
   const shortcut = useShortcutLabel(id)
   const title = action?.title.replace(/…$/, "") ?? id
   const hint = useHint(shortcut ? `${title} (${shortcut})` : title)
+  const showsText =
+    children === undefined ||
+    typeof children === "string" ||
+    typeof children === "number"
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={
           <Button
-            aria-label={children ? title : undefined}
+            aria-label={showsText ? undefined : title}
             disabled={disabled || !enabled}
             onClick={() => void runAction(id)}
             {...hint}

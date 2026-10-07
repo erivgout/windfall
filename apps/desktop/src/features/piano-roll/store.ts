@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
+import { onProjectReplaced } from "@/lib/store/replaced"
 import { DEFAULT_VELOCITY, TICKS_PER_STEP } from "@/lib/units"
 
 import type { LaneKind } from "./lane-math"
@@ -95,4 +96,14 @@ export const usePianoRollStore = create<PianoRollState>()(
       },
     }
   )
+)
+
+// The Draw tool gives a new note the length and velocity of the last one
+// touched. Those belong to the song that note was in: the first note of a
+// new project came out four bars long, and grew its pattern to match.
+onProjectReplaced(() =>
+  usePianoRollStore.setState({
+    lastLength: TICKS_PER_STEP,
+    lastVelocity: DEFAULT_VELOCITY,
+  })
 )

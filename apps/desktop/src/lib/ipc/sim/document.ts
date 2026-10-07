@@ -1,163 +1,140 @@
 import type {
   Command,
+  DispatchResult,
   DocumentSnapshot,
-  HistoryView,
+  Pattern,
   Project,
   ProjectPatch,
 } from "@/bindings"
 
-import { applyCommand, CommandError, type Applied } from "./commands"
-import { buildPatch, emptyTouched, mergeTouched, type Touched } from "./touched"
+import { sim } from "./wasm"
 
-type Entry = {
-  label: string
-  before: Project
-  after: Project
-  touched: Touched
+// Frees the document of a `SimDocument` that was dropped without `dispose`,
+// so a forgotten mock costs no WebAssembly memory once it is collected.
+const forgotten = new FinalizationRegistry<number>((handle) => {
+  try {
+    sim.call("doc_free", handle)
+  } catch {
+    // Only a module that has crashed refuses, and then nothing is left to free.
+  }
+})
+
+function mergePatterns(current: Pattern[], patch: ProjectPatch): Pattern[] {
+  const byId = new Map(current.map((pattern) => [pattern.id, pattern]))
+  for (const pattern of patch.patterns ?? []) byId.set(pattern.id, pattern)
+  const order = patch.patternOrder ?? current.map((pattern) => pattern.id)
+  return order.flatMap((id) => byId.get(id) ?? [])
 }
 
 /**
- * The one copy of a project plus its undo history. A TypeScript stand-in for
- * `windfall_project::Document`, with the same rules.
+ * One `windfall_project::Document`, living in the WebAssembly module: the
+ * project and its undo history, with every rule the app has.
+ *
+ * The project is also kept here as a plain object, brought up to date from
+ * the patches the document produces, for the parts of the mock that read it
+ * many times a second.
  */
 export class SimDocument {
-  private current: Project
-  private entries: Entry[] = []
-  private cursor = 0
-  private rev = 0
-  /** History position the file on disk matches, or null when it matches none. */
-  private savedCursor: number | null = 0
-  private lastGesture: number | null = null
+  private handle: number | null
+  private mirror: Project
+  private dirty: boolean
 
-  constructor(project: Project) {
-    this.current = project
+  private constructor(handle: number) {
+    this.handle = handle
+    forgotten.register(this, handle, this)
+    const snapshot = this.snapshot(null)
+    this.mirror = snapshot.project
+    this.dirty = snapshot.dirty
+  }
+
+  /** A document on a project that counts as saved. Throws if it breaks a rule. */
+  static create(project: Project): SimDocument {
+    return new SimDocument(sim.call<number>("doc_new", 0, project))
+  }
+
+  /** A document on the text of a `.windfall` file, loaded as the app loads one. */
+  static open(fileText: string): SimDocument {
+    return new SimDocument(sim.call<number>("doc_from_file_json", 0, fileText))
+  }
+
+  /** Closes the document. Calling it again does nothing. */
+  dispose() {
+    if (this.handle === null) return
+    forgotten.unregister(this)
+    const handle = this.handle
+    this.handle = null
+    sim.call("doc_free", handle)
   }
 
   project(): Project {
-    return this.current
-  }
-
-  revision(): number {
-    return this.rev
-  }
-
-  /**
-   * Applies a command and records it for undo. Consecutive dispatches that
-   * carry the same gesture id collapse into one undo step.
-   */
-  dispatch(command: Command, gesture?: number | null): Applied {
-    const applied = applyCommand(this.current, command)
-    const top = this.entries[this.cursor - 1]
-    const merges =
-      gesture != null &&
-      gesture === this.lastGesture &&
-      this.cursor === this.entries.length &&
-      top !== undefined
-
-    if (merges) {
-      top.after = applied.project
-      top.touched = mergeTouched(top.touched, applied.touched)
-      if (this.savedCursor === this.cursor) this.savedCursor = null
-    } else {
-      if (this.savedCursor !== null && this.savedCursor > this.cursor) {
-        this.savedCursor = null
-      }
-      this.entries = this.entries.slice(0, this.cursor)
-      this.entries.push({
-        label: applied.label,
-        before: this.current,
-        after: applied.project,
-        touched: applied.touched,
-      })
-      this.cursor = this.entries.length
-    }
-
-    this.current = applied.project
-    this.lastGesture = gesture ?? null
-    return applied
-  }
-
-  undo(): Touched | null {
-    const entry = this.entries[this.cursor - 1]
-    if (!entry) return null
-    this.cursor -= 1
-    this.restore(entry.before)
-    return entry.touched
-  }
-
-  redo(): Touched | null {
-    const entry = this.entries[this.cursor]
-    if (!entry) return null
-    this.cursor += 1
-    this.restore(entry.after)
-    return entry.touched
-  }
-
-  /** Undoes or redoes until `cursor` entries are applied. */
-  jump(cursor: number): Touched {
-    if (
-      !Number.isInteger(cursor) ||
-      cursor < 0 ||
-      cursor > this.entries.length
-    ) {
-      throw new CommandError(`History has no step ${cursor}`)
-    }
-    let touched = emptyTouched()
-    while (this.cursor > cursor) {
-      const step = this.undo()
-      if (step) touched = mergeTouched(touched, step)
-    }
-    while (this.cursor < cursor) {
-      const step = this.redo()
-      if (step) touched = mergeTouched(touched, step)
-    }
-    return touched
-  }
-
-  history(): HistoryView {
-    return {
-      entries: this.entries.map((entry) => ({ label: entry.label })),
-      cursor: this.cursor,
-    }
+    return this.mirror
   }
 
   isDirty(): boolean {
-    return this.savedCursor !== this.cursor
+    return this.dirty
   }
 
-  markSaved() {
-    this.savedCursor = this.cursor
-    // A drag that continues after a save must not fold into the saved step.
-    this.lastGesture = null
+  /**
+   * Applies a command. Dispatches in a row that carry the same gesture id
+   * are one undo step.
+   */
+  dispatch(command: Command, gesture?: number): DispatchResult {
+    const result = this.call<DispatchResult>("doc_dispatch", {
+      command,
+      gesture,
+    })
+    this.follow(result.patch)
+    // A patch does not carry the id counter, and only a dispatch moves it.
+    this.mirror.nextId = this.call<number>("doc_next_id")
+    return result
   }
 
-  /** Builds the patch for the UI and bumps the revision. */
-  patch(touched: Touched): ProjectPatch {
-    this.rev += 1
-    return buildPatch(
-      this.current,
-      touched,
-      this.rev,
-      this.history(),
-      this.isDirty()
-    )
+  undo(): ProjectPatch | null {
+    return this.follow(this.call<ProjectPatch | null>("doc_undo"))
+  }
+
+  redo(): ProjectPatch | null {
+    return this.follow(this.call<ProjectPatch | null>("doc_redo"))
+  }
+
+  /** Undoes or redoes until `cursor` history entries are applied. */
+  jump(cursor: number): ProjectPatch {
+    return this.follow(this.call<ProjectPatch>("doc_jump", cursor))
+  }
+
+  /** Records a save. The patch changes nothing but the dirty flag. */
+  markSaved(): ProjectPatch {
+    return this.follow(this.call<ProjectPatch>("doc_mark_saved"))
   }
 
   snapshot(path: string | null): DocumentSnapshot {
-    return {
-      revision: this.rev,
-      project: this.current,
-      history: this.history(),
-      dirty: this.isDirty(),
-      path,
-    }
+    return this.call<DocumentSnapshot>("doc_snapshot", path)
   }
 
-  // Ids are never reused, so undo brings back everything except the id
-  // counter: that only ever moves forward.
-  private restore(project: Project) {
-    const nextId = Math.max(project.nextId, this.current.nextId)
-    this.current = nextId === project.nextId ? project : { ...project, nextId }
-    this.lastGesture = null
+  /** The text of the `.windfall` file a save writes. */
+  fileText(): string {
+    return this.call<string>("doc_to_file_json")
+  }
+
+  private call<T>(operation: string, input?: unknown): T {
+    if (this.handle === null) throw new Error("This document was closed.")
+    return sim.call<T>(operation, this.handle, input)
+  }
+
+  private follow<T extends ProjectPatch | null>(patch: T): T {
+    if (patch === null) return patch
+    const project = this.mirror
+    this.mirror = {
+      ...project,
+      settings: patch.settings ?? project.settings,
+      samples: patch.samples ?? project.samples,
+      channels: patch.channels ?? project.channels,
+      mixer: patch.mixer ?? project.mixer,
+      playlist: patch.playlist ?? project.playlist,
+      automations: patch.automations ?? project.automations,
+      patterns: mergePatterns(project.patterns, patch),
+    }
+    this.dirty = patch.dirty
+    return patch
   }
 }

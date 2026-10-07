@@ -9,11 +9,13 @@ export type Clip = { id: ClipId, track: PlaylistTrackId,
  */
 start: number, 
 /**
- * Length in ticks, at least 1.
+ * Length in ticks, at least 1. The clip ends at or before
+ * [`MAX_SONG_TICKS`].
  */
 length: number, 
 /**
- * How far into its content the clip starts, in ticks. A pattern clip
- * loops its pattern, so this is taken modulo the pattern length.
+ * How far into its content the clip starts, in ticks, at most
+ * [`MAX_SONG_TICKS`]. A pattern clip loops its pattern, so this is
+ * taken modulo the pattern length.
  */
 offset: number, muted: boolean, content: ClipContent, };

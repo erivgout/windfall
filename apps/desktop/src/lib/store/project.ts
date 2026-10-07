@@ -38,10 +38,12 @@ const BLANK_PROJECT: Project = {
         solo: false,
         output: null,
         sends: [],
+        effects: [],
       },
     ],
   },
   playlist: { tracks: [], clips: [] },
+  automations: [],
 }
 
 export type ProjectState = DocumentState & {
@@ -74,15 +76,30 @@ export function loadSnapshot(snapshot: DocumentSnapshot) {
 }
 
 let refetching: Promise<void> | null = null
+/** The newest revision a patch has carried while a snapshot was on its way. */
+let newestMissed = 0
 
-/** Replaces the whole copy. Used at startup and after a missed patch. */
+/**
+ * Replaces the whole copy. Used at startup and after a missed patch. A
+ * patch that arrives while the snapshot is on its way cannot be applied,
+ * so when one was newer than the snapshot, the snapshot is fetched again.
+ */
 export function refetchSnapshot(): Promise<void> {
   refetching ??= backend
     .documentSnapshot()
-    .then(loadSnapshot)
-    .catch((error: unknown) => reportError(error, "Could not load the project"))
-    .finally(() => {
+    .then((snapshot) => {
+      loadSnapshot(snapshot)
+      return snapshot.revision
+    })
+    .catch((error: unknown) => {
+      reportError(error, "Could not load the project")
+      return Infinity
+    })
+    .then((revision) => {
       refetching = null
+      const behind = newestMissed > revision
+      newestMissed = 0
+      if (behind) return refetchSnapshot()
     })
   return refetching
 }
@@ -97,6 +114,7 @@ export function receivePatch(patch: ProjectPatch) {
   if (outcome.status === "applied") {
     useProjectStore.setState(outcome.state)
   } else if (outcome.status === "gap") {
+    newestMissed = Math.max(newestMissed, patch.revision)
     void refetchSnapshot()
   }
 }
@@ -142,7 +160,12 @@ export function historyJump(cursor: number): Promise<void> {
   return runHistory(backend.historyJump(cursor))
 }
 
-/** Records the result of a save, which travels outside the patch stream. */
-export function markSaved(path: string) {
-  useProjectStore.setState({ path, dirty: false })
+/**
+ * Records where a save went, which travels outside the patch stream.
+ * Whether the project is clean is not decided here: the shell sends a patch
+ * with `dirty` after every save, and it knows about an edit that came in
+ * while the file was being written.
+ */
+export function setProjectPath(path: string) {
+  useProjectStore.setState({ path })
 }

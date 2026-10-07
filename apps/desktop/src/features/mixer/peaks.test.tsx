@@ -17,7 +17,13 @@ import {
   subscribePeak,
   watchPeaks,
 } from "./peaks"
-import { flush, strip, stubCanvas, trackNamed } from "./test-utils"
+import {
+  channelNamed,
+  flush,
+  strip,
+  stubCanvas,
+  trackNamed,
+} from "./test-utils"
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
@@ -37,8 +43,15 @@ afterEach(() => {
 
 const peak = (name: string) =>
   within(strip(name)).getByRole("button", { name: /^Peak/ })
-const clipLight = (name: string) =>
-  within(strip(name)).getByRole("button", { name: /^Clip light/, hidden: true })
+// The meter hides its clip light from assistive technology until it is lit,
+// so it is found by its slot and not by its name.
+function clipLight(name: string): HTMLElement {
+  const light = strip(name).querySelector<HTMLElement>(
+    "[data-slot=level-meter-clip]"
+  )
+  if (!light) throw new Error(`The strip of ${name} has no clip light`)
+  return light
+}
 
 // The mock plays in real time, so these wait on its clock. The first hit
 // lands at once; the margin is for a busy machine.
@@ -91,7 +104,12 @@ describe("peak readout", () => {
   it("latches the clip light above 0 dB and clears it on a click", async () => {
     const user = userEvent.setup()
     render(<MixerPanel />)
-    // Turned up to +6 dB the kick goes over.
+    // With its channel at full level and its track at +6 dB the kick goes over.
+    await dispatch({
+      type: "updateChannel",
+      id: channelNamed("Kick").id,
+      patch: { volume: 1 },
+    })
     await dispatch({
       type: "updateMixerTrack",
       id: trackNamed("Kick").id,
@@ -106,6 +124,7 @@ describe("peak readout", () => {
 
     expect(clipLight("Kick")).toHaveAttribute("data-clipped")
     expect(clipLight("Kick")).toHaveAttribute("tabindex", "0")
+    expect(clipLight("Kick")).toHaveAccessibleName("Clip light. Click to clear")
     expect(peak("Hat")).not.toHaveAttribute("data-clipped")
 
     await user.click(clipLight("Kick"))

@@ -95,6 +95,54 @@ describe("hitTestPoint", () => {
     expect(hitTestPoint(zoomedOut, tiny, 101.5, 8, { slopPx: 0 })).toBeNull()
   })
 
+  it("gives no slop to a rect that is wide enough to press", () => {
+    // The beat-long rect ends at x = 120 and starts at x = 60.
+    expect(hitTestPoint(viewport, one, 121.5, 40)).toBeNull()
+    expect(hitTestPoint(viewport, one, 120, 40)).toBeNull()
+    expect(hitTestPoint(viewport, one, 58.5, 40)).toBeNull()
+    expect(hitTestPoint(viewport, one, 119.9, 40)?.id).toBe(7)
+  })
+
+  it("keeps the slop for rects narrower than twice its size", () => {
+    // 48 ticks is 3 px here and 80 ticks is 5 px. Both start at x = 60.
+    const three = items([[1, 3840 + 960, 48, 62]])
+    const five = items([[2, 3840 + 960, 80, 62]])
+    expect(hitTestPoint(viewport, three, 64.5, 40)?.id).toBe(1)
+    expect(hitTestPoint(viewport, three, 58.5, 40)?.id).toBe(1)
+    expect(hitTestPoint(viewport, three, 65.5, 40)).toBeNull()
+    expect(hitTestPoint(viewport, five, 66.5, 40)).toBeNull()
+    expect(hitTestPoint(viewport, five, 58.5, 40)).toBeNull()
+    // A larger slop takes wider rects with it.
+    expect(hitTestPoint(viewport, five, 66.5, 40, { slopPx: 4 })?.id).toBe(2)
+  })
+
+  it("never takes a press that lands inside another rect", () => {
+    // A 1.5 px sliver ends at x = 61.5, where a beat-long rect begins.
+    const pair = items([
+      [1, 3840 + 960, 24, 62],
+      [2, 3840 + 984, 960, 62],
+    ])
+    expect(hitTestPoint(viewport, pair, 62, 40)?.id).toBe(2)
+    expect(hitTestPoint(viewport, pair, 61, 40)?.id).toBe(1)
+    expect(hitTestPoint(viewport, pair, 59, 40)?.id).toBe(1)
+  })
+
+  it("takes the nearest of two slivers, and the selected one on a tie", () => {
+    // Two 1.5 px slivers, at x = 60 and x = 63.
+    const apart = items([
+      [1, 3840 + 960, 24, 62],
+      [2, 3840 + 1008, 24, 62],
+    ])
+    expect(hitTestPoint(viewport, apart, 62, 40)?.id).toBe(1)
+    expect(hitTestPoint(viewport, apart, 62.5, 40)?.id).toBe(2)
+    expect(hitTestPoint(viewport, apart, 62.25, 40)?.id).toBe(2)
+    const selected = items([
+      [1, 3840 + 960, 24, 62, RECT_SELECTED],
+      [2, 3840 + 1008, 24, 62],
+    ])
+    expect(hitTestPoint(viewport, selected, 62.25, 40)?.id).toBe(1)
+  })
+
   it("picks the selected rect where two overlap", () => {
     const stacked = items([
       [1, 3840, 960, 60, RECT_SELECTED],

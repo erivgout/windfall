@@ -1,6 +1,6 @@
 /**
  * Drag and drop between panels. The browser starts a drag with this data and
- * the channel rack accepts it, so the two only share this file.
+ * the channel rack and the playlist accept it, so they only share this file.
  */
 
 /** MIME type of an audio file dragged out of the browser. */
@@ -12,9 +12,32 @@ export type SampleDrag = {
   name: string
 }
 
+// A page cannot read what is being dragged until it is dropped, only what
+// kinds of data there are. The sample is kept here for the time of the
+// drag, so a drop target can show its name while it is still over it.
+let active: SampleDrag | null = null
+
 export function setSampleDrag(event: React.DragEvent, sample: SampleDrag) {
   event.dataTransfer.setData(SAMPLE_DRAG_TYPE, JSON.stringify(sample))
   event.dataTransfer.effectAllowed = "copy"
+  active = sample
+  const clear = () => {
+    active = null
+    window.removeEventListener("dragend", clear, true)
+    window.removeEventListener("drop", afterDrop, true)
+  }
+  // After the drop target has had the drop.
+  const afterDrop = () => queueMicrotask(clear)
+  window.addEventListener("dragend", clear, true)
+  window.addEventListener("drop", afterDrop, true)
+}
+
+/**
+ * The sample being dragged right now, when the drag started in this
+ * window. Null for a drag from elsewhere, and when nothing is dragged.
+ */
+export function activeSampleDrag(): SampleDrag | null {
+  return active
 }
 
 /** True while a sample is being dragged over the target. */

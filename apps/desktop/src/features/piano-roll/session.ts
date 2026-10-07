@@ -6,6 +6,7 @@ import {
   type Viewport,
 } from "@/lib/canvas"
 
+import { onProjectReplaced } from "@/lib/store/replaced"
 import { TICKS_PER_STEP } from "@/lib/units"
 
 import { notesExtent, type Extent, type PasteTarget } from "./edit-math"
@@ -26,11 +27,19 @@ type SavedView = Pick<
 // lane was scrolled to is kept here.
 const savedViews = new Map<string, SavedView>()
 let lastZoom: Pick<Viewport, "pxPerTick" | "rowHeight"> | null = null
+// Goes up when the kept views are forgotten. A session from before that
+// has nothing to add to them any more.
+let savedEpoch = 0
 
 export function forgetSavedViews() {
   savedViews.clear()
   lastZoom = null
+  savedEpoch += 1
 }
+
+// Lanes are known by pattern and channel id, and both start over in every
+// project: the view kept for "1:2" belongs to the song before.
+onProjectReplaced(forgetSavedViews)
 
 /**
  * One open piano roll: the editor, the canvas view once it exists, and the
@@ -51,6 +60,7 @@ export class PianoRollSession {
   private stopView: (() => void) | null = null
   private focusTarget: (() => HTMLElement | null) | null = null
   private laneKey: string | null = null
+  private readonly epoch = savedEpoch
 
   constructor(editor: Editor) {
     this.editor = editor
@@ -143,7 +153,7 @@ export class PianoRollSession {
 
   saveView(): void {
     const view = this.view
-    if (!view || this.laneKey === null) return
+    if (!view || this.laneKey === null || this.epoch !== savedEpoch) return
     const { scrollTick, scrollRow, pxPerTick, rowHeight } = view.viewport
     savedViews.set(this.laneKey, {
       scrollTick,

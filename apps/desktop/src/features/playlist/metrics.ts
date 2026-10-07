@@ -9,6 +9,7 @@ import {
   type Viewport,
   type ViewportLimits,
 } from "@/lib/canvas"
+import { onProjectReplaced } from "@/lib/store/replaced"
 import { clamp } from "@/lib/units"
 
 import {
@@ -20,6 +21,7 @@ import {
   MIN_ROW_HEIGHT,
   MIN_ROWS,
   MIN_SONG_BARS,
+  TALL_ROW_HEIGHT,
 } from "./layout"
 import type { GridSurface } from "./surface"
 
@@ -50,6 +52,9 @@ const FRESH_VIEW: SavedView = {
 // The panel is unmounted when another tab shows. This keeps the scroll and
 // zoom for when it comes back.
 let savedView: SavedView = FRESH_VIEW
+// Goes up when the kept view is forgotten. A panel from before that has
+// nothing to add to it any more.
+let savedEpoch = 0
 
 export function initialView(): SavedView {
   return savedView
@@ -58,7 +63,11 @@ export function initialView(): SavedView {
 /** Forgets the scroll and zoom kept from an earlier mount. */
 export function resetSavedView(): void {
   savedView = FRESH_VIEW
+  savedEpoch += 1
 }
+
+// Another song starts at its beginning, at the usual zoom.
+onProjectReplaced(resetSavedView)
 
 export type WheelInput = {
   /** CSS pixels from the grid's top left corner. */
@@ -99,6 +108,7 @@ export class GridMetrics {
   private current: Viewport
   private currentLimits: ViewportLimits = PLAYLIST_LIMITS
   private readonly listeners = new Set<() => void>()
+  private readonly epoch = savedEpoch
 
   constructor() {
     this.current = clampViewport(
@@ -181,6 +191,24 @@ export class GridMetrics {
     })
   }
 
+  /** True when the rows are tall enough to draw automation curves in. */
+  get tall(): boolean {
+    return this.viewport.rowHeight >= TALL_ROW_HEIGHT
+  }
+
+  /**
+   * Switches between the usual row height and the tall one, keeping the
+   * row at the top of the view where it is.
+   */
+  toggleTall(): void {
+    const viewport = this.viewport
+    this.setViewport({
+      ...viewport,
+      rowHeight: this.tall ? DEFAULT_ROW_HEIGHT : TALL_ROW_HEIGHT,
+      scrollRow: Math.floor(viewport.scrollRow),
+    })
+  }
+
   /**
    * The wheel, the same over the grid, the ruler and the track headers:
    * it scrolls tracks, Shift scrolls time, Ctrl zooms time around the
@@ -208,8 +236,10 @@ export class GridMetrics {
   }
 
   private changed(): void {
-    const { scrollTick, scrollRow, pxPerTick, rowHeight } = this.viewport
-    savedView = { scrollTick, scrollRow, pxPerTick, rowHeight }
+    if (this.epoch === savedEpoch) {
+      const { scrollTick, scrollRow, pxPerTick, rowHeight } = this.viewport
+      savedView = { scrollTick, scrollRow, pxPerTick, rowHeight }
+    }
     for (const listener of [...this.listeners]) listener()
   }
 }

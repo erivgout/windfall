@@ -1,5 +1,9 @@
 import type { TrackId } from "@/bindings"
-import { subscribeRealtime, useProjectStore } from "@/lib/store"
+import {
+  onProjectReplaced,
+  subscribeRealtime,
+  useProjectStore,
+} from "@/lib/store"
 
 /*
  * The loudest level each track has reached since it was last reset, as
@@ -67,6 +71,10 @@ export function resetAllPeaks() {
   held.clear()
   for (const id of ids) tell(id, 0)
 }
+
+// Track ids repeat from project to project, so a peak held for track 3 of
+// the last song would show on track 3 of this one.
+onProjectReplaced(resetAllPeaks)
 
 /** Calls `listener` with the held peak now and whenever it changes. */
 export function subscribePeak(id: TrackId, listener: Listener): () => void {

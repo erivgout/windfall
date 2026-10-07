@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
 import * as React from "react"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import {
   DEFAULT_ENVELOPE_LIMITS,
   EnvelopeEditor,
   constrainEnvelope,
+  envelopeFall,
   envelopePatch,
+  envelopeRise,
   envelopeSpanMs,
+  fitEnvelopeLabels,
   stepEnvelopeTime,
+  type EnvelopeAxisLabel,
   type EnvelopeValues,
 } from "./envelope-editor"
 
@@ -133,7 +137,192 @@ function renderEditor(
 const valueOf = (node: HTMLElement) =>
   Number(node.getAttribute("aria-valuenow"))
 
+describe("the shape of a stage", () => {
+  it("falls from all of the way to none of it, landing exactly", () => {
+    expect(envelopeFall(0)).toBe(1)
+    expect(envelopeFall(1)).toBe(0)
+    expect(envelopeFall(-1)).toBe(1)
+    expect(envelopeFall(2)).toBe(0)
+    // Just short of the end it is all but there, with no step at the end.
+    expect(envelopeFall(0.999)).toBeLessThan(0.00001)
+  })
+
+  it("covers 60 dB of the fall over the stage, so half the time is 30 dB", () => {
+    // The engine's curve: (1 + f) (f / (1 + f))^p - f with f = 0.001.
+    const expected = 1.001 * Math.sqrt(0.001 / 1.001) - 0.001
+    expect(envelopeFall(0.5)).toBeCloseTo(expected, 12)
+    expect(envelopeFall(0.5)).toBeGreaterThan(0.03)
+    expect(envelopeFall(0.5)).toBeLessThan(0.032)
+    // A tenth of the time takes half of the level away.
+    expect(envelopeFall(0.1)).toBeCloseTo(0.5, 1)
+  })
+
+  it("only ever falls", () => {
+    let previous = envelopeFall(0)
+    for (let step = 1; step <= 100; step += 1) {
+      const now = envelopeFall(step / 100)
+      expect(now).toBeLessThan(previous)
+      previous = now
+    }
+  })
+
+  it("rises to full level exactly, fast at first", () => {
+    expect(envelopeRise(0)).toBe(0)
+    expect(envelopeRise(1)).toBe(1)
+    // Aiming 30% past full level: 1.3 (1 - (0.3 / 1.3)^p).
+    expect(envelopeRise(0.5)).toBeCloseTo(1.3 * (1 - Math.sqrt(0.3 / 1.3)), 12)
+    expect(envelopeRise(0.5)).toBeGreaterThan(0.5)
+    let previous = 0
+    for (let step = 1; step <= 100; step += 1) {
+      const now = envelopeRise(step / 100)
+      expect(now).toBeGreaterThan(previous)
+      previous = now
+    }
+  })
+})
+
+describe("the labels of the time axis", () => {
+  // What a 500 ms axis is marked with, on a plot `width` pixels wide.
+  const marks = (width: number): EnvelopeAxisLabel[] =>
+    ["0", "100 ms", "200 ms", "300 ms", "400 ms", "500 ms"].map(
+      (text, index) => ({ x: 12 + (width * index) / 5, text })
+    )
+  // The room a label takes, the way the component reckons it.
+  const box = (label: EnvelopeAxisLabel, all: EnvelopeAxisLabel[]) => {
+    const width = label.text.length * 5.6
+    const left =
+      label === all[0]
+        ? label.x
+        : label === all[all.length - 1]
+          ? label.x - width
+          : label.x - width / 2
+    return [left, left + width] as const
+  }
+
+  it("all fit on a wide editor", () => {
+    expect(fitEnvelopeLabels(marks(296)).map((label) => label.text)).toEqual([
+      "0",
+      "100 ms",
+      "200 ms",
+      "300 ms",
+      "400 ms",
+      "500 ms",
+    ])
+  })
+
+  it("are thinned on a narrow one until none touches another", () => {
+    const all = marks(136)
+    const kept = fitEnvelopeLabels(all)
+    expect(kept.length).toBeLessThan(all.length)
+    // The ends stay: where the axis starts and how long it is.
+    expect(kept[0].text).toBe("0")
+    expect(kept[kept.length - 1].text).toBe("500 ms")
+    for (let index = 1; index < kept.length; index += 1) {
+      const [, previousRight] = box(kept[index - 1], all)
+      const [left] = box(kept[index], all)
+      expect(left).toBeGreaterThan(previousRight)
+    }
+  })
+
+  it("keeps only the start when not even two fit", () => {
+    expect(fitEnvelopeLabels(marks(20)).map((label) => label.text)).toEqual([
+      "0",
+    ])
+    expect(fitEnvelopeLabels([])).toEqual([])
+  })
+})
+
 describe("EnvelopeEditor", () => {
+  const shapeOf = (container: HTMLElement) =>
+    container.querySelector("[data-slot=envelope-shape]")?.getAttribute("d") ??
+    ""
+  const tailOf = (container: HTMLElement) =>
+    container.querySelector("[data-slot=envelope-tail]")?.getAttribute("d") ??
+    ""
+  const points = (path: string) => path.split(/[ML]/).length - 1
+
+  it("draws straight lines unless told the envelope is curved", () => {
+    const { container } = render(<EnvelopeEditor {...START} />)
+    // Attack and decay: start, peak, peak again, sustain.
+    expect(points(shapeOf(container))).toBe(4)
+    expect(points(tailOf(container))).toBe(2)
+  })
+
+  it("draws the decay and the release as the curves the engine plays", () => {
+    const straight = render(<EnvelopeEditor {...START} />)
+    const linearShape = shapeOf(straight.container)
+    const linearTail = tailOf(straight.container)
+    straight.unmount()
+
+    const { container } = render(
+      <EnvelopeEditor {...START} curve="exponential" />
+    )
+    // The attack stays a line; the decay is drawn through many points.
+    expect(points(shapeOf(container))).toBeGreaterThan(20)
+    expect(points(tailOf(container))).toBeGreaterThan(20)
+    expect(shapeOf(container)).not.toBe(linearShape)
+    expect(tailOf(container)).not.toBe(linearTail)
+    // The curves still start and end on the nodes, where the lines did.
+    const ends = (path: string) => {
+      const all = path.split(/[ML]/).filter(Boolean)
+      return [all[0].trim(), all[all.length - 1].trim()]
+    }
+    expect(ends(tailOf(container))).toEqual(ends(linearTail))
+    expect(ends(shapeOf(container))).toEqual(ends(linearShape))
+
+    // Half way through the release the level has all but gone.
+    const coords = tailOf(container)
+      .split(/[ML]/)
+      .filter(Boolean)
+      .map((pair) => pair.trim().split(" ").map(Number))
+    const [, top] = coords[0]
+    const [, bottom] = coords[coords.length - 1]
+    const [, middle] = coords[(coords.length - 1) / 2]
+    expect((bottom - middle) / (bottom - top)).toBeCloseTo(envelopeFall(0.5), 2)
+  })
+
+  it("rounds the attack as well for an envelope that has one", () => {
+    const sharp = render(<EnvelopeEditor {...START} curve="exponential" />)
+    const sharpShape = shapeOf(sharp.container)
+    sharp.unmount()
+    const { container } = render(<EnvelopeEditor {...START} curve="rounded" />)
+    expect(points(shapeOf(container))).toBeGreaterThan(points(sharpShape))
+    expect(container.firstElementChild).toHaveAttribute("data-curve", "rounded")
+  })
+
+  it("leaves Delete and Backspace on a node to the app", () => {
+    const changes: Partial<EnvelopeValues>[] = []
+    render(
+      <EnvelopeEditor
+        {...START}
+        defaults={{ releaseMs: 50 }}
+        onChange={(patch) => changes.push(patch)}
+      />
+    )
+    const release = screen.getByRole("slider", { name: "Release" })
+    expect(fireEvent.keyDown(release, { key: "Delete" })).toBe(true)
+    expect(fireEvent.keyDown(release, { key: "Backspace" })).toBe(true)
+    expect(changes).toEqual([])
+    // A double-click is what puts a node back.
+    fireEvent.doubleClick(release)
+    expect(changes).toEqual([{ releaseMs: 50 }])
+  })
+
+  it("is a group, so a label on it names the three nodes together", () => {
+    render(
+      <EnvelopeEditor
+        aria-label="Envelope shape"
+        attackMs={10}
+        decayMs={200}
+        sustain={0.5}
+        releaseMs={300}
+      />
+    )
+    const group = screen.getByRole("group", { name: "Envelope shape" })
+    expect(group).toHaveAttribute("data-slot", "envelope-editor")
+    expect(within(group).getAllByRole("slider")).toHaveLength(3)
+  })
+
   it("exposes three slider nodes with their values", () => {
     const { node } = renderEditor()
     expect(node("Attack")).toHaveAttribute("aria-valuenow", "10")

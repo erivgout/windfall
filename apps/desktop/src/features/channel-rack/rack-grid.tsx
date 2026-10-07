@@ -8,6 +8,7 @@ import {
 
 import type { ChannelId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
+import { ContextActions } from "@/components/context-actions"
 import { StepGridGroup, type StepGridGroupHandle } from "@/components/audio"
 import { hasSampleDrag, readSampleDrag } from "@/lib/dnd"
 import { useProjectStore } from "@/lib/store/project"
@@ -18,10 +19,12 @@ import { clamp, DEFAULT_PATTERN_STEPS, TICKS_PER_STEP } from "@/lib/units"
 
 import {
   addChannelFromFile,
+  findChannel,
   moveChannelTo,
   replaceSampleFromFile,
 } from "./channel-ops"
 import { ChannelRow } from "./channel-row"
+import { RACK_MENU } from "./menus"
 import {
   fitPitch,
   LEFT_COLUMNS,
@@ -45,11 +48,13 @@ type Drop =
   | { kind: "insert"; index: number }
   /** Onto a channel's button, to give it the dragged sample. */
   | { kind: "replace"; channel: ChannelId }
+  /** Onto the button of an instrument, which has no sample to replace. */
+  | { kind: "refuse"; channel: ChannelId }
 
 function sameDrop(a: Drop | null, b: Drop | null): boolean {
   if (a === null || b === null) return a === b
   if (a.kind === "insert") return b.kind === "insert" && a.index === b.index
-  return b.kind === "replace" && a.channel === b.channel
+  return b.kind === a.kind && a.channel === b.channel
 }
 
 /**
@@ -126,7 +131,8 @@ export function RackGrid() {
           : null
       const channel = Number(button?.dataset.channelButton)
       if (button && Number.isInteger(channel)) {
-        return { kind: "replace", channel }
+        const instrument = findChannel(channel)?.source.type === "instrument"
+        return { kind: instrument ? "refuse" : "replace", channel }
       }
       return { kind: "insert", index: gapAt(event) }
     }
@@ -164,8 +170,10 @@ export function RackGrid() {
   function onDragOver(event: DragEvent<HTMLDivElement>) {
     if (!accepts(event)) return
     event.preventDefault()
-    event.dataTransfer.dropEffect = hasSampleDrag(event) ? "copy" : "move"
     const next = dropAt(event)
+    // "none" gives the pointer the not-allowed cursor over an instrument.
+    event.dataTransfer.dropEffect =
+      next?.kind === "refuse" ? "none" : hasSampleDrag(event) ? "copy" : "move"
     setDrop((current) => (sameDrop(current, next) ? current : next))
   }
 
@@ -180,7 +188,7 @@ export function RackGrid() {
     event.preventDefault()
     const target = dropAt(event)
     setDrop(null)
-    if (target === null) return
+    if (target === null || target.kind === "refuse") return
 
     const sample = readSampleDrag(event)
     if (sample) {
@@ -202,107 +210,114 @@ export function RackGrid() {
   const barLines = rulerMarks(lengthSteps, signature)
     .filter((mark) => mark.bar && mark.step > 0)
     .map((mark) => mark.step)
-  const replacing = drop?.kind === "replace" ? drop.channel : null
 
   return (
-    <div
-      ref={scroller}
-      data-slot="rack-scroll"
-      className="relative min-h-0 flex-1 overflow-auto overscroll-contain"
-      style={{ [PITCH_VAR]: `${pitch}px` } as CSSProperties}
-      onDragStart={onDragStart}
-      onDragEnd={() => {
-        dragged.current = null
-        setDrop(null)
-      }}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-    >
+    <ContextActions items={RACK_MENU}>
       <div
-        className="flex min-h-full min-w-full flex-col"
-        style={{
-          width: pitches(lengthSteps, LEFT_WIDTH + STEPS_INSET + STEPS_TRAIL),
+        ref={scroller}
+        data-slot="rack-scroll"
+        className="relative min-h-0 flex-1 overflow-auto overscroll-contain"
+        style={{ [PITCH_VAR]: `${pitch}px` } as CSSProperties}
+        onDragStart={onDragStart}
+        onDragEnd={() => {
+          dragged.current = null
+          setDrop(null)
         }}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
       >
         <div
-          className="sticky top-0 z-20 flex shrink-0 border-b bg-background"
-          style={{ height: RULER_HEIGHT }}
+          className="flex min-h-full min-w-full flex-col"
+          style={{
+            width: pitches(lengthSteps, LEFT_WIDTH + STEPS_INSET + STEPS_TRAIL),
+          }}
         >
           <div
-            className={`${LEFT_COLUMNS} sticky left-0 z-10 shrink-0 bg-background text-[0.625rem] text-muted-foreground`}
-            style={{ width: LEFT_WIDTH }}
+            className="sticky top-0 z-20 flex shrink-0 border-b bg-background"
+            style={{ height: RULER_HEIGHT }}
           >
-            <span className="col-span-2" />
-            <span className="text-center">Pan</span>
-            <span className="text-center">Vol</span>
-            <span className="pl-3.5">Channel</span>
-            <span className="text-right">Mixer</span>
-          </div>
-          <div style={{ paddingLeft: STEPS_INSET }}>
-            <StepRuler
-              lengthSteps={lengthSteps}
-              signature={signature}
-              caretRef={caret}
-            />
-          </div>
-        </div>
-
-        <StepGridGroup
-          ref={group}
-          role="group"
-          aria-label="Channels"
-          className="relative gap-0"
-        >
-          <div ref={rows}>
-            {pattern !== null &&
-              ids.map((id) => (
-                <ChannelRow
-                  key={id}
-                  id={id}
-                  pattern={pattern}
-                  lengthSteps={lengthSteps}
-                  groupSize={groupSize}
-                  anySolo={anySolo}
-                  dropTarget={replacing === id}
-                />
-              ))}
-          </div>
-          {barLines.map((step) => (
             <div
-              key={step}
-              aria-hidden
-              data-slot="rack-bar-line"
-              className="pointer-events-none absolute inset-y-0 w-px bg-(--wf-grid-line-strong)"
-              // In the middle of the gap before the bar's first step.
-              style={{
-                left: pitches(step, LEFT_WIDTH + STEPS_INSET - 1.5),
-              }}
-            />
-          ))}
-          {drop?.kind === "insert" && (
-            <div
-              aria-hidden
-              data-slot="rack-drop-line"
-              data-index={drop.index}
-              className="pointer-events-none absolute inset-x-0 z-20 h-0.5 -translate-y-px bg-brand shadow-[0_0_6px_var(--wf-brand)]"
-              style={{ top: drop.index * ROW_HEIGHT }}
-            />
-          )}
-        </StepGridGroup>
+              className={`${LEFT_COLUMNS} sticky left-0 z-10 shrink-0 bg-background text-[0.625rem] text-muted-foreground`}
+              style={{ width: LEFT_WIDTH }}
+            >
+              <span className="col-span-2" />
+              <span className="text-center">Pan</span>
+              <span className="text-center">Vol</span>
+              <span className="pl-3.5">Channel</span>
+              <span className="text-right">Mixer</span>
+            </div>
+            <div style={{ paddingLeft: STEPS_INSET }}>
+              <StepRuler
+                lengthSteps={lengthSteps}
+                signature={signature}
+                caretRef={caret}
+              />
+            </div>
+          </div>
 
-        <div className="flex min-h-9 flex-1 items-start">
-          <div
-            className="sticky left-0 flex items-center gap-2 px-1.5 py-1.5"
-            style={{ minWidth: LEFT_WIDTH }}
+          <StepGridGroup
+            ref={group}
+            role="group"
+            aria-label="Channels"
+            className="relative gap-0"
           >
-            <ActionButton action="channel.add" variant="ghost" size="sm" />
-            <span className="text-muted-foreground">
-              or drag a sample here from the browser
-            </span>
+            <div ref={rows}>
+              {pattern !== null &&
+                ids.map((id) => (
+                  <ChannelRow
+                    key={id}
+                    id={id}
+                    pattern={pattern}
+                    lengthSteps={lengthSteps}
+                    groupSize={groupSize}
+                    anySolo={anySolo}
+                    drop={
+                      drop !== null &&
+                      drop.kind !== "insert" &&
+                      drop.channel === id
+                        ? drop.kind
+                        : null
+                    }
+                  />
+                ))}
+            </div>
+            {barLines.map((step) => (
+              <div
+                key={step}
+                aria-hidden
+                data-slot="rack-bar-line"
+                className="pointer-events-none absolute inset-y-0 w-px bg-(--wf-grid-line-strong)"
+                // In the middle of the gap before the bar's first step.
+                style={{
+                  left: pitches(step, LEFT_WIDTH + STEPS_INSET - 1.5),
+                }}
+              />
+            ))}
+            {drop?.kind === "insert" && (
+              <div
+                aria-hidden
+                data-slot="rack-drop-line"
+                data-index={drop.index}
+                className="pointer-events-none absolute inset-x-0 z-20 h-0.5 -translate-y-px bg-brand shadow-[0_0_6px_var(--wf-brand)]"
+                style={{ top: drop.index * ROW_HEIGHT }}
+              />
+            )}
+          </StepGridGroup>
+
+          <div className="flex min-h-9 flex-1 items-start">
+            <div
+              className="sticky left-0 flex items-center gap-2 px-1.5 py-1.5"
+              style={{ minWidth: LEFT_WIDTH }}
+            >
+              <ActionButton action="channel.add" variant="ghost" size="sm" />
+              <span className="text-muted-foreground">
+                or drag a sample here from the browser
+              </span>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </ContextActions>
   )
 }

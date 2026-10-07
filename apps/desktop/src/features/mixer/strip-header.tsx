@@ -11,17 +11,28 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { EFFECT_KINDS } from "@/features/params"
 import { useHint, useUiStore } from "@/lib/store"
 import { colorToCss } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
 import { TRACK_COLORS } from "./colors"
+import { addEffectActionId } from "./effect-actions"
 import { useMixerUi } from "./mixer-ui"
 import { renameTrack, setTrackColor, startRename } from "./operations"
+
+/** The effects that can be added to the selected track. */
+const ADD_EFFECT: ContextItem = {
+  submenu: "Add effect",
+  items: EFFECT_KINDS.map(addEffectActionId),
+}
 
 const INSERT_MENU: ContextItem[] = [
   "mixer.renameTrack",
   "mixer.changeColor",
+  contextSeparator,
+  ADD_EFFECT,
+  "mixer.effects",
   contextSeparator,
   "mixer.toggleMute",
   "mixer.toggleSolo",
@@ -39,6 +50,9 @@ const INSERT_MENU: ContextItem[] = [
 const MASTER_MENU: ContextItem[] = [
   "mixer.renameTrack",
   "mixer.changeColor",
+  contextSeparator,
+  ADD_EFFECT,
+  "mixer.effects",
   contextSeparator,
   "mixer.toggleMute",
   "mixer.unmuteAll",
@@ -147,7 +161,7 @@ function ColorBar({ id, color }: { id: TrackId; color: number }) {
             tabIndex={-1}
             aria-label="Change track color"
             data-slot="track-color"
-            className="block h-1.5 w-full shrink-0 outline-none hover:brightness-125"
+            className="block h-1.5 w-full shrink-0 outline-none hover:brightness-125 focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-inset"
             style={{ backgroundColor: colorToCss(color) }}
             {...hint}
           />

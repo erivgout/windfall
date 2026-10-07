@@ -1,11 +1,13 @@
 import type { HitPart } from "@/lib/canvas"
+import { MODIFIER_HINTS } from "@/lib/edit-modifiers"
 
 import type { Tool } from "./store"
 
 /*
  * What a press will do, decided from the tool, the button, the modifiers
  * and what is under the pointer. The cursor and the status-bar hint come
- * from the same answer, so they never promise something else.
+ * from the same answer, so they never promise something else. The
+ * modifiers follow `lib/edit-modifiers`, as the playlist's do.
  */
 
 export type Intent =
@@ -31,7 +33,11 @@ export function pressIntent(
   if (button === "right") {
     return tool === "select" ? { kind: "menu" } : { kind: "erase" }
   }
-  if (modifiers.ctrl) return { kind: "marquee" }
+  // Ctrl selects with a box, except on a note the tool can move: there it
+  // stays a move, which the drop turns into a copy.
+  if (modifiers.ctrl && (hitPart === null || tool === "erase")) {
+    return { kind: "marquee" }
+  }
   if (tool === "erase") return { kind: "erase" }
   if (hitPart === "body") return { kind: "move" }
   if (hitPart === "start-edge") return { kind: "resize", edge: "start" }
@@ -101,21 +107,22 @@ export function hintFor(intent: Intent | null, tool: Tool): string | null {
     tool === "select"
       ? "Right-click for the menu"
       : "Right-click or right-drag deletes"
+  const { copy, add, free } = MODIFIER_HINTS
   switch (intent.kind) {
     case "draw":
-      return `Click to add a note, drag to place it. Ctrl+drag selects. ${rightClick}`
+      return `Click to add a note, drag to place it. ${free}. Ctrl+drag selects. ${rightClick}`
     case "paint":
-      return `Drag to paint a row of notes. Ctrl+drag selects. ${rightClick}`
+      return `Drag to paint a row of notes. ${free}. Ctrl+drag selects. ${rightClick}`
     case "erase":
       return "Click or drag across notes to delete them"
     case "marquee":
       return "Drag to select notes. Shift adds to the selection. Click empty space to clear it"
     case "move":
-      return `Drag to move. Shift: no snap. Hold Ctrl as you drop to duplicate. Shift+click adds to the selection. ${rightClick}`
+      return `Drag to move. ${copy}. ${add}. ${free}. ${rightClick}`
     case "resize":
       return intent.edge === "end"
-        ? "Drag to change the length. Shift: no snap"
-        : "Drag to move the start and keep the end. Shift: no snap"
+        ? `Drag to change the length. ${free}`
+        : `Drag to move the start and keep the end. ${free}`
     case "menu":
       return null
     default: {

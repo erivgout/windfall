@@ -210,7 +210,73 @@ export type ValueControlProps = {
   format?: (value: number) => string
   /** Turns typed text into a value. Must understand what `format` prints. */
   parse?: (text: string) => number | null
+  /**
+   * What the number is, such as `"gain"` or `"pan"`: see `ValueUnit`. The
+   * control does nothing with it but hand it on in `ValueControlActions`,
+   * for a menu that copies a value from one control to another and must
+   * not paste a level into a pan.
+   */
+  unitKind?: string
   disabled?: boolean
+}
+
+/**
+ * What something outside a value control can do with it, such as an entry
+ * of a right-click menu: put it back to its default, open its text entry,
+ * or give it a value read from text.
+ */
+export type ValueControlActions = {
+  /** The value clamped to the range. */
+  value: number
+  /** The formatted readout. */
+  text: string
+  defaultValue: number | undefined
+  disabled: boolean
+  /** Whether Enter and typing open the text entry. */
+  editable: boolean
+  /** What the number is, when the control was told. */
+  unitKind: string | undefined
+  /** Restores the default as one gesture. Does nothing without one. */
+  reset: () => void
+  /** Opens the text entry, as Enter does. */
+  startEditing: () => void
+  /** Applies a value as a gesture of its own. */
+  change: (value: number) => void
+  /**
+   * Reads text the way the text entry does and brings it into the range.
+   * Null when it is not a value for this control.
+   */
+  parse: (text: string) => number | null
+}
+
+export type ValueControlSlotProps = {
+  control: ValueControlActions
+  /** The control's own element. It takes a ref and event handlers. */
+  children: React.ReactElement<React.ComponentProps<"div">>
+}
+
+/**
+ * A place to wrap every value control under it, without the controls
+ * knowing in what. An app provides a component here to give all of them
+ * the same right-click menu; the kit itself provides nothing.
+ *
+ *     <ValueControlSlot value={MyContextMenu}>…</ValueControlSlot>
+ */
+export const ValueControlSlot =
+  React.createContext<React.ComponentType<ValueControlSlotProps> | null>(null)
+
+/**
+ * Hands a control's element to the slot around it, if there is one, and
+ * returns what to render.
+ */
+export function useValueControlSlot(
+  control: ValueControlActions,
+  element: React.ReactElement<React.ComponentProps<"div">>
+): React.ReactElement {
+  const Slot = React.useContext(ValueControlSlot)
+  return Slot
+    ? React.createElement(Slot, { control, children: element })
+    : element
 }
 
 export type UseDragValueOptions = ValueControlProps & {
@@ -231,6 +297,12 @@ export type UseDragValueOptions = ValueControlProps & {
   wheel?: boolean
   /** Allow Enter and typing to open the text entry. */
   editable?: boolean
+  /**
+   * A value something else is giving the control right now. The slider
+   * says it in `aria-valuetext`, a few times a second, so a screen reader
+   * hears where the control is and not only where it was left.
+   */
+  live?: LiveValueFeed
 }
 
 type DragState = {
@@ -249,6 +321,13 @@ const WHEEL_IDLE_MS = 400
 const SCROLL_GUARD_MS = 250
 const DOUBLE_TAP_MS = 350
 const DOUBLE_TAP_PIXELS = 24
+/** A live value is said four times a second at most. */
+export const LIVE_TEXT_MS = 250
+
+/** What a slider says while something else is moving it. */
+export function liveValueText(live: string, stored: string): string {
+  return `${live}, automated (set to ${stored})`
+}
 
 // One passive listener for the whole page notes when a wheel event scrolled
 // something else, so a control never grabs the wheel in the middle of a scroll.
@@ -292,6 +371,10 @@ const STARTS_ENTRY = /^[0-9.,+\-−]$/
  * The interaction model shared by every value control: vertical drag with
  * pointer capture, Shift for fine adjust, double-click or Ctrl/Cmd-click to
  * reset, wheel, keyboard stepping and typed entry.
+ *
+ * Delete and Backspace are not the control's keys. In an app they delete
+ * things, and a focused knob that took them to reset itself made the same
+ * key mean two things a click apart.
  */
 export function useDragValue(options: UseDragValueOptions) {
   const {
@@ -386,9 +469,12 @@ export function useDragValue(options: UseDragValueOptions) {
     }
   }
 
-  function stopEditing() {
+  function stopEditing(reason?: "escape" | "blur") {
     setEntry(null)
-    node?.focus({ preventScroll: true })
+    // An entry that lost the focus leaves it where it went.
+    if (reason !== "blur") {
+      node?.focus({ preventScroll: true })
+    }
   }
 
   function commitEntry(typed: string) {
@@ -647,6 +733,67 @@ export function useDragValue(options: UseDragValueOptions) {
     }
   }, [node, wheel])
 
+  // The live value, for assistive technology. It is written to the element
+  // and not rendered: the feed can speak 60 times a second, and four are
+  // plenty for a readout that is read aloud.
+  const storedText = React.useRef(text)
+  React.useLayoutEffect(() => {
+    storedText.current = text
+  })
+  const liveFeed = options.live
+  React.useEffect(() => {
+    if (!liveFeed || !node) {
+      return undefined
+    }
+    let written = -Infinity
+    let waiting: number | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const say = (shown: number) => {
+      const props = latest.current
+      const clamped = clampValue(shown, props.min, props.max)
+      written = performance.now()
+      node.setAttribute(
+        "aria-valuetext",
+        liveValueText(
+          props.format ? props.format(clamped) : defaultFormat(clamped, props),
+          storedText.current
+        )
+      )
+    }
+    const rest = () => {
+      if (timer !== null) {
+        clearTimeout(timer)
+      }
+      timer = null
+      waiting = null
+      node.setAttribute("aria-valuetext", storedText.current)
+    }
+    const stop = liveFeed((next) => {
+      if (next === null) {
+        rest()
+        return
+      }
+      const since = performance.now() - written
+      if (since >= LIVE_TEXT_MS) {
+        say(next)
+        return
+      }
+      // Too soon: the newest value is said when its turn comes.
+      waiting = next
+      timer ??= setTimeout(() => {
+        timer = null
+        if (waiting !== null) {
+          say(waiting)
+          waiting = null
+        }
+      }, LIVE_TEXT_MS - since)
+    })
+    return () => {
+      stop()
+      rest()
+    }
+  }, [liveFeed, node])
+
   // A control removed in the middle of a gesture still closes it.
   React.useEffect(() => {
     const open = gestureOpen
@@ -709,7 +856,57 @@ export function useDragValue(options: UseDragValueOptions) {
     reset,
     /** Applies a value as a gesture of its own. */
     change,
+    /** The same, for whatever a `ValueControlSlot` wraps the control in. */
+    actions: {
+      value,
+      text,
+      defaultValue: options.defaultValue,
+      disabled,
+      editable,
+      unitKind: options.unitKind,
+      reset,
+      startEditing,
+      change,
+      parse: (typed: string) =>
+        parseEntry(typed, latest.current, latest.current.parse),
+    } satisfies ValueControlActions,
   }
 }
 
 export type DragValue = ReturnType<typeof useDragValue>
+
+/**
+ * A feed of the value something else is giving a control right now, as an
+ * automation curve does while a song plays. The control subscribes on
+ * mount: it hands over a listener and gets back a function that stops the
+ * feed. The listener takes the value in the control's own unit, or null
+ * when nothing is moving the control, and optionally the CSS color to show
+ * it in.
+ *
+ * Values may arrive 60 times a second. The control draws them straight to
+ * the page and never renders for one.
+ */
+export type LiveValueFeed = (
+  listener: (value: number | null, color?: string) => void
+) => () => void
+
+/**
+ * Subscribes a control to a live value. `draw` is called with each value,
+ * outside React's rendering, and with null once when the feed ends.
+ */
+export function useLiveValue(
+  feed: LiveValueFeed | undefined,
+  draw: (value: number | null, color?: string) => void
+) {
+  const onValue = React.useEffectEvent(draw)
+  React.useEffect(() => {
+    if (!feed) {
+      return undefined
+    }
+    const stop = feed((value, color) => onValue(value, color))
+    return () => {
+      stop()
+      onValue(null)
+    }
+  }, [feed])
+}

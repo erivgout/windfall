@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 import * as React from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { describe, expect, it } from "vitest"
 
 import { StepButton } from "./step-button"
@@ -13,7 +14,10 @@ import {
 
 const pattern = (text: string) => [...text].map((mark) => mark === "x")
 
-function renderGrid(text: string, props: { rightClickClears?: boolean } = {}) {
+function renderGrid(
+  text: string,
+  props: { rightClickClears?: boolean; spaceToggles?: boolean } = {}
+) {
   const events: string[] = []
   const ref = React.createRef<StepGridHandle>()
   function Harness() {
@@ -103,13 +107,37 @@ describe("StepGrid", () => {
     expect(steps()[0]).toHaveFocus()
   })
 
-  it("toggles with Space and Enter, which arrive as a click with no detail", () => {
+  it("toggles with Enter, which arrives as a click with no detail", async () => {
+    const user = userEvent.setup()
     const { steps, shown, events } = renderGrid("....")
     fireEvent.click(steps()[1], { detail: 0 })
     expect(shown()).toBe(".x..")
-    fireEvent.click(steps()[1], { detail: 0 })
+    act(() => steps()[1].focus())
+    await user.keyboard("{Enter}")
     expect(shown()).toBe("....")
     expect(events).toEqual(["start", "1:on", "end", "start", "1:off", "end"])
+  })
+
+  it("leaves Space to the app", async () => {
+    const user = userEvent.setup()
+    const { steps, shown, events } = renderGrid("....")
+    act(() => steps()[1].focus())
+    // The key goes down untouched, for a transport shortcut to take.
+    expect(fireEvent.keyDown(steps()[1], { key: " " })).toBe(true)
+    fireEvent.keyUp(steps()[1], { key: " " })
+    await user.keyboard(" ")
+    expect(shown()).toBe("....")
+    expect(events).toEqual([])
+  })
+
+  it("toggles with Space when asked to", async () => {
+    const user = userEvent.setup()
+    const { steps, shown } = renderGrid("....", { spaceToggles: true })
+    act(() => steps()[2].focus())
+    await user.keyboard(" ")
+    expect(shown()).toBe("..x.")
+    await user.keyboard(" ")
+    expect(shown()).toBe("....")
   })
 
   it("does not toggle twice for a pointer click", () => {
@@ -298,6 +326,45 @@ describe("StepButton", () => {
     expect(button).toHaveAttribute("aria-pressed", "false")
     fireEvent.click(button)
     expect(calls).toEqual([true])
+  })
+
+  it("toggles with Enter and leaves Space to the app", async () => {
+    const user = userEvent.setup()
+    const calls: boolean[] = []
+    render(
+      <StepButton
+        on={false}
+        onToggle={(on) => calls.push(on)}
+        aria-label="Step"
+      />
+    )
+    const button = screen.getByRole("button", { name: "Step" })
+    act(() => button.focus())
+    expect(fireEvent.keyDown(button, { key: " " })).toBe(true)
+    fireEvent.keyUp(button, { key: " " })
+    await user.keyboard(" ")
+    expect(calls).toEqual([])
+    await user.keyboard("{Enter}")
+    expect(calls).toEqual([true])
+  })
+
+  it("toggles with Space when asked to, and still runs its own key handler", async () => {
+    const user = userEvent.setup()
+    const calls: boolean[] = []
+    const keys: string[] = []
+    render(
+      <StepButton
+        on={false}
+        spaceToggles
+        onToggle={(on) => calls.push(on)}
+        onKeyUp={(event) => keys.push(event.key)}
+        aria-label="Step"
+      />
+    )
+    act(() => screen.getByRole("button", { name: "Step" }).focus())
+    await user.keyboard(" ")
+    expect(calls).toEqual([true])
+    expect(keys).toEqual([" "])
   })
 
   it("shows the playing and alternate states", () => {

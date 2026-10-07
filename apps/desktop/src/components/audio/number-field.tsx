@@ -8,6 +8,7 @@ import {
   clampValue,
   snapValue,
   useDragValue,
+  useValueControlSlot,
   type ValueControlProps,
 } from "./use-drag-value"
 import { ValueInput } from "./value-input"
@@ -78,6 +79,7 @@ function NumberField({
   max = 100,
   step = 1,
   parse,
+  unitKind,
   disabled = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
@@ -100,6 +102,7 @@ function NumberField({
     step,
     keyStep: coarse,
     parse,
+    unitKind,
     disabled,
     format: (current) => current.toFixed(digits),
     doubleClick: "edit",
@@ -122,7 +125,8 @@ function NumberField({
 
   const [whole, fraction] = control.text.split(".")
 
-  return (
+  return useValueControlSlot(
+    control.actions,
     <div
       data-slot="number-field"
       data-size={size}

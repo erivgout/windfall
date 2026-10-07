@@ -1,4 +1,4 @@
-import type { Clip, ClipId, Pattern, PatternId } from "@/bindings"
+import type { Clip, ClipId } from "@/bindings"
 import {
   mix,
   RECT_SELECTED,
@@ -9,12 +9,10 @@ import {
 } from "@/lib/canvas"
 
 import type { RowOf } from "./edit"
-
-/** Shown for a clip whose pattern cannot be found. It should never be seen. */
-export const ORPHAN_COLOR = 0x8b8d98
+import { contentColor, type ClipLookups } from "./look"
 
 /**
- * The fill of a clip's body. It is the pattern's color pulled toward the
+ * The fill of a clip's body. It is the clip's color pulled toward the
  * background, which leaves room for a title bar in the full color on top
  * and reads as "this color" in both themes. A muted clip fades almost out.
  */
@@ -29,13 +27,13 @@ export function clipBodyColor(
 /**
  * Builds the rects the grid draws for the clips: one per clip, on its
  * track's row. Clips arrive sorted by start, which the grid's index needs.
- * Build again when the clips, the patterns' colors, the track mutes or the
+ * Build again when the clips, the colors they take, the track mutes or the
  * theme change. A change of selection only needs the flags set.
  */
 export function buildClipBatch(
   clips: readonly Clip[],
   rowOf: RowOf,
-  patterns: ReadonlyMap<PatternId, Pattern>,
+  lookups: ClipLookups,
   isMuted: (clip: Clip) => boolean,
   selection: ReadonlySet<ClipId>,
   theme: GridTheme
@@ -44,7 +42,7 @@ export function buildClipBatch(
   const colors = new Map<number, Rgba>()
   for (const clip of clips) {
     const muted = isMuted(clip)
-    const color = patterns.get(clip.content.pattern)?.color ?? ORPHAN_COLOR
+    const color = contentColor(clip.content, lookups)
     const key = color * 2 + (muted ? 1 : 0)
     let fill = colors.get(key)
     if (!fill) {

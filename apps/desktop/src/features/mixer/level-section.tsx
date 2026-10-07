@@ -3,15 +3,17 @@ import { useEffect, useMemo, useRef } from "react"
 import type { TrackId } from "@/bindings"
 import {
   Fader,
-  FADER_DB_TICKS,
   formatGain,
   gainToFaderPosition,
   LevelMeter,
-  type FaderTick,
+  type LevelMeterHandle,
 } from "@/components/audio"
+import { ValueContextItems } from "@/components/value-context-menu"
+import { automationFeed, useAutomationMarker } from "@/features/automation/live"
 import { meterFeed, useHint } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
+import { trackValueItems } from "./menus"
 import { clampGain } from "./operations"
 import { CLIP_GAIN, resetPeak, subscribePeak } from "./peaks"
 import { useGestureValue } from "./use-gesture-value"
@@ -67,58 +69,34 @@ type StripMeterProps = {
 
 /**
  * The stereo meter beside the fader, on the fader's own dB scale. Its clip
- * light sits just past the top of the scale and follows the held peak, so
- * it is still lit when a strip that clipped out of view scrolls back in.
+ * light follows the held peak, so it is still lit when a strip that clipped
+ * out of view scrolls back in.
  */
 function StripMeter({ id, feed, orientation, wide }: StripMeterProps) {
-  const light = useRef<HTMLButtonElement>(null)
+  const meter = useRef<LevelMeterHandle>(null)
   const vertical = orientation === "vertical"
 
   useEffect(
     () =>
-      subscribePeak(id, (peak) => {
-        const clipped = peak > CLIP_GAIN
-        light.current?.toggleAttribute("data-clipped", clipped)
-        // Only a lit clip light is worth a tab stop.
-        if (light.current) light.current.tabIndex = clipped ? 0 : -1
-      }),
+      subscribePeak(id, (peak) => meter.current?.setClipped(peak > CLIP_GAIN)),
     [id]
   )
 
   return (
-    <div className={cn("relative", vertical ? "h-full" : "w-full")}>
-      <LevelMeter
-        subscribe={feed}
-        orientation={orientation}
-        taper={gainToFaderPosition}
-        showClip={false}
-        className={
-          vertical ? cn("h-full", wide ? "w-4" : "w-3") : "h-1.5 w-full"
-        }
-      />
-      <button
-        ref={light}
-        type="button"
-        tabIndex={-1}
-        data-slot="track-clip"
-        aria-label="Clip light. Click to clear"
-        className={cn(
-          "absolute rounded-[1px] bg-(--wf-meter-bg) outline-none after:absolute after:-inset-1 focus-visible:ring-2 focus-visible:ring-ring data-clipped:bg-(--wf-meter-high)",
-          vertical ? "inset-x-0 -top-[5px] h-1" : "inset-y-0 -right-[5px] w-1"
-        )}
-        onClick={() => resetPeak(id)}
-      />
-    </div>
+    <LevelMeter
+      ref={meter}
+      subscribe={feed}
+      orientation={orientation}
+      taper={gainToFaderPosition}
+      clipGain={CLIP_GAIN}
+      clipLabel="Clip light. Click to clear"
+      onClipChange={(clipped) => {
+        if (!clipped) resetPeak(id)
+      }}
+      className={vertical ? cn("h-full", wide ? "w-4" : "w-3") : "h-1.5 w-full"}
+    />
   )
 }
-
-// With little travel the labels of neighboring dB marks run into each
-// other, so a short fader labels fewer of them. The lines all stay.
-const SPARSE_TICKS: readonly FaderTick[] = FADER_DB_TICKS.map((tick) =>
-  tick.label === "−6" || tick.label === "−∞"
-    ? { value: tick.value, strong: tick.strong }
-    : tick
-)
 
 export type LevelLayout =
   /** An upright fader with the peak readout above it. */
@@ -139,8 +117,6 @@ type LevelSectionProps = {
   /** False while the strip is kept mounted out of view. */
   metering: boolean
   layout: LevelLayout
-  /** Label only some of the dB marks, for a fader with little travel. */
-  sparseScale: boolean
   wide: boolean
 }
 
@@ -152,7 +128,6 @@ export function LevelSection({
   index,
   metering,
   layout,
-  sparseScale,
   wide,
 }: LevelSectionProps) {
   const level = useGestureValue(
@@ -164,6 +139,14 @@ export function LevelSection({
   const hint = useHint(
     "Volume. Drag, or double-click for 0 dB. Hold Shift for fine steps"
   )
+  // What the fader is bound to adds its own entries to the fader's menu,
+  // and automation of it moves the fader while the song plays.
+  const items = useMemo(() => trackValueItems(id, "volume"), [id])
+  const live = useMemo(
+    () => automationFeed({ type: "trackVolume", track: id }),
+    [id]
+  )
+  const marker = useAutomationMarker({ type: "trackVolume", track: id })
   const upright = layout === "tall" || layout === "short"
   const meter = (
     <StripMeter
@@ -177,20 +160,22 @@ export function LevelSection({
   if (!upright) {
     return (
       <div className="flex shrink-0 flex-col gap-1 px-1">
-        <Fader
-          {...level}
-          orientation="horizontal"
-          ticks={false}
-          aria-label={`${name} volume`}
-          title={formatGain(level.value)}
-          className={cn(
-            "w-full",
+        <ValueContextItems items={items}>
+          <Fader
+            {...level}
+            orientation="horizontal"
             // The lowest panel has no room for a full-height cap.
-            layout === "bare" && "[&_[data-slot=fader-control]]:h-5"
-          )}
-          meter={meter}
-          {...hint}
-        />
+            size={layout === "bare" ? "sm" : "md"}
+            ticks={false}
+            aria-label={`${name} volume`}
+            title={formatGain(level.value)}
+            className="w-full"
+            live={live}
+            marker={marker}
+            meter={meter}
+            {...hint}
+          />
+        </ValueContextItems>
         {layout === "flat" && (
           <div className="flex h-3.5 items-center justify-between gap-1">
             <PeakReadout id={id} className="w-9" />
@@ -209,15 +194,18 @@ export function LevelSection({
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center gap-1.5">
       {layout === "tall" && <PeakReadout id={id} className="w-12" />}
-      <Fader
-        {...level}
-        showValue
-        ticks={sparseScale ? SPARSE_TICKS : undefined}
-        aria-label={`${name} volume`}
-        className="h-auto min-h-0 flex-1 [&_[data-slot=fader-value]]:font-readout [&_[data-slot=fader-value]]:text-[9px]"
-        meter={meter}
-        {...hint}
-      />
+      <ValueContextItems items={items}>
+        <Fader
+          {...level}
+          showValue
+          aria-label={`${name} volume`}
+          className="h-auto min-h-0 flex-1 [&_[data-slot=fader-value]]:font-readout [&_[data-slot=fader-value]]:text-[9px]"
+          live={live}
+          marker={marker}
+          meter={meter}
+          {...hint}
+        />
+      </ValueContextItems>
     </div>
   )
 }

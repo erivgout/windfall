@@ -9,12 +9,21 @@ import {
   stepPattern,
 } from "@/lib/flows/edit"
 import {
+  canScaleTempo,
+  resetTempo,
+  scaleTempo,
+  tapTempo,
+} from "@/lib/flows/tempo"
+import {
   newProject,
   openProject,
   openProjectPath,
+  reloadMissingSamples,
   saveProject,
   saveProjectAs,
 } from "@/lib/flows/project"
+import type { EngineStatus } from "@/bindings"
+import { useEngineStore } from "@/lib/store/engine"
 import { redo, undo } from "@/lib/store/project"
 import { selectedPatternId } from "@/lib/store/selectors"
 import {
@@ -25,11 +34,90 @@ import {
   useTransportStore,
 } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
-import { fileName } from "@/lib/time"
+import { fileName, formatSampleRate } from "@/lib/time"
+import { DEFAULT_TEMPO_BPM } from "@/lib/units"
 
-import { registry, type Action, type AppState } from "./registry"
+import { getAppState } from "."
+import { FL_KEYMAP } from "./keymap"
+import { linksOfScope } from "./scope"
+import {
+  isEnabled,
+  registry,
+  type Action,
+  type AppState,
+  type EditCommand,
+} from "./registry"
 
 const ui = () => useUiStore.getState()
+
+/** The audio output in one line, for a bug report or a forum post. */
+export function deviceInfo(status: EngineStatus): string {
+  if (!status.running) {
+    return `No audio: ${status.error ?? "the output is not running"}`
+  }
+  const plugins =
+    status.latencyFrames > 0 ? `, plus ${status.latencyFrames} samples` : ""
+  return `${status.host} ${status.device ?? "default device"}, ${formatSampleRate(status.sampleRate)}, ${status.bufferFrames} samples, ${status.latencyMs.toFixed(1)} ms${plugins}`
+}
+
+async function copyDeviceInfo() {
+  const status = useEngineStore.getState().status
+  if (!status) return
+  const text = deviceInfo(status)
+  await navigator.clipboard.writeText(text)
+  toast.success("Copied", { description: text })
+}
+
+const EDIT_COMMANDS: { command: EditCommand; title: string; words: string }[] =
+  [
+    { command: "cut", title: "Cut", words: "clipboard move" },
+    { command: "copy", title: "Copy", words: "clipboard" },
+    { command: "paste", title: "Paste", words: "clipboard insert" },
+    { command: "duplicate", title: "Duplicate", words: "clone repeat" },
+    { command: "delete", title: "Delete", words: "remove erase" },
+    { command: "selectAll", title: "Select all", words: "everything" },
+  ]
+
+/**
+ * What an Edit menu command means right now: the action that declares that
+ * command in the scope that has the keyboard, or in the nearest scope
+ * around it. An inspector that keeps the command from its panel ends the
+ * search, so Edit > Delete is off there instead of deleting the channel.
+ * An action that can run is preferred, so the menu item is enabled whenever
+ * any of them is.
+ */
+function editTarget(command: EditCommand, state: AppState): Action | undefined {
+  const declared = registry
+    .list()
+    .filter((action) => action.editCommand === command)
+  for (const link of linksOfScope(state.ui.activeScope)) {
+    const candidates = declared.filter((action) => action.scope === link.scope)
+    if (candidates.length > 0) {
+      return (
+        candidates.find((action) => isEnabled(action, state)) ?? candidates[0]
+      )
+    }
+    if (link.keeps.includes(command)) return undefined
+  }
+  return undefined
+}
+
+function editAction({ command, title, words }: (typeof EDIT_COMMANDS)[0]) {
+  const target = (state: AppState) => editTarget(command, state)
+  const action: Action = {
+    id: `edit.${command}`,
+    title,
+    section: "Edit",
+    keywords: `${words} selection`,
+    standsFor: (state) => target(state)?.id,
+    enabled: (state) => {
+      const found = target(state)
+      return found !== undefined && isEnabled(found, state)
+    },
+    run: () => target(getAppState())?.run(),
+  }
+  return action
+}
 
 function patternIndex(state: AppState): number {
   const id = selectedPatternId(state.document.project, state.transport.pattern)
@@ -72,6 +160,13 @@ export const BUILTIN_ACTIONS: Action[] = [
     },
   },
   {
+    id: "file.reloadSamples",
+    title: "Reload missing samples",
+    section: "File",
+    keywords: "retry find relink audio files warnings",
+    run: reloadMissingSamples,
+  },
+  {
     id: "file.export",
     title: "Export audio…",
     section: "File",
@@ -99,6 +194,14 @@ export const BUILTIN_ACTIONS: Action[] = [
       state.document.history.cursor < state.document.history.entries.length,
     run: redo,
   },
+  {
+    id: "edit.history",
+    title: "History",
+    section: "Edit",
+    keywords: "steps list earlier back",
+    run: () => ui().setHistoryOpen(true),
+  },
+  ...EDIT_COMMANDS.map(editAction),
 
   {
     id: "transport.toggle",
@@ -146,6 +249,41 @@ export const BUILTIN_ACTIONS: Action[] = [
       setPlayMode(
         useTransportStore.getState().mode === "pattern" ? "song" : "pattern"
       ),
+  },
+
+  {
+    id: "tempo.tap",
+    title: "Tap tempo",
+    section: "Transport",
+    keywords: "bpm beat measure speed",
+    run: tapTempo,
+  },
+  {
+    id: "tempo.half",
+    title: "Halve the tempo",
+    section: "Transport",
+    keywords: "bpm half time slower",
+    enabled: (state) =>
+      canScaleTempo(state.document.project.settings.tempoBpm, 0.5),
+    run: () => scaleTempo(0.5),
+  },
+  {
+    id: "tempo.double",
+    title: "Double the tempo",
+    section: "Transport",
+    keywords: "bpm double time faster",
+    enabled: (state) =>
+      canScaleTempo(state.document.project.settings.tempoBpm, 2),
+    run: () => scaleTempo(2),
+  },
+  {
+    id: "tempo.reset",
+    title: `Reset the tempo to ${DEFAULT_TEMPO_BPM} BPM`,
+    section: "Transport",
+    keywords: "bpm default",
+    enabled: (state) =>
+      state.document.project.settings.tempoBpm !== DEFAULT_TEMPO_BPM,
+    run: resetTempo,
   },
 
   {
@@ -285,6 +423,14 @@ export const BUILTIN_ACTIONS: Action[] = [
     run: () => ui().openDialog("settings"),
   },
   {
+    id: "engine.copyDeviceInfo",
+    title: "Copy audio device info",
+    section: "Options",
+    keywords: "driver output sample rate buffer latency clipboard report",
+    enabled: () => useEngineStore.getState().status !== null,
+    run: copyDeviceInfo,
+  },
+  {
     id: "options.keymapWindfall",
     title: "Use Windfall shortcuts",
     section: "Options",
@@ -315,7 +461,7 @@ export const BUILTIN_ACTIONS: Action[] = [
     keywords: "version license",
     run: () => {
       toast("Windfall 0.1.0", {
-        description: "A free digital audio workstation. Open source, GPL-3.0.",
+        description: "A free, open source DAW. GPL-3.0.",
       })
     },
   },
@@ -343,7 +489,9 @@ export function syncRecentActions(paths: string[]) {
 }
 
 export function registerBuiltinActions(): () => void {
-  const remove = registry.register(BUILTIN_ACTIONS)
+  const remove = registry.register(BUILTIN_ACTIONS, {
+    presets: { fl: FL_KEYMAP },
+  })
   return () => {
     remove()
     removeRecent?.()

@@ -34,6 +34,12 @@ export function clampPan(pan: number): number {
   return clamp(pan, -1, 1)
 }
 
+/**
+ * The last tick a note may reach: the end of the longest pattern there can
+ * be. A note past it could never play, in any pattern.
+ */
+export const MAX_PATTERN_TICKS = MAX_PATTERN_STEPS * TICKS_PER_STEP
+
 export function clampStart(start: number): number {
   return Math.max(0, Math.round(start))
 }
@@ -353,6 +359,31 @@ export function endAfterUpdates(
 
 export function endOfInits(inits: readonly NoteInit[]): number {
   return inits.reduce((end, init) => Math.max(end, init.start + init.length), 0)
+}
+
+/** Whether new notes all end inside the longest pattern there can be. */
+export function initsFit(inits: readonly NoteInit[]): boolean {
+  return endOfInits(inits) <= MAX_PATTERN_TICKS
+}
+
+/**
+ * Whether an update leaves every note it moves or resizes inside the
+ * longest pattern there can be. A note that is out there already (from a
+ * file made before this was checked) may still be brought back, or moved
+ * without going further out.
+ */
+export function updatesFit(
+  notes: readonly Note[],
+  updates: readonly NoteUpdate[]
+): boolean {
+  const byId = new Map(updates.map((update) => [update.id, update.patch]))
+  for (const note of notes) {
+    const patch = byId.get(note.id)
+    if (!patch) continue
+    const end = (patch.start ?? note.start) + (patch.length ?? note.length)
+    if (end > MAX_PATTERN_TICKS && end > noteEnd(note)) return false
+  }
+  return true
 }
 
 export type PatternInfo = {

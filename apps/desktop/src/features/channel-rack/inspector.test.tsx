@@ -1,8 +1,10 @@
 import {
+  act,
   createEvent,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -14,7 +16,10 @@ import { runAction } from "@/lib/actions"
 import { SAMPLE_DRAG_TYPE } from "@/lib/dnd"
 import type { Backend } from "@/lib/ipc"
 import { dispatch, undo } from "@/lib/store/project"
+import { usePromptStore } from "@/lib/store/prompts"
+import { useTransportStore } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
+import { samplesReloaded } from "@/lib/store/warnings"
 import { settle } from "@/test/harness"
 
 import ChannelRackPanel from "./index"
@@ -27,6 +32,7 @@ import {
   history,
   labels,
   project,
+  samplerOf,
   startRack,
 } from "./test-utils"
 
@@ -55,7 +61,7 @@ beforeEach(async () => {
 })
 afterEach(() => stop())
 
-const sampler = (name: string) => channel(name).source
+const sampler = samplerOf
 const settings = () =>
   screen.getByRole("complementary", { name: "Channel settings" })
 const slider = (name: string) =>
@@ -120,6 +126,81 @@ describe("the settings panel", () => {
   })
 })
 
+describe("keys while a setting has the focus", () => {
+  const DELETE = { key: "Delete", code: "Delete" }
+  const CTRL_D = { key: "d", code: "KeyD", ctrlKey: true }
+  const asked = () => usePromptStore.getState().confirm
+
+  it("does nothing with Delete on a setting: no reset, and no question about the channel", async () => {
+    await openSettings("Kick")
+    tap(slider("Tune"), "ArrowUp", 3)
+    await settle()
+    expect(sampler("Kick").tune).toBe(3)
+
+    slider("Tune").focus()
+    // Used up by the settings, so it goes nowhere else either.
+    expect(fireEvent.keyDown(slider("Tune"), DELETE)).toBe(false)
+    expect(
+      fireEvent.keyDown(slider("Tune"), { key: "Backspace", code: "Backspace" })
+    ).toBe(true)
+    await settle()
+    expect(asked()).toBeNull()
+    expect(sampler("Kick").tune).toBe(3)
+    expect(project().channels.map((item) => item.name)).toContain("Kick")
+
+    // A double-click is what puts a setting back.
+    fireEvent.doubleClick(slider("Tune"))
+    await settle()
+    expect(sampler("Kick").tune).toBe(0)
+  })
+
+  it("does not duplicate the channel on Ctrl+D", async () => {
+    await openSettings("Kick")
+    const count = project().channels.length
+    slider("Tune").focus()
+    // The key is used up, so the webview does nothing with it either.
+    expect(fireEvent.keyDown(slider("Tune"), CTRL_D)).toBe(false)
+    await settle()
+    expect(project().channels).toHaveLength(count)
+  })
+
+  it("uses the keys up on a setting that has nothing to put back", async () => {
+    await openSettings("Kick")
+    const count = project().channels.length
+    const reverse = within(settings()).getByRole("switch", { name: "Reverse" })
+    reverse.focus()
+    expect(fireEvent.keyDown(reverse, DELETE)).toBe(false)
+    expect(fireEvent.keyDown(reverse, CTRL_D)).toBe(false)
+    await settle()
+    expect(asked()).toBeNull()
+    expect(project().channels).toHaveLength(count)
+  })
+
+  it("still plays with Space and undoes with Ctrl+Z", async () => {
+    await openSettings("Kick")
+    tap(slider("Tune"), "ArrowUp", 2)
+    await settle()
+    slider("Tune").focus()
+    fireEvent.keyDown(slider("Tune"), { key: "z", code: "KeyZ", ctrlKey: true })
+    await settle()
+    expect(sampler("Kick").tune).toBe(0)
+
+    fireEvent.keyDown(slider("Tune"), { key: " ", code: "Space" })
+    await settle()
+    expect(useTransportStore.getState().playing).toBe(true)
+  })
+
+  it("leaves Delete on a channel's own row what it was", async () => {
+    await openSettings("Kick")
+    const name = screen.getByRole("button", { name: "Kick" })
+    name.focus()
+    fireEvent.keyDown(name, DELETE)
+    await settle()
+    expect(asked()?.title).toBe("Delete Kick?")
+    asked()?.resolve(null)
+  })
+})
+
 describe("the sample", () => {
   it("shows the sample's name and facts", async () => {
     await openSettings("Kick")
@@ -142,12 +223,12 @@ describe("the sample", () => {
     expect(sampler("Kick").end).toBe(1)
     expect(sent).toHaveBeenCalledTimes(3)
     expect(new Set(sent.mock.calls.map((call) => call[1])).size).toBe(1)
-    expect(labels()).toEqual(["Change sample start"])
+    expect(labels()).toEqual(["Change sample range"])
 
     tap(end, "ArrowLeft", 2)
     await settle()
     expect(sampler("Kick").end).toBeCloseTo(0.98, 2)
-    expect(labels()).toEqual(["Change sample start", "Change sample end"])
+    expect(labels()).toEqual(["Change sample range", "Change sample range"])
 
     await undo()
     await undo()
@@ -173,10 +254,10 @@ describe("the sample", () => {
     useUiStore.getState().selectChannel(channel("Kick").id)
     await settle()
     expect(slider("Region start")).toBeVisible()
-    expect(info.mock.calls.map((call) => call[0])).toEqual([
-      sampler("Kick").sample,
-      sampler("Hat").sample,
-    ])
+    // The rows ask too, to mark a channel whose file is missing.
+    const asked = info.mock.calls.map((call) => call[0])
+    expect(asked).toEqual(expect.arrayContaining([sampler("Kick").sample]))
+    expect(new Set(asked).size).toBe(asked.length)
   })
 
   it("says so when the waveform cannot be read, and keeps the controls", async () => {
@@ -185,10 +266,78 @@ describe("the sample", () => {
     )
     await openSettings("Kick")
     expect(within(settings()).getByRole("alert")).toHaveTextContent(
-      "The waveform could not be read. The file is missing."
+      "The sample file is missing or cannot be read. The file is missing."
     )
     expect(slider("Tune")).toBeVisible()
     expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it("marks the channel in the rack, and looks again after a reload", async () => {
+    const user = userEvent.setup()
+    const info = vi.spyOn(backend, "sampleInfoById")
+    info.mockRejectedValue(new Error("The file is missing."))
+    await openSettings("Kick")
+    const kick = screen.getByRole("button", {
+      name: "Kick, sample file is missing",
+    })
+    expect(kick.querySelector("[data-sample-missing]")).toHaveAttribute(
+      "title",
+      "Sample file is missing"
+    )
+
+    // The file is back: reloading reads the samples that failed again.
+    info.mockRestore()
+    await user.click(
+      within(settings()).getByRole("button", {
+        name: "Reload missing samples",
+      })
+    )
+    await settle()
+    expect(
+      screen.queryByRole("button", { name: "Kick, sample file is missing" })
+    ).toBeNull()
+    expect(slider("Region start")).toBeVisible()
+  })
+
+  it("does not call a sample missing when another project overtook the read", async () => {
+    const answers: ((error: Error) => void)[] = []
+    const info = vi.spyOn(backend, "sampleInfoById").mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          answers.push(reject)
+        })
+    )
+    await openSettings("Kick")
+    const asked = answers.length
+    expect(asked).toBeGreaterThan(0)
+
+    // Another project loads while the reads are on their way, and the
+    // backend refuses them for that reason.
+    samplesReloaded()
+    info.mockRestore()
+    for (const reject of answers) {
+      reject(new Error("Another project was opened in the meantime."))
+    }
+    await settle()
+
+    expect(
+      screen.queryByRole("button", { name: /sample file is missing/ })
+    ).toBeNull()
+    // The samples still on screen were read again, and are there.
+    expect(slider("Region start")).toBeVisible()
+  })
+
+  it("says how a reload of missing samples went", async () => {
+    const reload = vi.spyOn(backend, "samplesReload")
+    reload.mockResolvedValueOnce(0)
+    await runAction("file.reloadSamples")
+    expect(toast.success).toHaveBeenLastCalledWith("All samples loaded")
+    reload.mockResolvedValueOnce(1)
+    await runAction("file.reloadSamples")
+    expect(toast.error).toHaveBeenLastCalledWith("1 sample is still missing")
+    reload.mockResolvedValueOnce(3)
+    await runAction("file.reloadSamples")
+    expect(toast.error).toHaveBeenLastCalledWith("3 samples are still missing")
   })
 
   it("explains a channel with no sample and lets one be chosen", async () => {
@@ -255,6 +404,38 @@ describe("the sound", () => {
     expect(labels()).toEqual(["Change tuning", "Change tuning"])
   })
 
+  it("keeps the semitone on show while Fine goes to either end", async () => {
+    await openSettings("Kick")
+    tap(slider("Tune"), "ArrowUp", 2)
+    await settle()
+
+    // Fine all the way down: 1.5, read as two semitones less 50 cents.
+    tap(slider("Fine"), "Home")
+    await settle()
+    expect(sampler("Kick").tune).toBe(1.5)
+    expect(slider("Tune")).toHaveAttribute("aria-valuenow", "2")
+    expect(slider("Fine")).toHaveAttribute("aria-valuetext", "−50 ct")
+
+    // And all the way up: 2.5 is still semitone 2, now with +50 cents.
+    tap(slider("Fine"), "End")
+    await settle()
+    expect(sampler("Kick").tune).toBe(2.5)
+    expect(slider("Tune")).toHaveAttribute("aria-valuenow", "2")
+    expect(slider("Fine")).toHaveAttribute("aria-valuetext", "+50 ct")
+
+    // Tune moves by whole semitones and takes the cents along.
+    tap(slider("Tune"), "ArrowUp")
+    await settle()
+    expect(sampler("Kick").tune).toBe(3.5)
+    expect(slider("Tune")).toHaveAttribute("aria-valuenow", "3")
+    expect(slider("Fine")).toHaveAttribute("aria-valuetext", "+50 ct")
+    tap(slider("Tune"), "ArrowDown", 2)
+    await settle()
+    expect(sampler("Kick").tune).toBe(1.5)
+    expect(slider("Tune")).toHaveAttribute("aria-valuenow", "1")
+    expect(slider("Fine")).toHaveAttribute("aria-valuetext", "+50 ct")
+  })
+
   it("keeps the tuning inside its range", async () => {
     await openSettings("Kick")
     tap(slider("Tune"), "End")
@@ -308,7 +489,7 @@ describe("the sound", () => {
     expect(labels()).toEqual([
       "Change sample gain",
       "Reverse sample",
-      "Change cut mode",
+      "Toggle cut itself",
       "Change cut group",
     ])
   })
@@ -346,7 +527,7 @@ describe("the envelope", () => {
     await user.click(toggle())
     await settle()
     expect(sampler("Kick").envelope).toBeNull()
-    expect(labels()).toEqual(["Turn envelope on", "Turn envelope off"])
+    expect(labels()).toEqual(["Change envelope", "Change envelope"])
   })
 
   it("edits one shape from the knobs and from the nodes", async () => {
@@ -374,7 +555,7 @@ describe("the envelope", () => {
     expect(envelope?.attackMs).toBe(DEFAULT_ENVELOPE.attackMs)
     // Turning it on, the knob and the held key are three steps.
     expect(labels()).toEqual([
-      "Turn envelope on",
+      "Change envelope",
       "Change envelope",
       "Change envelope",
     ])
@@ -417,6 +598,58 @@ describe("playing and routing", () => {
     expect(off).toHaveBeenCalledTimes(1)
   })
 
+  it("has a menu of its own for the note names and how many keys it shows", async () => {
+    await openSettings("Kick")
+    const keys = () =>
+      within(settings()).getByRole("group", { name: "Piano keyboard" })
+    const menuOf = async () => {
+      // The app's menu, so the webview's own stays away.
+      expect(
+        fireEvent.contextMenu(
+          within(keys()).getByRole("button", { name: "D5" }),
+          { clientX: 20, clientY: 20 }
+        )
+      ).toBe(false)
+      await act(settle)
+      return screen.getByRole("menu")
+    }
+    const pick = async (name: RegExp) => {
+      fireEvent.click(
+        within(await menuOf()).getByRole("menuitemcheckbox", { name })
+      )
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+    }
+
+    const menu = await menuOf()
+    expect(
+      within(menu)
+        .getAllByRole("menuitemcheckbox")
+        .map((item) => `${item.textContent}:${item.getAttribute("aria-checked")}`)
+    ).toEqual([
+      "Note names:true",
+      "Around the root key (C3 to C7):true",
+      "Six octaves (C2 to C8):false",
+      "Every key (C0 to G10):false",
+    ])
+    fireEvent.keyDown(menu, { key: "Escape" })
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+
+    // A sampler starts with the four octaves around its root key.
+    expect(within(keys()).queryByRole("button", { name: "C0" })).toBeNull()
+    await pick(/^Every key/)
+    expect(within(keys()).getByRole("button", { name: "C0" })).toBeVisible()
+    expect(within(keys()).getByRole("button", { name: "G10" })).toBeVisible()
+    expect(useRackStore.getState().keyboardRange).toBe("full")
+
+    expect(keys()).toHaveTextContent("C5")
+    await pick(/^Note names/)
+    expect(keys()).not.toHaveTextContent("C5")
+    expect(useRackStore.getState().keyboardLabels).toBe(false)
+
+    await pick(/^Around the root key/)
+    expect(within(keys()).queryByRole("button", { name: "C0" })).toBeNull()
+  })
+
   it("lights the root key", async () => {
     await openSettings("Kick")
     const keys = within(settings()).getByRole("group", {
@@ -437,9 +670,7 @@ describe("playing and routing", () => {
     ).toHaveTextContent("4")
 
     await user.click(
-      within(settings()).getByRole("button", {
-        name: "Show the channel's mixer track",
-      })
+      within(settings()).getByRole("button", { name: "Show in mixer" })
     )
     expect(useUiStore.getState().selectedTrack).toBe(
       channel("Snare").mixerTrack

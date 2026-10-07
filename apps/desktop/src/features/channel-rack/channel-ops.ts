@@ -2,11 +2,16 @@ import type {
   Channel,
   ChannelId,
   Command,
+  InstrumentKind,
+  InstrumentParams,
   Note,
   PatternId,
   SampleId,
   TrackId,
 } from "@/bindings"
+import { automationGoingWith } from "@/features/automation/owned"
+import { instrumentDescriptor } from "@/features/params"
+import { instrumentParams, sourceSample } from "@/lib/channel-source"
 import { attempt } from "@/lib/errors"
 import { currentPatternId } from "@/lib/flows/edit"
 import { backend } from "@/lib/ipc"
@@ -75,10 +80,16 @@ export async function renameChannel(id: ChannelId): Promise<void> {
 export async function deleteChannel(id: ChannelId): Promise<void> {
   const channel = findChannel(id)
   if (!channel) return
+  const automation = automationGoingWith({ type: "channel", channel: id })
   const choice = await askConfirm({
     title: `Delete ${channel.name}?`,
-    description:
-      "Its steps in every pattern are deleted with it. Its mixer track stays. Undo brings the channel back.",
+    description: [
+      "Its steps in every pattern are deleted with it. Its mixer track stays.",
+      automation,
+      "Undo brings the channel back.",
+    ]
+      .filter((part) => part !== null)
+      .join(" "),
     choices: [
       { id: "delete", label: "Delete channel", variant: "destructive" },
     ],
@@ -266,6 +277,60 @@ export async function addChannelFromFile(
   if (created) selectChannel(created.id)
 }
 
+/** Adds a channel that plays a built-in instrument and opens its settings. */
+export async function addInstrumentChannel(
+  kind: InstrumentKind
+): Promise<void> {
+  const result = await dispatch({ type: "addChannel", instrument: kind })
+  if (!result) return
+  selectChannel(result.created[0], { openSettings: true })
+  useUiStore.getState().showCenterTab("channelRack")
+}
+
+/**
+ * Replaces every setting of the channel's instrument, as one undo step
+ * that the history names after what was loaded.
+ */
+export async function loadInstrumentSound(
+  id: ChannelId,
+  params: InstrumentParams,
+  label: string
+): Promise<void> {
+  await dispatch({
+    type: "batch",
+    label,
+    commands: [{ type: "setInstrumentParams", channel: id, params }],
+  })
+}
+
+/** Puts the channel's instrument back to the settings a new one has. */
+export async function initInstrument(id: ChannelId): Promise<void> {
+  const params = instrumentParams(findChannel(id))
+  if (!params) return
+  const descriptor = instrumentDescriptor(params.type)
+  await loadInstrumentSound(
+    id,
+    descriptor.defaults,
+    `Init ${descriptor.name.toLowerCase()}`
+  )
+}
+
+/** Asks for an audio file and adds a channel that plays it. */
+export async function addChannelFromPickedFile(): Promise<void> {
+  const path = await attempt(backend.pickAudioFile(), "Could not choose a file")
+  if (path === null) return
+  await addChannelFromFile(path)
+  useUiStore.getState().showCenterTab("channelRack")
+}
+
+/** Asks for an audio file and makes the channel play it instead. */
+export async function replaceSampleFromPickedFile(
+  id: ChannelId
+): Promise<void> {
+  const path = await attempt(backend.pickAudioFile(), "Could not choose a file")
+  if (path !== null) await replaceSampleFromFile(id, path)
+}
+
 export async function replaceSampleFromFile(
   id: ChannelId,
   path: string
@@ -282,7 +347,8 @@ export async function assignProjectSample(
   id: ChannelId,
   sample: SampleId
 ): Promise<void> {
-  if (findChannel(id)?.source.sample === sample) return
+  const channel = findChannel(id)
+  if (!channel || sourceSample(channel.source) === sample) return
   await dispatch({ type: "setChannelSample", id, sample })
 }
 

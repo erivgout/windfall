@@ -13,6 +13,7 @@ import {
   withAlpha,
   xToTick,
 } from "@/lib/canvas"
+import { ignoresSnap } from "@/lib/edit-modifiers"
 import { dispatch } from "@/lib/store/project"
 import { seek, useTransportStore } from "@/lib/store/transport"
 import { ticksPerBar, ticksPerBeat } from "@/lib/time"
@@ -23,7 +24,7 @@ import { useSession } from "./context"
 import { lengthStepsAt } from "./edit-math"
 import { handleWheel } from "./grid-input"
 import { showHint } from "./hint"
-import { useRollMenu, VIEW_MENU } from "./menu"
+import { VIEW_MENU } from "./menu"
 import { fadePastEnd, shownLengthTicks } from "./overlays"
 import type { PianoRollSession } from "./session"
 import { snapRound, snapTicks } from "./snap"
@@ -35,7 +36,7 @@ const MIN_TICK_MARK_PX = 10
 const MIN_BEAT_LABEL_PX = 64
 
 const END_HINT =
-  "Drag to change the pattern length by bars. Shift: by steps. Notes past the end do not play"
+  "Drag to change the pattern length by bars. Alt: by steps. Notes past the end do not play"
 const RULER_HINT =
   "Click to move the playhead. Drag the marker at the end of the pattern to change its length"
 
@@ -166,7 +167,6 @@ export function Ruler() {
   const session = useSession()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragging = useRef(false)
-  const menu = useRollMenu(RULER_MENU)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -213,7 +213,8 @@ export function Ruler() {
     const steps = lengthStepsAt(
       xToTick(view.viewport, localX(event)),
       context.pattern.signature,
-      event.shiftKey
+      // By steps is this drag with the snap let go.
+      ignoresSnap({ alt: event.altKey })
     )
     session.setLengthPreview(steps * TICKS_PER_STEP)
   }
@@ -284,7 +285,7 @@ export function Ruler() {
   }
 
   return (
-    <ContextActions items={menu.items}>
+    <ContextActions items={RULER_MENU}>
       <canvas
         ref={canvasRef}
         aria-label="Time ruler. Drag the marker at the end of the pattern to change its length"
@@ -294,7 +295,6 @@ export function Ruler() {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onPointerLeave={() => showHint(null)}
-        onContextMenuCapture={menu.refresh}
       />
     </ContextActions>
   )

@@ -1,18 +1,27 @@
 import { Add01Icon, Cancel01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
+import { useMemo } from "react"
+
 import type { Send, TrackId } from "@/bindings"
 import { faderTaper, gainUnit, Knob } from "@/components/audio"
+import {
+  contextSeparator,
+  type ContextItem,
+} from "@/components/context-actions"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { ValueContextItems } from "@/components/value-context-menu"
+import { automationFeed, useAutomationMarker } from "@/features/automation/live"
 import { useHint, useProjectStore } from "@/lib/store"
 import { MAX_GAIN } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
+import { trackValueItems } from "./menus"
 import { addSend, clampGain, removeSend } from "./operations"
 import { LoopNote, TrackLabel } from "./output-select"
 import { sendChoices } from "./routing"
@@ -33,22 +42,49 @@ function SendRow({ from, send }: { from: TrackId; send: Send }) {
     `How much of this track goes to "${target}", after its fader. Double-click for 0 dB`
   )
 
+  const items = useMemo(
+    (): ContextItem[] => [
+      ...trackValueItems(from, { send: send.target }),
+      contextSeparator,
+      {
+        title: "Remove send",
+        destructive: true,
+        run: () => removeSend(from, send.target),
+      },
+    ],
+    [from, send.target]
+  )
+  const live = useMemo(
+    () =>
+      automationFeed({ type: "sendGain", track: from, target: send.target }),
+    [from, send.target]
+  )
+  const marker = useAutomationMarker({
+    type: "sendGain",
+    track: from,
+    target: send.target,
+  })
+
   return (
     <li
       data-slot="track-send"
       className="group/send relative flex h-[26px] shrink-0 items-center gap-1"
     >
-      <Knob
-        size="sm"
-        min={0}
-        max={MAX_GAIN}
-        scale={faderTaper}
-        defaultValue={1}
-        aria-label={`Send to ${target}`}
-        {...gainUnit}
-        {...level}
-        {...hint}
-      />
+      <ValueContextItems items={items}>
+        <Knob
+          size="sm"
+          min={0}
+          max={MAX_GAIN}
+          scale={faderTaper}
+          defaultValue={1}
+          aria-label={`Send to ${target}`}
+          live={live}
+          marker={marker}
+          {...gainUnit}
+          {...level}
+          {...hint}
+        />
+      </ValueContextItems>
       <span
         title={target}
         className="min-w-0 flex-1 truncate text-[10px] leading-none"

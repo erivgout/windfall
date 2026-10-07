@@ -162,7 +162,7 @@ type PianoKeyboardProps = Omit<
   showLabels?: boolean
   /** Octave number of key 60. 5 (the default) follows FL, 4 follows most others. */
   middleCOctave?: number
-  /** Velocity of notes played with Space or Enter. */
+  /** Velocity of notes played with Enter. */
   keyboardVelocity?: number
   /** Highlight color as any CSS color. Defaults to `--wf-brand`. */
   color?: string
@@ -386,7 +386,6 @@ function PianoKeyboard({
       keyElement(clamped)?.focus({ preventScroll: true })
     }
     switch (event.key) {
-      case " ":
       case "Enter":
         if (!event.repeat && !disabled) {
           release(KEYBOARD_SOURCE)
@@ -420,7 +419,7 @@ function PianoKeyboard({
   }
 
   function handleKeyUp(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === " " || event.key === "Enter") {
+    if (event.key === "Enter") {
       release(KEYBOARD_SOURCE)
     }
   }

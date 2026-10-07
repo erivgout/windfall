@@ -1,8 +1,12 @@
 import { useEffect } from "react"
 
+import { ContextActions } from "@/components/context-actions"
+import { useShortcutScope } from "@/lib/actions"
+
 import { BrowserHeader } from "./browser-header"
 import { flushScrollTop } from "./persist"
 import { PreviewPane } from "./preview-pane"
+import { BROWSER_MENU } from "./row-menu"
 import { ensureRootsLoaded } from "./store"
 import { TreeView } from "./tree-view"
 
@@ -23,14 +27,19 @@ export default function BrowserPanel() {
     }
   }, [])
 
+  const scope = useShortcutScope("browser")
+
   return (
-    <div
-      data-slot="browser-panel"
-      className="@container/browser flex h-full min-h-0 flex-col"
-    >
-      <BrowserHeader />
-      <TreeView />
-      <PreviewPane />
-    </div>
+    <ContextActions items={BROWSER_MENU}>
+      <div
+        data-slot="browser-panel"
+        className="@container/browser flex h-full min-h-0 flex-col"
+        {...scope}
+      >
+        <BrowserHeader />
+        <TreeView />
+        <PreviewPane />
+      </div>
+    </ContextActions>
   )
 }

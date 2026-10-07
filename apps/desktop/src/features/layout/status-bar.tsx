@@ -1,9 +1,12 @@
+import { ContextActions } from "@/components/context-actions"
 import { runAction } from "@/lib/actions"
 import { useEngineStore } from "@/lib/store/engine"
 import { useHint, useHintStore } from "@/lib/store/hint"
 import { useDirty, useProjectPath } from "@/lib/store/selectors"
 import { fileName, formatSampleRate } from "@/lib/time"
 import { cn } from "@/lib/utils"
+
+import { STATUS_MENU } from "./chrome-menus"
 
 function Dot({ className }: { className: string }) {
   return (
@@ -17,6 +20,12 @@ function Dot({ className }: { className: string }) {
 function EngineStatus() {
   const status = useEngineStore((state) => state.status)
   const hint = useHint("Audio output. Click to choose a device or buffer size")
+
+  // What the project's effects and instruments add on top of the buffer.
+  const pluginMs =
+    status && status.sampleRate > 0
+      ? (status.latencyFrames / status.sampleRate) * 1000
+      : 0
 
   let content = (
     <>
@@ -38,6 +47,14 @@ function EngineStatus() {
         <span className="shrink-0 font-readout">
           {status.latencyMs.toFixed(1)} ms
         </span>
+        {pluginMs > 0 && (
+          <span
+            className="shrink-0 font-readout"
+            title={`Effects and instruments delay the output by ${status.latencyFrames} samples. Every track is lined up with the slowest.`}
+          >
+            +{pluginMs.toFixed(1)} ms
+          </span>
+        )}
       </>
     )
   } else if (status) {
@@ -56,7 +73,9 @@ function EngineStatus() {
       type="button"
       aria-label="Audio output status. Open audio settings"
       onClick={() => void runAction("options.settings")}
-      className="flex h-full max-w-[45%] min-w-0 items-center gap-2 px-2 outline-none hover:bg-foreground/5 focus-visible:bg-foreground/10"
+      // It gives way before the hint does: the name of the device is cut
+      // short first.
+      className="flex h-full max-w-[45%] min-w-0 shrink-[4] items-center gap-2 px-2 outline-none hover:bg-foreground/5 focus-visible:bg-foreground/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       {...hint}
     >
       {content}
@@ -66,9 +85,23 @@ function EngineStatus() {
 
 function Hint() {
   const text = useHintStore((state) => state.text)
+  const notice = useHintStore((state) => state.notice)
+  const shown = notice ?? text
   return (
-    <p aria-live="off" className="min-w-0 flex-1 truncate px-2">
-      {text}
+    <p
+      // A notice is about what was just done, so it is read out. The hint
+      // changes with every pointer move and is not.
+      role={notice === null ? undefined : "status"}
+      aria-live={notice === null ? "off" : "polite"}
+      data-slot="status-hint"
+      data-notice={notice === null ? undefined : ""}
+      // Cut short only when the window leaves no room. The whole line is
+      // then a hover away.
+      title={shown ?? undefined}
+      // As wide as what it says, and the last of the three to be cut.
+      className="min-w-0 flex-[1_1_auto] truncate px-2 data-notice:text-warn"
+    >
+      {shown}
     </p>
   )
 }
@@ -83,7 +116,7 @@ function SaveState() {
 
   return (
     <div
-      className="flex min-w-0 shrink items-center gap-2 px-2"
+      className="ml-auto flex min-w-0 shrink-[4] items-center gap-2 px-2"
       title={path ?? undefined}
     >
       <Dot className={dirty ? "bg-brand" : "bg-foreground/30"} />
@@ -101,10 +134,12 @@ function SaveState() {
  */
 export function StatusBar() {
   return (
-    <footer className="flex h-6 shrink-0 items-center border-t bg-chassis text-[0.6875rem] text-muted-foreground">
-      <EngineStatus />
-      <Hint />
-      <SaveState />
-    </footer>
+    <ContextActions items={STATUS_MENU}>
+      <footer className="flex h-6 shrink-0 items-center border-t bg-chassis text-[0.6875rem] text-muted-foreground">
+        <EngineStatus />
+        <Hint />
+        <SaveState />
+      </footer>
+    </ContextActions>
   )
 }

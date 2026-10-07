@@ -1,6 +1,12 @@
 import { screen } from "@testing-library/react"
 
 import type { Channel, Project } from "@/bindings"
+import {
+  isInstrumentChannel,
+  isSamplerChannel,
+  type InstrumentChannel,
+  type SamplerSource,
+} from "@/lib/channel-source"
 import { useProjectStore } from "@/lib/store/project"
 import { usePromptStore } from "@/lib/store/prompts"
 import { selectedPatternId } from "@/lib/store/selectors"
@@ -34,6 +40,22 @@ export const labels = () => history().entries.map((entry) => entry.label)
 export function channel(name: string): Channel {
   const found = project().channels.find((item) => item.name === name)
   if (!found) throw new Error(`No channel called ${name}`)
+  return found
+}
+
+/** The sampler settings of a channel, which must be a sampler. */
+export function samplerOf(name: string): SamplerSource {
+  const found = channel(name)
+  if (!isSamplerChannel(found)) throw new Error(`${name} is not a sampler`)
+  return found.source
+}
+
+/** A channel that must be an instrument. */
+export function instrumentChannel(name: string): InstrumentChannel {
+  const found = channel(name)
+  if (!isInstrumentChannel(found)) {
+    throw new Error(`${name} is not an instrument`)
+  }
   return found
 }
 

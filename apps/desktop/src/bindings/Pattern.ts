@@ -16,7 +16,8 @@ export type Pattern = { id: PatternId, name: string,
 color: number, 
 /**
  * Length in sixteenth-note steps, 1 to 1024. The pattern loops at this
- * length, and notes that start at or after it do not play.
+ * length, and notes that start at or after it do not play. They are
+ * kept, so making the pattern longer again brings them back.
  */
 lengthSteps: number, 
 /**

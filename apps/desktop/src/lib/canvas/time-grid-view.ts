@@ -10,6 +10,7 @@ import {
 import { hitTestPoint, type Hit, type HitOptions } from "./hit-test"
 import { RectBatch } from "./rect-batch"
 import type { RectRenderer } from "./renderer"
+import { createCanvas2DRenderer } from "./renderer-canvas2d"
 import { visibleRange, type IndexedBatch } from "./spatial-index"
 import {
   createCanvasColorParser,
@@ -105,16 +106,25 @@ function styleCanvas(canvas: HTMLCanvasElement, interactive: boolean): void {
  * overlay holds the marquee and the playhead, so those move without the
  * items being redrawn or any item data being touched.
  *
+ * Overlay painters draw what belongs to the items: names, outlines, the
+ * places a drag started from. So whatever changes the items or where they
+ * are shown (`setItems`, `setDragOffset`, `setDragResize`, the viewport)
+ * redraws both layers, and a painter needs no invalidation of its own for
+ * those. Only the marquee and the playhead redraw the overlay alone.
+ *
  * The view holds no project state. Give it a batch, a viewport and a
  * playhead position; it draws them.
  */
 export class TimeGridView {
-  readonly renderer: RectRenderer
   /** Called after every drawn frame. */
   onFrame: ((stats: FrameStats) => void) | null = null
 
   private readonly container: HTMLElement
+  /** Takes the pointer. The first renderer draws into it. */
   private readonly baseCanvas: HTMLCanvasElement
+  /** What the renderer in use draws into. */
+  private drawCanvas: HTMLCanvasElement
+  private activeRenderer: RectRenderer
   private readonly overlayCanvas: HTMLCanvasElement
   private readonly overlayContext: CanvasRenderingContext2D | null
   private readonly gridBatch = new RectBatch(512)
@@ -164,8 +174,9 @@ export class TimeGridView {
     options: TimeGridViewOptions
   ) {
     this.container = container
-    this.renderer = renderer
+    this.activeRenderer = renderer
     this.baseCanvas = baseCanvas
+    this.drawCanvas = baseCanvas
     this.overlayCanvas = document.createElement("canvas")
     this.overlayContext = this.overlayCanvas.getContext("2d")
     this.timeGrid = options.timeGrid ?? DEFAULT_TIME_GRID
@@ -183,8 +194,7 @@ export class TimeGridView {
     this.parseColor = createCanvasColorParser()
     this.tokens = readThemeTokens(container, this.parseColor)
     this.currentTheme = deriveGridTheme(this.tokens)
-    renderer.setTheme(this.currentTheme)
-    renderer.onRestored = () => this.invalidate("all")
+    this.adopt(renderer)
 
     const dpr = window.devicePixelRatio || 1
     this.currentViewport = clampViewport(
@@ -239,7 +249,18 @@ export class TimeGridView {
     return this.currentItems
   }
 
-  /** The canvas that receives pointer and wheel events. */
+  /**
+   * The renderer in use. It changes to a Canvas 2D one if a GPU renderer
+   * loses its context for good, so read it when it is needed.
+   */
+  get renderer(): RectRenderer {
+    return this.activeRenderer
+  }
+
+  /**
+   * The canvas that receives pointer and wheel events. It stays the same
+   * element for the life of the view.
+   */
   get element(): HTMLCanvasElement {
     return this.baseCanvas
   }
@@ -247,8 +268,8 @@ export class TimeGridView {
   get transform(): DeviceTransform {
     return {
       ...deviceTransform(this.currentViewport),
-      widthDev: this.baseCanvas.width,
-      heightDev: this.baseCanvas.height,
+      widthDev: this.drawCanvas.width,
+      heightDev: this.drawCanvas.height,
     }
   }
 
@@ -320,10 +341,10 @@ export class TimeGridView {
   setItems(items: IndexedBatch | null): void {
     const previous = this.currentItems
     if (previous && previous.batch !== items?.batch) {
-      this.renderer.release(previous.batch)
+      this.activeRenderer.release(previous.batch)
     }
     this.currentItems = items
-    this.invalidate("base")
+    this.invalidate("all")
   }
 
   /**
@@ -334,7 +355,7 @@ export class TimeGridView {
   setUnderlay(items: IndexedBatch | null): void {
     const previous = this.currentUnderlay
     if (previous && previous.batch !== items?.batch) {
-      this.renderer.release(previous.batch)
+      this.activeRenderer.release(previous.batch)
     }
     this.currentUnderlay = items
     this.invalidate("base")
@@ -348,7 +369,7 @@ export class TimeGridView {
     if (ticks === this.dragTicks && rows === this.dragRows) return
     this.dragTicks = ticks
     this.dragRows = rows
-    this.invalidate("base")
+    this.invalidate("all")
   }
 
   /**
@@ -367,7 +388,7 @@ export class TimeGridView {
     this.resizeStart = startTicks
     this.resizeEnd = endTicks
     this.resizeMinLength = minLength
-    this.invalidate("base")
+    this.invalidate("all")
   }
 
   setMarquee(marquee: Marquee | null): void {
@@ -408,7 +429,11 @@ export class TimeGridView {
     }
   }
 
-  /** Marks a layer for redraw. Call after mutating the item batch in place. */
+  /**
+   * Marks a layer for redraw, both by default. Call it after mutating the
+   * item batch in place, or after a change to something only an overlay
+   * painter knows about.
+   */
   invalidate(layer: Layer = "all"): void {
     if (layer !== "overlay") this.baseDirty = true
     if (layer !== "base") this.overlayDirty = true
@@ -467,8 +492,11 @@ export class TimeGridView {
     if (this.frameRequest !== 0) cancelAnimationFrame(this.frameRequest)
     this.resizeObserver.disconnect()
     this.stopThemeObserver()
-    this.renderer.dispose()
+    this.activeRenderer.onRestored = null
+    this.activeRenderer.onLost = null
+    this.activeRenderer.dispose()
     this.baseCanvas.remove()
+    this.drawCanvas.remove()
     this.overlayCanvas.remove()
     this.themeListeners = []
     this.viewportListeners = []
@@ -483,7 +511,7 @@ export class TimeGridView {
     if (JSON.stringify(tokens) === JSON.stringify(this.tokens)) return
     this.tokens = tokens
     this.currentTheme = deriveGridTheme(tokens)
-    this.renderer.setTheme(this.currentTheme)
+    this.activeRenderer.setTheme(this.currentTheme)
     this.baseDirty = true
     this.overlayDirty = true
     for (const listener of this.themeListeners) listener(this.currentTheme)
@@ -513,22 +541,58 @@ export class TimeGridView {
     const width = Math.max(1, widthDev)
     const height = Math.max(1, heightDev)
     if (
-      this.baseCanvas.width === width &&
-      this.baseCanvas.height === height &&
+      this.drawCanvas.width === width &&
+      this.drawCanvas.height === height &&
       this.overlayCanvas.width === width &&
       this.overlayCanvas.height === height
     ) {
       return false
     }
-    this.renderer.resize(width, height)
+    this.activeRenderer.resize(width, height)
     this.overlayCanvas.width = width
     this.overlayCanvas.height = height
     return true
   }
 
+  private adopt(renderer: RectRenderer): void {
+    renderer.setTheme(this.currentTheme)
+    renderer.onRestored = () => this.invalidate("all")
+    renderer.onLost = () => this.replaceLostRenderer()
+  }
+
+  /**
+   * Carries on in Canvas 2D after a GPU renderer lost its context for good.
+   * The canvas that takes the pointer stays in place, so listeners on
+   * `element` keep working. It turns see-through and the new canvas goes
+   * under it.
+   */
+  private replaceLostRenderer(): void {
+    const lost = this.activeRenderer
+    if (this.destroyed || lost.info.kind === "canvas2d") return
+    const canvas = document.createElement("canvas")
+    let renderer: RectRenderer
+    try {
+      renderer = createCanvas2DRenderer(canvas)
+    } catch {
+      // No 2D context either. The view stays blank, as it already is.
+      return
+    }
+    renderer.resize(this.drawCanvas.width, this.drawCanvas.height)
+    styleCanvas(canvas, false)
+    this.baseCanvas.before(canvas)
+    this.baseCanvas.style.opacity = "0"
+    lost.onRestored = null
+    lost.onLost = null
+    lost.dispose()
+    this.drawCanvas = canvas
+    this.activeRenderer = renderer
+    this.adopt(renderer)
+    this.invalidate("all")
+  }
+
   private drawBase(transform: DeviceTransform): number {
     const viewport = this.currentViewport
-    const renderer = this.renderer
+    const renderer = this.activeRenderer
     writeGrid(
       this.gridBatch,
       viewport,

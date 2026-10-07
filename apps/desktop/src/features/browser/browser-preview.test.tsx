@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -322,6 +329,26 @@ describe("the preview pane", () => {
     ).toBeInTheDocument()
     // It can still be added; the engine may know more than the overview.
     expect(screen.getByRole("button", { name: "Add to rack" })).toBeEnabled()
+  })
+
+  it("says it once for a broken file, with the file's name instead of its path", async () => {
+    const broken = (path: string) =>
+      Promise.reject(new Error(`Could not decode "${path}": bad header`))
+    const { user } = await openKicks(() => ({
+      sampleInfo: broken,
+      previewPlay: broken,
+    }))
+    await user.click(item("Kick 01.wav"))
+    expect(
+      await screen.findByText(
+        'Could not read this sound. Could not decode "Kick 01.wav": bad header'
+      )
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(useBrowserStore.getState().previewError).not.toBeNull()
+    )
+    expect(within(pane()).getAllByRole("alert")).toHaveLength(1)
+    expect(pane()).not.toHaveTextContent("/factory")
   })
 })
 

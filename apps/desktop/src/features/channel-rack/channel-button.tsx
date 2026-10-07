@@ -1,3 +1,5 @@
+import { Alert02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { memo, type KeyboardEvent, type PointerEvent } from "react"
 
 import type { ChannelId } from "@/bindings"
@@ -26,6 +28,7 @@ import {
 } from "./channel-ops"
 import { ColorSwatches } from "./color-swatches"
 import { useRackStore } from "./rack-store"
+import { WaveGlyph, type WaveShape } from "./synth/wave-glyph"
 
 type ChannelButtonProps = {
   id: ChannelId
@@ -36,9 +39,19 @@ type ChannelButtonProps = {
   solo: boolean
   /** Muted, or silent because another channel is soloed. */
   dimmed: boolean
+  /**
+   * The wave to draw for a channel that plays an instrument, which has no
+   * sample to show or miss. Null for a sampler.
+   */
+  instrument: WaveShape | null
   hasSample: boolean
-  /** A dragged sample is over the button and would replace its sample. */
-  dropTarget: boolean
+  /** The channel has a sample, but its file could not be read. */
+  sampleMissing: boolean
+  /**
+   * A dragged sample is over the button: it would replace the channel's
+   * sample, or, on an instrument, be refused.
+   */
+  drop: "replace" | "refuse" | null
 }
 
 /** Finds the control to move to with the arrow keys, in this row or the next. */
@@ -113,14 +126,22 @@ export const ChannelButton = memo(function ChannelButton({
   muted,
   solo,
   dimmed,
-  hasSample,
-  dropTarget,
+  instrument,
+  hasSample: sampleSet,
+  sampleMissing,
+  drop,
 }: ChannelButtonProps) {
   const audition = useAudition(id)
+  // Only an empty sampler is drawn as missing its sound.
+  const hasSample = instrument !== null || sampleSet
   const hint = useHint(
-    hasSample
-      ? `${name}: press to hear it, click to open its settings, right-click for more. Drop a sample here to replace its sound`
-      : `${name} has no sample yet. Drop one here from the browser, or click to open its settings`
+    instrument !== null
+      ? `${name}: press and hold to hear it, click to open its settings, right-click for more`
+      : sampleMissing
+        ? `${name}: its sample file is missing, so it is silent. Drop another sample here, or put the file back and use File > Reload missing samples`
+        : hasSample
+          ? `${name}: press to hear it, click to open its settings, right-click for more. Drop a sample here to replace its sound`
+          : `${name} has no sample yet. Drop one here from the browser, or click to open its settings`
   )
 
   // Mute and solo are worded for this row. Everything else is a registry
@@ -129,6 +150,10 @@ export const ChannelButton = memo(function ChannelButton({
     "channel.rename",
     "channel.color",
     "channel.duplicate",
+    contextSeparator,
+    // Greyed out on an instrument, with the reason beside it.
+    "channel.replaceSample",
+    ...(instrument !== null ? ["channel.initInstrument"] : []),
     contextSeparator,
     { title: muted ? "Unmute" : "Mute", run: () => toggleMute(id) },
     { title: solo ? "Unsolo" : "Solo", run: () => toggleSolo(id) },
@@ -178,7 +203,8 @@ export const ChannelButton = memo(function ChannelButton({
         selected && "bg-(--wf-step-off-alt) ring-foreground/45",
         !hasSample &&
           "bg-transparent outline-1 -outline-offset-1 outline-foreground/30 outline-dashed",
-        dropTarget && "ring-2 ring-brand"
+        drop === "replace" && "ring-2 ring-brand",
+        drop === "refuse" && "ring-2 ring-warn"
       )}
     >
       <ColorChip id={id} name={name} color={color} />
@@ -187,7 +213,15 @@ export const ChannelButton = memo(function ChannelButton({
           type="button"
           data-channel-button={id}
           aria-pressed={selected}
-          aria-label={hasSample ? name : `${name}, no sample`}
+          aria-label={
+            instrument !== null
+              ? name
+              : sampleMissing
+                ? `${name}, sample file is missing`
+                : hasSample
+                  ? name
+                  : `${name}, no sample`
+          }
           onClick={() => selectChannel(id, { openSettings: true })}
           onContextMenu={() => selectChannel(id)}
           onPointerDown={onPointerDown}
@@ -218,8 +252,26 @@ export const ChannelButton = memo(function ChannelButton({
           )}
         >
           <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
-          {dropTarget ? (
+          {drop === "replace" ? (
             <span className="shrink-0 text-[0.625rem] text-brand">replace</span>
+          ) : drop === "refuse" ? (
+            <span className="shrink-0 text-[0.625rem] text-warn">
+              takes no sample
+            </span>
+          ) : instrument !== null ? (
+            <WaveGlyph shape={instrument} className="text-muted-foreground" />
+          ) : sampleMissing ? (
+            <span
+              data-sample-missing
+              title="Sample file is missing"
+              className="flex shrink-0 items-center text-warn"
+            >
+              <HugeiconsIcon
+                icon={Alert02Icon}
+                strokeWidth={2}
+                className="size-3.5"
+              />
+            </span>
           ) : (
             !hasSample && (
               <span className="shrink-0 text-[0.625rem] text-warn">

@@ -1,4 +1,8 @@
-import type { TimeGridView } from "@/lib/canvas"
+import {
+  createPointerFrame,
+  type PointerFrame,
+  type TimeGridView,
+} from "@/lib/canvas"
 
 import type { PointerInput } from "./editor"
 import { cursorFor } from "./intents"
@@ -13,11 +17,11 @@ const SCROLL_AFTER_PX = 6
 const MAX_SCROLL_PX_PER_FRAME = 28
 
 function toInput(
-  view: TimeGridView,
+  frame: PointerFrame,
   event: MouseEvent,
   modifiers?: Partial<PointerInput>
 ): PointerInput {
-  const point = view.localPoint(event)
+  const point = frame.point(event)
   return {
     x: point.x,
     y: point.y,
@@ -80,6 +84,9 @@ export function attachGridInput(
 ): () => void {
   const { editor } = session
   const element = view.element
+  // A drag is measured from where the grid was when it began, so a layout
+  // change under a still pointer is never taken for a drag.
+  const frame = createPointerFrame((event) => view.localPoint(event))
   let last: PointerInput | null = null
   let pressed: PointerInput | null = null
   let travelled = false
@@ -122,9 +129,10 @@ export function attachGridInput(
       pan = null
       showCursor()
     } else if (editor.busy) {
-      if (commit) editor.pointerUp(toInput(view, event))
+      if (commit) editor.pointerUp(toInput(frame, event))
       else editor.cancel()
     }
+    frame.release()
     if (element.hasPointerCapture(event.pointerId)) {
       element.releasePointerCapture(event.pointerId)
     }
@@ -143,14 +151,18 @@ export function attachGridInput(
       return
     }
     if (event.button !== 0 && event.button !== 2) return
-    last = toInput(view, event)
+    frame.hold(event)
+    last = toInput(frame, event)
     pressed = last
     travelled = false
     const intent = editor.pointerDown(
       last,
       event.button === 0 ? "left" : "right"
     )
-    if (!editor.busy || intent?.kind === "menu") return
+    if (!editor.busy || intent?.kind === "menu") {
+      frame.release()
+      return
+    }
     element.setPointerCapture(event.pointerId)
     if (scrollFrame === 0) scrollFrame = requestAnimationFrame(autoScroll)
   }
@@ -161,7 +173,7 @@ export function attachGridInput(
       pan = { x: event.clientX, y: event.clientY }
       return
     }
-    last = toInput(view, event)
+    last = toInput(frame, event)
     if (
       pressed &&
       Math.hypot(last.x - pressed.x, last.y - pressed.y) > SCROLL_AFTER_PX
@@ -190,7 +202,7 @@ export function attachGridInput(
   }
 
   const onWheel = (event: WheelEvent) => {
-    handleWheel(session, event, view.localPoint(event), {
+    handleWheel(session, event, frame.point(event), {
       time: true,
       rows: true,
     })
@@ -213,6 +225,7 @@ export function attachGridInput(
   const onBlur = () => {
     stopAutoScroll()
     pan = null
+    frame.release()
     editor.cancel()
   }
 

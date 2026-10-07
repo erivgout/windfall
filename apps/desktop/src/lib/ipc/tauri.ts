@@ -5,7 +5,13 @@ import { open, save } from "@tauri-apps/plugin-dialog"
 
 import type { RealtimeFrame } from "@/bindings"
 
-import { EVENTS, errorMessage, type Backend, type Unsubscribe } from "./backend"
+import {
+  AUDIO_EXTENSIONS,
+  EVENTS,
+  errorMessage,
+  type Backend,
+  type Unsubscribe,
+} from "./backend"
 
 /** Rejections from Rust are plain strings; the UI wants `Error`s. */
 async function call<T>(
@@ -77,6 +83,7 @@ export function createTauriBackend(): Backend {
     engineStatus: () => call("engine_status"),
     engineDevices: () => call("engine_devices"),
     engineConfigure: (settings) => call("engine_configure", { settings }),
+    engineSettings: () => call("engine_settings"),
 
     auditionNoteOn: (channel, key, velocity) =>
       call("audition_note_on", { channel, key, velocity }),
@@ -95,6 +102,12 @@ export function createTauriBackend(): Backend {
       call("add_channel_from_file", { path, index }),
     setChannelSampleFromFile: (channel, path) =>
       call("set_channel_sample_from_file", { channel, path }),
+    addAudioClipFromFile: (path, place) =>
+      call("add_audio_clip_from_file", { path, ...place }),
+    addAudioClipFromSample: (sample, place) =>
+      call("add_audio_clip_from_sample", { sample, ...place }),
+    automate: (target) => call("automate", { target }),
+    samplesReload: () => call("samples_reload"),
 
     exportAudio: (options) => call("export_audio", { options }),
 
@@ -139,6 +152,16 @@ export function createTauriBackend(): Backend {
         title: "Choose a folder",
         multiple: false,
         directory: true,
+      })
+      return typeof picked === "string" ? picked : null
+    },
+
+    async pickAudioFile() {
+      const picked = await open({
+        title: "Choose an audio file",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Audio", extensions: AUDIO_EXTENSIONS }],
       })
       return typeof picked === "string" ? picked : null
     },

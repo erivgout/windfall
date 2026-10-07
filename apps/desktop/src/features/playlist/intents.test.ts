@@ -69,16 +69,45 @@ describe("intentFor", () => {
     })
   })
 
-  it.each(TOOLS)("selects with a box on Ctrl+drag in the %s tool", (tool) => {
-    expect(intentFor(press({ tool, mod: true, hit: body }))).toEqual({
-      kind: "marquee",
-      additive: false,
-    })
-    expect(intentFor(press({ tool, mod: true, shift: true }))).toEqual({
-      kind: "marquee",
-      additive: true,
-    })
-  })
+  it.each(TOOLS)(
+    "selects with a box on Ctrl+drag over empty grid in the %s tool",
+    (tool) => {
+      expect(intentFor(press({ tool, mod: true }))).toEqual({
+        kind: "marquee",
+        additive: false,
+      })
+      expect(intentFor(press({ tool, mod: true, shift: true }))).toEqual({
+        kind: "marquee",
+        additive: true,
+      })
+    }
+  )
+
+  it.each<Tool>(["draw", "paint", "select"])(
+    "keeps Ctrl on a clip a move in the %s tool, for the drop to copy",
+    (tool) => {
+      expect(intentFor(press({ tool, mod: true, hit: body }))).toEqual({
+        kind: "move",
+        id: 7,
+        additive: false,
+      })
+      // Ctrl changes nothing about a press on an edge.
+      expect(intentFor(press({ tool, mod: true, hit: endEdge }))).toEqual({
+        kind: "resize-end",
+        id: 7,
+      })
+    }
+  )
+
+  it.each<Tool>(["erase", "mute"])(
+    "selects with Ctrl on a clip too in the %s tool, which does nothing else to it",
+    (tool) => {
+      expect(intentFor(press({ tool, mod: true, hit: body }))).toEqual({
+        kind: "marquee",
+        additive: false,
+      })
+    }
+  )
 
   it.each<Tool>(["draw", "paint", "erase", "mute"])(
     "deletes with the right button in the %s tool",

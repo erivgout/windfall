@@ -18,6 +18,15 @@ bufferFrames: number,
  */
 latencyMs: number, 
 /**
+ * Frames by which the project's instruments and effects delay the
+ * output, at `sample_rate`: a limiter by its look-ahead, for one. The
+ * engine lines every path up with the slowest, so this is one figure
+ * for the whole mix. It comes on top of `latency_ms`, and it changes
+ * with the project, so ask for the status again after an edit to an
+ * effect.
+ */
+latencyFrames: number, 
+/**
  * Why the stream is not running, when it is not.
  */
 error: string | null, };

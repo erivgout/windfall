@@ -1,15 +1,27 @@
 import type { Channel } from "@/bindings"
-import { registry, type Action, type AppState } from "@/lib/actions"
+import { INSTRUMENT_KINDS, instrumentDescriptor } from "@/features/params"
+import {
+  invalidateActionsOn,
+  registry,
+  type Action,
+  type AppState,
+} from "@/lib/actions"
+import { instrumentParams } from "@/lib/channel-source"
 import { selectedPatternId } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 
 import {
+  addChannelFromPickedFile,
+  addInstrumentChannel,
   clearSteps,
   deleteChannel,
   duplicateChannel,
   fillEvery,
+  initInstrument,
+  loadInstrumentSound,
   moveChannelBy,
   renameChannel,
+  replaceSampleFromPickedFile,
   routeToNewTrack,
   selectedChannel,
   setPatternLength,
@@ -19,24 +31,23 @@ import {
   toggleSolo,
 } from "./channel-ops"
 import { useRackStore } from "./rack-store"
+import { matchingPreset, SYNTH_PRESETS } from "./synth/presets"
+
+/** The palette section, and menu, of the built-in instrument sounds. */
+export const SOUNDS_SECTION = "Sounds"
 
 export const LENGTH_PRESETS = [16, 32, 48, 64]
 export const FILL_INTERVALS = [2, 4, 8]
 
-/*
- * The selection is not part of the state actions are handed, so it is read
- * from the store. The hooks that follow action state listen to that store
- * too, so buttons and menus still update when the selection changes.
- */
 function selected(state: AppState): Channel | undefined {
-  const id = useUiStore.getState().selectedChannel
-  return state.document.project.channels.find((channel) => channel.id === id)
+  return state.document.project.channels.find(
+    (channel) => channel.id === state.ui.selectedChannel
+  )
 }
 
 function selectedIndex(state: AppState): number {
-  const id = useUiStore.getState().selectedChannel
   return state.document.project.channels.findIndex(
-    (channel) => channel.id === id
+    (channel) => channel.id === state.ui.selectedChannel
   )
 }
 
@@ -68,15 +79,94 @@ function withSelected(work: (channel: Channel) => void | Promise<void>) {
 
 const hasSelection = (state: AppState) => selected(state) !== undefined
 
+const isSampler = (state: AppState) =>
+  selected(state)?.source.type === "sampler"
+const isInstrument = (state: AppState) =>
+  selected(state)?.source.type === "instrument"
+
+/** The selected channel's synth settings, when it is a subtractive synth. */
+function selectedSynth(state: AppState) {
+  const params = instrumentParams(selected(state))
+  return params?.type === "subtractiveSynth" ? params : null
+}
+
+/** Says which kind of channel an action is for, when the other is selected. */
+const onlyFor =
+  (wanted: "sampler" | "instrument", reason: string) =>
+  (state: AppState): string | undefined => {
+    const channel = selected(state)
+    return channel && channel.source.type !== wanted ? reason : undefined
+  }
+
+const ADD_INSTRUMENT_ACTIONS = INSTRUMENT_KINDS.map((kind): Action => ({
+  id: `channel.addInstrument.${kind}`,
+  title: `Add ${instrumentDescriptor(kind).name.toLowerCase()}`,
+  section: "Channels",
+  keywords: "new channel instrument synthesizer synth keys bass lead pad",
+  run: () => addInstrumentChannel(kind),
+}))
+
+/** The id of the action that loads a built-in synth sound. */
+export const synthSoundActionId = (preset: string) =>
+  `channel.synthSound.${preset}`
+
+/** Every built-in synth sound but the init sound, which has its own action. */
+const SYNTH_SOUND_ACTIONS = SYNTH_PRESETS.filter(
+  (preset) => preset.id !== "init"
+).map((preset): Action => ({
+  id: synthSoundActionId(preset.id),
+  title: `Load synth sound: ${preset.name}`,
+  section: SOUNDS_SECTION,
+  keywords: `preset patch ${preset.description}`,
+  enabled: (state) => selectedSynth(state) !== null,
+  whyDisabled: () => "Synth channels only",
+  checked: (state) => {
+    const params = selectedSynth(state)
+    return params !== null && matchingPreset(params)?.id === preset.id
+  },
+  run: withSelected((channel) =>
+    loadInstrumentSound(channel.id, preset.params, `Load sound: ${preset.name}`)
+  ),
+}))
+
 /**
  * What can be done to the selected channel and to the pattern's steps. A
- * row's right-click menu selects the row and then lists these.
+ * row's right-click menu selects the row and then lists these. The keys
+ * belong to the rack: they work while it has the keyboard.
  */
 export const CHANNEL_RACK_ACTIONS: Action[] = [
+  {
+    id: "channel.addFromFile",
+    title: "Add channel from an audio file…",
+    section: "Channels",
+    keywords: "new sampler sample load open wav",
+    run: addChannelFromPickedFile,
+  },
+  ...ADD_INSTRUMENT_ACTIONS,
+  {
+    id: "channel.replaceSample",
+    title: "Replace sample from an audio file…",
+    section: "Channels",
+    keywords: "swap sound load sampler",
+    enabled: isSampler,
+    whyDisabled: onlyFor("sampler", "Samplers only"),
+    run: withSelected((channel) => replaceSampleFromPickedFile(channel.id)),
+  },
+  {
+    id: "channel.initInstrument",
+    title: "Init instrument",
+    section: "Channels",
+    keywords: "reset default sound preset patch clear synth",
+    enabled: isInstrument,
+    whyDisabled: onlyFor("instrument", "Instruments only"),
+    run: withSelected((channel) => initInstrument(channel.id)),
+  },
+  ...SYNTH_SOUND_ACTIONS,
   {
     id: "channel.rename",
     title: "Rename channel…",
     section: "Channels",
+    scope: "channelRack",
     defaultShortcut: "F2",
     enabled: hasSelection,
     run: withSelected((channel) => renameChannel(channel.id)),
@@ -96,6 +186,8 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     id: "channel.duplicate",
     title: "Duplicate channel",
     section: "Channels",
+    scope: "channelRack",
+    editCommand: "duplicate",
     defaultShortcut: "Mod+D",
     keywords: "clone copy",
     enabled: hasSelection,
@@ -105,17 +197,18 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     id: "channel.delete",
     title: "Delete channel…",
     section: "Channels",
+    scope: "channelRack",
+    editCommand: "delete",
     defaultShortcut: "Delete",
     keywords: "remove",
-    // Delete is a plain key, so it only acts while the rack is in view.
-    enabled: (state) =>
-      hasSelection(state) && state.ui.centerTab === "channelRack",
+    enabled: hasSelection,
     run: withSelected((channel) => deleteChannel(channel.id)),
   },
   {
     id: "channel.moveUp",
     title: "Move channel up",
     section: "Channels",
+    scope: "channelRack",
     defaultShortcut: "Alt+ArrowUp",
     repeats: true,
     keywords: "reorder",
@@ -126,6 +219,7 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     id: "channel.moveDown",
     title: "Move channel down",
     section: "Channels",
+    scope: "channelRack",
     defaultShortcut: "Alt+ArrowDown",
     repeats: true,
     keywords: "reorder",
@@ -173,6 +267,7 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     id: "channel.shiftLeft",
     title: "Shift steps left",
     section: "Channels",
+    scope: "channelRack",
     defaultShortcut: "Mod+Shift+ArrowLeft",
     repeats: true,
     keywords: "rotate nudge earlier",
@@ -183,6 +278,7 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     id: "channel.shiftRight",
     title: "Shift steps right",
     section: "Channels",
+    scope: "channelRack",
     defaultShortcut: "Mod+Shift+ArrowRight",
     repeats: true,
     keywords: "rotate nudge later",
@@ -228,5 +324,11 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
 
 /** Adds the rack's actions to the registry. Returns a function that removes them. */
 export function registerChannelRackActions(): () => void {
-  return registry.register(CHANNEL_RACK_ACTIONS)
+  const stops = [
+    registry.register(CHANNEL_RACK_ACTIONS),
+    invalidateActionsOn(useRackStore, (state) => [state.inspectorOpen]),
+  ]
+  return () => {
+    for (const stop of stops) stop()
+  }
 }

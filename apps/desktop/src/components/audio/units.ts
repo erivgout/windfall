@@ -10,7 +10,16 @@ export const SILENCE_DB = -120
 export type ValueUnit = {
   format: (value: number) => string
   parse: (text: string) => number | null
+  /**
+   * What the number is: `"gain"`, `"pan"`, `"hertz"`. Two controls with
+   * the same kind hold the same sort of number, so a value copied from one
+   * means the same in the other.
+   */
+  unitKind?: string
 }
+
+/** The kind of a control that holds a bare number, with no unit. */
+export const PLAIN_NUMBER = "number"
 
 export function gainToDb(gain: number): number {
   return gain > 0 ? 20 * Math.log10(gain) : -Infinity
@@ -168,16 +177,38 @@ export function parseHz(text: string): number | null {
 
 // Matching format and parse pairs. Spread one into a control:
 // <Knob {...percentUnit} />.
-export const dbUnit: ValueUnit = { format: formatDb, parse: parseDb }
-export const gainUnit: ValueUnit = { format: formatGain, parse: parseGain }
-export const panUnit: ValueUnit = { format: formatPan, parse: parsePan }
+export const dbUnit: ValueUnit = {
+  format: formatDb,
+  parse: parseDb,
+  unitKind: "decibels",
+}
+export const gainUnit: ValueUnit = {
+  format: formatGain,
+  parse: parseGain,
+  unitKind: "gain",
+}
+export const panUnit: ValueUnit = {
+  format: formatPan,
+  parse: parsePan,
+  unitKind: "pan",
+}
 export const percentUnit: ValueUnit = {
   format: formatPercent,
   parse: parsePercent,
+  unitKind: "fraction",
 }
-export const msUnit: ValueUnit = { format: formatMs, parse: parseMs }
+export const msUnit: ValueUnit = {
+  format: formatMs,
+  parse: parseMs,
+  unitKind: "milliseconds",
+}
 export const semitonesUnit: ValueUnit = {
   format: formatSemitones,
   parse: parseSemitones,
+  unitKind: "semitones",
 }
-export const hzUnit: ValueUnit = { format: formatHz, parse: parseHz }
+export const hzUnit: ValueUnit = {
+  format: formatHz,
+  parse: parseHz,
+  unitKind: "hertz",
+}

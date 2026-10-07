@@ -72,6 +72,13 @@ export function advanceMeter(
 export type LevelMeterHandle = {
   /** Feeds linear peak values. Call it as often as values arrive. */
   set: (left: number, right?: number) => void
+  /** Whether the clip light is on. */
+  isClipped: () => boolean
+  /**
+   * Turns the clip light on or off, as when a meter that was unmounted comes
+   * back and should show a clip it missed.
+   */
+  setClipped: (clipped: boolean) => void
   clearClip: () => void
   /** Drops the levels, the held peaks and the clip indicator. */
   reset: () => void
@@ -89,6 +96,7 @@ type MeterConfig = {
   peakHoldMs: number
   clipGain: number
   showClip: boolean
+  clipped?: boolean
   onClipChange?: (clipped: boolean) => void
 }
 
@@ -129,16 +137,57 @@ function createMeter(
   let visible = true
   let stale = true
   let drawn = ""
+  let shown = false
+  // With a `clipped` prop the app owns the light and the meter only asks for
+  // it. A level over the threshold asks once per render, not once per value.
+  let asked = false
 
-  const isClipped = () => channels[0].clipped || channels[1].clipped
+  /** Whether the clip light of one channel is lit. */
+  function lit(index: number): boolean {
+    return getConfig().clipped ?? channels[index].clipped
+  }
 
-  function showClipState() {
+  const isClipped = () => lit(0) || lit(1)
+
+  /** Puts the clip state on the elements. Returns whether it changed. */
+  function showClipState(force = false): boolean {
     const clipped = isClipped()
+    if (clipped === shown && !force) {
+      return false
+    }
+    shown = clipped
     root.toggleAttribute("data-clipped", clipped)
+    button.toggleAttribute("data-clipped", clipped)
     // Only a lit clip light is worth a tab stop.
     button.tabIndex = clipped ? 0 : -1
     button.setAttribute("aria-hidden", clipped ? "false" : "true")
-    getConfig().onClipChange?.(clipped)
+    return true
+  }
+
+  function setClipped(clipped: boolean) {
+    const config = getConfig()
+    if (config.clipped !== undefined) {
+      if (clipped !== config.clipped) {
+        config.onClipChange?.(clipped)
+      }
+      return
+    }
+    if (channels[0].clipped === clipped && channels[1].clipped === clipped) {
+      return
+    }
+    channels[0].clipped = clipped
+    channels[1].clipped = clipped
+    if (showClipState()) {
+      config.onClipChange?.(clipped)
+    }
+    invalidate()
+  }
+
+  /** Takes in new props, among them a `clipped` that may have changed. */
+  function configure() {
+    asked = false
+    showClipState()
+    invalidate()
   }
 
   function schedule() {
@@ -197,7 +246,8 @@ function createMeter(
       highAt,
       levels,
       peaks,
-      channels.map((channel) => channel.clipped),
+      lit(0),
+      lit(1),
     ].join()
     if (!stale && signature === drawn) {
       return
@@ -239,7 +289,7 @@ function createMeter(
           index,
           length + clipGap,
           full,
-          channels[index].clipped ? palette.high : palette.bg
+          lit(index) ? palette.high : palette.bg
         )
       }
     }
@@ -274,6 +324,7 @@ function createMeter(
   function set(left: number, right: number = left) {
     const config = getConfig()
     const values = [left, config.channels === 2 ? right : left]
+    let over = false
     let clippedNow = false
     let audible = false
     for (let index = 0; index < 2; index += 1) {
@@ -283,14 +334,24 @@ function createMeter(
       }
       pending[index] = Math.max(pending[index], gain)
       audible ||= gainToDb(gain) > METER_FLOOR_DB
-      if (gain > config.clipGain && !channels[index].clipped) {
+      if (gain <= config.clipGain) {
+        continue
+      }
+      over = true
+      if (config.clipped === undefined && !channels[index].clipped) {
         channels[index].clipped = true
         clippedNow = true
       }
     }
+    if (over && config.clipped === false && !asked) {
+      asked = true
+      config.onClipChange?.(true)
+    }
     if (clippedNow) {
-      showClipState()
       stale = true
+      if (showClipState()) {
+        config.onClipChange?.(true)
+      }
     }
     if (audible || clippedNow) {
       schedule()
@@ -298,24 +359,15 @@ function createMeter(
   }
 
   function clearClip() {
-    if (!isClipped()) {
-      return
-    }
-    channels[0].clipped = false
-    channels[1].clipped = false
-    showClipState()
-    invalidate()
+    setClipped(false)
   }
 
   function reset() {
-    const wasClipped = isClipped()
+    setClipped(false)
     channels[0] = createMeterChannel()
     channels[1] = createMeterChannel()
     pending[0] = 0
     pending[1] = 0
-    if (wasClipped) {
-      showClipState()
-    }
     invalidate()
   }
 
@@ -342,12 +394,17 @@ function createMeter(
           { rootMargin: "64px" }
         )
   viewObserver?.observe(root)
+  // The elements may carry the state of a meter that was here before, as
+  // when React runs the effects of a new component twice.
+  showClipState(true)
 
   return {
     set,
+    isClipped,
+    setClipped,
     clearClip,
     reset,
-    invalidate,
+    configure,
     destroy() {
       stopCanvas()
       stopTheme()
@@ -387,7 +444,16 @@ type LevelMeterProps = Omit<React.ComponentProps<"div">, "ref" | "children"> & {
   /** Linear gain above which the clip light latches. */
   clipGain?: number
   showClip?: boolean
+  /**
+   * Sets the clip light from outside. The meter then only reports through
+   * `onClipChange` when a peak goes over or the light is clicked, and the
+   * light follows this prop. Leave it out and the meter keeps the latch.
+   */
+  clipped?: boolean
+  /** Called when the clip light changes, or should when `clipped` is set. */
   onClipChange?: (clipped: boolean) => void
+  /** The accessible name of the button that clears the clip light. */
+  clipLabel?: string
 }
 
 /**
@@ -409,7 +475,9 @@ function LevelMeter({
   peakHoldMs = 1000,
   clipGain = 1,
   showClip = true,
+  clipped,
   onClipChange,
+  clipLabel = "Clear clip indicator",
   ...props
 }: LevelMeterProps) {
   const vertical = orientation === "vertical"
@@ -425,6 +493,7 @@ function LevelMeter({
     peakHoldMs,
     clipGain,
     showClip,
+    clipped,
     onClipChange,
   }
 
@@ -436,7 +505,7 @@ function LevelMeter({
 
   React.useLayoutEffect(() => {
     latest.current = config
-    meter.current?.invalidate()
+    meter.current?.configure()
   })
 
   React.useEffect(() => {
@@ -458,6 +527,8 @@ function LevelMeter({
     ref,
     () => ({
       set: (left, right) => meter.current?.set(left, right),
+      isClipped: () => meter.current?.isClipped() ?? false,
+      setClipped: (clipped) => meter.current?.setClipped(clipped),
       clearClip: () => meter.current?.clearClip(),
       reset: () => meter.current?.reset(),
     }),
@@ -498,7 +569,8 @@ function LevelMeter({
         type="button"
         tabIndex={-1}
         aria-hidden="true"
-        aria-label="Clear clip indicator"
+        aria-label={clipLabel}
+        data-slot="level-meter-clip"
         className="absolute inset-0 size-full cursor-default rounded-[2px] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={() => meter.current?.clearClip()}
       />

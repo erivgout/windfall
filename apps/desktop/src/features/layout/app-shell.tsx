@@ -1,4 +1,7 @@
+import type { CSSProperties } from "react"
+
 import { Toaster } from "@/components/ui/sonner"
+import { ValueContextMenus } from "@/components/value-context-menu"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ExportDialog } from "@/features/export/export-dialog"
 import { CommandPalette } from "@/features/palette/command-palette"
@@ -11,16 +14,48 @@ import { PANELS, type PanelId } from "./panels"
 import { PromptHost } from "./prompt-host"
 import { StatusBar } from "./status-bar"
 import { TitleBar } from "./title-bar"
+import { useToastOffset } from "./toast-place"
 import { useAppBoot, useWindowTitle } from "./use-app-boot"
 import { Workspace } from "./workspace"
 
+/** The most room a toast takes across, however long its message. */
+const TOAST_WIDTH = 340
+
+/**
+ * A toast is one line, with what it says and the detail side by side, so
+ * a stack of them stays low. A long message wraps inside the toast's
+ * width, also where it is one long word such as a file's path, and makes
+ * the toast taller. It can be closed at its right.
+ */
+const TOAST_CLASSES = {
+  toast:
+    "cn-toast min-h-6! gap-1.5! rounded-md! py-0.5! pr-7! pl-2! text-xs! shadow-md!",
+  content: "min-w-0! flex-row! flex-wrap! items-baseline! gap-x-2! gap-y-0!",
+  title: "min-w-0! leading-5! wrap-anywhere!",
+  description: "min-w-0! leading-5! wrap-anywhere! text-muted-foreground!",
+  closeButton:
+    "top-1/2! right-1! left-auto! size-4! -translate-y-1/2! transform-none! border-0! bg-transparent! text-muted-foreground! hover:text-foreground!",
+}
+
 /** Dialogs and toasts every window needs, whatever it shows. */
-function Overlays() {
+export function Overlays() {
   const theme = useUiStore((state) => resolveTheme(state.theme))
+  // At the bottom right above the status bar, left of the mixer's effects.
+  const offset = useToastOffset()
   return (
     <>
       <PromptHost />
-      <Toaster theme={theme} position="bottom-right" offset={36} />
+      <Toaster
+        theme={theme}
+        position="bottom-right"
+        offset={offset}
+        mobileOffset={offset}
+        visibleToasts={3}
+        gap={4}
+        closeButton
+        style={{ "--width": `${TOAST_WIDTH}px` } as CSSProperties}
+        toastOptions={{ classNames: TOAST_CLASSES }}
+      />
     </>
   )
 }
@@ -32,16 +67,18 @@ export function AppShell() {
 
   return (
     <TooltipProvider delay={500}>
-      <div className="flex h-full flex-col bg-chassis">
-        <TitleBar />
-        <TransportBar />
-        <Workspace />
-        <StatusBar />
-      </div>
-      <CommandPalette />
-      <SettingsDialog />
-      <ExportDialog />
-      <Overlays />
+      <ValueContextMenus>
+        <div className="flex h-full flex-col bg-chassis">
+          <TitleBar />
+          <TransportBar />
+          <Workspace />
+          <StatusBar />
+        </div>
+        <CommandPalette />
+        <SettingsDialog />
+        <ExportDialog />
+        <Overlays />
+      </ValueContextMenus>
     </TooltipProvider>
   )
 }
@@ -57,12 +94,14 @@ export function PanelWindow({ panel }: { panel: PanelId }) {
 
   return (
     <TooltipProvider delay={500}>
-      <div className="h-full">
-        <PanelFrame title={title}>
-          <Panel />
-        </PanelFrame>
-      </div>
-      <Overlays />
+      <ValueContextMenus>
+        <div className="h-full">
+          <PanelFrame title={title}>
+            <Panel />
+          </PanelFrame>
+        </div>
+        <Overlays />
+      </ValueContextMenus>
     </TooltipProvider>
   )
 }

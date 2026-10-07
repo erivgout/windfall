@@ -1,5 +1,6 @@
 import type { RectBatch } from "./rect-batch"
 import {
+  BORDER_ROUNDING,
   BORDER_SHADE,
   RendererUnavailableError,
   type DrawOptions,
@@ -82,7 +83,8 @@ fn vertexMain(
   let position = vec2f(x0, y0) + corner * size;
 
   var fill = color.rgb;
-  var border = fill * ${BORDER_SHADE};
+  // shadeChannel in renderer.ts.
+  var border = floor(fill * 255.0 * ${BORDER_SHADE} + ${BORDER_ROUNDING}) / 255.0;
   if (selected) {
     fill = mix(fill, u.selectionFill.rgb, u.selectionFill.a);
     border = u.selectionBorder.rgb;
@@ -152,6 +154,7 @@ interface Frame {
 class WebGPURenderer implements RectRenderer {
   readonly info: RendererInfo
   onRestored: (() => void) | null = null
+  onLost: (() => void) | null = null
 
   private readonly canvas: HTMLCanvasElement
   private readonly device: GPUDevice
@@ -273,8 +276,10 @@ class WebGPURenderer implements RectRenderer {
       device: deviceName,
       gpuTiming: timestamps ? "timestamp-query" : "none",
     }
-    void device.lost.then(() => {
+    void device.lost.then((lost) => {
       this.lost = true
+      // A device this renderer destroyed itself is not a loss to report.
+      if (lost.reason !== "destroyed") this.onLost?.()
     })
   }
 

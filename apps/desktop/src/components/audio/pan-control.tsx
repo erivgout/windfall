@@ -12,6 +12,7 @@ function PanControl({
   defaultValue = 0,
   format = formatPan,
   parse = parsePan,
+  unitKind = "pan",
   "aria-label": ariaLabel,
   label,
   ...props
@@ -25,6 +26,7 @@ function PanControl({
       defaultValue={defaultValue}
       format={format}
       parse={parse}
+      unitKind={unitKind}
       label={label}
       aria-label={ariaLabel ?? (label ? undefined : "Pan")}
       {...props}

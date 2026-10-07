@@ -32,13 +32,17 @@ export {
   type Theme,
 } from "./ui"
 export {
+  automatedValue,
+  gainReductionFeed,
   meterFeed,
   realtimeFrame,
   subscribeRealtime,
+  useGainReduction,
   useMeter,
   usePlayhead,
   useRealtime,
 } from "./realtime"
 export { newGestureId, useGesture, type Gesture } from "./gesture"
+export { onProjectReplaced, useProjectGeneration } from "./replaced"
 export { useHint } from "./hint"
 export { askConfirm, askText } from "./prompts"

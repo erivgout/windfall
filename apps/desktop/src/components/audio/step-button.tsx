@@ -43,6 +43,11 @@ type StepButtonProps = Omit<React.ComponentProps<"button">, "onToggle"> &
     playing?: boolean
     /** The lit color as any CSS color. Defaults to `--wf-step-on`. */
     color?: string
+    /**
+     * Let Space toggle the step as well as Enter. Off by default, so an app
+     * can keep Space for its transport.
+     */
+    spaceToggles?: boolean
   }
 
 /** One step of a step sequencer. */
@@ -55,7 +60,9 @@ const StepButton = React.memo(function StepButton({
   alt = false,
   playing = false,
   color,
+  spaceToggles = false,
   onClick,
+  onKeyUp,
   type = "button",
   ...props
 }: StepButtonProps) {
@@ -82,6 +89,13 @@ const StepButton = React.memo(function StepButton({
             }
           : undefined
       }
+      onKeyUp={(event) => {
+        onKeyUp?.(event)
+        // A button turns Space into a click as the key comes up.
+        if (event.key === " " && !spaceToggles) {
+          event.preventDefault()
+        }
+      }}
       {...props}
     />
   )

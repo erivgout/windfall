@@ -151,4 +151,125 @@ describe("LevelMeter", () => {
     act(() => ref.current?.set(Number.NaN, Number.NaN))
     expect(meter).not.toHaveAttribute("data-clipped")
   })
+
+  it("sets and reads the clip light through the ref", () => {
+    const changes: boolean[] = []
+    const { ref, meter } = renderMeter({
+      onClipChange: (clipped) => changes.push(clipped),
+    })
+    const button = meter.querySelector("button") as HTMLButtonElement
+    expect(ref.current?.isClipped()).toBe(false)
+    act(() => ref.current?.setClipped(true))
+    expect(ref.current?.isClipped()).toBe(true)
+    expect(meter).toHaveAttribute("data-clipped")
+    expect(button).toHaveAttribute("data-clipped")
+    expect(button).toHaveAttribute("tabindex", "0")
+    // Setting what it already is tells nobody.
+    act(() => ref.current?.setClipped(true))
+    act(() => ref.current?.set(1.5, 1.5))
+    expect(changes).toEqual([true])
+    act(() => ref.current?.setClipped(false))
+    expect(ref.current?.isClipped()).toBe(false)
+    expect(meter).not.toHaveAttribute("data-clipped")
+    expect(button).not.toHaveAttribute("data-clipped")
+    expect(changes).toEqual([true, false])
+  })
+
+  it("shows a clip it missed while it was unmounted", () => {
+    const first = renderMeter()
+    act(() => first.ref.current?.set(1.5, 0))
+    const held = first.ref.current?.isClipped() ?? false
+    expect(held).toBe(true)
+    first.unmount()
+
+    const changes: boolean[] = []
+    const second = renderMeter({
+      onClipChange: (clipped) => changes.push(clipped),
+    })
+    expect(second.meter).not.toHaveAttribute("data-clipped")
+    act(() => second.ref.current?.setClipped(held))
+    expect(second.meter).toHaveAttribute("data-clipped")
+    fireEvent.click(second.meter.querySelector("button") as HTMLButtonElement)
+    expect(second.meter).not.toHaveAttribute("data-clipped")
+    expect(changes).toEqual([true, false])
+  })
+
+  it("follows a clipped prop and only reports what it would do", () => {
+    const changes: boolean[] = []
+    const onClipChange = (clipped: boolean) => changes.push(clipped)
+    const ref = React.createRef<LevelMeterHandle>()
+    const meterWith = (clipped: boolean) => (
+      <LevelMeter
+        ref={ref}
+        data-testid="meter"
+        clipped={clipped}
+        onClipChange={onClipChange}
+      />
+    )
+    const { rerender } = render(meterWith(false))
+    const meter = screen.getByTestId("meter")
+    const button = meter.querySelector("button") as HTMLButtonElement
+
+    // A level over the threshold asks for the light, once.
+    act(() => ref.current?.set(1.5, 0))
+    act(() => ref.current?.set(1.6, 0))
+    expect(changes).toEqual([true])
+    expect(meter).not.toHaveAttribute("data-clipped")
+    expect(ref.current?.isClipped()).toBe(false)
+
+    rerender(meterWith(true))
+    expect(meter).toHaveAttribute("data-clipped")
+    expect(ref.current?.isClipped()).toBe(true)
+    expect(button).toHaveAttribute("tabindex", "0")
+
+    // A click asks for it to go off. It stays on until the prop says so.
+    fireEvent.click(button)
+    expect(changes).toEqual([true, false])
+    expect(meter).toHaveAttribute("data-clipped")
+    rerender(meterWith(false))
+    expect(meter).not.toHaveAttribute("data-clipped")
+    expect(changes).toEqual([true, false])
+  })
+
+  it("is lit from the first render when the prop says so", () => {
+    const { meter } = renderMeter({ clipped: true })
+    expect(meter).toHaveAttribute("data-clipped")
+  })
+
+  it("starts with the elements matching its own state when its effects run twice", () => {
+    // Strict mode makes a meter, drops it and makes another one on the same
+    // elements. Here the first one is lit in between.
+    const ref = React.createRef<LevelMeterHandle>()
+    function Late() {
+      const [mounted, setMounted] = React.useState(false)
+      React.useEffect(() => {
+        if (mounted) ref.current?.setClipped(true)
+      }, [mounted])
+      return (
+        <>
+          <button onClick={() => setMounted(true)}>Mount</button>
+          {mounted ? <LevelMeter ref={ref} data-testid="meter" /> : null}
+        </>
+      )
+    }
+    render(
+      <React.StrictMode>
+        <Late />
+      </React.StrictMode>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Mount" }))
+    const meter = screen.getByTestId("meter")
+    expect(meter.hasAttribute("data-clipped")).toBe(ref.current?.isClipped())
+    // Whatever it shows can be cleared with a click.
+    act(() => ref.current?.setClipped(true))
+    expect(meter).toHaveAttribute("data-clipped")
+    fireEvent.click(meter.querySelector("button") as HTMLButtonElement)
+    expect(meter).not.toHaveAttribute("data-clipped")
+  })
+
+  it("names the clip button as asked", () => {
+    const { ref, meter } = renderMeter({ clipLabel: "Clip light" })
+    act(() => ref.current?.setClipped(true))
+    expect(meter.querySelector("button")).toHaveAccessibleName("Clip light")
+  })
 })

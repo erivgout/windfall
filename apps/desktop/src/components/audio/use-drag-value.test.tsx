@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 import * as React from "react"
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { Knob, type KnobProps } from "./knob"
@@ -332,11 +338,44 @@ describe("value control", () => {
     expect(calls.order).toEqual(["start", "change", "change", "change", "end"])
   })
 
+  it("leaves Delete and Backspace to the app, default or not", () => {
+    // In an app these keys delete things. A control that reset itself with
+    // them made one key mean two things, a click apart.
+    for (const defaultValue of [0.25, undefined]) {
+      const { slider, calls } = renderKnob({ defaultValue })
+      expect(fireEvent.keyDown(slider, { key: "Delete" })).toBe(true)
+      expect(fireEvent.keyDown(slider, { key: "Backspace" })).toBe(true)
+      expect(calls.order).toEqual([])
+      expect(valueOf(slider)).toBe(0.5)
+      cleanup()
+    }
+  })
+
+  it("goes back to its default on a double-click and on Ctrl+click", () => {
+    const { slider, calls } = renderKnob()
+    fireEvent.doubleClick(slider)
+    expect(valueOf(slider)).toBe(0.25)
+    expect(calls.order).toEqual(["start", "change", "end"])
+    drag(slider, 300, 200)
+    expect(valueOf(slider)).not.toBe(0.25)
+    fireEvent.pointerDown(slider, { button: 0, pointerId: 1, ctrlKey: true })
+    expect(valueOf(slider)).toBe(0.25)
+  })
+
   it("leaves modified keys to the app", () => {
     const { slider, calls } = renderKnob()
     fireEvent.keyDown(slider, { key: "ArrowUp", ctrlKey: true })
     fireEvent.keyDown(slider, { key: "z", metaKey: true })
     expect(calls.values).toEqual([])
+  })
+
+  it("leaves Space to the app", () => {
+    const { slider, calls } = renderKnob()
+    // Not handled and not prevented, so a transport shortcut can take it.
+    expect(fireEvent.keyDown(slider, { key: " " })).toBe(true)
+    expect(fireEvent.keyUp(slider, { key: " " })).toBe(true)
+    expect(calls.order).toEqual([])
+    expect(screen.queryByRole("textbox")).toBeNull()
   })
 
   it("opens a text entry on Enter and commits the parsed value", () => {
@@ -358,8 +397,50 @@ describe("value control", () => {
     const input = screen.getByRole("textbox")
     expect(input).toHaveValue("-")
     fireEvent.change(input, { target: { value: "-6 dB" } })
-    fireEvent.blur(input)
+    fireEvent.keyDown(input, { key: "Enter" })
     expect(valueOf(slider)).toBe(-6)
+  })
+
+  it("commits the entry on Tab and lets the focus move on", () => {
+    const { slider, calls } = renderKnob()
+    fireEvent.keyDown(slider, { key: "Enter" })
+    const input = screen.getByRole("textbox")
+    fireEvent.change(input, { target: { value: "0.8" } })
+    // Not prevented, so the browser takes the focus to the next control.
+    expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true)
+    expect(valueOf(slider)).toBe(0.8)
+    expect(screen.queryByRole("textbox")).toBeNull()
+    expect(calls.order).toEqual(["start", "change", "end"])
+  })
+
+  it("cancels the entry when the field is left without Enter or Tab", () => {
+    const { slider, calls } = renderKnob({ min: 0, max: 100, value: 50 })
+    // A stray digit opened the entry, and a click elsewhere left it.
+    fireEvent.keyDown(slider, { key: "2" })
+    const input = screen.getByRole("textbox")
+    expect(input).toHaveValue("2")
+    fireEvent.blur(input)
+    expect(screen.queryByRole("textbox")).toBeNull()
+    expect(calls.values).toEqual([])
+    expect(valueOf(slider)).toBe(50)
+
+    // The same for a whole, valid value that was typed but not confirmed.
+    fireEvent.keyDown(slider, { key: "Enter" })
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "80" } })
+    fireEvent.blur(screen.getByRole("textbox"))
+    expect(calls.values).toEqual([])
+    // The focus stays where it went.
+    expect(slider).not.toHaveFocus()
+  })
+
+  it("leaves a digit typed with Ctrl, Alt or Cmd to the app", () => {
+    const { slider } = renderKnob()
+    for (const modifier of ["altKey", "ctrlKey", "metaKey"] as const) {
+      expect(fireEvent.keyDown(slider, { key: "2", [modifier]: true })).toBe(
+        true
+      )
+    }
+    expect(screen.queryByRole("textbox")).toBeNull()
   })
 
   it("cancels the entry on Escape and on unreadable text", () => {

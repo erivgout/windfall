@@ -3,6 +3,7 @@ import type { SampleId } from "./SampleId";
 import type { SamplePath } from "./SamplePath";
 
 /**
- * An audio file the project uses.
+ * An audio file the project uses: as the sample of a sampler channel, as
+ * the audio of a clip on the playlist, or both.
  */
 export type SampleAsset = { id: SampleId, name: string, path: SamplePath, };

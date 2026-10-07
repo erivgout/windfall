@@ -20,6 +20,8 @@ import {
   xToTick,
   type Viewport,
 } from "@/lib/canvas"
+import { ignoresSnap, MODIFIER_HINTS } from "@/lib/edit-modifiers"
+import { useHint } from "@/lib/store/hint"
 import { useProjectStore } from "@/lib/store/project"
 import { usePlayhead } from "@/lib/store/realtime"
 import { useSettings } from "@/lib/store/selectors"
@@ -30,7 +32,6 @@ import { snapNearest, songEnd } from "./edit"
 import { wheelInput, type GridMetrics } from "./metrics"
 import { currentSnapTicks, seekSong, songTick, toggleLoopSong } from "./ops"
 import { usePlaylistStore } from "./store"
-import { useLiveHint } from "./use-live-hint"
 
 const RULER_COLORS = {
   ink: "var(--muted-foreground)",
@@ -168,9 +169,9 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
   const markerRef = useRef<HTMLDivElement>(null)
   const markerX = useRef<number | null>(null)
   const lastSeek = useRef<number | null>(null)
-  const hint = useLiveHint(
+  const hint = useHint(
     mode === "song"
-      ? "Click or drag to move the playhead. Hold Shift to ignore the snap"
+      ? `Click or drag to move the playhead. ${MODIFIER_HINTS.free}`
       : "Click to set where the song starts. The transport is looping the pattern, so the song is not playing"
   )
 
@@ -236,7 +237,10 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
   const seekAt = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect()
     const tick = xToTick(metrics.viewport, event.clientX - bounds.left)
-    const target = snapNearest(tick, event.shiftKey ? 0 : currentSnapTicks())
+    const target = snapNearest(
+      tick,
+      ignoresSnap({ alt: event.altKey }) ? 0 : currentSnapTicks()
+    )
     if (target === lastSeek.current) return
     lastSeek.current = target
     void seekSong(target)

@@ -108,6 +108,10 @@ export function applyPatch(
       project.playlist,
       patch.playlist ?? project.playlist
     ),
+    automations: shareStructure(
+      project.automations,
+      patch.automations ?? project.automations
+    ),
     patterns: mergePatterns(project.patterns, patch),
   }
 

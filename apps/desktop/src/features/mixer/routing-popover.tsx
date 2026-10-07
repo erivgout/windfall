@@ -1,7 +1,6 @@
 import { GitForkIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
-import type { MixerTrack } from "@/bindings"
 import {
   Popover,
   PopoverContent,
@@ -11,9 +10,14 @@ import { useHint } from "@/lib/store"
 import { MASTER_TRACK } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
-import { ChannelList, useTrackChannels } from "./channel-chips"
+import {
+  FeedList,
+  useTrackAudioClips,
+  useTrackChannels,
+} from "./channel-chips"
 import { OutputSelect } from "./output-select"
 import { AddSendMenu, SendList } from "./sends"
+import type { StripTrack } from "./strip-track"
 
 function Heading({ children }: { children: string }) {
   return (
@@ -23,16 +27,18 @@ function Heading({ children }: { children: string }) {
   )
 }
 
-function Channels({ track }: { track: MixerTrack }) {
+/** The channels and audio clips of a track, for a strip too low to show them. */
+function Channels({ track }: { track: StripTrack }) {
   const channels = useTrackChannels(track.id)
+  const clips = useTrackAudioClips(track.id)
   return (
     <section className="flex flex-col gap-1.5">
-      <Heading>Channels</Heading>
-      {channels.length > 0 ? (
-        <ChannelList channels={channels} />
+      <Heading>Plays into it</Heading>
+      {channels.length > 0 || clips.length > 0 ? (
+        <FeedList channels={channels} clips={clips} inputs={0} />
       ) : (
         <p className="text-[10px] text-muted-foreground">
-          No channel plays into this track.
+          No channel and no audio clip plays into this track.
         </p>
       )}
     </section>
@@ -40,7 +46,7 @@ function Channels({ track }: { track: MixerTrack }) {
 }
 
 type RoutingButtonProps = {
-  track: MixerTrack
+  track: StripTrack
   /** Also list the track's channels, for when the strip has no room to. */
   withChannels: boolean
 }

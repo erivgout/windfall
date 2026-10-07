@@ -1,19 +1,26 @@
 import type { Project } from "@/bindings"
+import { installKeymap } from "@/lib/actions"
 import { registerBuiltinActions } from "@/lib/actions/builtin"
-import { setBackend, type Backend } from "@/lib/ipc"
-import { createMockBackend, type MockDialogs } from "@/lib/ipc/mock"
+import { setBackend } from "@/lib/ipc"
+import {
+  createMockBackend,
+  type MockBackend,
+  type MockDialogs,
+} from "@/lib/ipc/mock"
 import { connectStores } from "@/lib/store/connect"
 import { useEngineStore } from "@/lib/store/engine"
 import { useProjectStore } from "@/lib/store/project"
 import { usePromptStore } from "@/lib/store/prompts"
 import { useTransportStore } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
+import { useWarningsStore } from "@/lib/store/warnings"
 
 export const TEST_DIALOGS: MockDialogs = {
   openProject: (saved) => Promise.resolve(saved[0] ?? null),
   saveProject: (suggested) => Promise.resolve(suggested),
   exportPath: (suggested) => Promise.resolve(suggested),
   folder: () => Promise.resolve("/samples/Test"),
+  audioFile: () => Promise.resolve("/factory/Drums/Kicks/Kick 02.wav"),
 }
 
 /** Lets promises that are already resolved run their callbacks. */
@@ -22,11 +29,11 @@ export async function settle() {
 }
 
 /**
- * A fresh mock backend with the stores and actions wired to it, the way the
- * app starts. Call the returned `stop` when the test is done.
+ * A fresh mock backend with the stores, the actions and the keymap wired to
+ * it, the way the app starts. Call the returned `stop` when the test is done.
  */
 export async function startTestApp(options: { project?: Project } = {}) {
-  const backend: Backend = createMockBackend({
+  const backend: MockBackend = createMockBackend({
     storage: null,
     dialogs: TEST_DIALOGS,
     project: options.project,
@@ -37,14 +44,18 @@ export async function startTestApp(options: { project?: Project } = {}) {
   useEngineStore.setState(useEngineStore.getInitialState(), true)
   useUiStore.setState(useUiStore.getInitialState(), true)
   usePromptStore.setState(usePromptStore.getInitialState(), true)
+  useWarningsStore.setState(useWarningsStore.getInitialState(), true)
   const disconnect = connectStores()
   const unregister = registerBuiltinActions()
+  const uninstall = installKeymap()
   await settle()
   return {
     backend,
     stop() {
       disconnect()
       unregister()
+      uninstall()
+      backend.dispose()
     },
   }
 }

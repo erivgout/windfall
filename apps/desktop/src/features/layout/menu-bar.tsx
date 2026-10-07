@@ -39,10 +39,25 @@ function MenuEntries({ entries }: { entries: MenuEntry[] }) {
     }
     if ("separator" in entry) return <MenubarSeparator key={index} />
 
+    if ("entries" in entry) {
+      return (
+        <MenubarSub key={entry.submenu}>
+          <MenubarSubTrigger inset={hasToggles}>
+            {entry.submenu}
+          </MenubarSubTrigger>
+          <MenubarSubContent className="w-auto min-w-48">
+            <MenuEntries entries={entry.entries} />
+          </MenubarSubContent>
+        </MenubarSub>
+      )
+    }
+
     const items = actions.filter((action) => action.section === entry.section)
     return (
       <MenubarSub key={entry.submenu}>
-        <MenubarSubTrigger>{entry.submenu}</MenubarSubTrigger>
+        <MenubarSubTrigger inset={hasToggles}>
+          {entry.submenu}
+        </MenubarSubTrigger>
         <MenubarSubContent className="w-auto min-w-48">
           {items.length === 0 ? (
             <MenubarItem disabled>{entry.empty}</MenubarItem>
@@ -57,7 +72,7 @@ function MenuEntries({ entries }: { entries: MenuEntry[] }) {
   })
 }
 
-/** File, Edit, View, Options and Help. Every item is a registry action. */
+/** The menu bar. Every item is a registry action. */
 export function AppMenuBar() {
   return (
     <Menubar className="h-full gap-0 rounded-none border-0 p-0">

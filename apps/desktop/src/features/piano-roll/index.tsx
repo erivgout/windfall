@@ -3,6 +3,7 @@ import { MusicNote03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { ActionButton } from "@/components/action-button"
+import { ContextActions } from "@/components/context-actions"
 import {
   Empty,
   EmptyContent,
@@ -11,34 +12,38 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { useProjectGeneration } from "@/lib/store/replaced"
 import { useChannelIds, useSelectedPatternId } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 
+import { NO_CHANNEL_MENU } from "./menu"
 import { Workspace } from "./workspace"
 
 function NoChannels() {
   return (
-    <Empty className="h-full">
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <HugeiconsIcon icon={MusicNote03Icon} strokeWidth={2} />
-        </EmptyMedia>
-        <EmptyTitle>There is no channel to write notes for</EmptyTitle>
-        <EmptyDescription>
-          The piano roll edits the notes one channel plays in the current
-          pattern. Add a channel, or drag a sample in from the browser, and its
-          notes open here.
-        </EmptyDescription>
-      </EmptyHeader>
-      <EmptyContent>
-        <div className="flex flex-wrap justify-center gap-2">
-          <ActionButton action="channel.add" />
-          <ActionButton action="view.channelRack" variant="outline">
-            Go to the channel rack
-          </ActionButton>
-        </div>
-      </EmptyContent>
-    </Empty>
+    <ContextActions items={NO_CHANNEL_MENU}>
+      <Empty className="h-full">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <HugeiconsIcon icon={MusicNote03Icon} strokeWidth={2} />
+          </EmptyMedia>
+          <EmptyTitle>There is no channel to write notes for</EmptyTitle>
+          <EmptyDescription>
+            The piano roll edits the notes one channel plays in the current
+            pattern. Add a channel, or drag a sample in from the browser, and
+            its notes open here.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <div className="flex flex-wrap justify-center gap-2">
+            <ActionButton action="channel.add" />
+            <ActionButton action="view.channelRack" variant="outline">
+              Go to the channel rack
+            </ActionButton>
+          </div>
+        </EmptyContent>
+      </Empty>
+    </ContextActions>
   )
 }
 
@@ -52,6 +57,7 @@ export default function PianoRollPanel() {
   const patternId = useSelectedPatternId()
   const selected = useUiStore((state) => state.selectedChannel)
   const selectChannel = useUiStore((state) => state.selectChannel)
+  const generation = useProjectGeneration()
   const channelId =
     selected !== null && channelIds.includes(selected)
       ? selected
@@ -64,5 +70,9 @@ export default function PianoRollPanel() {
   }, [channelId, selected, selectChannel])
 
   if (channelId === null || patternId === null) return <NoChannels />
-  return <Workspace patternId={patternId} channelId={channelId} />
+  // Another project starts the editor over: its scroll, zoom and selection
+  // belonged to the notes of the one before.
+  return (
+    <Workspace key={generation} patternId={patternId} channelId={channelId} />
+  )
 }

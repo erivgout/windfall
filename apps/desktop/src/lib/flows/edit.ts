@@ -1,6 +1,6 @@
 import type { PatternId } from "@/bindings"
 import { dispatch, useProjectStore } from "@/lib/store/project"
-import { askText } from "@/lib/store/prompts"
+import { askConfirm, askText } from "@/lib/store/prompts"
 import { selectedPatternId } from "@/lib/store/selectors"
 import { setTransportPattern, useTransportStore } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
@@ -41,8 +41,51 @@ export async function renamePattern(id = currentPatternId()): Promise<void> {
   await dispatch({ type: "updatePattern", id: pattern.id, patch: { name } })
 }
 
+function count(amount: number, one: string, many: string): string {
+  return `${amount} ${amount === 1 ? one : many}`
+}
+
+/**
+ * What deleting a pattern takes with it, in words, or null for an empty
+ * pattern nothing plays: that one goes without a question.
+ */
+export function patternLoss(id: PatternId): string | null {
+  const { project } = useProjectStore.getState()
+  const pattern = project.patterns.find((item) => item.id === id)
+  if (!pattern) return null
+  const notes = pattern.lanes.reduce(
+    (total, lane) => total + lane.notes.length,
+    0
+  )
+  const clips = project.playlist.clips.filter(
+    (clip) => clip.content.type === "pattern" && clip.content.pattern === id
+  ).length
+  if (notes === 0 && clips === 0) return null
+  const has = `It has ${count(notes, "note", "notes")}`
+  if (clips === 0) return `${has}. Undo brings the pattern back.`
+  const used =
+    clips === 1
+      ? "1 clip on the playlist plays it and is deleted with it"
+      : `${clips} clips on the playlist play it and are deleted with it`
+  const lost = notes === 0 ? used : `${has}, and ${used}`
+  return `${lost}. Undo brings everything back.`
+}
+
 export async function deletePattern(id = currentPatternId()): Promise<void> {
   if (id === null) return
+  const pattern = patterns().find((item) => item.id === id)
+  if (!pattern) return
+  const loss = patternLoss(id)
+  if (loss !== null) {
+    const choice = await askConfirm({
+      title: `Delete ${pattern.name}?`,
+      description: loss,
+      choices: [
+        { id: "delete", label: "Delete pattern", variant: "destructive" },
+      ],
+    })
+    if (choice !== "delete") return
+  }
   const index = patterns().findIndex((pattern) => pattern.id === id)
   const neighbor = patterns()[index + 1] ?? patterns()[index - 1]
   const wasSelected = id === currentPatternId()

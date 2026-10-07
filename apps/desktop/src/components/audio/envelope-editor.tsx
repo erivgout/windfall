@@ -65,6 +65,150 @@ export function envelopePatch(
   return patch
 }
 
+/**
+ * The shape of the stages between the nodes.
+ *
+ * - `"linear"`: straight lines.
+ * - `"exponential"`: a straight attack, and a decay and a release that fall
+ *   fast at first and ever slower, covering 60 dB before they land.
+ * - `"rounded"`: the same falls, and an attack that rises fast at first and
+ *   eases into full level, as an analogue envelope does.
+ */
+export type EnvelopeCurve = "linear" | "exponential" | "rounded"
+
+// These two numbers and the formulas below are the ones of Windfall's
+// engine, so the editor draws what is heard. The falls are those of the
+// sampler (`EnvelopeState::fall`, `CURVE_FLOOR` in `windfall-engine`'s
+// `voice.rs`) and of the synth (`Adsr::tick`, `FALL_OVERSHOOT` in
+// `windfall-dsp`'s `blocks/adsr.rs`), which are the same curve. The rounded
+// rise is the synth's attack (`ATTACK_OVERSHOOT` there).
+const FALL_FLOOR = 0.001
+const RISE_OVERSHOOT = 0.3
+
+/**
+ * How much of a decay or release is still to come at `progress` through
+ * the stage, 0 to 1: 1 at its start and exactly 0 at its end. It is an
+ * exponential that would stop a thousandth (60 dB) short of the target,
+ * lowered by that thousandth so that it lands on it.
+ */
+export function envelopeFall(progress: number): number {
+  const reach = clamp(progress, 0, 1)
+  // The ends are exact, whatever rounding does to the curve between them.
+  if (reach === 0 || reach === 1) {
+    return 1 - reach
+  }
+  const floor = FALL_FLOOR / (1 + FALL_FLOOR)
+  return Math.max(0, (1 + FALL_FLOOR) * floor ** reach - FALL_FLOOR)
+}
+
+/**
+ * The level of a rounded attack at `progress` through the stage, 0 to 1:
+ * an exponential that aims 30% past full level and is stopped there.
+ */
+export function envelopeRise(progress: number): number {
+  const reach = clamp(progress, 0, 1)
+  if (reach === 0 || reach === 1) {
+    return reach
+  }
+  const aim = 1 + RISE_OVERSHOOT
+  return Math.min(1, aim * (1 - (RISE_OVERSHOOT / aim) ** reach))
+}
+
+type Point = { x: number; y: number }
+
+/** Points drawn for one curved stage. A straight one needs only its ends. */
+const CURVE_STEPS = 24
+
+/**
+ * The points of one stage from `from` to `to`. `share` says how far toward
+ * `to` the level has come at a share of the stage's time; left out, the
+ * stage is a straight line.
+ */
+function stagePoints(
+  from: Point,
+  to: Point,
+  share?: (progress: number) => number
+): Point[] {
+  if (!share || from.x === to.x) {
+    return [from, to]
+  }
+  const points: Point[] = []
+  for (let step = 0; step <= CURVE_STEPS; step += 1) {
+    const progress = step / CURVE_STEPS
+    points.push({
+      x: from.x + (to.x - from.x) * progress,
+      y: from.y + (to.y - from.y) * share(progress),
+    })
+  }
+  return points
+}
+
+function pathThrough(points: readonly Point[]): string {
+  return points
+    .map(
+      (point, index) =>
+        `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`
+    )
+    .join(" ")
+}
+
+/** Room a label of the time axis takes per character, in pixels. */
+const AXIS_CHAR_PX = 5.6
+/** The least space between two labels of the time axis, in pixels. */
+const AXIS_LABEL_GAP = 6
+
+export type EnvelopeAxisLabel = {
+  /** Where the label's tick is, in pixels along the axis. */
+  x: number
+  text: string
+}
+
+/**
+ * Picks the labels of the time axis that fit beside each other, so that no
+ * two run together on a narrow editor. The first one starts at its tick,
+ * the last one ends at its tick and the others are centered on theirs. The
+ * two ends are kept first, then whichever label lies furthest from the
+ * ones already kept, for as long as one fits. Returns the labels to show,
+ * in order.
+ */
+export function fitEnvelopeLabels(
+  labels: readonly EnvelopeAxisLabel[]
+): EnvelopeAxisLabel[] {
+  const last = labels.length - 1
+  const box = (index: number) => {
+    const { x, text } = labels[index]
+    const width = text.length * AXIS_CHAR_PX
+    const left = index === 0 ? x : index === last ? x - width : x - width / 2
+    return { left, right: left + width }
+  }
+  const kept: number[] = []
+  const fits = (index: number) =>
+    kept.every((other) => {
+      const a = box(index)
+      const b = box(other)
+      return (
+        a.left >= b.right + AXIS_LABEL_GAP || b.left >= a.right + AXIS_LABEL_GAP
+      )
+    })
+  const room = (index: number) =>
+    Math.min(
+      ...kept.map((other) => Math.abs(labels[other].x - labels[index].x))
+    )
+
+  if (labels.length > 0) kept.push(0)
+  if (last > 0 && fits(last)) kept.push(last)
+  for (;;) {
+    let next = -1
+    for (let index = 1; index < last; index += 1) {
+      if (kept.includes(index) || !fits(index)) continue
+      if (next < 0 || room(index) > room(next)) next = index
+    }
+    if (next < 0) break
+    kept.push(next)
+  }
+  return kept.sort((a, b) => a - b).map((index) => labels[index])
+}
+
 // The sustain stage has no length of its own; it is drawn this wide.
 const HOLD_SHARE = 0.2
 const MIN_SPAN_MS = 100
@@ -178,6 +322,11 @@ type EnvelopeEditorProps = Omit<
     defaults?: Partial<EnvelopeValues>
     /** Curve color as any CSS color. Defaults to `--wf-brand`. */
     color?: string
+    /**
+     * The shape drawn between the nodes. Pass the one the envelope being
+     * edited really has. Defaults to `"linear"`.
+     */
+    curve?: EnvelopeCurve
     disabled?: boolean
   }
 
@@ -201,6 +350,7 @@ function EnvelopeEditor({
   onGestureEnd,
   defaults,
   color,
+  curve = "linear",
   disabled = false,
   ...props
 }: EnvelopeEditorProps) {
@@ -410,14 +560,35 @@ function EnvelopeEditor({
   }
 
   const ticks = [0, 1, 2, 3, 4, 5].map((index) => (span / 5) * index)
-  const curve = `M ${origin.x} ${origin.y} L ${peak.x} ${peak.y} L ${settle.x} ${settle.y}`
-  const tail = `M ${letGo.x} ${letGo.y} L ${finish.x} ${finish.y}`
-  const area = `M ${origin.x} ${origin.y} L ${peak.x} ${peak.y} L ${settle.x} ${settle.y} L ${letGo.x} ${letGo.y} L ${finish.x} ${finish.y} Z`
+  // Labels that would run into each other at this width are left out. The
+  // grid lines all stay.
+  const shownLabels = new Set(
+    fitEnvelopeLabels(
+      ticks.map((tick) => ({ x: xOf(tick), text: axisLabel(tick) }))
+    ).map((label) => label.text)
+  )
+
+  const falls =
+    curve === "linear"
+      ? undefined
+      : (progress: number) => 1 - envelopeFall(progress)
+  const rise = stagePoints(
+    origin,
+    peak,
+    curve === "rounded" ? envelopeRise : undefined
+  )
+  const decay = stagePoints(peak, settle, falls)
+  const release = stagePoints(letGo, finish, falls)
+  const shape = pathThrough([...rise, ...decay])
+  const tail = pathThrough(release)
+  const area = `${pathThrough([...rise, ...decay, ...release])} Z`
 
   return (
     <div
       ref={rootRef}
+      role="group"
       data-slot="envelope-editor"
+      data-curve={curve}
       data-disabled={disabled ? "" : undefined}
       className={cn(
         "relative h-32 w-full overflow-hidden rounded-sm bg-(--wf-meter-bg)/40 select-none data-disabled:opacity-50",
@@ -446,16 +617,18 @@ function EnvelopeEditor({
               y2={origin.y}
               stroke="var(--wf-grid-line)"
             />
-            <text
-              x={xOf(tick)}
-              y={size.height - 5}
-              textAnchor={
-                index === 0 ? "start" : index === 5 ? "end" : "middle"
-              }
-              className="fill-muted-foreground text-[9px] tabular-nums"
-            >
-              {axisLabel(tick)}
-            </text>
+            {shownLabels.has(axisLabel(tick)) ? (
+              <text
+                x={xOf(tick)}
+                y={size.height - 5}
+                textAnchor={
+                  index === 0 ? "start" : index === 5 ? "end" : "middle"
+                }
+                className="fill-muted-foreground text-[9px] tabular-nums"
+              >
+                {axisLabel(tick)}
+              </text>
+            ) : null}
           </g>
         ))}
         <line
@@ -467,7 +640,8 @@ function EnvelopeEditor({
         />
         <path d={area} fill="var(--envelope-color)" fillOpacity={0.16} />
         <path
-          d={curve}
+          data-slot="envelope-shape"
+          d={shape}
           fill="none"
           stroke="var(--envelope-color)"
           strokeWidth={1.5}
@@ -484,10 +658,12 @@ function EnvelopeEditor({
           strokeDasharray="3 3"
         />
         <path
+          data-slot="envelope-tail"
           d={tail}
           fill="none"
           stroke="var(--envelope-color)"
           strokeWidth={1.5}
+          strokeLinejoin="round"
         />
       </svg>
       {NODE_NAMES.map((node) => {

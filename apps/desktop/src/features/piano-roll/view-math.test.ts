@@ -164,12 +164,28 @@ describe("press intents", () => {
     )
   })
 
-  it("selects with Ctrl in every tool, even on a note", () => {
+  it("selects with Ctrl on empty grid in every tool", () => {
     for (const tool of ["draw", "paint", "select", "erase"] as const) {
-      expect(pressIntent(tool, "left", "body", { ctrl: true }).kind).toBe(
+      expect(pressIntent(tool, "left", null, { ctrl: true }).kind).toBe(
         "marquee"
       )
     }
+  })
+
+  it("keeps Ctrl on a note a move, for the drop to copy", () => {
+    for (const tool of ["draw", "paint", "select"] as const) {
+      expect(pressIntent(tool, "left", "body", { ctrl: true }).kind).toBe(
+        "move"
+      )
+      expect(pressIntent(tool, "left", "end-edge", { ctrl: true })).toEqual({
+        kind: "resize",
+        edge: "end",
+      })
+    }
+    // The erase tool does nothing else to a note, so there Ctrl selects.
+    expect(pressIntent("erase", "left", "body", { ctrl: true }).kind).toBe(
+      "marquee"
+    )
   })
 
   it("deletes with the right button, except in the select tool", () => {

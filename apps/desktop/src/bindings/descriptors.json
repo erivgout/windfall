@@ -1,0 +1,2603 @@
+{
+  "effects": {
+    "compressor": {
+      "defaults": {
+        "attackMs": 10.0,
+        "autoMakeup": false,
+        "detector": "peak",
+        "kneeDb": 6.0,
+        "makeupDb": 0.0,
+        "mix": 1.0,
+        "ratio": 4.0,
+        "releaseMs": 120.0,
+        "thresholdDb": -18.0,
+        "type": "compressor"
+      },
+      "name": "Compressor",
+      "params": [
+        {
+          "choices": [],
+          "default": -18.0,
+          "id": "thresholdDb",
+          "kind": "float",
+          "max": 0.0,
+          "min": -60.0,
+          "name": "Threshold",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 4.0,
+          "id": "ratio",
+          "kind": "float",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "Ratio",
+          "scale": "logarithmic",
+          "unit": "ratio"
+        },
+        {
+          "choices": [],
+          "default": 10.0,
+          "id": "attackMs",
+          "kind": "float",
+          "max": 250.0,
+          "min": 0.05000000074505806,
+          "name": "Attack",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 120.0,
+          "id": "releaseMs",
+          "kind": "float",
+          "max": 2500.0,
+          "min": 5.0,
+          "name": "Release",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 6.0,
+          "id": "kneeDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": 0.0,
+          "name": "Knee",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "makeupDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "Makeup",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "autoMakeup",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Auto makeup",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [
+            {
+              "label": "Peak",
+              "value": "peak"
+            },
+            {
+              "label": "RMS",
+              "value": "rms"
+            }
+          ],
+          "default": 0.0,
+          "id": "detector",
+          "kind": "choice",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Detector",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
+        }
+      ]
+    },
+    "delay": {
+      "defaults": {
+        "division": "eighth",
+        "feedback": 0.3499999940395355,
+        "highCutHz": 12000.0,
+        "lowCutHz": 20.0,
+        "mix": 0.30000001192092896,
+        "mode": "stereo",
+        "saturation": 0.0,
+        "stereoOffsetMs": 0.0,
+        "sync": true,
+        "timeMs": 250.0,
+        "type": "delay"
+      },
+      "name": "Delay",
+      "params": [
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "sync",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Sync",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 250.0,
+          "id": "timeMs",
+          "kind": "float",
+          "max": 2000.0,
+          "min": 1.0,
+          "name": "Time",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [
+            {
+              "label": "1/1",
+              "value": "whole"
+            },
+            {
+              "label": "1/2 dotted",
+              "value": "halfDotted"
+            },
+            {
+              "label": "1/2",
+              "value": "half"
+            },
+            {
+              "label": "1/2 triplet",
+              "value": "halfTriplet"
+            },
+            {
+              "label": "1/4 dotted",
+              "value": "quarterDotted"
+            },
+            {
+              "label": "1/4",
+              "value": "quarter"
+            },
+            {
+              "label": "1/4 triplet",
+              "value": "quarterTriplet"
+            },
+            {
+              "label": "1/8 dotted",
+              "value": "eighthDotted"
+            },
+            {
+              "label": "1/8",
+              "value": "eighth"
+            },
+            {
+              "label": "1/8 triplet",
+              "value": "eighthTriplet"
+            },
+            {
+              "label": "1/16 dotted",
+              "value": "sixteenthDotted"
+            },
+            {
+              "label": "1/16",
+              "value": "sixteenth"
+            },
+            {
+              "label": "1/16 triplet",
+              "value": "sixteenthTriplet"
+            },
+            {
+              "label": "1/32",
+              "value": "thirtySecond"
+            }
+          ],
+          "default": 8.0,
+          "id": "division",
+          "kind": "choice",
+          "max": 13.0,
+          "min": 0.0,
+          "name": "Division",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.3499999940395355,
+          "id": "feedback",
+          "kind": "float",
+          "max": 0.949999988079071,
+          "min": 0.0,
+          "name": "Feedback",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [
+            {
+              "label": "Stereo",
+              "value": "stereo"
+            },
+            {
+              "label": "Ping-pong",
+              "value": "pingPong"
+            }
+          ],
+          "default": 0.0,
+          "id": "mode",
+          "kind": "choice",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mode",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "stereoOffsetMs",
+          "kind": "float",
+          "max": 50.0,
+          "min": -50.0,
+          "name": "Stereo offset",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 20.0,
+          "id": "lowCutHz",
+          "kind": "float",
+          "max": 2000.0,
+          "min": 20.0,
+          "name": "Low cut",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 12000.0,
+          "id": "highCutHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 500.0,
+          "name": "High cut",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "saturation",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Saturation",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.30000001192092896,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
+        }
+      ]
+    },
+    "eq": {
+      "defaults": {
+        "highCut": {
+          "enabled": false,
+          "frequencyHz": 18000.0,
+          "q": 0.7071067690849304,
+          "slope": "db12"
+        },
+        "highShelf": {
+          "enabled": true,
+          "frequencyHz": 8000.0,
+          "gainDb": 0.0,
+          "q": 0.7071067690849304
+        },
+        "lowCut": {
+          "enabled": false,
+          "frequencyHz": 30.0,
+          "q": 0.7071067690849304,
+          "slope": "db12"
+        },
+        "lowShelf": {
+          "enabled": true,
+          "frequencyHz": 100.0,
+          "gainDb": 0.0,
+          "q": 0.7071067690849304
+        },
+        "outputGainDb": 0.0,
+        "peak1": {
+          "enabled": true,
+          "frequencyHz": 400.0,
+          "gainDb": 0.0,
+          "q": 1.0
+        },
+        "peak2": {
+          "enabled": true,
+          "frequencyHz": 1000.0,
+          "gainDb": 0.0,
+          "q": 1.0
+        },
+        "peak3": {
+          "enabled": true,
+          "frequencyHz": 3500.0,
+          "gainDb": 0.0,
+          "q": 1.0
+        },
+        "type": "eq"
+      },
+      "name": "Parametric EQ",
+      "params": [
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lowCut.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Low cut",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 30.0,
+          "id": "lowCut.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Low cut frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.7071067690849304,
+          "id": "lowCut.q",
+          "kind": "float",
+          "max": 8.0,
+          "min": 0.25,
+          "name": "Low cut Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [
+            {
+              "label": "12 dB/oct",
+              "value": "db12"
+            },
+            {
+              "label": "24 dB/oct",
+              "value": "db24"
+            },
+            {
+              "label": "48 dB/oct",
+              "value": "db48"
+            }
+          ],
+          "default": 0.0,
+          "id": "lowCut.slope",
+          "kind": "choice",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "Low cut slope",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "lowShelf.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Low shelf",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 100.0,
+          "id": "lowShelf.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Low shelf frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lowShelf.gainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "Low shelf gain",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.7071067690849304,
+          "id": "lowShelf.q",
+          "kind": "float",
+          "max": 2.0,
+          "min": 0.10000000149011612,
+          "name": "Low shelf Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "peak1.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Peak 1",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 400.0,
+          "id": "peak1.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Peak 1 frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "peak1.gainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "Peak 1 gain",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "peak1.q",
+          "kind": "float",
+          "max": 18.0,
+          "min": 0.10000000149011612,
+          "name": "Peak 1 Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "peak2.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Peak 2",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1000.0,
+          "id": "peak2.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Peak 2 frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "peak2.gainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "Peak 2 gain",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "peak2.q",
+          "kind": "float",
+          "max": 18.0,
+          "min": 0.10000000149011612,
+          "name": "Peak 2 Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "peak3.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Peak 3",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 3500.0,
+          "id": "peak3.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Peak 3 frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "peak3.gainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "Peak 3 gain",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "peak3.q",
+          "kind": "float",
+          "max": 18.0,
+          "min": 0.10000000149011612,
+          "name": "Peak 3 Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "highShelf.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "High shelf",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 8000.0,
+          "id": "highShelf.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "High shelf frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "highShelf.gainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "High shelf gain",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.7071067690849304,
+          "id": "highShelf.q",
+          "kind": "float",
+          "max": 2.0,
+          "min": 0.10000000149011612,
+          "name": "High shelf Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "highCut.enabled",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "High cut",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 18000.0,
+          "id": "highCut.frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "High cut frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.7071067690849304,
+          "id": "highCut.q",
+          "kind": "float",
+          "max": 8.0,
+          "min": 0.25,
+          "name": "High cut Q",
+          "scale": "logarithmic",
+          "unit": "none"
+        },
+        {
+          "choices": [
+            {
+              "label": "12 dB/oct",
+              "value": "db12"
+            },
+            {
+              "label": "24 dB/oct",
+              "value": "db24"
+            },
+            {
+              "label": "48 dB/oct",
+              "value": "db48"
+            }
+          ],
+          "default": 0.0,
+          "id": "highCut.slope",
+          "kind": "choice",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "High cut slope",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "outputGainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "Output gain",
+          "scale": "linear",
+          "unit": "decibels"
+        }
+      ]
+    },
+    "limiter": {
+      "defaults": {
+        "ceilingDb": -0.30000001192092896,
+        "inputGainDb": 0.0,
+        "lookaheadMs": 5.0,
+        "releaseMs": 100.0,
+        "type": "limiter"
+      },
+      "name": "Limiter",
+      "params": [
+        {
+          "choices": [],
+          "default": -0.30000001192092896,
+          "id": "ceilingDb",
+          "kind": "float",
+          "max": 0.0,
+          "min": -24.0,
+          "name": "Ceiling",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "inputGainDb",
+          "kind": "float",
+          "max": 24.0,
+          "min": -12.0,
+          "name": "Input gain",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 100.0,
+          "id": "releaseMs",
+          "kind": "float",
+          "max": 1000.0,
+          "min": 1.0,
+          "name": "Release",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 5.0,
+          "id": "lookaheadMs",
+          "kind": "float",
+          "max": 20.0,
+          "min": 0.10000000149011612,
+          "name": "Look-ahead",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        }
+      ]
+    },
+    "reverb": {
+      "defaults": {
+        "damping": 0.5,
+        "decayS": 1.7999999523162842,
+        "diffusion": 0.800000011920929,
+        "earlyLevel": 0.5,
+        "highCutHz": 10000.0,
+        "lowCutHz": 100.0,
+        "mix": 0.30000001192092896,
+        "modulation": 0.25,
+        "preDelayMs": 10.0,
+        "size": 0.5,
+        "type": "reverb",
+        "width": 1.0
+      },
+      "name": "Reverb",
+      "params": [
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "size",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Size",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 1.7999999523162842,
+          "id": "decayS",
+          "kind": "float",
+          "max": 20.0,
+          "min": 0.10000000149011612,
+          "name": "Decay",
+          "scale": "logarithmic",
+          "unit": "seconds"
+        },
+        {
+          "choices": [],
+          "default": 10.0,
+          "id": "preDelayMs",
+          "kind": "float",
+          "max": 250.0,
+          "min": 0.0,
+          "name": "Pre-delay",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "damping",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Damping",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.800000011920929,
+          "id": "diffusion",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Diffusion",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "earlyLevel",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Early reflections",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "modulation",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Modulation",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 100.0,
+          "id": "lowCutHz",
+          "kind": "float",
+          "max": 1000.0,
+          "min": 20.0,
+          "name": "Low cut",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 10000.0,
+          "id": "highCutHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 1000.0,
+          "name": "High cut",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "width",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Width",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.30000001192092896,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
+        }
+      ]
+    }
+  },
+  "fixtures": {
+    "compressorCurve": {
+      "cases": [
+        {
+          "gainsDb": [
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.5625,
+            -2.25,
+            -4.5,
+            -6.75,
+            -9.0,
+            -11.25,
+            -13.5
+          ],
+          "params": {
+            "attackMs": 10.0,
+            "autoMakeup": false,
+            "detector": "peak",
+            "kneeDb": 6.0,
+            "makeupDb": 0.0,
+            "mix": 1.0,
+            "ratio": 4.0,
+            "releaseMs": 120.0,
+            "thresholdDb": -18.0
+          },
+          "totalMakeupDb": 0.0
+        },
+        {
+          "gainsDb": [
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -1.5,
+            -3.0,
+            -4.5,
+            -6.0,
+            -7.5,
+            -9.0,
+            -10.5,
+            -12.0,
+            -13.5,
+            -15.0
+          ],
+          "params": {
+            "attackMs": 10.0,
+            "autoMakeup": false,
+            "detector": "peak",
+            "kneeDb": 0.0,
+            "makeupDb": 0.0,
+            "mix": 1.0,
+            "ratio": 2.0,
+            "releaseMs": 120.0,
+            "thresholdDb": -30.0
+          },
+          "totalMakeupDb": 0.0
+        },
+        {
+          "gainsDb": [
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.375,
+            -1.5,
+            -3.375,
+            -6.0,
+            -9.0,
+            -12.0
+          ],
+          "params": {
+            "attackMs": 10.0,
+            "autoMakeup": true,
+            "detector": "peak",
+            "kneeDb": 12.0,
+            "makeupDb": 0.0,
+            "mix": 1.0,
+            "ratio": 100.0,
+            "releaseMs": 120.0,
+            "thresholdDb": -12.0
+          },
+          "totalMakeupDb": 6.0
+        },
+        {
+          "gainsDb": [
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.0,
+            -0.1640625,
+            -0.65625,
+            -1.4765625,
+            -2.625,
+            -4.1015625,
+            -5.90625,
+            -8.0390625,
+            -10.5,
+            -13.125,
+            -15.75,
+            -18.375,
+            -21.0
+          ],
+          "params": {
+            "attackMs": 10.0,
+            "autoMakeup": false,
+            "detector": "peak",
+            "kneeDb": 24.0,
+            "makeupDb": 6.0,
+            "mix": 1.0,
+            "ratio": 8.0,
+            "releaseMs": 120.0,
+            "thresholdDb": -24.0
+          },
+          "totalMakeupDb": 6.0
+        }
+      ],
+      "levelsDb": [
+        -72.0,
+        -69.0,
+        -66.0,
+        -63.0,
+        -60.0,
+        -57.0,
+        -54.0,
+        -51.0,
+        -48.0,
+        -45.0,
+        -42.0,
+        -39.0,
+        -36.0,
+        -33.0,
+        -30.0,
+        -27.0,
+        -24.0,
+        -21.0,
+        -18.0,
+        -15.0,
+        -12.0,
+        -9.0,
+        -6.0,
+        -3.0,
+        0.0
+      ]
+    },
+    "eqResponse": {
+      "cases": [
+        {
+          "gainsDb": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "params": {
+            "highCut": {
+              "enabled": false,
+              "frequencyHz": 18000.0,
+              "q": 0.7071067690849304,
+              "slope": "db12"
+            },
+            "highShelf": {
+              "enabled": true,
+              "frequencyHz": 8000.0,
+              "gainDb": 0.0,
+              "q": 0.7071067690849304
+            },
+            "lowCut": {
+              "enabled": false,
+              "frequencyHz": 30.0,
+              "q": 0.7071067690849304,
+              "slope": "db12"
+            },
+            "lowShelf": {
+              "enabled": true,
+              "frequencyHz": 100.0,
+              "gainDb": 0.0,
+              "q": 0.7071067690849304
+            },
+            "outputGainDb": 0.0,
+            "peak1": {
+              "enabled": true,
+              "frequencyHz": 400.0,
+              "gainDb": 0.0,
+              "q": 1.0
+            },
+            "peak2": {
+              "enabled": true,
+              "frequencyHz": 1000.0,
+              "gainDb": 0.0,
+              "q": 1.0
+            },
+            "peak3": {
+              "enabled": true,
+              "frequencyHz": 3500.0,
+              "gainDb": 0.0,
+              "q": 1.0
+            }
+          }
+        },
+        {
+          "gainsDb": [
+            -21.119953155517578,
+            -21.119935989379883,
+            -21.119915008544922,
+            -21.11988639831543,
+            -21.11984634399414,
+            -21.119792938232422,
+            -21.11972427368164,
+            -21.11962890625,
+            -21.119503021240234,
+            -21.119325637817383,
+            -21.11909294128418,
+            -21.11878204345703,
+            -21.11836051940918,
+            -21.117782592773438,
+            -21.11699676513672,
+            -21.115924835205078,
+            -21.114450454711914,
+            -21.11240577697754,
+            -21.10953712463379,
+            -21.105464935302734,
+            -21.099580764770508,
+            -21.090898513793945,
+            -21.077747344970703,
+            -21.057186126708984,
+            -21.023778915405273,
+            -20.966882705688477,
+            -20.864212036132812,
+            -20.664897918701172,
+            -20.240474700927734,
+            -19.24066162109375,
+            -16.97998809814453,
+            -16.06630516052246,
+            -18.66116714477539,
+            -19.90354347229004,
+            -19.656997680664062,
+            -16.415353775024414,
+            -12.342778205871582,
+            -17.040313720703125,
+            -12.956897735595703,
+            -9.734292984008789,
+            -15.021191596984863,
+            -15.127396583557129,
+            -14.980876922607422,
+            -15.972543716430664,
+            -19.375030517578125,
+            -26.33519172668457,
+            -37.745521545410156,
+            -56.9537467956543
+          ],
+          "params": {
+            "highCut": {
+              "enabled": true,
+              "frequencyHz": 9810.2001953125,
+              "q": 0.32749998569488525,
+              "slope": "db24"
+            },
+            "highShelf": {
+              "enabled": true,
+              "frequencyHz": 7812.19970703125,
+              "gainDb": 20.15999984741211,
+              "q": 0.9359999895095825
+            },
+            "lowCut": {
+              "enabled": false,
+              "frequencyHz": 18002.0,
+              "q": 3.504999876022339,
+              "slope": "db48"
+            },
+            "lowShelf": {
+              "enabled": false,
+              "frequencyHz": 20000.0,
+              "gainDb": 0.9599990844726562,
+              "q": 0.17599999904632568
+            },
+            "outputGainDb": -21.1200008392334,
+            "peak1": {
+              "enabled": true,
+              "frequencyHz": 1818.2000732421875,
+              "gainDb": 5.760000228881836,
+              "q": 2.6059999465942383
+            },
+            "peak2": {
+              "enabled": true,
+              "frequencyHz": 3816.199951171875,
+              "gainDb": 10.560001373291016,
+              "q": 4.395999908447266
+            },
+            "peak3": {
+              "enabled": true,
+              "frequencyHz": 5814.19970703125,
+              "gainDb": 15.360000610351562,
+              "q": 6.185999870300293
+            }
+          }
+        },
+        {
+          "gainsDb": [
+            -179.32351684570312,
+            -174.2170867919922,
+            -169.11065673828125,
+            -164.00421142578125,
+            -158.89773559570312,
+            -153.79122924804688,
+            -148.68467712402344,
+            -143.57809448242188,
+            -138.47140502929688,
+            -133.36463928222656,
+            -128.2577362060547,
+            -123.15064239501953,
+            -118.0433120727539,
+            -112.93566131591797,
+            -107.82757568359375,
+            -102.71891021728516,
+            -97.60946655273438,
+            -92.49898529052734,
+            -87.38706970214844,
+            -82.2733154296875,
+            -77.15702056884766,
+            -72.037353515625,
+            -66.91315460205078,
+            -61.78289031982422,
+            -56.644508361816406,
+            -51.495277404785156,
+            -46.33156967163086,
+            -41.148555755615234,
+            -35.93989944458008,
+            -30.697311401367188,
+            -25.410139083862305,
+            -20.06488609313965,
+            -14.644858360290527,
+            -9.129094123840332,
+            -3.486072063446045,
+            2.3617236614227295,
+            8.711396217346191,
+            16.968420028686523,
+            27.3182373046875,
+            15.85244369506836,
+            10.75136947631836,
+            10.084260940551758,
+            13.111452102661133,
+            0.6187888383865356,
+            -2.4389781951904297,
+            -3.3960554599761963,
+            -3.5430281162261963,
+            -3.448068618774414
+          ],
+          "params": {
+            "highCut": {
+              "enabled": false,
+              "frequencyHz": 17202.80078125,
+              "q": 3.194999933242798,
+              "slope": "db48"
+            },
+            "highShelf": {
+              "enabled": false,
+              "frequencyHz": 15204.7998046875,
+              "gainDb": -10.559999465942383,
+              "q": 1.6390000581741333
+            },
+            "lowCut": {
+              "enabled": true,
+              "frequencyHz": 5214.7998046875,
+              "q": 6.372499942779541,
+              "slope": "db24"
+            },
+            "lowShelf": {
+              "enabled": true,
+              "frequencyHz": 7212.80029296875,
+              "gainDb": 18.720001220703125,
+              "q": 0.8790000081062317
+            },
+            "outputGainDb": -3.3600006103515625,
+            "peak1": {
+              "enabled": true,
+              "frequencyHz": 9210.7998046875,
+              "gainDb": 23.520000457763672,
+              "q": 9.229000091552734
+            },
+            "peak2": {
+              "enabled": false,
+              "frequencyHz": 11208.7998046875,
+              "gainDb": -20.15999984741211,
+              "q": 11.019000053405762
+            },
+            "peak3": {
+              "enabled": false,
+              "frequencyHz": 13206.80078125,
+              "gainDb": -15.359999656677246,
+              "q": 12.809000015258789
+            }
+          }
+        },
+        {
+          "gainsDb": [
+            14.403969764709473,
+            14.405329704284668,
+            14.407158851623535,
+            14.40961742401123,
+            14.412930488586426,
+            14.417396545410156,
+            14.42342472076416,
+            14.431581497192383,
+            14.442651748657227,
+            14.457733154296875,
+            14.478386878967285,
+            14.506866455078125,
+            14.54651165008545,
+            14.602384567260742,
+            14.68240737915039,
+            14.799406051635742,
+            14.974700927734375,
+            15.24376106262207,
+            15.659992218017578,
+            16.26659393310547,
+            16.93522834777832,
+            17.179840087890625,
+            16.827789306640625,
+            16.381399154663086,
+            16.13149070739746,
+            16.082483291625977,
+            16.183279037475586,
+            16.394912719726562,
+            16.69399070739746,
+            17.068754196166992,
+            17.51837158203125,
+            18.05683135986328,
+            18.723278045654297,
+            19.606325149536133,
+            20.90812110900879,
+            23.154510498046875,
+            28.209716796875,
+            31.669246673583984,
+            18.616073608398438,
+            10.559240341186523,
+            3.768688440322876,
+            -2.7348198890686035,
+            -9.390241622924805,
+            -16.529842376708984,
+            -24.55413818359375,
+            -34.130096435546875,
+            -46.674110412597656,
+            -66.30535888671875
+          ],
+          "params": {
+            "highCut": {
+              "enabled": true,
+              "frequencyHz": 4415.60009765625,
+              "q": 6.0625,
+              "slope": "db24"
+            },
+            "highShelf": {
+              "enabled": true,
+              "frequencyHz": 2417.599853515625,
+              "gainDb": 7.19999885559082,
+              "q": 0.4230000078678131
+            },
+            "lowCut": {
+              "enabled": false,
+              "frequencyHz": 12607.400390625,
+              "q": 1.412500023841858,
+              "slope": "db24"
+            },
+            "lowShelf": {
+              "enabled": false,
+              "frequencyHz": 14605.400390625,
+              "gainDb": -12.0,
+              "q": 1.5819998979568481
+            },
+            "outputGainDb": 14.400001525878906,
+            "peak1": {
+              "enabled": false,
+              "frequencyHz": 16603.400390625,
+              "gainDb": -7.200000762939453,
+              "q": 15.85200023651123
+            },
+            "peak2": {
+              "enabled": false,
+              "frequencyHz": 18601.400390625,
+              "gainDb": -2.4000015258789062,
+              "q": 17.642000198364258
+            },
+            "peak3": {
+              "enabled": true,
+              "frequencyHz": 419.6000061035156,
+              "gainDb": 2.4000015258789062,
+              "q": 1.3530000448226929
+            }
+          }
+        },
+        {
+          "gainsDb": [
+            -10.561833381652832,
+            -10.562457084655762,
+            -10.563297271728516,
+            -10.564421653747559,
+            -10.565929412841797,
+            -10.567950248718262,
+            -10.570658683776855,
+            -10.574280738830566,
+            -10.579126358032227,
+            -10.585600852966309,
+            -10.594239234924316,
+            -10.605740547180176,
+            -10.621020317077637,
+            -10.641249656677246,
+            -10.667912483215332,
+            -10.702853202819824,
+            -10.748290061950684,
+            -10.80679988861084,
+            -10.881197929382324,
+            -10.974281311035156,
+            -11.088425636291504,
+            -11.224991798400879,
+            -11.383612632751465,
+            -11.561549186706543,
+            -11.753315925598145,
+            -11.950798034667969,
+            -12.143877029418945,
+            -12.32129955291748,
+            -12.471235275268555,
+            -12.580778121948242,
+            -12.633400917053223,
+            -12.602287292480469,
+            -12.433022499084473,
+            -11.989265441894531,
+            -10.828948974609375,
+            -7.038832664489746,
+            -2.8125672340393066,
+            -8.058958053588867,
+            -5.605485439300537,
+            -4.890134811401367,
+            -10.196457862854004,
+            -12.689523696899414,
+            -24.56527328491211,
+            -30.57874298095703,
+            -35.889225006103516,
+            -40.24808120727539,
+            -41.41236877441406,
+            -40.52082061767578
+          ],
+          "params": {
+            "highCut": {
+              "enabled": false,
+              "frequencyHz": 11808.19921875,
+              "q": 1.1024999618530273,
+              "slope": "db24"
+            },
+            "highShelf": {
+              "enabled": true,
+              "frequencyHz": 9810.2001953125,
+              "gainDb": -23.520000457763672,
+              "q": 1.1260000467300415
+            },
+            "lowCut": {
+              "enabled": false,
+              "frequencyHz": 20000.0,
+              "q": 4.279999732971191,
+              "slope": "db12"
+            },
+            "lowShelf": {
+              "enabled": true,
+              "frequencyHz": 1818.2000732421875,
+              "gainDb": 5.760000228881836,
+              "q": 0.3659999966621399
+            },
+            "outputGainDb": -16.31999969482422,
+            "peak1": {
+              "enabled": true,
+              "frequencyHz": 3816.199951171875,
+              "gainDb": 10.560001373291016,
+              "q": 4.395999908447266
+            },
+            "peak2": {
+              "enabled": true,
+              "frequencyHz": 5814.19970703125,
+              "gainDb": 15.360000610351562,
+              "q": 6.185999870300293
+            },
+            "peak3": {
+              "enabled": true,
+              "frequencyHz": 7812.19970703125,
+              "gainDb": 20.15999984741211,
+              "q": 7.97599983215332
+            }
+          }
+        },
+        {
+          "gainsDb": [
+            -182.3300018310547,
+            -177.2235870361328,
+            -172.11715698242188,
+            -167.0106964111328,
+            -161.9042510986328,
+            -156.79774475097656,
+            -151.6912078857422,
+            -146.58462524414062,
+            -141.47796630859375,
+            -136.37124633789062,
+            -131.26437377929688,
+            -126.15733337402344,
+            -121.05009460449219,
+            -115.94253540039062,
+            -110.8345947265625,
+            -105.72611236572266,
+            -100.61691284179688,
+            -95.50674438476562,
+            -90.39529418945312,
+            -85.28211212158203,
+            -80.1666030883789,
+            -75.04798126220703,
+            -69.9251708984375,
+            -64.7967529296875,
+            -59.66082000732422,
+            -54.51478958129883,
+            -49.355247497558594,
+            -44.17760467529297,
+            -38.975746154785156,
+            -33.74158477783203,
+            -28.46449089050293,
+            -23.13080406188965,
+            -17.723705291748047,
+            -12.22439956665039,
+            -6.617315292358398,
+            -0.9051055908203125,
+            4.859617233276367,
+            10.553678512573242,
+            16.171951293945312,
+            22.754350662231445,
+            36.12244415283203,
+            22.758609771728516,
+            15.093671798706055,
+            9.382349014282227,
+            4.383884429931641,
+            0.8947750926017761,
+            0.23012518882751465,
+            0.9224976301193237
+          ],
+          "params": {
+            "highCut": {
+              "enabled": false,
+              "frequencyHz": 19200.798828125,
+              "q": 3.9700000286102295,
+              "slope": "db12"
+            },
+            "highShelf": {
+              "enabled": false,
+              "frequencyHz": 17202.80078125,
+              "gainDb": -5.760000228881836,
+              "q": 1.8289999961853027
+            },
+            "lowCut": {
+              "enabled": true,
+              "frequencyHz": 7212.80029296875,
+              "q": 7.147500038146973,
+              "slope": "db24"
+            },
+            "lowShelf": {
+              "enabled": true,
+              "frequencyHz": 9210.7998046875,
+              "gainDb": 23.520000457763672,
+              "q": 1.069000005722046
+            },
+            "outputGainDb": 1.4399986267089844,
+            "peak1": {
+              "enabled": false,
+              "frequencyHz": 11208.7998046875,
+              "gainDb": -20.15999984741211,
+              "q": 11.019000053405762
+            },
+            "peak2": {
+              "enabled": false,
+              "frequencyHz": 13206.80078125,
+              "gainDb": -15.359999656677246,
+              "q": 12.809000015258789
+            },
+            "peak3": {
+              "enabled": false,
+              "frequencyHz": 15204.7998046875,
+              "gainDb": -10.559999465942383,
+              "q": 14.598999977111816
+            }
+          }
+        }
+      ],
+      "frequenciesHz": [
+        20.0,
+        23.166465759277344,
+        26.834257125854492,
+        31.082744598388672,
+        36.003868103027344,
+        41.70411682128906,
+        48.30685043334961,
+        55.95494842529297,
+        64.81391906738281,
+        75.07547760009766,
+        86.961669921875,
+        100.729736328125,
+        116.6775894165039,
+        135.15036010742188,
+        156.54782104492188,
+        181.33297729492188,
+        210.04220581054688,
+        243.29678344726562,
+        281.8163757324219,
+        326.4344482421875,
+        378.1166076660156,
+        437.98126220703125,
+        507.32391357421875,
+        587.6450805664062,
+        680.6829833984375,
+        788.450927734375,
+        913.281005859375,
+        1057.8746337890625,
+        1225.36083984375,
+        1419.364013671875,
+        1644.082275390625,
+        1904.3787841796875,
+        2205.88623046875,
+        2555.12939453125,
+        2959.665771484375,
+        3428.249755859375,
+        3971.023193359375,
+        4599.728515625,
+        5327.97265625,
+        6171.51416015625,
+        7148.60888671875,
+        8280.3994140625,
+        9591.3798828125,
+        11109.91796875,
+        12868.876953125,
+        14906.3193359375,
+        17266.3359375,
+        20000.0
+      ],
+      "sampleRate": 48000.0
+    }
+  },
+  "instruments": {
+    "subtractiveSynth": {
+      "defaults": {
+        "ampEnvelope": {
+          "attackMs": 2.0,
+          "decayMs": 200.0,
+          "releaseMs": 150.0,
+          "sustain": 0.800000011920929
+        },
+        "ampVelocity": 0.699999988079071,
+        "filter": {
+          "cutoffHz": 20000.0,
+          "drive": 0.0,
+          "envelopeOctaves": 0.0,
+          "keyTracking": 0.0,
+          "mode": "lowPass",
+          "resonance": 0.10000000149011612,
+          "slope": "db12",
+          "velocity": 0.0
+        },
+        "filterEnvelope": {
+          "attackMs": 2.0,
+          "decayMs": 300.0,
+          "releaseMs": 200.0,
+          "sustain": 0.30000001192092896
+        },
+        "gain": 0.25,
+        "glideMs": 0.0,
+        "lfos": [
+          {
+            "amp": 0.0,
+            "cutoffOctaves": 0.0,
+            "pitchSemitones": 0.0,
+            "pulseWidth": 0.0,
+            "rateHz": 5.0,
+            "shape": "sine"
+          },
+          {
+            "amp": 0.0,
+            "cutoffOctaves": 0.0,
+            "pitchSemitones": 0.0,
+            "pulseWidth": 0.0,
+            "rateHz": 5.0,
+            "shape": "sine"
+          }
+        ],
+        "oscillators": [
+          {
+            "coarse": 0,
+            "fineCents": 0.0,
+            "level": 1.0,
+            "pan": 0.0,
+            "pulseWidth": 0.5,
+            "waveform": "saw"
+          },
+          {
+            "coarse": 0,
+            "fineCents": 0.0,
+            "level": 0.0,
+            "pan": 0.0,
+            "pulseWidth": 0.5,
+            "waveform": "saw"
+          },
+          {
+            "coarse": 0,
+            "fineCents": 0.0,
+            "level": 0.0,
+            "pan": 0.0,
+            "pulseWidth": 0.5,
+            "waveform": "saw"
+          }
+        ],
+        "pan": 0.0,
+        "polyphony": 16,
+        "type": "subtractiveSynth",
+        "unisonDetuneCents": 20.0,
+        "unisonSpread": 0.699999988079071,
+        "unisonVoices": 1,
+        "voiceMode": "poly"
+      },
+      "name": "Subtractive synth",
+      "params": [
+        {
+          "choices": [
+            {
+              "label": "Sine",
+              "value": "sine"
+            },
+            {
+              "label": "Triangle",
+              "value": "triangle"
+            },
+            {
+              "label": "Saw",
+              "value": "saw"
+            },
+            {
+              "label": "Square",
+              "value": "square"
+            },
+            {
+              "label": "Pulse",
+              "value": "pulse"
+            },
+            {
+              "label": "White noise",
+              "value": "whiteNoise"
+            },
+            {
+              "label": "Pink noise",
+              "value": "pinkNoise"
+            }
+          ],
+          "default": 2.0,
+          "id": "oscillators.0.waveform",
+          "kind": "choice",
+          "max": 6.0,
+          "min": 0.0,
+          "name": "Osc 1 waveform",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "oscillators.0.level",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Osc 1 level",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.0.coarse",
+          "kind": "integer",
+          "max": 36.0,
+          "min": -36.0,
+          "name": "Osc 1 coarse",
+          "scale": "linear",
+          "unit": "semitones"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.0.fineCents",
+          "kind": "float",
+          "max": 100.0,
+          "min": -100.0,
+          "name": "Osc 1 fine",
+          "scale": "linear",
+          "unit": "cents"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "oscillators.0.pulseWidth",
+          "kind": "float",
+          "max": 0.949999988079071,
+          "min": 0.05000000074505806,
+          "name": "Osc 1 pulse width",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.0.pan",
+          "kind": "float",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "Osc 1 pan",
+          "scale": "linear",
+          "unit": "pan"
+        },
+        {
+          "choices": [
+            {
+              "label": "Sine",
+              "value": "sine"
+            },
+            {
+              "label": "Triangle",
+              "value": "triangle"
+            },
+            {
+              "label": "Saw",
+              "value": "saw"
+            },
+            {
+              "label": "Square",
+              "value": "square"
+            },
+            {
+              "label": "Pulse",
+              "value": "pulse"
+            },
+            {
+              "label": "White noise",
+              "value": "whiteNoise"
+            },
+            {
+              "label": "Pink noise",
+              "value": "pinkNoise"
+            }
+          ],
+          "default": 2.0,
+          "id": "oscillators.1.waveform",
+          "kind": "choice",
+          "max": 6.0,
+          "min": 0.0,
+          "name": "Osc 2 waveform",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.1.level",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Osc 2 level",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.1.coarse",
+          "kind": "integer",
+          "max": 36.0,
+          "min": -36.0,
+          "name": "Osc 2 coarse",
+          "scale": "linear",
+          "unit": "semitones"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.1.fineCents",
+          "kind": "float",
+          "max": 100.0,
+          "min": -100.0,
+          "name": "Osc 2 fine",
+          "scale": "linear",
+          "unit": "cents"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "oscillators.1.pulseWidth",
+          "kind": "float",
+          "max": 0.949999988079071,
+          "min": 0.05000000074505806,
+          "name": "Osc 2 pulse width",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.1.pan",
+          "kind": "float",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "Osc 2 pan",
+          "scale": "linear",
+          "unit": "pan"
+        },
+        {
+          "choices": [
+            {
+              "label": "Sine",
+              "value": "sine"
+            },
+            {
+              "label": "Triangle",
+              "value": "triangle"
+            },
+            {
+              "label": "Saw",
+              "value": "saw"
+            },
+            {
+              "label": "Square",
+              "value": "square"
+            },
+            {
+              "label": "Pulse",
+              "value": "pulse"
+            },
+            {
+              "label": "White noise",
+              "value": "whiteNoise"
+            },
+            {
+              "label": "Pink noise",
+              "value": "pinkNoise"
+            }
+          ],
+          "default": 2.0,
+          "id": "oscillators.2.waveform",
+          "kind": "choice",
+          "max": 6.0,
+          "min": 0.0,
+          "name": "Osc 3 waveform",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.2.level",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Osc 3 level",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.2.coarse",
+          "kind": "integer",
+          "max": 36.0,
+          "min": -36.0,
+          "name": "Osc 3 coarse",
+          "scale": "linear",
+          "unit": "semitones"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.2.fineCents",
+          "kind": "float",
+          "max": 100.0,
+          "min": -100.0,
+          "name": "Osc 3 fine",
+          "scale": "linear",
+          "unit": "cents"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "oscillators.2.pulseWidth",
+          "kind": "float",
+          "max": 0.949999988079071,
+          "min": 0.05000000074505806,
+          "name": "Osc 3 pulse width",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "oscillators.2.pan",
+          "kind": "float",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "Osc 3 pan",
+          "scale": "linear",
+          "unit": "pan"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "unisonVoices",
+          "kind": "integer",
+          "max": 7.0,
+          "min": 1.0,
+          "name": "Unison voices",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 20.0,
+          "id": "unisonDetuneCents",
+          "kind": "float",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "Unison detune",
+          "scale": "linear",
+          "unit": "cents"
+        },
+        {
+          "choices": [],
+          "default": 0.699999988079071,
+          "id": "unisonSpread",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Unison spread",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [
+            {
+              "label": "Low-pass",
+              "value": "lowPass"
+            },
+            {
+              "label": "Band-pass",
+              "value": "bandPass"
+            },
+            {
+              "label": "High-pass",
+              "value": "highPass"
+            }
+          ],
+          "default": 0.0,
+          "id": "filter.mode",
+          "kind": "choice",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "Filter mode",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [
+            {
+              "label": "12 dB/oct",
+              "value": "db12"
+            },
+            {
+              "label": "24 dB/oct",
+              "value": "db24"
+            }
+          ],
+          "default": 0.0,
+          "id": "filter.slope",
+          "kind": "choice",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Filter slope",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 20000.0,
+          "id": "filter.cutoffHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Cutoff",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.10000000149011612,
+          "id": "filter.resonance",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Resonance",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "filter.keyTracking",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Key tracking",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "filter.envelopeOctaves",
+          "kind": "float",
+          "max": 8.0,
+          "min": -8.0,
+          "name": "Filter envelope amount",
+          "scale": "linear",
+          "unit": "octaves"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "filter.velocity",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Filter velocity",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "filter.drive",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Drive",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 2.0,
+          "id": "ampEnvelope.attackMs",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 0.0,
+          "name": "Amp attack",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 200.0,
+          "id": "ampEnvelope.decayMs",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 1.0,
+          "name": "Amp decay",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 0.800000011920929,
+          "id": "ampEnvelope.sustain",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Amp sustain",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 150.0,
+          "id": "ampEnvelope.releaseMs",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 1.0,
+          "name": "Amp release",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 2.0,
+          "id": "filterEnvelope.attackMs",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 0.0,
+          "name": "Filter attack",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 300.0,
+          "id": "filterEnvelope.decayMs",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 1.0,
+          "name": "Filter decay",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 0.30000001192092896,
+          "id": "filterEnvelope.sustain",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Filter sustain",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 200.0,
+          "id": "filterEnvelope.releaseMs",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 1.0,
+          "name": "Filter release",
+          "scale": "logarithmic",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [
+            {
+              "label": "Sine",
+              "value": "sine"
+            },
+            {
+              "label": "Triangle",
+              "value": "triangle"
+            },
+            {
+              "label": "Saw",
+              "value": "saw"
+            },
+            {
+              "label": "Square",
+              "value": "square"
+            },
+            {
+              "label": "Random",
+              "value": "random"
+            }
+          ],
+          "default": 0.0,
+          "id": "lfos.0.shape",
+          "kind": "choice",
+          "max": 4.0,
+          "min": 0.0,
+          "name": "LFO 1 shape",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 5.0,
+          "id": "lfos.0.rateHz",
+          "kind": "float",
+          "max": 30.0,
+          "min": 0.009999999776482582,
+          "name": "LFO 1 rate",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.0.pitchSemitones",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "LFO 1 to pitch",
+          "scale": "linear",
+          "unit": "semitones"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.0.cutoffOctaves",
+          "kind": "float",
+          "max": 5.0,
+          "min": -5.0,
+          "name": "LFO 1 to cutoff",
+          "scale": "linear",
+          "unit": "octaves"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.0.amp",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "LFO 1 to volume",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.0.pulseWidth",
+          "kind": "float",
+          "max": 0.44999998807907104,
+          "min": -0.44999998807907104,
+          "name": "LFO 1 to pulse width",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [
+            {
+              "label": "Sine",
+              "value": "sine"
+            },
+            {
+              "label": "Triangle",
+              "value": "triangle"
+            },
+            {
+              "label": "Saw",
+              "value": "saw"
+            },
+            {
+              "label": "Square",
+              "value": "square"
+            },
+            {
+              "label": "Random",
+              "value": "random"
+            }
+          ],
+          "default": 0.0,
+          "id": "lfos.1.shape",
+          "kind": "choice",
+          "max": 4.0,
+          "min": 0.0,
+          "name": "LFO 2 shape",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 5.0,
+          "id": "lfos.1.rateHz",
+          "kind": "float",
+          "max": 30.0,
+          "min": 0.009999999776482582,
+          "name": "LFO 2 rate",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.1.pitchSemitones",
+          "kind": "float",
+          "max": 24.0,
+          "min": -24.0,
+          "name": "LFO 2 to pitch",
+          "scale": "linear",
+          "unit": "semitones"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.1.cutoffOctaves",
+          "kind": "float",
+          "max": 5.0,
+          "min": -5.0,
+          "name": "LFO 2 to cutoff",
+          "scale": "linear",
+          "unit": "octaves"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.1.amp",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "LFO 2 to volume",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "lfos.1.pulseWidth",
+          "kind": "float",
+          "max": 0.44999998807907104,
+          "min": -0.44999998807907104,
+          "name": "LFO 2 to pulse width",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [
+            {
+              "label": "Poly",
+              "value": "poly"
+            },
+            {
+              "label": "Mono",
+              "value": "mono"
+            },
+            {
+              "label": "Legato",
+              "value": "legato"
+            }
+          ],
+          "default": 0.0,
+          "id": "voiceMode",
+          "kind": "choice",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "Voice mode",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "glideMs",
+          "kind": "float",
+          "max": 2000.0,
+          "min": 0.0,
+          "name": "Glide",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 16.0,
+          "id": "polyphony",
+          "kind": "integer",
+          "max": 32.0,
+          "min": 1.0,
+          "name": "Polyphony",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.699999988079071,
+          "id": "ampVelocity",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Volume velocity",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "gain",
+          "kind": "float",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "Volume",
+          "scale": "linear",
+          "unit": "gain"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "pan",
+          "kind": "float",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "Pan",
+          "scale": "linear",
+          "unit": "pan"
+        }
+      ]
+    }
+  }
+}

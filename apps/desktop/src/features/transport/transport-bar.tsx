@@ -8,8 +8,10 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { ActionButton } from "@/components/action-button"
+import { ContextActions } from "@/components/context-actions"
 import { Separator } from "@/components/ui/separator"
 import { HistoryPopover } from "@/features/history/history-popover"
+import { TRANSPORT_MENU } from "@/features/layout/chrome-menus"
 import { useTransportStore } from "@/lib/store/transport"
 import { cn } from "@/lib/utils"
 
@@ -78,37 +80,39 @@ function Display() {
  */
 export function TransportBar() {
   return (
-    <div
-      role="toolbar"
-      aria-label="Transport"
-      className="flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b bg-chassis px-2"
-    >
-      <PlayControls />
-      <ModeSwitch />
-      <Divider />
-      <Display />
-      <Divider />
-      <div className="flex items-center gap-1">
-        <PatternSelector />
-        <ActionButton action="pattern.add" variant="ghost" size="icon">
-          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
-        </ActionButton>
-      </div>
+    <ContextActions items={TRANSPORT_MENU}>
+      <div
+        role="toolbar"
+        aria-label="Transport"
+        className="flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b bg-chassis px-2"
+      >
+        <PlayControls />
+        <ModeSwitch />
+        <Divider />
+        <Display />
+        <Divider />
+        <div className="flex items-center gap-1">
+          <PatternSelector />
+          <ActionButton action="pattern.add" variant="ghost" size="icon">
+            <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+          </ActionButton>
+        </div>
 
-      <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
-        <MasterMeterSlot />
-        <PerformanceReadout />
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
+          <MasterMeterSlot />
+          <PerformanceReadout />
+        </div>
+        <Divider />
+        <div className="flex items-center">
+          <ActionButton action="edit.undo" variant="ghost" size="icon">
+            <HugeiconsIcon icon={Undo02Icon} strokeWidth={2} />
+          </ActionButton>
+          <ActionButton action="edit.redo" variant="ghost" size="icon">
+            <HugeiconsIcon icon={Redo02Icon} strokeWidth={2} />
+          </ActionButton>
+          <HistoryPopover />
+        </div>
       </div>
-      <Divider />
-      <div className="flex items-center">
-        <ActionButton action="edit.undo" variant="ghost" size="icon">
-          <HugeiconsIcon icon={Undo02Icon} strokeWidth={2} />
-        </ActionButton>
-        <ActionButton action="edit.redo" variant="ghost" size="icon">
-          <HugeiconsIcon icon={Redo02Icon} strokeWidth={2} />
-        </ActionButton>
-        <HistoryPopover />
-      </div>
-    </div>
+    </ContextActions>
   )
 }

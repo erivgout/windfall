@@ -5,19 +5,22 @@ import "./index.css"
 import App from "./App.tsx"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 
-// `?view=kit` opens the audio control kit showcase instead of the app.
+// `?view=kit` opens the audio control kit showcase instead of the app, and
+// `?view=params` the editors made from the effect and instrument descriptors.
 const view = new URLSearchParams(window.location.search).get("view")
 const KitDemo = lazy(() => import("@/features/kit-demo"))
+const ParamDemo = lazy(() => import("@/features/params/demo"))
+const Showcase = view === "kit" ? KitDemo : view === "params" ? ParamDemo : null
 
 // The stylesheet locks scrolling and text selection for the app window only.
-document.documentElement.dataset.view = view === "kit" ? "kit" : "app"
+document.documentElement.dataset.view = Showcase ? "kit" : "app"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
-      {view === "kit" ? (
+      {Showcase ? (
         <Suspense>
-          <KitDemo />
+          <Showcase />
         </Suspense>
       ) : (
         <App />

@@ -72,10 +72,11 @@ The token values in `registry.json` are copies of the ones in `src/index.css`. W
 | `scale` | `"linear" \| "log" \| ValueScale` | How the value maps to travel. `ValueScale` is `{ toNormalized(value, min, max), fromNormalized(normalized, min, max) }`. `logScale` needs `min` above 0. `powerScale(exponent)` and `faderTaper` are ready-made. |
 | `format` | `(value: number) => string` | The readout and `aria-valuetext`. |
 | `parse` | `(text: string) => number \| null` | Turns typed text into a value. It must understand what `format` prints. The default reads the first number in the text. |
+| `unitKind` | `string` | What the number is: `"gain"`, `"pan"`, `"hertz"`, or `PLAIN_NUMBER` for a bare one. The control only hands it on in `ValueControlActions`, for a menu that copies a value between controls and must not paste a level into a pan. `PanControl` says `"pan"` and a gain `Fader` `"gain"` by themselves. |
 | `disabled` | `boolean` | |
 | `aria-label` | `string` | Or pass a visible `label`, which labels the slider. |
 
-Spread a unit to set `format` and `parse` together: `<Knob {...percentUnit} />`.
+Spread a unit to set `format`, `parse` and `unitKind` together: `<Knob {...percentUnit} />`.
 
 ### Gestures
 
@@ -109,10 +110,72 @@ A press that changes nothing opens no gesture. A control that unmounts in the mi
 | Shift + arrow | 0.1% of the travel | one step |
 | Page up / page down | 10% of the travel | ten key steps |
 | Home / End | `min` / `max` | `min` / `max` |
+| Delete, Backspace | nothing; left to the app, where they delete things. A value goes back to its default by double-click or Ctrl/Cmd-click | same |
 | Enter | opens the text entry with the readout selected | same |
 | A digit, `-`, `+`, `.` or `,` | opens the text entry starting with that character | same |
+| Space | nothing; left to the app | same |
 
-In the text entry, Enter and leaving the field commit, and Escape cancels. Typed values are clamped to the range. Keys with Ctrl, Cmd or Alt are left to the app.
+In the text entry, Enter and Tab commit. Escape cancels, and so does leaving the field any other way (a blur cancels): a value is only ever set on purpose, so an entry that a stray key opened and a click elsewhere closed changes nothing. `ValueInput`'s `onCancel` is told which it was, `"escape"` or `"blur"`; after a blur the focus is left where it went. Typed values are clamped to the range. Keys with Ctrl, Cmd or Alt are left to the app and never start the entry.
+
+### A menu for every value control (`ValueControlSlot`)
+
+The kit has no menus, but an app usually wants the same right-click menu on every knob and fader it shows. `ValueControlSlot` is a React context for that. Give it a component and every `Knob`, `PanControl`, `Fader` and `NumberField` under it renders its root element through that component:
+
+```tsx
+function ValueMenu({ control, children }: ValueControlSlotProps) {
+  return cloneElement(children, {
+    onContextMenu: (event) => {
+      event.preventDefault()
+      openMyMenu(event, [
+        { title: "Reset", run: control.reset },
+        { title: "Type in value…", run: control.startEditing },
+        { title: "Copy", run: () => copy(control.text) },
+      ])
+    },
+  })
+}
+
+<ValueControlSlot value={ValueMenu}>…the app…</ValueControlSlot>
+```
+
+`children` is the control's root `<div>`: return it, wrapped or cloned with more props. `control` is a `ValueControlActions`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `value`, `text` | `number`, `string` | The value in its range and the formatted readout. |
+| `defaultValue` | `number \| undefined` | |
+| `disabled`, `editable` | `boolean` | |
+| `unitKind` | `string \| undefined` | What the number is, when the control was told. Copy `value` with it, and paste only into a control of the same kind. |
+| `reset()` | | Restores the default as one gesture. |
+| `startEditing()` | | Opens the text entry, as Enter does. The entry takes the focus, so call it after a menu has closed. |
+| `change(value)` | | Applies a value as a gesture of its own. |
+| `parse(text)` | `number \| null` | Reads text the way the text entry does, clamped and snapped. Null when it is not a value for this control. |
+
+Without a provider the controls render themselves, as before. Any `onContextMenu` passed to a control still reaches its root element.
+
+### A value something else is moving (`live`, `marker`)
+
+A knob or fader can show a second value beside its own: the one an automation curve, a controller or a modulator is giving it right now. `Knob`, `PanControl` and `Fader` take two props for that:
+
+| Prop | Type | Notes |
+|---|---|---|
+| `live` | `LiveValueFeed` | A feed of the moving value, in the control's own unit. The control subscribes on mount, as `LevelMeter` does with `subscribe`. |
+| `marker` | CSS color | A small dot at the control's corner: something else can move this value. Also the color of the live value when the feed gives none. |
+
+```tsx
+const feed: LiveValueFeed = (listener) => {
+  const stop = engine.onValue((value) => listener(value, "#12a594"))
+  return stop // call listener(null) when nothing moves the control any more
+}
+
+<Knob value={stored} onValueChange={setStored} live={feed} marker="#12a594" />
+```
+
+`LiveValueFeed` is `(listener: (value: number | null, color?: string) => void) => () => void`. While the feed gives a value, a knob draws a second pointer and arc in that color and dims its own, and a fader draws a second cap; the readout under a control with `showValue` shows the live value. All of it is written straight to the page, 60 times a second if need be, and the control never renders for it. `value` stays what a drag, a key and the menu change. The root carries `data-live` while a value is being shown. `useLiveValue(feed, draw)` is the subscription on its own.
+
+A screen reader hears the live value too. While the feed gives one, the slider's `aria-valuetext` reads `"+2.5 dB, automated (set to 0.0 dB)"`: the live value, then the stored one, which is what `aria-valuenow` holds and the keys change. It is written at most four times a second (`LIVE_TEXT_MS`), never rendered, and goes back to the stored readout when the feed ends. `useDragValue` takes the feed as its `live` option for a control of your own.
+
+No control in the kit needs Space, so an app can keep it for its transport. A slider, an envelope node and a piano key do not handle it and do not prevent its default. A step toggles with Enter, and with Space only when `spaceToggles` is set.
 
 ### Accessibility
 
@@ -151,7 +214,7 @@ The pure helpers are exported too: `clampValue`, `snapValue`, `valueToNormalized
 
 Readouts use the real minus sign (U+2212). The parsers accept a plain hyphen, a comma as the decimal mark, and "-inf".
 
-Units pair a formatter with its parser: `dbUnit`, `gainUnit`, `panUnit`, `percentUnit`, `msUnit`, `semitonesUnit`, `hzUnit`.
+Units pair a formatter with its parser and name the kind of number they are for (`unitKind`: `"decibels"`, `"gain"`, `"pan"`, `"fraction"`, `"milliseconds"`, `"semitones"`, `"hertz"`): `dbUnit`, `gainUnit`, `panUnit`, `percentUnit`, `msUnit`, `semitonesUnit`, `hzUnit`.
 
 ## Knob
 
@@ -194,8 +257,9 @@ With no `min`, `max` or `scale`, a fader is a gain fader: linear gain 0 to 2.0 o
 
 | Prop | Type | Default | Notes |
 |---|---|---|---|
-| `orientation` | `"vertical" \| "horizontal"` | `"vertical"` | Default size is `h-44` or `w-48`. Override with `className`. |
-| `ticks` | `FaderTick[] \| false` | dB marks for a gain fader | `FaderTick` is `{ value, label?, strong? }`, with `value` in the fader's own unit. Labels that would overlap are dropped; their lines stay. |
+| `orientation` | `"vertical" \| "horizontal"` | `"vertical"` | Default length is `h-44` or `w-48`. Override with `className`. |
+| `size` | `"sm" \| "md"` | `"md"` | How thick the control is across its travel: 20 or 28 pixels. |
+| `ticks` | `FaderTick[] \| false` | dB marks for a gain fader | `FaderTick` is `{ value, label?, strong? }`, with `value` in the fader's own unit. Labels that do not fit are left out; their lines stay. |
 | `label` | `ReactNode` | | Shown under the fader. |
 | `showValue` | `boolean` | `false` | Shows the value under the fader. Double-click it to type. |
 | `meter` | `ReactNode` | | Rendered beside the travel and aligned to it. |
@@ -209,6 +273,8 @@ The taper:
 - `FADER_MAX_GAIN` is 2. `FADER_DB_TICKS` is the default marks: +6, 0, −6, −12, −24, −48, −∞.
 
 Dragging anywhere on the fader moves the cap from where it is. A click on the track does not make the level jump.
+
+The fader measures its travel and labels only the marks that fit, so no two labels come closer than 10 pixels on a vertical fader or 20 on a horizontal one (`FADER_LABEL_GAP`). Labels are kept in order of importance: the `strong` marks, then the two ends, then whichever mark lies furthest from every label kept so far. For the dB marks that is 0, then +6 and −∞, then −12, −24, −6 and −48. A gain fader with 60 pixels of travel shows +6, 0, −12, −24 and −∞. `fitFaderLabels(marks, length, gap)` is that rule on its own.
 
 ## LevelMeter
 
@@ -227,7 +293,9 @@ Imperative API (`LevelMeterHandle`):
 | Method | Notes |
 |---|---|
 | `set(left, right?)` | Linear peak values. With one argument both channels get it. Call it as often as values arrive; the loudest value since the last frame is drawn. |
-| `clearClip()` | Turns the clip light off. |
+| `isClipped()` | Whether the clip light is on. |
+| `setClipped(clipped)` | Turns the clip light on or off. |
+| `clearClip()` | Turns the clip light off. The same as `setClipped(false)`. |
 | `reset()` | Drops the levels, the held peaks and the clip light. |
 
 Or pass `subscribe`: a function that receives a listener `(left, right?) => void` on mount and returns a function that stops the feed.
@@ -243,9 +311,26 @@ Or pass `subscribe`: a function that receives a listener `(left, right?) => void
 | `peakHoldMs` | `number` | `1000` | How long the peak line holds before it falls. 0 hides it. |
 | `clipGain` | `number` | `1` | The clip light latches on a value above this. |
 | `showClip` | `boolean` | `true` | |
-| `onClipChange` | `(clipped: boolean) => void` | | |
+| `clipped` | `boolean` | | Sets the clip light from outside. Leave it out and the meter keeps the latch itself. |
+| `onClipChange` | `(clipped: boolean) => void` | | Called when the clip light changes, whatever changed it. |
+| `clipLabel` | `string` | "Clear clip indicator" | The accessible name of the button that clears the light. |
 
-The clip light stays on until the meter is clicked or `clearClip()` is called. The root carries `data-clipped` while it is on. The animation frame loop stops when the levels have fallen to rest and when the meter is scrolled out of view. The canvas follows the device pixel ratio and its own size.
+The clip light stays on until the meter is clicked or it is turned off through the ref. The root and the button carry `data-clipped` while it is on. The button is hidden from assistive technology and out of the tab order until then. The animation frame loop stops when the levels have fallen to rest and when the meter is scrolled out of view. The canvas follows the device pixel ratio and its own size.
+
+The latch lives in the mounted meter. A list that unmounts meters out of view can keep it elsewhere and put it back:
+
+```tsx
+// when the meter comes back
+meter.current?.setClipped(heldPeak > 1)
+
+<LevelMeter ref={meter} onClipChange={(clipped) => { if (!clipped) clearHeldPeak() }} />
+```
+
+Or own the light as state with `clipped`. The meter then changes nothing by itself: a level over `clipGain` calls `onClipChange(true)`, a click calls `onClipChange(false)`, and the light shows what the prop says.
+
+```tsx
+<LevelMeter clipped={clipped} onClipChange={setClipped} />
+```
 
 `advanceMeter(channel, inputDb, seconds, ballistics)` and `createMeterChannel()` are the ballistics on their own.
 
@@ -277,6 +362,7 @@ rack.current?.setPlayStep(step)
 | `size` | `"sm" \| "md" \| "lg"` | `"md"` | Row heights of 16, 24 and 32 pixels. The row fills its container's width. |
 | `disabled` | `boolean` | `false` | |
 | `rightClickClears` | `boolean` | `true` | Turn off to let a context menu open. |
+| `spaceToggles` | `boolean` | `false` | Let Space toggle the focused step as well as Enter. |
 | `stepLabel` | `(step: number) => string` | "Step 1"… | The accessible name of a step. |
 
 Imperative API: `StepGridHandle.setPlayStep(step | null)` moves the playhead highlight of one row. `StepGridGroupHandle.setPlayStep(step | null)` moves it for every row in the group. Neither renders.
@@ -285,11 +371,11 @@ Interaction:
 
 - A press toggles a step. Dragging on paints the opposite of the first step's state across the row, including steps a fast drag jumps over.
 - A right-click or right-drag clears.
-- Each row is one tab stop. Left, right, Home and End move along it; inside a `StepGridGroup`, up and down move between rows. Space and Enter toggle.
+- Each row is one tab stop. Left, right, Home and End move along it; inside a `StepGridGroup`, up and down move between rows. Enter toggles. Space is left to the app unless `spaceToggles` is set.
 
 Every step is a single memoized `<button aria-pressed>` and all pointer handling sits on the row, so a toggle re-renders one button and the playhead is one attribute write. A rack of 50 rows of 64 steps holds 60 frames a second while painting with the playhead running. Keep `steps` referentially stable for rows that did not change.
 
-`StepButton` is one step on its own: `on`, `onToggle(on)`, `alt`, `playing`, `color`, `size`, and the props of a button.
+`StepButton` is one step on its own: `on`, `onToggle(on)`, `alt`, `playing`, `color`, `size`, `spaceToggles`, and the props of a button.
 
 ## ToggleLed and MuteSolo
 
@@ -327,7 +413,7 @@ Every step is a single memoized `<button aria-pressed>` and all pointer handling
 | `activeKeys` | `ReadonlySet<number> \| readonly number[]` | | Keys shown as held. |
 | `showLabels` | `boolean` | `true` | Note names on the C keys. |
 | `middleCOctave` | `number` | `5` | 5 names key 60 "C5", 4 names it "C4". |
-| `keyboardVelocity` | `number` | `0.8` | For notes played with Space or Enter. |
+| `keyboardVelocity` | `number` | `0.8` | For notes played with Enter. |
 | `color` | CSS color | `--wf-brand` | The highlight color. |
 | `disabled` | `boolean` | `false` | |
 
@@ -335,7 +421,7 @@ Imperative API (`PianoKeyboardHandle`): `flash(key, durationMs = 150)` and `setL
 
 Every note-on is followed by exactly one note-off: on pointer up, on pointer cancel, when the pointer slides off the keys, when the window loses focus and when the keyboard unmounts. Dragging across keys plays a glissando. Two pointers on one key send one note.
 
-Each key is a `role="button"` named after its note. The keyboard is one tab stop: arrows move by a semitone, Page up and Page down by an octave, and Space or Enter plays the focused key for as long as it is held.
+Each key is a `role="button"` named after its note. The keyboard is one tab stop: arrows move by a semitone, Page up and Page down by an octave, and Enter plays the focused key for as long as it is held. Space is left to the app.
 
 `noteName(key, middleCOctave)`, `isBlackKey(key)`, `layoutKeys(low, high, layout)` and `keyAtPoint(shapes, along, depth)` are exported.
 
@@ -354,13 +440,19 @@ Each key is a `role="button"` named after its note. The keyboard is one tab stop
 | `onGestureStart`, `onGestureEnd` | `() => void` | | A handle drag is one gesture. |
 | `minRegion` | `number` | `0.001` | The handles cannot come closer than this. |
 | `formatPosition` | `(position: number) => string` | percent | The handles' `aria-valuetext`, such as a time. |
-| `normalize` | `boolean` | `false` | Scale the drawing so the loudest peak fills the height. |
+| `normalize` | `boolean` | `true` | Magnify the drawing so the loudest peak fills the height. Turn it off to draw full scale as the full height. |
 | `color` | CSS color | `--wf-waveform` | |
 | `disabled` | `boolean` | `false` | |
 
 Imperative API: `WaveformHandle.setPlayhead(position | null)` moves or hides the playhead without rendering.
 
-The handles are sliders with the shared interaction model: they follow the pointer, Shift is fine, arrows step, Home and End jump, and double-click returns a handle to its end of the file. They have no wheel and no typed entry. The canvas redraws on resize, on a device pixel ratio change and on a theme change. `drawWaveform(context, peaks, width, height, color, amplitude)` is the drawing on its own.
+A quiet sample would otherwise draw as a flat line, so the waveform is magnified by default. The gain stops at 100 times (`MAX_DISPLAY_GAIN`, 40 dB), so silence stays flat and a noise floor is not drawn as a loud sound. When the gain is more than 2 dB either way, a label in the top right corner says so: "×4" for a sample that peaks at a quarter of full scale. `waveformDisplayGain(peaks)` and `formatDisplayGain(gain)` are the two halves of that.
+
+The handles are sliders with the shared interaction model: they follow the pointer, Shift is fine, arrows step, Home and End jump, and double-click returns a handle to its end of the file. They have no wheel and no typed entry.
+
+Each handle takes the pointer across 12 pixels. Away from the edges that area is centered on the handle's line. At an edge it slides inwards with the line and the flag, so a handle resting at 0 or 1 is whole and can be grabbed across its full width. The waveform itself runs edge to edge. `layoutRegionHandle(edge, position, width)` gives the pixel positions.
+
+The canvas redraws on resize, on a device pixel ratio change and on a theme change. `drawWaveform(context, peaks, width, height, color, amplitude)` is the drawing on its own.
 
 ## EnvelopeEditor
 
@@ -377,13 +469,16 @@ The handles are sliders with the shared interaction model: they follow the point
 | `maxAttackMs`, `maxDecayMs`, `maxReleaseMs` | `number` | `5000`, `5000`, `10000` | |
 | `defaults` | `Partial<EnvelopeValues>` | | Restored for a node by double-click and Ctrl/Cmd-click. |
 | `color` | CSS color | `--wf-brand` | |
+| `curve` | `"linear" \| "exponential" \| "rounded"` | `"linear"` | The shape drawn between the nodes. Pass the one the envelope really has. |
 | `disabled` | `boolean` | `false` | |
 
-Three nodes: attack (time), decay and sustain (time and level), release (time). Each is a `role="slider"`. Left and right change the time by 5% of its value (at least 1 ms), Shift makes that 0.5% (at least 0.1 ms), Page up and Page down 25%, and Home and End jump to 0 and the maximum. On the decay node, up and down change the sustain level by 0.01, or 0.001 with Shift.
+The root is a `role="group"`, so an `aria-label` on it names the three nodes together. Three nodes: attack (time), decay and sustain (time and level), release (time). Each is a `role="slider"`. Left and right change the time by 5% of its value (at least 1 ms), Shift makes that 0.5% (at least 0.1 ms), Page up and Page down 25%, and Home and End jump to 0 and the maximum. On the decay node, up and down change the sustain level by 0.01, or 0.001 with Shift.
 
-Times are rounded to 0.1 ms and sustain to 0.001. Values never leave their ranges. The time axis picks a round length that fits the envelope and keeps it while a node is dragged, so the node stays under the pointer. The sustain stage has no length of its own and is drawn dashed.
+Times are rounded to 0.1 ms and sustain to 0.001. Values never leave their ranges. The time axis picks a round length that fits the envelope and keeps it while a node is dragged, so the node stays under the pointer. Its labels are thinned to the ones that fit the editor's width, the two ends first; the grid lines all stay. The sustain stage has no length of its own and is drawn dashed.
 
-`constrainEnvelope(values, limits)`, `envelopePatch(current, next)`, `envelopeSpanMs(values)` and `stepEnvelopeTime(value, direction, size)` are exported.
+`curve` is how the stages between the nodes are drawn. `"linear"` is straight lines. `"exponential"` keeps a straight attack and draws the decay and the release as the curve most envelope generators play: fast at first and ever slower, covering 60 dB before it lands exactly on its target (`envelopeFall(progress)`, 1 down to 0). `"rounded"` draws the attack curved as well, rising fast and easing into full level (`envelopeRise(progress)`, 0 up to 1). The nodes sit where they always do: at the ends of the stages.
+
+`constrainEnvelope(values, limits)`, `envelopePatch(current, next)`, `envelopeSpanMs(values)`, `stepEnvelopeTime(value, direction, size)`, `envelopeFall(progress)`, `envelopeRise(progress)` and `fitEnvelopeLabels(labels)` are exported.
 
 ## NumberField
 

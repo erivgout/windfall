@@ -1,17 +1,15 @@
 import type {
   Clip,
+  ClipContent,
   ClipId,
   ClipInit,
   ClipUpdate,
-  Command,
   Pattern,
-  PatternId,
-  Playlist,
   PlaylistTrack,
   PlaylistTrackId,
 } from "@/bindings"
 import { resizedSpan, snapTick } from "@/lib/canvas"
-import { clamp, TICKS_PER_STEP } from "@/lib/units"
+import { clamp, MAX_SONG_TICKS, TICKS_PER_STEP } from "@/lib/units"
 
 /*
  * The arithmetic of editing clips, with no pointer, canvas or store in it.
@@ -21,8 +19,13 @@ import { clamp, TICKS_PER_STEP } from "@/lib/units"
 
 /** The shortest a clip can be made when snapping is off. */
 export const MIN_CLIP_TICKS = 60
-/** Clip geometry is drawn from 32-bit integers. */
-export const MAX_TICK = 0x7fffffff
+/** The last tick a clip may end on: the end of the longest song. */
+export const MAX_TICK = MAX_SONG_TICKS
+
+/** Whether a clip with this span ends inside what the timeline can count. */
+export function spanFits(start: number, length: number): boolean {
+  return start >= 0 && start + length <= MAX_TICK
+}
 
 /** A clip that is about to be created. */
 export type NewClip = {
@@ -31,7 +34,23 @@ export type NewClip = {
   length: number
   offset: number
   muted: boolean
-  pattern: PatternId
+  content: ClipContent
+}
+
+/** What a clip plays, as text: two clips with the same key play the same thing. */
+export function contentKey(content: ClipContent): string {
+  switch (content.type) {
+    case "pattern":
+      return `pattern:${content.pattern}`
+    case "audio":
+      return `audio:${content.sample}`
+    case "automation":
+      return `automation:${content.automation}`
+    default: {
+      const _exhaustive: never = content
+      return _exhaustive
+    }
+  }
 }
 
 /** A change to an existing clip. Missing fields stay as they are. */
@@ -163,24 +182,33 @@ export function endResizeDelta(
 
 /**
  * Ticks to add to the start of the grabbed clip so it meets the pointer.
- * Stops where the earliest selected clip would cross the start of the song.
+ * Stops where the earliest selected clip would cross the start of the song,
+ * and where a clip that does not loop would reach the start of what it
+ * plays: an audio clip has no audio before its first frame.
  */
 export function startTrimDelta(
   clips: readonly Clip[],
   anchor: Clip,
   pointerTick: number,
-  snap: number
+  snap: number,
+  passTicks: (clip: Clip) => number = () => 1
 ): number {
-  let minStart = anchor.start
-  for (const clip of clips) minStart = Math.min(minStart, clip.start)
-  return Math.max(snapNearest(pointerTick, snap) - anchor.start, -minStart)
+  let limit = -anchor.start
+  for (const clip of [anchor, ...clips]) {
+    limit = Math.max(limit, -clip.start)
+    if (passTicks(clip) <= 0) limit = Math.max(limit, -clip.offset)
+  }
+  // "|| 0" turns a negative zero into a plain one.
+  return Math.max(snapNearest(pointerTick, snap) - anchor.start, limit) || 0
 }
 
 /**
  * What an edge drag does to each clip. Moving the start edge changes
- * `offset` by the same amount, so the notes inside stay where they were on
- * the timeline: trimming hides the beginning, and pulling the edge left
- * uncovers the end of the previous pass of the loop.
+ * `offset` by the same amount, so what is inside stays where it was on the
+ * timeline: trimming hides the beginning. A pattern clip loops, so pulling
+ * its edge left uncovers the end of the previous pass; `passTicks` is the
+ * length of that loop, and 0 for a clip of audio or automation, whose
+ * offset simply stops at 0.
  */
 export function resizeChanges(
   clips: readonly Clip[],
@@ -203,7 +231,11 @@ export function resizeChanges(
     const change: ClipChange = { id: clip.id }
     if (shift !== 0) {
       change.start = span.start
-      change.offset = wrapTicks(clip.offset + shift, passTicks(clip))
+      const pass = passTicks(clip)
+      change.offset =
+        pass > 0
+          ? wrapTicks(clip.offset + shift, pass)
+          : Math.max(0, clip.offset + shift)
     }
     if (span.length !== clip.length) change.length = span.length
     changes.push(change)
@@ -243,12 +275,14 @@ export function withoutStacked(
   const taken = new Set(
     existing.map(
       (clip) =>
-        `${rowOf(clip.track)}:${clip.start}:${clip.length}:${clip.content.pattern}`
+        `${rowOf(clip.track)}:${clip.start}:${clip.length}:${contentKey(clip.content)}`
     )
   )
   return candidates.filter(
     (clip) =>
-      !taken.has(`${clip.row}:${clip.start}:${clip.length}:${clip.pattern}`)
+      !taken.has(
+        `${clip.row}:${clip.start}:${clip.length}:${contentKey(clip.content)}`
+      )
   )
 }
 
@@ -259,11 +293,11 @@ function asNewClip(clip: Clip, rowOf: RowOf): NewClip {
     length: clip.length,
     offset: clip.offset,
     muted: clip.muted,
-    pattern: clip.content.pattern,
+    content: clip.content,
   }
 }
 
-/** Copies of clips moved by a drag, for Shift+drag. */
+/** Copies of clips moved by a drag, for Ctrl+drag. */
 export function cloneMoved(
   clips: readonly Clip[],
   rowOf: RowOf,
@@ -309,18 +343,18 @@ export function clipboardFrom(clips: readonly Clip[], rowOf: RowOf): NewClip[] {
 
 /**
  * Where pasted clips go: on the rows they were copied from, with the
- * earliest one starting at `tick` snapped to the grid. Clips whose pattern
- * has been deleted since are left out.
+ * earliest one starting at `tick` snapped to the grid. Clips whose pattern,
+ * sample or automation has been deleted since are left out.
  */
 export function pasteAt(
   copied: readonly NewClip[],
   tick: number,
   snap: number,
-  hasPattern: (pattern: PatternId) => boolean
+  exists: (content: ClipContent) => boolean
 ): NewClip[] {
   const at = snapNearest(tick, snap)
   return copied
-    .filter((clip) => hasPattern(clip.pattern))
+    .filter((clip) => exists(clip.content))
     .map((clip) => ({ ...clip, start: at + clip.start }))
 }
 
@@ -346,31 +380,10 @@ export function clipInits(
     track: tracks[clip.row],
     start: wholeTick(clip.start, 0),
     length: wholeTick(clip.length, 1),
-    content: { type: "pattern", pattern: clip.pattern },
+    ...(clip.offset !== 0 && { offset: wholeTick(clip.offset, 0) }),
+    ...(clip.muted && { muted: true }),
+    content: clip.content,
   }))
-}
-
-/**
- * `addClips` cannot set an offset or mute a clip, so copies of clips that
- * have either need a second command once their ids are known.
- */
-export function clipFollowUps(
-  clips: readonly NewClip[],
-  created: readonly ClipId[]
-): ClipUpdate[] {
-  const updates: ClipUpdate[] = []
-  clips.forEach((clip, index) => {
-    const id = created[index]
-    if (id === undefined || (clip.offset === 0 && !clip.muted)) return
-    updates.push({
-      id,
-      patch: {
-        ...(clip.offset !== 0 && { offset: wholeTick(clip.offset, 0) }),
-        ...(clip.muted && { muted: true }),
-      },
-    })
-  })
-  return updates
 }
 
 /** `updateClips` entries for changes, once every row has a track. */
@@ -395,51 +408,19 @@ export function clipUpdates(
 }
 
 /**
- * The model can only add a track at the bottom. To put an empty track at
- * `index`, a track is added at the bottom and this moves everything from
- * `index` on down one row: clips, names and mute states. `added` is the new
- * bottom track, and `playlist` is the playlist before it was added.
+ * Where a track dragged from row `from` and dropped into gap `gap` ends up,
+ * as the index `movePlaylistTrack` takes, or null when the drop changes
+ * nothing. Gap 0 is above the first track and gap `n` below the last of `n`.
  */
-export function insertTrackCommands(
-  playlist: Playlist,
-  index: number,
-  added: PlaylistTrack
-): Command[] {
-  const before = playlist.tracks
-  if (index < 0 || index >= before.length) return []
-  const after = [...before, added]
-  const nextTrack = new Map<PlaylistTrackId, PlaylistTrackId>()
-  for (let row = index; row < before.length; row++) {
-    nextTrack.set(before[row].id, after[row + 1].id)
-  }
-
-  const commands: Command[] = []
-  const updates: ClipUpdate[] = []
-  for (const clip of playlist.clips) {
-    const track = nextTrack.get(clip.track)
-    if (track !== undefined) updates.push({ id: clip.id, patch: { track } })
-  }
-  if (updates.length > 0) commands.push({ type: "updateClips", updates })
-
-  for (let row = before.length; row > index; row--) {
-    const from = before[row - 1]
-    const to = after[row]
-    if (from.name === to.name && from.muted === to.muted) continue
-    commands.push({
-      type: "updatePlaylistTrack",
-      id: to.id,
-      patch: { name: from.name, muted: from.muted },
-    })
-  }
-  const emptied = before[index]
-  if (emptied.name !== added.name || emptied.muted) {
-    commands.push({
-      type: "updatePlaylistTrack",
-      id: emptied.id,
-      patch: { name: added.name, muted: false },
-    })
-  }
-  return commands
+export function trackDropIndex(
+  from: number,
+  gap: number,
+  trackCount: number
+): number | null {
+  if (from < 0 || from >= trackCount) return null
+  // The track leaves its place first, so the gaps below it move up one.
+  const to = clamp(gap > from ? gap - 1 : gap, 0, trackCount - 1)
+  return to === from ? null : to
 }
 
 /** Every clip a pointer stroke from one point to another passes over. */

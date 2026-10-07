@@ -1,7 +1,8 @@
 import { fireEvent } from "@testing-library/react"
+import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { runAction } from "@/lib/actions"
+import { runAction, shortcutLabel } from "@/lib/actions"
 import type { Backend } from "@/lib/ipc"
 import { dispatch, undo } from "@/lib/store/project"
 import { realtimeFrame, subscribeRealtime } from "@/lib/store/realtime"
@@ -9,12 +10,13 @@ import { setPlayMode, useTransportStore } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
 import { settle } from "@/test/harness"
 
-import { installPlaylistKeys, playlistShortcut } from "./keys"
+import { MAX_TICK } from "./edit"
 import {
   addClips,
   applySongCursor,
   copySelection,
   insertTrack,
+  moveTrack,
   paste,
   playSong,
   seekSong,
@@ -58,7 +60,7 @@ async function seed(...spots: [row: number, start: number, length?: number][]) {
       length,
       offset: 0,
       muted: false,
-      pattern: pattern().id,
+      content: { type: "pattern", pattern: pattern().id },
     })),
     "Seed"
   )
@@ -271,6 +273,43 @@ describe("selection actions", () => {
   })
 })
 
+describe("the end of the timeline", () => {
+  beforeEach(() => vi.mocked(toast.error).mockClear())
+
+  it("refuses to put a clip past the last tick, and says so", async () => {
+    const [id] = await seed([0, MAX_TICK - 2 * BAR])
+    ui().select([id])
+    const before = steps()
+    // One copy still fits behind the clip; the copy of both does not.
+    await run("playlist.duplicate")
+    expect(clips()).toHaveLength(2)
+    expect(toast.error).not.toHaveBeenCalled()
+
+    ui().select(clips().map((clip) => clip.id))
+    await run("playlist.duplicate")
+    expect(toast.error).toHaveBeenLastCalledWith(
+      "Clips cannot go past the end of the timeline",
+      expect.objectContaining({ description: expect.any(String) })
+    )
+    expect(clips()).toHaveLength(2)
+    expect(steps()).toBe(before + 1)
+    expect(Math.max(...clips().map((clip) => clip.start + clip.length))).toBe(
+      MAX_TICK
+    )
+  })
+
+  it("refuses to nudge a clip past it, and lets it come back", async () => {
+    const [id] = await seed([0, MAX_TICK - BAR])
+    ui().select([id])
+    await run("playlist.nudgeRight")
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(layout()).toEqual([`0:${MAX_TICK - BAR}+${BAR}`])
+    await run("playlist.nudgeLeft")
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(clips()[0].start).toBeLessThan(MAX_TICK - BAR)
+  })
+})
+
 describe("another project", () => {
   it("drops the selection, the clipboard and the song position", async () => {
     const ids = await seed([0, 0])
@@ -333,6 +372,60 @@ describe("tracks", () => {
       `1:${BAR}+${BAR}`,
       `2:${2 * BAR}+${BAR}`,
     ])
+  })
+
+  it("moves a track with its clips, up, down and to a place", async () => {
+    await seed([0, 0], [1, BAR], [2, 2 * BAR])
+    const [first, second, third] = tracks().map((track) => track.id)
+    const before = steps()
+
+    ui().setTargetTrack(third)
+    await run("playlist.moveTrackUp")
+    expect(tracks().map((track) => track.id)).toEqual([first, third, second])
+    // The clips went along: each is still on its own track.
+    expect(layout()).toEqual([
+      `0:0+${BAR}`,
+      `2:${BAR}+${BAR}`,
+      `1:${2 * BAR}+${BAR}`,
+    ])
+    expect(steps()).toBe(before + 1)
+    expect(labels().at(-1)).toBe("Move playlist track")
+
+    await run("playlist.moveTrackDown")
+    expect(tracks().map((track) => track.id)).toEqual([first, second, third])
+    await moveTrack(first, 2)
+    expect(tracks().map((track) => track.id)).toEqual([second, third, first])
+
+    await undo()
+    await undo()
+    await undo()
+    expect(tracks().map((track) => track.id)).toEqual([first, second, third])
+  })
+
+  it("has nowhere to move the top track up or the bottom track down", async () => {
+    await seed([0, 0], [1, 0])
+    const before = steps()
+    ui().setTargetTrack(tracks()[0].id)
+    await run("playlist.moveTrackUp")
+    ui().setTargetTrack(tracks()[1].id)
+    await run("playlist.moveTrackDown")
+    await moveTrack(tracks()[0].id, 0)
+    expect(steps()).toBe(before)
+  })
+
+  it("inserts a track in one command, with nothing shuffled", async () => {
+    await seed([0, 0], [1, BAR])
+    const ids = clips().map((clip) => clip.id)
+    const sent = vi.spyOn(backend, "dispatch")
+    await insertTrack(1)
+    expect(sent).toHaveBeenCalledTimes(1)
+    expect(sent.mock.lastCall?.[0]).toEqual({
+      type: "batch",
+      label: "Insert track",
+      commands: [{ type: "addPlaylistTrack", index: 1 }],
+    })
+    expect(clips().map((clip) => clip.id)).toEqual(ids)
+    expect(ui().targetTrack).toBe(tracks()[1].id)
   })
 
   it("inserting below the last track just adds one", async () => {
@@ -429,17 +522,13 @@ describe("song position", () => {
 
 describe("keys inside the playlist", () => {
   let root: HTMLElement
-  let uninstall: () => void
 
   beforeEach(() => {
     root = document.createElement("div")
+    root.dataset.shortcutScope = "playlist"
     document.body.append(root)
-    uninstall = installPlaylistKeys(root)
   })
-  afterEach(() => {
-    uninstall()
-    root.remove()
-  })
+  afterEach(() => root.remove())
 
   const press = (init: KeyboardEventInit) => {
     fireEvent.keyDown(document.body, init)
@@ -502,20 +591,30 @@ describe("keys inside the playlist", () => {
     ui().select(ids)
     await press({ key: "b", code: "KeyB", ctrlKey: true })
     expect(clips()).toHaveLength(2)
-    expect(playlistShortcut("playlist.duplicate")).toBe("Ctrl+B")
-    expect(playlistShortcut("playlist.toolDraw")).toBe("P")
+    expect(shortcutLabel("playlist.duplicate")).toBe("Ctrl+B")
+    expect(shortcutLabel("playlist.toolDraw")).toBe("P")
   })
 
   it("leaves keys alone while the focus is in another panel", async () => {
     const ids = await seed([0, 0])
     ui().select(ids)
+    const mixer = document.createElement("div")
+    mixer.dataset.shortcutScope = "mixer"
     const elsewhere = document.createElement("button")
-    document.body.append(elsewhere)
+    mixer.append(elsewhere)
+    document.body.append(mixer)
     elsewhere.focus()
     fireEvent.keyDown(elsewhere, { key: "Delete", code: "Delete" })
     await settle()
     expect(clips()).toHaveLength(1)
-    elsewhere.remove()
+
+    // The page itself has no panel, so the keys go back to the editor in
+    // view once the other panel is gone.
+    mixer.remove()
+    useUiStore.getState().setActiveScope(null)
+    fireEvent.keyDown(document.body, { key: "Delete", code: "Delete" })
+    await settle()
+    expect(clips()).toHaveLength(0)
   })
 
   it("leaves keys alone while a name is being typed", async () => {

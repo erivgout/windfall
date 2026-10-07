@@ -2,10 +2,10 @@ import { memo } from "react"
 
 import type { ChannelId } from "@/bindings"
 import { ToggleLed } from "@/components/audio"
+import { useHint } from "@/lib/store/hint"
 import { cn } from "@/lib/utils"
 
 import { toggleMute, toggleSolo } from "./channel-ops"
-import { useLiveHint } from "./use-live-hint"
 
 type MuteLampProps = {
   id: ChannelId
@@ -28,7 +28,7 @@ export const MuteLamp = memo(function MuteLamp({
   solo,
   silenced,
 }: MuteLampProps) {
-  const hint = useLiveHint(
+  const hint = useHint(
     solo
       ? `${name} is soloed. Right-click or Ctrl-click to hear every channel again`
       : `${name} is ${muted ? "muted" : "on"}. Click to ${muted ? "unmute" : "mute"}, right-click or Ctrl-click to solo`

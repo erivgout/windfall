@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import type { Channel, MixerTrack, Send, TrackId } from "@/bindings"
+import type { Channel, Clip, MixerTrack, Send, TrackId } from "@/bindings"
 
 import {
   audibility,
   channelsOfTrack,
+  audioClipsOfTrack,
   feedersOf,
   heardTracks,
   maxSendCount,
@@ -31,6 +32,7 @@ function track(
     solo: false,
     output: id === 0 ? null : output,
     sends: sends.map((target): Send => ({ target, gain: 1 })),
+    effects: [],
     ...extra,
   }
 }
@@ -230,11 +232,34 @@ describe("sendChoices", () => {
 describe("what plays into a track", () => {
   const channels = [channel(10, 1), channel(11, 2), channel(12, 1)]
 
-  it("lists channels, outputs and sends", () => {
-    const feeders = feedersOf(BUS, channels, 2)
+  const audioClip = (id: number, mixerTrack: number, start = 0) =>
+    ({
+      id,
+      start,
+      content: { type: "audio", mixerTrack },
+    }) as unknown as Clip
+  const clips = [
+    audioClip(21, 2, 960),
+    audioClip(20, 2, 0),
+    audioClip(22, 3),
+    { id: 23, start: 0, content: { type: "pattern", pattern: 1 } } as unknown as Clip,
+  ]
+
+  it("lists channels, audio clips, outputs and sends", () => {
+    const feeders = feedersOf(BUS, channels, clips, 2)
     expect(feeders.channels.map((item) => item.id)).toEqual([11])
+    expect(feeders.clips).toEqual([20, 21])
     expect(ids(feeders.outputs)).toEqual([1])
     expect(ids(feeders.sends)).toEqual([4])
+  })
+
+  it("groups audio clips by the track they play into, in timeline order", () => {
+    expect(audioClipsOfTrack(clips, 2)).toEqual([20, 21])
+    expect(audioClipsOfTrack(clips, 3)).toEqual([22])
+    // The same list while no clip changes, so a strip does not render again.
+    expect(audioClipsOfTrack(clips, 2)).toBe(audioClipsOfTrack(clips, 2))
+    expect(audioClipsOfTrack(clips, 1)).toEqual([])
+    expect(audioClipsOfTrack(clips, 1)).toBe(audioClipsOfTrack(clips, 4))
   })
 
   it("counts the tracks that play into a track", () => {

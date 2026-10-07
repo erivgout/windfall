@@ -1,5 +1,10 @@
-import { registry, type Action, type AppState } from "@/lib/actions"
-import { addFlShortcuts } from "@/lib/actions/keymap"
+import {
+  invalidateActionsOn,
+  registry,
+  type Action,
+  type AppState,
+  type PresetShortcuts,
+} from "@/lib/actions"
 
 import { LANE_KINDS } from "./lane-math"
 import { currentSession } from "./session"
@@ -12,9 +17,9 @@ const roll = () => usePianoRollStore.getState()
 const editor = () => currentSession()?.editor
 
 /*
- * Most of these are bound to plain keys, so they only act while the piano
- * roll is the editor in view. What is selected is not part of the state
- * actions are handed; it is read from the piano roll's own store.
+ * These act on the piano roll in view. What is selected is not part of the
+ * state actions are handed; it is read from the piano roll's own store,
+ * which `registerPianoRollActions` makes the registry follow.
  */
 const inRoll = (state: AppState) => state.ui.centerTab === "pianoRoll"
 const hasSelection = (state: AppState) =>
@@ -38,7 +43,7 @@ function capital(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1)
 }
 
-export const PIANO_ROLL_ACTIONS: Action[] = [
+const ACTIONS: Action[] = [
   ...TOOL_ACTIONS.map(({ tool, title, key, words }): Action => ({
     id: `pianoRoll.tool${capital(tool)}`,
     title,
@@ -57,6 +62,7 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
     id: "pianoRoll.selectAll",
     title: "Select all notes",
     section: SECTION,
+    editCommand: "selectAll",
     defaultShortcut: "Mod+A",
     enabled: hasNotes,
     run: () => editor()?.selectAll(),
@@ -81,6 +87,7 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
     id: "pianoRoll.delete",
     title: "Delete selected notes",
     section: SECTION,
+    editCommand: "delete",
     defaultShortcut: ["Delete", "Backspace"],
     keywords: "remove erase",
     enabled: hasSelection,
@@ -90,6 +97,7 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
     id: "pianoRoll.cut",
     title: "Cut notes",
     section: SECTION,
+    editCommand: "cut",
     defaultShortcut: "Mod+X",
     enabled: hasSelection,
     run: () => editor()?.cut(),
@@ -98,6 +106,7 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
     id: "pianoRoll.copy",
     title: "Copy notes",
     section: SECTION,
+    editCommand: "copy",
     defaultShortcut: "Mod+C",
     enabled: hasSelection,
     run: () => {
@@ -108,6 +117,7 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
     id: "pianoRoll.paste",
     title: "Paste notes",
     section: SECTION,
+    editCommand: "paste",
     defaultShortcut: "Mod+V",
     keywords: "clipboard insert",
     enabled: (state) => inRoll(state) && roll().clipboardCount > 0,
@@ -120,6 +130,7 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
     id: "pianoRoll.duplicate",
     title: "Duplicate notes to the right",
     section: SECTION,
+    editCommand: "duplicate",
     defaultShortcut: "Mod+D",
     keywords: "repeat clone copy",
     enabled: hasSelection,
@@ -264,15 +275,28 @@ export const PIANO_ROLL_ACTIONS: Action[] = [
 ]
 
 /**
+ * Every action here belongs to the piano roll: its keys work while the
+ * piano roll has the keyboard, and other panels may use the same keys.
+ */
+export const PIANO_ROLL_ACTIONS: Action[] = ACTIONS.map((action) => ({
+  ...action,
+  scope: "pianoRoll",
+}))
+
+/**
  * FL Studio's piano roll shortcuts, from the shortcut list in its manual.
  * FL moves the selection with Shift and the arrows; the plain arrows are
- * kept as well. Actions not listed keep their Windfall shortcut.
+ * kept as well. Actions not listed keep their Windfall shortcut. The
+ * preset changes keys only: the mouse modifiers are those of
+ * `lib/edit-modifiers` in both presets (FL equivalent: Shift+drag clones a
+ * note, which here is Ctrl+drag, the same as on the playlist).
  */
-export const PIANO_ROLL_FL_KEYMAP: Record<string, string[]> = {
+export const PIANO_ROLL_FL_KEYMAP: PresetShortcuts = {
   "pianoRoll.toolDraw": ["P"],
   "pianoRoll.toolPaint": ["B"],
   "pianoRoll.toolErase": ["D"],
   "pianoRoll.toolSelect": ["E"],
+  "pianoRoll.deselect": ["Mod+D", "Escape"],
   "pianoRoll.duplicate": ["Mod+B"],
   "pianoRoll.nudgeLeft": ["Shift+ArrowLeft", "ArrowLeft"],
   "pianoRoll.nudgeRight": ["Shift+ArrowRight", "ArrowRight"],
@@ -283,17 +307,23 @@ export const PIANO_ROLL_FL_KEYMAP: Record<string, string[]> = {
   "pianoRoll.ghosts": ["Alt+V"],
 }
 
-/**
- * FL shortcuts that would take a key away from another panel if they were
- * in the app-wide FL keymap: Ctrl+D duplicates a channel in the rack. They
- * apply while the piano roll has the keyboard, and nowhere else.
- */
-export const FL_ONLY_IN_ROLL: Record<string, string[]> = {
-  "pianoRoll.deselect": ["Mod+D", "Escape"],
-}
-
 /** Adds the piano roll's actions to the registry. Returns a function that removes them. */
 export function registerPianoRollActions(): () => void {
-  addFlShortcuts(PIANO_ROLL_FL_KEYMAP)
-  return registry.register(PIANO_ROLL_ACTIONS)
+  const stops = [
+    registry.register(PIANO_ROLL_ACTIONS, {
+      presets: { fl: PIANO_ROLL_FL_KEYMAP },
+    }),
+    invalidateActionsOn(usePianoRollStore, (state) => [
+      state.tool,
+      state.snap,
+      state.ghosts,
+      state.follow,
+      state.laneKind,
+      state.selectionCount,
+      state.clipboardCount,
+    ]),
+  ]
+  return () => {
+    for (const stop of stops) stop()
+  }
 }

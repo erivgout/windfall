@@ -1,8 +1,15 @@
-import type { PlaylistTrack } from "@/bindings"
-import { registry, type Action, type AppState } from "@/lib/actions"
+import type { PatternId, PlaylistTrack } from "@/bindings"
+import {
+  invalidateActionsOn,
+  registry,
+  type Action,
+  type AppState,
+  type PresetShortcuts,
+} from "@/lib/actions"
 
 import { activeMetrics, activeSession, zoomBy, zoomToFit } from "./active"
 import type { Tool } from "./intents"
+import { patchSelectedAudioClips, selectedAudioClips } from "./audio/ops"
 import {
   addTrack,
   copySelection,
@@ -11,6 +18,7 @@ import {
   deleteTrack,
   duplicateSelection,
   insertTrack,
+  moveTrackBy,
   nudgeSelection,
   openPattern,
   paste,
@@ -30,10 +38,10 @@ const SECTION = "Playlist"
 const ui = () => usePlaylistStore.getState()
 
 /*
- * Most of these are bound to plain keys, so they only act while the
- * playlist is the editor in view. The selection and the target track are
- * not part of the state actions are handed; they are read from the
- * playlist's own store.
+ * These act on the playlist in view. The selection and the target track
+ * are not part of the state actions are handed; they are read from the
+ * playlist's own store, which `registerPlaylistActions` makes the registry
+ * follow.
  */
 const inPlaylist = (state: AppState) => state.ui.centerTab === "playlist"
 const hasSelection = (state: AppState) =>
@@ -47,6 +55,18 @@ function targetTrack(): PlaylistTrack | undefined {
 }
 
 const hasTarget = () => targetTrack() !== undefined
+
+/** The pattern of the one selected clip, when that clip plays a pattern. */
+function selectedPatternClip(): PatternId | null {
+  if (ui().selection.size !== 1) return null
+  const [clip] = selectedClips()
+  return clip?.content.type === "pattern" ? clip.content.pattern : null
+}
+
+function targetIndex(): number {
+  const id = ui().targetTrack
+  return playlist().tracks.findIndex((track) => track.id === id)
+}
 
 /** Runs `work` on the track whose header was last pressed, if there is one. */
 function withTarget(work: (track: PlaylistTrack) => void | Promise<void>) {
@@ -106,7 +126,7 @@ function capital(word: string): string {
 
 export const toolActionId = (tool: Tool) => `playlist.tool${capital(tool)}`
 
-export const PLAYLIST_ACTIONS: Action[] = [
+const ACTIONS: Action[] = [
   ...TOOL_ACTIONS.map(({ tool, title, key, words }): Action => ({
     id: toolActionId(tool),
     title,
@@ -130,6 +150,7 @@ export const PLAYLIST_ACTIONS: Action[] = [
     id: "playlist.selectAll",
     title: "Select all clips",
     section: SECTION,
+    editCommand: "selectAll",
     defaultShortcut: "Mod+A",
     enabled: hasClips,
     run: selectAll,
@@ -153,6 +174,7 @@ export const PLAYLIST_ACTIONS: Action[] = [
     id: "playlist.deleteClips",
     title: "Delete clips",
     section: SECTION,
+    editCommand: "delete",
     defaultShortcut: ["Delete", "Backspace"],
     keywords: "remove",
     enabled: hasSelection,
@@ -162,6 +184,7 @@ export const PLAYLIST_ACTIONS: Action[] = [
     id: "playlist.cut",
     title: "Cut clips",
     section: SECTION,
+    editCommand: "cut",
     defaultShortcut: "Mod+X",
     enabled: hasSelection,
     run: cutSelection,
@@ -170,6 +193,7 @@ export const PLAYLIST_ACTIONS: Action[] = [
     id: "playlist.copy",
     title: "Copy clips",
     section: SECTION,
+    editCommand: "copy",
     defaultShortcut: "Mod+C",
     enabled: hasSelection,
     run: () => {
@@ -180,6 +204,7 @@ export const PLAYLIST_ACTIONS: Action[] = [
     id: "playlist.paste",
     title: "Paste clips at the song position",
     section: SECTION,
+    editCommand: "paste",
     defaultShortcut: "Mod+V",
     enabled: (state) => inPlaylist(state) && ui().clipboard.length > 0,
     run: paste,
@@ -188,6 +213,7 @@ export const PLAYLIST_ACTIONS: Action[] = [
     id: "playlist.duplicate",
     title: "Duplicate clips to the right",
     section: SECTION,
+    editCommand: "duplicate",
     defaultShortcut: "Mod+D",
     keywords: "clone copy repeat",
     enabled: hasSelection,
@@ -250,10 +276,64 @@ export const PLAYLIST_ACTIONS: Action[] = [
     section: SECTION,
     defaultShortcut: "Enter",
     keywords: "open channel rack",
-    enabled: (state) => inPlaylist(state) && ui().selection.size === 1,
+    enabled: (state) => inPlaylist(state) && selectedPatternClip() !== null,
+    whyDisabled: (state) =>
+      inPlaylist(state) &&
+      ui().selection.size === 1 &&
+      selectedPatternClip() === null
+        ? "Pattern clips only"
+        : undefined,
     run: () => {
-      const [clip] = selectedClips()
-      if (clip) return openPattern(clip.content.pattern)
+      const pattern = selectedPatternClip()
+      if (pattern !== null) return openPattern(pattern)
+    },
+  },
+
+  {
+    id: "playlist.reverseClips",
+    title: "Reverse audio clips",
+    section: SECTION,
+    keywords: "backwards flip",
+    enabled: (state) => inPlaylist(state) && selectedAudioClips().length > 0,
+    whyDisabled: (state) =>
+      inPlaylist(state) && ui().selection.size > 0
+        ? "Audio clips only"
+        : undefined,
+    checked: () => {
+      const clips = selectedAudioClips()
+      return (
+        clips.length > 0 &&
+        clips.every(
+          (clip) => clip.content.type === "audio" && clip.content.reverse
+        )
+      )
+    },
+    run: async () => {
+      const clips = selectedAudioClips()
+      const all = clips.every(
+        (clip) => clip.content.type === "audio" && clip.content.reverse
+      )
+      await patchSelectedAudioClips({ reverse: !all })
+    },
+  },
+  {
+    id: "playlist.clipInspector",
+    title: "Audio clip settings",
+    section: SECTION,
+    keywords: "inspector gain pan pitch fade route show hide",
+    checked: () => ui().inspectorOpen,
+    run: () => ui().toggleInspector(),
+  },
+  {
+    id: "playlist.tallTracks",
+    title: "Tall tracks",
+    section: SECTION,
+    keywords: "row height automation curve zoom lanes",
+    enabled: (state) => inPlaylist(state) && activeMetrics() !== null,
+    checked: () => activeMetrics()?.tall ?? false,
+    run: () => {
+      activeMetrics()?.toggleTall()
+      registry.invalidate()
     },
   },
 
@@ -294,9 +374,9 @@ export const PLAYLIST_ACTIONS: Action[] = [
   },
   {
     id: "playlist.patterns",
-    title: "Pattern list",
+    title: "Clip list",
     section: SECTION,
-    keywords: "show hide toggle picker brush",
+    keywords: "show hide toggle picker brush patterns audio automation",
     checked: () => ui().pickerOpen,
     run: () => ui().togglePicker(),
   },
@@ -336,9 +416,31 @@ export const PLAYLIST_ACTIONS: Action[] = [
     ),
   },
   {
+    id: "playlist.moveTrackUp",
+    title: "Move playlist track up",
+    section: SECTION,
+    defaultShortcut: "Alt+ArrowUp",
+    keywords: "reorder lane row",
+    enabled: () => targetIndex() > 0,
+    run: withTarget((track) => moveTrackBy(track.id, -1)),
+  },
+  {
+    id: "playlist.moveTrackDown",
+    title: "Move playlist track down",
+    section: SECTION,
+    defaultShortcut: "Alt+ArrowDown",
+    keywords: "reorder lane row",
+    enabled: () => {
+      const index = targetIndex()
+      return index >= 0 && index < playlist().tracks.length - 1
+    },
+    run: withTarget((track) => moveTrackBy(track.id, 1)),
+  },
+  {
     id: "playlist.renameTrack",
     title: "Rename playlist track…",
     section: SECTION,
+    defaultShortcut: "F2",
     enabled: hasTarget,
     run: withTarget((track) => renameTrack(track.id)),
   },
@@ -362,11 +464,21 @@ export const PLAYLIST_ACTIONS: Action[] = [
 ]
 
 /**
- * Where FL Studio's playlist uses another key than Windfall. They apply
- * with the FL keymap, and only inside the playlist, because the piano roll
- * gives the same letters to its own tools.
+ * Every action here belongs to the playlist: its keys work while the
+ * playlist has the keyboard, and other panels may use the same keys.
  */
-export const FL_IN_PLAYLIST: Record<string, string[]> = {
+export const PLAYLIST_ACTIONS: Action[] = ACTIONS.map((action) => ({
+  ...action,
+  scope: "playlist",
+}))
+
+/**
+ * Where FL Studio's playlist uses another key than Windfall. The preset
+ * changes keys only: the mouse modifiers are those of `lib/edit-modifiers`
+ * in both presets (FL equivalent: Shift+drag clones a clip, which here is
+ * Ctrl+drag, the same as in the piano roll).
+ */
+export const PLAYLIST_FL_KEYMAP: PresetShortcuts = {
   ...Object.fromEntries(
     TOOL_ACTIONS.map(({ tool, flKey }) => [toolActionId(tool), [flKey]])
   ),
@@ -376,5 +488,22 @@ export const FL_IN_PLAYLIST: Record<string, string[]> = {
 
 /** Adds the playlist's actions to the registry. Returns a function that removes them. */
 export function registerPlaylistActions(): () => void {
-  return registry.register(PLAYLIST_ACTIONS)
+  const stops = [
+    registry.register(PLAYLIST_ACTIONS, {
+      presets: { fl: PLAYLIST_FL_KEYMAP },
+    }),
+    invalidateActionsOn(usePlaylistStore, (state) => [
+      state.tool,
+      state.snap,
+      state.follow,
+      state.pickerOpen,
+      state.inspectorOpen,
+      state.selection,
+      state.clipboard,
+      state.targetTrack,
+    ]),
+  ]
+  return () => {
+    for (const stop of stops) stop()
+  }
 }

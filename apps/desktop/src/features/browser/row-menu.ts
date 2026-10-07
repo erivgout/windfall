@@ -6,6 +6,7 @@ import {
 import { openProjectPath } from "@/lib/flows/project"
 
 import {
+  addToPlaylist,
   addToRack,
   copyPath,
   refresh,
@@ -16,6 +17,17 @@ import { requestPreview } from "./preview"
 import { toggleFolder } from "./store"
 import type { EntryRow } from "./tree-model"
 
+/** The browser's empty space, and its parts that have no menu of their own. */
+export const BROWSER_MENU: ContextItem[] = [
+  "browser.addFolder",
+  "browser.refresh",
+  contextSeparator,
+  "browser.toggleAutoPreview",
+  "browser.focusSearch",
+  contextSeparator,
+  "view.browser",
+]
+
 /**
  * What a right-click offers for a row, or for the empty space below the
  * rows when `row` is null.
@@ -24,7 +36,7 @@ export function rowMenu(
   row: EntryRow | null,
   channel: Channel | null
 ): ContextItem[] {
-  if (row === null) return ["browser.addFolder"]
+  if (row === null) return BROWSER_MENU
 
   const copy: ContextItem = {
     title: "Copy path",
@@ -40,10 +52,17 @@ export function rowMenu(
         run: () => addToRack(row.path),
       },
       {
+        title: "Add to playlist",
+        run: () => addToPlaylist(row.path),
+      },
+      {
         title: channel
           ? `Replace sample of ${channel.name}`
           : "Replace selected channel's sample",
-        disabled: channel === null,
+        // An instrument has no sample to replace.
+        disabled: channel?.source.type !== "sampler",
+        shortcut:
+          channel?.source.type === "instrument" ? "samplers only" : undefined,
         run: () => replaceChannelSample(row.path),
       },
       contextSeparator,

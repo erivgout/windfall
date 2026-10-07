@@ -1,6 +1,13 @@
-import { gainToFaderPosition, LevelMeter } from "@/components/audio"
+import { useEffect, useRef } from "react"
+
+import {
+  gainToFaderPosition,
+  LevelMeter,
+  type LevelMeterHandle,
+} from "@/components/audio"
 import { useHint } from "@/lib/store/hint"
 import { meterFeed } from "@/lib/store/realtime"
+import { onProjectReplaced } from "@/lib/store/replaced"
 import { MASTER_TRACK } from "@/lib/units"
 
 // Made once, so the meter subscribes once and not on every render.
@@ -13,6 +20,10 @@ const MASTER_FEED = meterFeed(MASTER_TRACK)
  */
 export function MasterMeterSlot() {
   const hint = useHint("Master level. Click to clear the clip light")
+  const meter = useRef<LevelMeterHandle>(null)
+
+  // A clip in the song before is not a clip in this one.
+  useEffect(() => onProjectReplaced(() => meter.current?.reset()), [])
 
   return (
     <div
@@ -23,6 +34,7 @@ export function MasterMeterSlot() {
       {...hint}
     >
       <LevelMeter
+        ref={meter}
         orientation="horizontal"
         subscribe={MASTER_FEED}
         taper={gainToFaderPosition}

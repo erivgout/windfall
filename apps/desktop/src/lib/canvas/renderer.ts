@@ -13,6 +13,19 @@ export const RENDERER_KINDS: readonly RendererKind[] = [
 /** Border color of an item as a fraction of its fill color. */
 export const BORDER_SHADE = 0.62
 
+/**
+ * Added to a shaded channel before it is cut to a whole number. A plain
+ * round would land exactly on a half for some fill colors, and float32 on a
+ * GPU and float64 here would then fall to different sides. This way a half
+ * always goes down, with a hundredth to spare on both sides.
+ */
+export const BORDER_ROUNDING = 0.49
+
+/** One channel, 0 to 255, of an item's border color in every renderer. */
+export function shadeChannel(fill: number): number {
+  return Math.floor(fill * BORDER_SHADE + BORDER_ROUNDING)
+}
+
 export interface RendererInfo {
   readonly kind: RendererKind
   /** GPU or driver name when the API exposes one. */
@@ -88,6 +101,11 @@ export interface RectRenderer {
   takeGpuTimes(): number[]
   /** Called when the drawing surface was lost and restored, so the owner can redraw. */
   onRestored: (() => void) | null
+  /**
+   * Called when the drawing surface was lost and is not coming back. The
+   * renderer draws nothing from then on, so the owner should replace it.
+   */
+  onLost: (() => void) | null
   dispose(): void
 }
 

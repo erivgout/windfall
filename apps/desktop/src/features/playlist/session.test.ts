@@ -59,7 +59,7 @@ async function seed(...spots: [row: number, start: number, length?: number][]) {
       length,
       offset: 0,
       muted: false,
-      pattern: pattern().id,
+      content: { type: "pattern", pattern: pattern().id },
     })),
     "Seed"
   )
@@ -253,18 +253,63 @@ describe("Draw tool", () => {
     expect(layout()).toEqual([`0:0+${BAR}`])
   })
 
-  it("copies instead of moving when Shift is held at the drop", async () => {
+  it("moves the selection on Shift+drag and copies nothing", async () => {
+    const [first, second] = await seed([0, 0], [1, 2 * BAR])
+    ui().select([first])
+    const before = steps()
+    // Shift adds the pressed clip to the selection. It never means "copy".
+    await drag(
+      session,
+      at(2 * BAR + BAR / 2, 1, { shift: true }),
+      at(3 * BAR + BAR / 2, 1, { shift: true })
+    )
+    expect(clips()).toHaveLength(2)
+    expect(layout()).toEqual([`0:${BAR}+${BAR}`, `1:${3 * BAR}+${BAR}`])
+    expect(selection()).toEqual([first, second])
+    expect(labels().at(-1)).toBe("Move clips")
+    expect(steps()).toBe(before + 1)
+  })
+
+  it("copies only the clip that is dragged with Ctrl, not the rest of the selection", async () => {
+    const [first, second] = await seed([0, 0], [1, 2 * BAR])
+    ui().select([first])
+    // Ctrl from the press on: the clip under the pointer is the one copied.
+    await drag(
+      session,
+      at(2 * BAR + BAR / 2, 1, { mod: true }),
+      at(5 * BAR + BAR / 2, 1, { mod: true })
+    )
+    expect(layout()).toEqual([
+      `0:0+${BAR}`,
+      `1:${2 * BAR}+${BAR}`,
+      `1:${5 * BAR}+${BAR}`,
+    ])
+    expect(labels().at(-1)).toBe("Clone clip")
+    const copy = clips().find((clip) => clip.start === 5 * BAR)
+    expect(selection()).toEqual([copy?.id])
+    expect(selection()).not.toContain(second)
+  })
+
+  it("copies the whole selection when one of its clips is dragged with Ctrl", async () => {
+    const ids = await seed([0, 0], [1, 2 * BAR])
+    ui().select(ids)
+    await drag(
+      session,
+      at(BAR / 2, 0, { mod: true }),
+      at(BAR / 2 + 4 * BAR, 0, { mod: true })
+    )
+    expect(clips()).toHaveLength(4)
+    expect(labels().at(-1)).toBe("Clone clips")
+  })
+
+  it("copies instead of moving when Ctrl is held at the drop", async () => {
     const [original] = await seed([0, 0, 2 * BAR])
     await dispatch({
       type: "updateClips",
       updates: [{ id: original, patch: { offset: STEP, muted: true } }],
     })
     const before = steps()
-    await drag(
-      session,
-      at(BAR / 2, 0),
-      at(BAR / 2 + 4 * BAR, 1, { shift: true })
-    )
+    await drag(session, at(BAR / 2, 0), at(BAR / 2 + 4 * BAR, 1, { mod: true }))
     expect(clips()).toEqual([
       expect.objectContaining({ id: original, row: 0, start: 0 }),
       expect.objectContaining({
@@ -373,12 +418,12 @@ describe("Draw tool", () => {
     expect(layout()).toEqual([`0:0+${4 * BAR}`, `0:${BAR}+${BAR}`])
   })
 
-  it("selects with a box on Ctrl+drag", async () => {
+  it("selects with a box on Ctrl+drag from empty grid", async () => {
     const ids = await seed([0, 0], [1, 2 * BAR], [5, 9 * BAR])
     await drag(
       session,
-      at(100, 0, { mod: true }),
-      at(3 * BAR, 2, { mod: true })
+      at(3 * BAR + 10, 2, { mod: true }),
+      at(100, 0, { mod: true })
     )
     expect(selection()).toEqual(ids.slice(0, 2))
     expect(clips()).toHaveLength(3)
@@ -602,6 +647,15 @@ describe("double-click", () => {
     expect(useTransportStore.getState().pattern).toBe(other)
     expect(useUiStore.getState().centerTab).toBe("channelRack")
     expect(steps()).toBe(before)
+  })
+
+  it("does not count a click on a clip and then a grab of its edge", async () => {
+    await seed([0, 0])
+    await click(session, at(BAR / 2, 0))
+    clock.time += 100
+    await drag(session, at(BAR - 40, 0), at(3 * BAR + 20, 0))
+    expect(useUiStore.getState().centerTab).toBe("playlist")
+    expect(layout()).toEqual([`0:0+${3 * BAR}`])
   })
 
   it("does not count two slow clicks, or clicks on empty grid", async () => {

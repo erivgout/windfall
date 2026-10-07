@@ -2,12 +2,14 @@ import { Moon02Icon, Search01Icon, Sun03Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
 import { ActionButton } from "@/components/action-button"
+import { ContextActions } from "@/components/context-actions"
 import { Kbd } from "@/components/ui/kbd"
 import { runAction, useShortcutLabel } from "@/lib/actions"
 import { useHint } from "@/lib/store/hint"
 import { useDirty, useProjectName } from "@/lib/store/selectors"
 import { resolveTheme, useUiStore } from "@/lib/store/ui"
 
+import { TITLE_MENU } from "./chrome-menus"
 import { AppMenuBar } from "./menu-bar"
 
 function Mark() {
@@ -25,9 +27,14 @@ function ProjectTitle() {
   const name = useProjectName()
   const dirty = useDirty()
   return (
-    <div className="pointer-events-none absolute inset-x-0 flex justify-center">
-      <span className="flex max-w-[30%] items-center gap-1.5 text-foreground/70">
-        <span className="truncate">{name || "Untitled"}</span>
+    // It has the room between the menus and the search box, and gives way
+    // to both: in a narrow window the name is cut short, not laid over them.
+    <div
+      data-slot="project-title"
+      className="flex min-w-0 flex-1 justify-center"
+    >
+      <span className="flex max-w-full min-w-0 items-center gap-1.5 text-foreground/70">
+        <span className="truncate">{name}</span>
         {dirty && (
           <span
             role="img"
@@ -69,14 +76,18 @@ function ThemeButton() {
 /** The top strip: menus on the left, the project name, and search on the right. */
 export function TitleBar() {
   return (
-    <header className="relative flex h-8 shrink-0 items-center gap-2 border-b bg-chassis pr-1.5 pl-2">
-      <Mark />
-      <AppMenuBar />
-      <ProjectTitle />
-      <div className="relative ml-auto flex items-center gap-1">
-        <PaletteButton />
-        <ThemeButton />
-      </div>
-    </header>
+    <ContextActions items={TITLE_MENU}>
+      <header className="flex h-8 shrink-0 items-center gap-2 border-b bg-chassis pr-1.5 pl-2">
+        <Mark />
+        <div className="shrink-0">
+          <AppMenuBar />
+        </div>
+        <ProjectTitle />
+        <div className="flex shrink-0 items-center gap-1">
+          <PaletteButton />
+          <ThemeButton />
+        </div>
+      </header>
+    </ContextActions>
   )
 }

@@ -15,5 +15,13 @@ path: string, format: ExportFormat, bitDepth: BitDepth, sampleRate: number,
 mode: PlayMode, patternLoops: number, 
 /**
  * Extra time rendered after the end so reverb and release tails finish.
+ * With `auto_tail` it is the longest the tail may get.
  */
-tailSecs: number, };
+tailSecs: number, 
+/**
+ * Ends the tail as soon as everything has rung out: every note, every
+ * instrument and every effect is done and the output has fallen
+ * silent. The file is then as long as the sound, up to `tail_secs`
+ * past the end. Without it the tail is always `tail_secs` long.
+ */
+autoTail: boolean, };

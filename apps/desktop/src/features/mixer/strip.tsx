@@ -1,14 +1,15 @@
 import { ArrowRight02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { memo } from "react"
+import { memo, useMemo } from "react"
 
-import type { MixerTrack, TrackId } from "@/bindings"
+import type { TrackId } from "@/bindings"
 import { MuteSolo, PanControl, ToggleLed } from "@/components/audio"
+import { ValueContextItems } from "@/components/value-context-menu"
+import { automationFeed, useAutomationMarker } from "@/features/automation/live"
 import { runAction } from "@/lib/actions"
 import {
   useEngineStore,
   useHint,
-  useMixerTrack,
   useMixerTrackIndex,
   useProjectStore,
   useUiStore,
@@ -17,14 +18,18 @@ import { MASTER_TRACK } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
 import { ChannelChips } from "./channel-chips"
+import { useEffectDrop } from "./effect-drag"
+import { EffectBadge, EffectRack } from "./effect-rack"
 import { SEND_ROW_HEIGHT, type StripMode } from "./layout"
 import { LevelSection, type LevelLayout } from "./level-section"
+import { trackValueItems } from "./menus"
 import { clampPan, patchTrack } from "./operations"
 import { OutputSelect } from "./output-select"
 import { heardTracks, type Audibility } from "./routing"
 import { RoutingButton } from "./routing-popover"
 import { AddSendMenu, SendList } from "./sends"
 import { StripHeader } from "./strip-header"
+import { useStripTrack, type StripTrack } from "./strip-track"
 import { useGestureValue } from "./use-gesture-value"
 
 /** Fades the parts of a strip that solo on another track has silenced. */
@@ -35,7 +40,7 @@ function PanKnob({
   track,
   showValue,
 }: {
-  track: MixerTrack
+  track: StripTrack
   showValue: boolean
 }) {
   const pan = useGestureValue(
@@ -48,22 +53,33 @@ function PanKnob({
     clampPan
   )
   const hint = useHint("Pan. Drag, or double-click to center")
+  // What the knob is bound to adds its own entries to the knob's menu.
+  const items = useMemo(() => trackValueItems(track.id, "pan"), [track.id])
+  const live = useMemo(
+    () => automationFeed({ type: "trackPan", track: track.id }),
+    [track.id]
+  )
+  const marker = useAutomationMarker({ type: "trackPan", track: track.id })
   return (
-    <PanControl
-      size="sm"
-      showValue={showValue}
-      aria-label={`${track.name} pan`}
-      className={cn(
-        DIMMED,
-        "[&_[data-slot=knob-value]]:font-readout [&_[data-slot=knob-value]]:text-[9px] [&_[data-slot=knob-value]]:text-muted-foreground"
-      )}
-      {...pan}
-      {...hint}
-    />
+    <ValueContextItems items={items}>
+      <PanControl
+        size="sm"
+        showValue={showValue}
+        live={live}
+        marker={marker}
+        aria-label={`${track.name} pan`}
+        className={cn(
+          DIMMED,
+          "[&_[data-slot=knob-value]]:font-readout [&_[data-slot=knob-value]]:text-[9px] [&_[data-slot=knob-value]]:text-muted-foreground"
+        )}
+        {...pan}
+        {...hint}
+      />
+    </ValueContextItems>
   )
 }
 
-function MuteButtons({ track, small }: { track: MixerTrack; small: boolean }) {
+function MuteButtons({ track, small }: { track: StripTrack; small: boolean }) {
   const hint = useHint(
     track.id === MASTER_TRACK
       ? "Mute silences everything"
@@ -124,7 +140,7 @@ function MasterOutput() {
 }
 
 /** The output selector and the sends, inline. Every strip is equally tall. */
-function Routing({ track, sendRows }: { track: MixerTrack; sendRows: number }) {
+function Routing({ track, sendRows }: { track: StripTrack; sendRows: number }) {
   const master = track.id === MASTER_TRACK
   return (
     <div
@@ -148,7 +164,7 @@ function Routing({ track, sendRows }: { track: MixerTrack; sendRows: number }) {
   )
 }
 
-function stripLabel(track: MixerTrack, index: number, audible: Audibility) {
+function stripLabel(track: StripTrack, index: number, audible: Audibility) {
   const place = track.id === MASTER_TRACK ? "master track" : `track ${index}`
   const state =
     audible === "muted"
@@ -172,8 +188,8 @@ export type MixerStripProps = {
   mode: StripMode
   /** Send rows every strip keeps free in "full" mode. */
   sendRows: number
-  /** The fader is too short to label every dB mark. */
-  sparseScale: boolean
+  /** Rows of the effect rack. 0 shows a badge with the count instead. */
+  effectRows: number
   /** The channel selected in the rack plays into this track. */
   linked: boolean
   /** False for a strip kept mounted while it is scrolled out of view. */
@@ -182,22 +198,24 @@ export type MixerStripProps = {
 
 /**
  * One mixer track. It reads its own track from the store, so moving a fader
- * renders this strip and no other.
+ * renders this strip and no other, and it leaves the settings of the
+ * track's effects out, so turning a knob in an effect renders no strip.
  */
 export const MixerStrip = memo(function MixerStrip({
   id,
   mode,
   sendRows,
-  sparseScale,
+  effectRows,
   linked,
   metering,
 }: MixerStripProps) {
-  const track = useMixerTrack(id)
+  const track = useStripTrack(id)
   const index = useMixerTrackIndex(id)
   const selected = useUiStore((state) => state.selectedTrack === id)
   const heard = useProjectStore((state) =>
     heardTracks(state.project.mixer.tracks).has(id)
   )
+  const drop = useEffectDrop(id)
 
   if (!track) return null
 
@@ -211,6 +229,14 @@ export const MixerStrip = memo(function MixerStrip({
   const low = mode === "flat" || mode === "mini"
   // The channel chips have a row of their own.
   const chips = mode === "full" || mode === "compact"
+
+  // The lowest strip gives the name row to the name and the effect badge,
+  // so the routing button moves down beside mute and solo.
+  const mini = mode === "mini"
+  const routing =
+    mode !== "full" && (!master || !chips) ? (
+      <RoutingButton track={track} withChannels={!chips} />
+    ) : null
 
   function select() {
     const ui = useUiStore.getState()
@@ -226,14 +252,20 @@ export const MixerStrip = memo(function MixerStrip({
       data-audible={audible}
       data-selected={selected || undefined}
       data-linked={linked ? "" : undefined}
+      data-drop={drop.gap === null ? undefined : ""}
       tabIndex={0}
       onPointerDownCapture={select}
       onFocus={select}
+      {...drop.zone}
       className={cn(
-        "group/strip relative flex h-full w-full flex-col border-r outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+        // `outline-none` alone would switch the focus outline off for good:
+        // the width set on focus needs its style said again.
+        "group/strip relative flex h-full w-full flex-col border-r outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:outline-solid",
         low ? "gap-0.5" : "gap-1.5 pb-1.5",
         "data-linked:bg-[color-mix(in_oklch,var(--wf-brand)_10%,transparent)]",
-        "data-selected:bg-accent data-selected:shadow-[inset_0_-2px_0_var(--wf-brand)]"
+        "data-selected:bg-accent data-selected:shadow-[inset_0_-2px_0_var(--wf-brand)]",
+        // An effect dragged over the strip would land on this track.
+        "data-drop:bg-[color-mix(in_oklch,var(--wf-brand)_9%,transparent)]"
       )}
     >
       <StripHeader
@@ -242,22 +274,39 @@ export const MixerStrip = memo(function MixerStrip({
         color={track.color}
         number={master ? "M" : String(index)}
         master={master}
-        trailing={
-          mode !== "full" && (!master || !chips) ? (
-            <RoutingButton track={track} withChannels={!chips} />
-          ) : null
-        }
+        trailing={mini ? <EffectBadge track={id} showEmpty={false} /> : routing}
       />
       {chips && (
         <div className={DIMMED}>
           <ChannelChips id={id} master={master} />
         </div>
       )}
+      {/* Top to bottom is the way the signal goes: what plays into the
+          track, its effects, then pan and the fader. */}
+      {effectRows > 0 && (
+        <EffectRack
+          track={id}
+          rows={effectRows}
+          dropGap={drop.gap}
+          className={DIMMED}
+        />
+      )}
+      {mode === "flat" && (
+        <div className={cn("flex h-4 shrink-0 px-1", DIMMED)}>
+          <EffectBadge track={id} showEmpty />
+        </div>
+      )}
       {mode === "full" && <Routing track={track} sendRows={sendRows} />}
-      <div className="flex shrink-0 items-start justify-center gap-2">
+      <div
+        className={cn(
+          "flex shrink-0 items-start justify-center",
+          mini ? "gap-0.5" : "gap-2"
+        )}
+      >
         <PanKnob track={track} showValue={mode === "full"} />
-        <div className="flex h-6 items-center">
+        <div className="flex h-6 items-center gap-0.5">
           <MuteButtons track={track} small={low} />
+          {mini && routing}
         </div>
       </div>
       <div
@@ -273,7 +322,6 @@ export const MixerStrip = memo(function MixerStrip({
           index={index}
           metering={metering}
           layout={LEVEL_LAYOUT[mode]}
-          sparseScale={sparseScale}
           wide={master}
         />
       </div>

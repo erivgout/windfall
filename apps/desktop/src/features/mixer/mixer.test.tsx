@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { dbToGain } from "@/components/audio"
+import { usePlaylistStore } from "@/features/playlist/store"
 import { getAppState, isEnabled, registry, runAction } from "@/lib/actions"
+import type { Backend } from "@/lib/ipc"
 import { dispatch, redo, undo } from "@/lib/store/project"
 import { usePromptStore } from "@/lib/store/prompts"
 import { useTransportStore } from "@/lib/store/transport"
@@ -19,6 +21,7 @@ import {
   drag,
   flush,
   history,
+  project,
   strip,
   stubCanvas,
   trackNamed,
@@ -32,11 +35,13 @@ vi.mock("sonner", () => ({
 const { toast } = await import("sonner")
 
 let stop: () => void
+let backend: Backend
 
 beforeEach(async () => {
   stubCanvas()
   useMixerUi.setState(useMixerUi.getInitialState(), true)
-  ;({ stop } = await startTestApp())
+  usePlaylistStore.setState(usePlaylistStore.getInitialState(), true)
+  ;({ stop, backend } = await startTestApp())
 })
 afterEach(() => {
   stop()
@@ -98,7 +103,7 @@ describe("fader and pan", () => {
     expect(trackNamed("Kick").volume).toBeCloseTo(dbToGain(-12), 4)
     expect(fader("Kick")).toHaveAttribute("aria-valuetext", "−12.0 dB")
     expect(history().entries).toHaveLength(before + 1)
-    expect(history().entries.at(-1)?.label).toBe("Change track volume")
+    expect(history().entries.at(-1)?.label).toBe("Change mixer track volume")
 
     await undo()
     await flush()
@@ -152,7 +157,7 @@ describe("fader and pan", () => {
     expect(trackNamed("Clap").pan).toBeCloseTo(0.5, 5)
     expect(panKnob("Clap")).toHaveAttribute("aria-valuetext", "R50")
     expect(history().entries).toHaveLength(before + 1)
-    expect(history().entries.at(-1)?.label).toBe("Change track pan")
+    expect(history().entries.at(-1)?.label).toBe("Change mixer track pan")
 
     await undo()
     await flush()
@@ -338,7 +343,7 @@ describe("routing", () => {
     await flush()
     expect(trackNamed("Clap").output).toBe(MASTER_TRACK)
     expect(toast.error).toHaveBeenCalledWith(
-      expect.stringContaining("feed the track back into itself")
+      expect.stringContaining("loop back on itself")
     )
   })
 })
@@ -462,7 +467,8 @@ describe("channel chips", () => {
     await flush()
 
     await user.click(button("Master", "All 2 channels of this track"))
-    const list = await screen.findByRole("list")
+    const popover = await screen.findByRole("dialog")
+    const list = within(popover).getByRole("list")
     expect(
       within(list)
         .getAllByRole("button")
@@ -634,6 +640,99 @@ describe("track operations", () => {
     expect(screen.queryByRole("button", { name: "Teal" })).toBeNull()
   })
 
+  it("says what an audio clip's track is fed by, and selects the clips on the playlist", async () => {
+    const user = userEvent.setup()
+    render(<MixerPanel />)
+    const loop = "/factory/Loops/Drum loop 128.wav"
+    const first = await backend.addAudioClipFromFile(loop, { start: 0 })
+    const second = await backend.addAudioClipFromFile(loop, { start: 7680 })
+    await flush()
+    const clipIds = [first.created.at(-1)!, second.created.at(-1)!]
+
+    // The track the clips play into is not "unused".
+    const name = "Drum loop 128"
+    expect(within(strip(name)).queryByText("unused")).toBeNull()
+    const chip = button(name, "2 audio clips of this track")
+    expect(chip).toHaveTextContent("2 audio clips")
+
+    await user.click(chip)
+    expect([...usePlaylistStore.getState().selection].sort()).toEqual(
+      [...clipIds].sort()
+    )
+    expect(ui().centerTab).toBe("playlist")
+
+    // Beside a channel the clips are behind the count, with the tracks
+    // that feed the track.
+    await dispatch({
+      type: "updateAudioClips",
+      updates: clipIds.map((id) => ({
+        id,
+        patch: { mixerTrack: trackNamed("Kick").id },
+      })),
+    })
+    await setOutput(trackNamed("Clap").id, trackNamed("Kick").id)
+    await flush()
+    expect(button("Kick", "Channel Kick")).toBeVisible()
+    const more = button(
+      "Kick",
+      "Everything that plays into this track: 1 channel, 2 audio clips, 1 track"
+    )
+    expect(more).toHaveTextContent("+2")
+    await user.click(more)
+    expect(
+      await screen.findByRole("button", { name: "2 audio clips of this track" })
+    ).toBeVisible()
+    expect(screen.getByText("1 track in")).toBeVisible()
+    // And the track the clips left is unused again.
+    expect(within(strip(name)).getByText("unused")).toBeVisible()
+  })
+
+  it("shows the tracks that feed a track with no channel, and audio clips on the master", async () => {
+    render(<MixerPanel />)
+    await dispatch({ type: "addMixerTrack", name: "Bus" })
+    await flush()
+    expect(within(strip("Bus")).getByText("unused")).toBeVisible()
+    await setOutput(trackNamed("Kick").id, trackNamed("Bus").id)
+    await flush()
+    expect(within(strip("Bus")).getByText("1 track in")).toBeVisible()
+    expect(within(strip("Bus")).queryByText("unused")).toBeNull()
+
+    const added = await backend.addAudioClipFromFile(
+      "/factory/Loops/Drum loop 128.wav",
+      { start: 0, mixerTrack: MASTER_TRACK }
+    )
+    await flush()
+    expect(added.created).toHaveLength(3)
+    expect(button("Master", "1 audio clip of this track")).toBeVisible()
+  })
+
+  it("says in the delete question that a track's audio clips go to the master", async () => {
+    render(<MixerPanel />)
+    const loop = "/factory/Loops/Drum loop 128.wav"
+    const added = await backend.addAudioClipFromFile(loop, { start: 0 })
+    await backend.addAudioClipFromFile(loop, { start: 7680 })
+    await flush()
+    const track = trackNamed("Drum loop 128")
+    selectTrack(track.id)
+
+    const confirmed = runAction("mixer.deleteTrack")
+    await flush()
+    const question = usePromptStore.getState().confirm
+    expect(question?.description).toBe(
+      "2 audio clips on the playlist play into this track. They will play into the master instead."
+    )
+    question?.resolve("delete")
+    await confirmed
+    await flush()
+    const clip = project().playlist.clips.find(
+      (item) => item.id === added.created.at(-1)
+    )
+    expect(clip?.content).toMatchObject({
+      type: "audio",
+      mixerTrack: MASTER_TRACK,
+    })
+  })
+
   it("asks before deleting a track a channel plays into", async () => {
     render(<MixerPanel />)
     const kick = trackNamed("Kick").id
@@ -734,23 +833,32 @@ describe("track operations", () => {
     fireEvent.contextMenu(nameOf("Snare"))
     const menu = await screen.findByRole("menu")
     expect(ui().selectedTrack).toBe(trackNamed("Snare").id)
+    // Each entry shows the key it has while the mixer has the keyboard.
     expect(
-      within(menu)
-        .getAllByRole("menuitem")
-        .map((item) => item.textContent)
+      [...menu.querySelectorAll("[role^=menuitem]")].map(
+        (item) => item.textContent
+      )
     ).toEqual([
-      "Rename mixer track",
+      "Rename mixer trackF2",
       "Change track color…",
-      "Mute or unmute track",
-      "Solo or unsolo track",
+      "Add effect",
+      "Show effectsE",
+      "Mute or unmute trackM",
+      "Solo or unsolo trackS",
       "Unmute all tracks",
       "Unsolo all tracks",
       "Reset fader to 0 dB",
       "Center pan",
       "Route to master",
       "Add mixer trackAlt+M",
-      "Delete mixer track",
+      "Delete mixer trackDel",
     ])
+    // Mute and solo are on or off, and say so.
+    expect(
+      within(menu).getByRole("menuitemcheckbox", {
+        name: /^Mute or unmute track/,
+      })
+    ).toHaveAttribute("aria-checked", "false")
     expect(
       within(menu).getByRole("menuitem", { name: "Route to master" })
     ).toHaveAttribute("aria-disabled", "true")

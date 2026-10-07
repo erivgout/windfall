@@ -7,7 +7,7 @@
       "name": "knob",
       "type": "registry:component",
       "title": "Knob",
-      "description": "A rotary control in three sizes with unipolar and bipolar arcs, drag, wheel, keyboard and typed entry.",
+      "description": "A rotary control in three sizes with unipolar and bipolar arcs, drag, wheel, keyboard and typed entry (Enter or Tab sets, leaving the field cancels), a live value that is also read out to screen readers, and a slot for an app-wide context menu.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"
@@ -116,10 +116,13 @@
       "name": "fader",
       "type": "registry:component",
       "title": "Fader",
-      "description": "A vertical or horizontal level fader with a dB taper, scale marks and a slot for a meter.",
+      "description": "A vertical or horizontal level fader in two thicknesses with a dB taper, scale marks whose labels thin out to fit, and a slot for a meter.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"
+      ],
+      "dependencies": [
+        "class-variance-authority"
       ],
       "files": [
         {
@@ -165,7 +168,7 @@
       "name": "level-meter",
       "type": "registry:component",
       "title": "Level Meter",
-      "description": "A canvas peak meter fed through a ref, with peak hold, a latching clip light and its own ballistics.",
+      "description": "A canvas peak meter fed through a ref, with peak hold, its own ballistics and a latching clip light that can be set and read from outside.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"
@@ -363,7 +366,7 @@
       "name": "waveform",
       "type": "registry:component",
       "title": "Waveform",
-      "description": "A canvas waveform overview from min and max peak pairs, with draggable region handles and a playhead.",
+      "description": "A canvas waveform overview from min and max peak pairs, drawn at full height with its display gain shown, with draggable region handles and a playhead.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"
@@ -414,7 +417,7 @@
       "name": "envelope-editor",
       "type": "registry:component",
       "title": "Envelope Editor",
-      "description": "An attack, decay, sustain, release editor with draggable, keyboard-accessible nodes on a time axis.",
+      "description": "An attack, decay, sustain, release editor with draggable, keyboard-accessible nodes on a time axis, drawn with straight or exponential stages.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"
@@ -491,7 +494,7 @@
       "name": "use-drag-value",
       "type": "registry:hook",
       "title": "useDragValue",
-      "description": "The interaction model the value controls share, for building controls of your own.",
+      "description": "The interaction model the value controls share, for building controls of your own: drag, wheel, keys, typed entry that only Enter or Tab commit, reset by double-click or Ctrl-click (Delete is left to the app), a unit kind for copying values between controls, and a spoken live value.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"
@@ -521,7 +524,7 @@
       "name": "audio-units",
       "type": "registry:lib",
       "title": "Audio Units",
-      "description": "Gain and decibel conversion, and matching formatters and parsers for dB, pan, percent, time, pitch and frequency.",
+      "description": "Gain and decibel conversion, and matching formatters and parsers for dB, pan, percent, time, pitch and frequency, each naming its kind of unit.",
       "author": "The Windfall contributors <https://github.com/windfall-daw/windfall>",
       "categories": [
         "audio"

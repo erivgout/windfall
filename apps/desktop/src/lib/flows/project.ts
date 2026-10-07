@@ -3,8 +3,14 @@ import { create } from "zustand"
 
 import { reportError } from "@/lib/errors"
 import { backend } from "@/lib/ipc"
-import { loadSnapshot, markSaved, useProjectStore } from "@/lib/store/project"
+import {
+  loadSnapshot,
+  setProjectPath,
+  useProjectStore,
+} from "@/lib/store/project"
 import { askConfirm } from "@/lib/store/prompts"
+import { projectDisplayName } from "@/lib/store/selectors"
+import { clearWarnings, samplesReloaded } from "@/lib/store/warnings"
 import { fileName } from "@/lib/time"
 
 /** Recently saved or opened project files, newest first. */
@@ -18,14 +24,15 @@ export async function refreshRecentProjects(): Promise<void> {
   }
 }
 
-function projectName(): string {
-  return useProjectStore.getState().project.settings.name || "Untitled"
+/** The project's name as it is shown: its file's name once it has a file. */
+export function projectName(): string {
+  return projectDisplayName(useProjectStore.getState())
 }
 
 async function saveTo(path?: string): Promise<boolean> {
   try {
     const saved = await backend.projectSave(path)
-    markSaved(saved)
+    setProjectPath(saved)
     toast.success("Saved", { description: fileName(saved) })
     void refreshRecentProjects()
     return true
@@ -46,7 +53,10 @@ export async function saveProjectAs(): Promise<boolean> {
   }
 }
 
-/** Saves to the project's file, or asks for one when it has none yet. */
+/**
+ * Saves to the project's file, or asks for one when it has none: a project
+ * never saved, or a backup, which opens as a copy without a path.
+ */
 export function saveProject(): Promise<boolean> {
   return useProjectStore.getState().path === null ? saveProjectAs() : saveTo()
 }
@@ -99,4 +109,24 @@ export async function openProject(): Promise<void> {
   } catch (error) {
     reportError(error, "Could not open the project")
   }
+}
+
+/**
+ * Asks the backend to look for the missing sample files again, for after
+ * the user has put them back. What is still missing is reported the usual
+ * way, as project warnings.
+ */
+export async function reloadMissingSamples(): Promise<void> {
+  clearWarnings()
+  let missing: number
+  try {
+    missing = await backend.samplesReload()
+  } catch (error) {
+    reportError(error, "Could not reload the samples")
+    return
+  }
+  samplesReloaded()
+  if (missing === 0) toast.success("All samples loaded")
+  else if (missing === 1) toast.error("1 sample is still missing")
+  else toast.error(`${missing} samples are still missing`)
 }

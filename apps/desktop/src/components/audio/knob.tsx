@@ -5,8 +5,13 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 import {
+  clampValue,
+  defaultFormat,
   useDragValue,
+  useLiveValue,
+  useValueControlSlot,
   valueToNormalized,
+  type LiveValueFeed,
   type ValueControlProps,
 } from "./use-drag-value"
 import { ValueInput } from "./value-input"
@@ -70,6 +75,19 @@ type KnobProps = Omit<
     color?: string
     /** Pointer travel in pixels for the full range. */
     dragRange?: number
+    /**
+     * A value something else is moving the knob to, such as an automation
+     * curve while a song plays. The knob shows it with a second pointer and
+     * arc, drawn outside React, and dims its own. `value` stays what a drag
+     * changes.
+     */
+    live?: LiveValueFeed
+    /**
+     * A small dot at the knob's corner in this CSS color: something else
+     * can move this value. It is also the color of the live pointer when
+     * the feed gives none.
+     */
+    marker?: string
   }
 
 function Knob({
@@ -82,6 +100,8 @@ function Knob({
   showValue = false,
   color,
   dragRange,
+  live,
+  marker,
   value,
   onValueChange,
   onGestureStart,
@@ -94,6 +114,7 @@ function Knob({
   scale,
   format,
   parse,
+  unitKind,
   disabled = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
@@ -113,11 +134,17 @@ function Knob({
     scale,
     format,
     parse,
+    unitKind,
     disabled,
     dragRange,
+    live,
     detents: bipolar ? [origin] : undefined,
   })
   const labelId = React.useId()
+  const liveGroup = React.useRef<SVGGElement>(null)
+  const liveArc = React.useRef<SVGPathElement>(null)
+  const liveNeedle = React.useRef<SVGGElement>(null)
+  const liveText = React.useRef<HTMLSpanElement>(null)
 
   const shape = GEOMETRY[size ?? "md"]
   const middle = shape.size / 2
@@ -152,7 +179,46 @@ function Knob({
   const pointerTo = pointAt(middle, capRadius * 0.82, angle)
   const liveLabel = !showValue && control.dragging
 
-  return (
+  useLiveValue(live, (next, liveColor) => {
+    const group = liveGroup.current
+    if (!group) {
+      return
+    }
+    // The root, whatever slot name a control built on the knob gave it.
+    const root = group.closest<HTMLElement>("[data-size]")
+    if (next === null) {
+      group.style.display = "none"
+      root?.removeAttribute("data-live")
+      return
+    }
+    const shown = clampValue(next, min, max)
+    const at = valueToNormalized(shown, min, max, scale)
+    const from = valueToNormalized(origin, min, max, scale)
+    group.style.display = ""
+    group.style.setProperty(
+      "--live-color",
+      liveColor ?? marker ?? "var(--wf-playhead)"
+    )
+    root?.setAttribute("data-live", "")
+    // The arc is one path a dash is moved along, so no path is rebuilt.
+    if (liveArc.current) {
+      liveArc.current.style.strokeDasharray = bipolar
+        ? `0 ${Math.min(at, from)} ${Math.abs(at - from)} 1`
+        : `${at} 1`
+    }
+    liveNeedle.current?.setAttribute(
+      "transform",
+      `rotate(${(SWEEP_START + at * SWEEP).toFixed(2)} ${middle} ${middle})`
+    )
+    if (liveText.current) {
+      liveText.current.textContent = format
+        ? format(shown)
+        : defaultFormat(shown, { min, max, step })
+    }
+  })
+
+  return useValueControlSlot(
+    control.actions,
     <div
       data-slot="knob"
       data-size={size}
@@ -174,8 +240,16 @@ function Knob({
           ariaLabelledBy ?? (label && !ariaLabel ? labelId : undefined)
         }
         title={label || showValue ? undefined : control.text}
-        className="cursor-ns-resize touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-disabled:cursor-default"
+        className="relative cursor-ns-resize touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-disabled:cursor-default"
       >
+        {marker ? (
+          <span
+            data-slot="knob-marker"
+            aria-hidden="true"
+            className="pointer-events-none absolute top-0 right-0 size-[5px] rounded-full ring-1 ring-background"
+            style={{ backgroundColor: marker }}
+          />
+        ) : null}
         <svg
           width={shape.size}
           height={shape.size}
@@ -196,6 +270,7 @@ function Knob({
               stroke="var(--knob-fill, var(--wf-control-fill))"
               strokeWidth={shape.stroke}
               strokeLinecap="round"
+              className="group-data-live/knob:opacity-25"
             />
           ) : null}
           <circle
@@ -213,7 +288,43 @@ function Knob({
             stroke="var(--foreground)"
             strokeWidth={shape.pointer}
             strokeLinecap="round"
+            className="group-data-live/knob:opacity-25"
           />
+          {live ? (
+            <g
+              ref={liveGroup}
+              data-slot="knob-live"
+              style={{ display: "none" }}
+            >
+              <path
+                ref={liveArc}
+                d={arcPath(middle, radius, SWEEP_START, SWEEP_START + SWEEP)}
+                pathLength={1}
+                stroke="var(--live-color)"
+                strokeWidth={shape.stroke}
+                strokeDasharray="0 1"
+              />
+              <g ref={liveNeedle}>
+                <line
+                  x1={middle}
+                  y1={middle - capRadius * 0.3}
+                  x2={middle}
+                  y2={middle - capRadius * 0.82}
+                  stroke="var(--live-color)"
+                  strokeWidth={shape.pointer}
+                  strokeLinecap="round"
+                />
+                <circle
+                  cx={middle}
+                  cy={middle - radius}
+                  r={shape.stroke * 0.8}
+                  fill="var(--live-color)"
+                  stroke="var(--background)"
+                  strokeWidth={1}
+                />
+              </g>
+            </g>
+          ) : null}
         </svg>
       </div>
       {label ? (
@@ -222,7 +333,14 @@ function Knob({
           data-slot="knob-label"
           className="relative max-w-16 leading-none text-muted-foreground"
         >
-          <span className={cn("block truncate", liveLabel && "invisible")}>
+          <span
+            // A line as tall as its letters cuts the tails off g, p and q.
+            // The padding gives them room, and the margin takes it back.
+            className={cn(
+              "-my-[0.25em] block truncate py-[0.25em]",
+              liveLabel && "invisible"
+            )}
+          >
             {label}
           </span>
           {liveLabel ? (
@@ -242,7 +360,20 @@ function Knob({
           className="leading-none text-foreground tabular-nums"
           onDoubleClick={() => control.startEditing()}
         >
-          {control.text}
+          {live ? (
+            <>
+              <span className="group-data-live/knob:hidden">
+                {control.text}
+              </span>
+              <span
+                ref={liveText}
+                data-slot="knob-live-value"
+                className="hidden group-data-live/knob:inline"
+              />
+            </>
+          ) : (
+            control.text
+          )}
         </span>
       ) : null}
       {control.editing ? (

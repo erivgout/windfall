@@ -1,62 +1,15 @@
-import type { Channel, MixerTrack, TrackId } from "@/bindings"
+import type { Channel, Clip, ClipId, MixerTrack, TrackId } from "@/bindings"
+import { soloSet, targetsOf } from "@/lib/mixer-graph"
 import { MASTER_TRACK } from "@/lib/units"
 
 /*
- * The mixer as a graph: a track feeds its output and the targets of its
- * sends. These helpers answer the questions the strips ask about it. They
- * mirror `compile_mixer` in the engine, so what the mixer shows as silent is
- * what the engine plays as silent.
+ * The questions the strips ask about the mixer as a graph. The graph itself,
+ * and the rule for what solo leaves audible, are in `lib/mixer-graph`.
  */
+
+export { soloSet }
 
 type Tracks = readonly MixerTrack[]
-
-/** The tracks `track` feeds. The master feeds nothing, whatever it stores. */
-function targetsOf(track: MixerTrack, known: ReadonlySet<TrackId>): TrackId[] {
-  if (track.id === MASTER_TRACK) return []
-  const targets = track.sends.map((send) => send.target)
-  if (track.output !== null) targets.push(track.output)
-  return targets.filter((target) => target !== track.id && known.has(target))
-}
-
-function spread(
-  from: Iterable<TrackId>,
-  neighbours: ReadonlyMap<TrackId, readonly TrackId[]>
-): Set<TrackId> {
-  const reached = new Set(from)
-  const pending = [...reached]
-  for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
-    for (const next of neighbours.get(id) ?? []) {
-      if (!reached.has(next)) {
-        reached.add(next)
-        pending.push(next)
-      }
-    }
-  }
-  return reached
-}
-
-/**
- * The tracks solo leaves audible: all of them when nothing is soloed.
- * Otherwise a track is heard if it is soloed, feeds a soloed track through
- * outputs and sends, or carries a soloed track's signal on toward the
- * master. Mute is not looked at here; it silences a track on top of this.
- */
-export function soloSet(tracks: Tracks): Set<TrackId> {
-  const ids = new Set(tracks.map((track) => track.id))
-  const soloed = tracks.filter((track) => track.solo).map((track) => track.id)
-  if (soloed.length === 0) return ids
-
-  const downstream = new Map<TrackId, TrackId[]>()
-  const upstream = new Map<TrackId, TrackId[]>()
-  for (const track of tracks) {
-    const targets = targetsOf(track, ids)
-    downstream.set(track.id, targets)
-    for (const target of targets) {
-      upstream.set(target, [...(upstream.get(target) ?? []), track.id])
-    }
-  }
-  return new Set([...spread(soloed, downstream), ...spread(soloed, upstream)])
-}
 
 const heardCache = new WeakMap<Tracks, Set<TrackId>>()
 
@@ -132,6 +85,8 @@ export function sendChoices(tracks: Tracks, id: TrackId): RoutingChoices {
 export type Feeders = {
   /** Channels that play into the track. */
   channels: Channel[]
+  /** Audio clips on the playlist that play into the track. */
+  clips: readonly ClipId[]
   /** Tracks whose output is the track. */
   outputs: MixerTrack[]
   /** Tracks that send to the track. */
@@ -142,6 +97,7 @@ export type Feeders = {
 export function feedersOf(
   tracks: Tracks,
   channels: readonly Channel[],
+  clips: readonly Clip[],
   id: TrackId
 ): Feeders {
   const others = tracks.filter(
@@ -149,11 +105,41 @@ export function feedersOf(
   )
   return {
     channels: channels.filter((channel) => channel.mixerTrack === id),
+    clips: audioClipsOfTrack(clips, id),
     outputs: others.filter((track) => track.output === id),
     sends: others.filter((track) =>
       track.sends.some((send) => send.target === id)
     ),
   }
+}
+
+const NO_CLIPS: readonly ClipId[] = []
+const clipCache = new WeakMap<readonly Clip[], Map<TrackId, ClipId[]>>()
+
+/**
+ * The audio clips that play into a track, in timeline order, grouped once
+ * per clip list. A track no clip plays into always gets the same empty
+ * list, and a track gets the same list until a clip changes.
+ */
+export function audioClipsOfTrack(
+  clips: readonly Clip[],
+  id: TrackId
+): readonly ClipId[] {
+  let byTrack = clipCache.get(clips)
+  if (!byTrack) {
+    byTrack = new Map()
+    const audio = clips
+      .filter((clip) => clip.content.type === "audio")
+      .sort((a, b) => a.start - b.start || a.id - b.id)
+    for (const clip of audio) {
+      if (clip.content.type !== "audio") continue
+      const list = byTrack.get(clip.content.mixerTrack)
+      if (list) list.push(clip.id)
+      else byTrack.set(clip.content.mixerTrack, [clip.id])
+    }
+    clipCache.set(clips, byTrack)
+  }
+  return byTrack.get(id) ?? NO_CLIPS
 }
 
 /** How many tracks play into track `id` through an output or a send. */

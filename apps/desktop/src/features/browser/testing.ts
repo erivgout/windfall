@@ -1,7 +1,6 @@
 import { screen } from "@testing-library/react"
 
 import type { BrowserEntry } from "@/bindings"
-import { installKeymap } from "@/lib/actions"
 import { setBackend, type Backend } from "@/lib/ipc"
 import { startTestApp } from "@/test/harness"
 
@@ -10,7 +9,7 @@ import { resetPreview } from "./preview"
 import { resetBrowserStore } from "./store"
 
 /**
- * Starts the test app with the browser's actions and the keymap in place.
+ * Starts the test app with the browser's actions in place.
  * `override` swaps backend calls, for folders that are huge, slow or broken.
  */
 export async function startBrowserTest(
@@ -21,11 +20,11 @@ export async function startBrowserTest(
   setBackend(backend)
   resetBrowserStore()
   resetPreview()
-  const stops = [registerBrowserActions(), installKeymap()]
+  const unregister = registerBrowserActions()
   return {
     backend,
     stop() {
-      for (const stop of stops) stop()
+      unregister()
       app.stop()
     },
   }

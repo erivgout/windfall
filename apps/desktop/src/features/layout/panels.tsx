@@ -5,9 +5,9 @@ import ChannelRackPanel from "@/features/channel-rack"
 import MixerPanel from "@/features/mixer"
 import PianoRollPanel from "@/features/piano-roll"
 import PlaylistPanel from "@/features/playlist"
-import type { CenterTab, SidePanel } from "@/lib/store/ui"
+import type { CenterTab, PanelId } from "@/lib/store/ui"
 
-export type PanelId = SidePanel | CenterTab
+export type { PanelId }
 
 type PanelInfo = {
   title: string

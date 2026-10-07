@@ -1,4 +1,6 @@
-import type { Channel, ChannelId, SamplerPatch } from "@/bindings"
+import { useState } from "react"
+
+import type { ChannelId, SamplerPatch } from "@/bindings"
 import {
   faderTaper,
   formatGain,
@@ -9,6 +11,7 @@ import {
   parseNumber,
   semitonesUnit,
 } from "@/components/audio"
+import type { SamplerChannel } from "@/lib/channel-source"
 import { useHint } from "@/lib/store/hint"
 import { dispatch } from "@/lib/store/project"
 import { clamp, DEFAULT_KEY, MAX_GAIN } from "@/lib/units"
@@ -16,7 +19,6 @@ import { clamp, DEFAULT_KEY, MAX_GAIN } from "@/lib/units"
 import { findChannel } from "../channel-ops"
 import { joinTune, splitTune } from "../steps"
 import { useGestureValue } from "../use-gesture-value"
-import { useLiveHint } from "../use-live-hint"
 import { Section, SwitchRow } from "./parts"
 
 const MAX_TUNE = 48
@@ -49,16 +51,23 @@ const formatCents = (cents: number) => {
   return `${rounded > 0 ? "+" : rounded < 0 ? "−" : ""}${Math.abs(rounded)} ct`
 }
 
-function storedTune(id: ChannelId) {
-  return splitTune(findChannel(id)?.source.tune ?? 0)
+/** The channel's tuning as the project has it right now. */
+function storedTune(id: ChannelId): number {
+  const source = findChannel(id)?.source
+  return source?.type === "sampler" ? source.tune : 0
 }
 
 /** Pitch, level and how the channel's notes cut each other off. */
-export function SoundSection({ channel }: { channel: Channel }) {
+export function SoundSection({ channel }: { channel: SamplerChannel }) {
   const { id, source } = channel
   const send = (patch: SamplerPatch) =>
     dispatch({ type: "updateSampler", id, patch })
-  const { semitones, cents } = splitTune(source.tune)
+  // Tune and Fine are two views of one number, and a tuning half way
+  // between two semitones can be read as either. The semitone on show is
+  // kept here, so Fine at +50 or -50 does not flip Tune to the neighbour.
+  const [coarse, setCoarse] = useState(() => splitTune(source.tune).semitones)
+  const { semitones, cents } = splitTune(source.tune, coarse)
+  if (semitones !== coarse) setCoarse(semitones)
 
   const root = useGestureValue(source.rootKey, (value, sendInGesture) =>
     sendInGesture({
@@ -67,20 +76,29 @@ export function SoundSection({ channel }: { channel: Channel }) {
       patch: { rootKey: clamp(Math.round(value), 0, MAX_KEY) },
     })
   )
-  // Tune and Fine are two views of one number, so each reads the other half
-  // from the project at the moment it sends.
-  const tune = useGestureValue(semitones, (value, sendInGesture) =>
-    sendInGesture({
+  // Each knob reads the other half from the project at the moment it
+  // sends, split around the semitone on show.
+  const tune = useGestureValue(semitones, (value, sendInGesture) => {
+    const { cents: kept } = splitTune(storedTune(id), coarse)
+    // The knob now shows this semitone, so it is the one to keep.
+    setCoarse(value)
+    return sendInGesture({
       type: "updateSampler",
       id,
-      patch: { tune: joinTune(value, storedTune(id).cents, MAX_TUNE) },
+      patch: { tune: joinTune(value, kept, MAX_TUNE) },
     })
-  )
+  })
   const fine = useGestureValue(cents, (value, sendInGesture) =>
     sendInGesture({
       type: "updateSampler",
       id,
-      patch: { tune: joinTune(storedTune(id).semitones, value, MAX_TUNE) },
+      patch: {
+        tune: joinTune(
+          splitTune(storedTune(id), coarse).semitones,
+          value,
+          MAX_TUNE
+        ),
+      },
     })
   )
   const gain = useGestureValue(source.gain, (value, sendInGesture) =>
@@ -98,16 +116,16 @@ export function SoundSection({ channel }: { channel: Channel }) {
     })
   )
 
-  const rootHint = useLiveHint(
+  const rootHint = useHint(
     `Root key: ${formatKey(root.value)}. The key that plays the sample at its own pitch. Double-click for C5`
   )
-  const tuneHint = useLiveHint(
+  const tuneHint = useHint(
     `Tune: ${semitonesUnit.format(tune.value)}. Whole semitones up or down. Double-click to reset`
   )
-  const fineHint = useLiveHint(
+  const fineHint = useHint(
     `Fine tune: ${formatCents(fine.value)}. Hundredths of a semitone. Double-click to reset`
   )
-  const gainHint = useLiveHint(
+  const gainHint = useHint(
     `Sample gain: ${formatGain(gain.value)}. Level of the sample before the channel volume. Double-click for 0 dB`
   )
   const cutHint = useHint(

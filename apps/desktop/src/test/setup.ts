@@ -21,6 +21,11 @@ window.matchMedia ??= (query: string): MediaQueryList => ({
   dispatchEvent: () => false,
 })
 
+// jsdom has no canvas and logs an error for every `getContext`. Components
+// already cope with a browser that hands out no context, so this hands out
+// none: canvases mount and draw nothing.
+HTMLCanvasElement.prototype.getContext = () => null
+
 Element.prototype.scrollIntoView ??= () => {}
 Element.prototype.setPointerCapture ??= () => {}
 Element.prototype.releasePointerCapture ??= () => {}

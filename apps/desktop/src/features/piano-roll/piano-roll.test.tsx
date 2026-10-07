@@ -1,20 +1,21 @@
 import { render, screen } from "@testing-library/react"
+import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { NoteInit } from "@/bindings"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { isStepNote, litSteps } from "@/features/channel-rack/steps"
-import { installKeymap, runAction } from "@/lib/actions"
-import { newProject } from "@/lib/ipc/sim/project"
+import { runAction, shortcutLabel } from "@/lib/actions"
+import { emptyProject } from "@/lib/ipc/sim/project"
 import { dispatch, redo, undo } from "@/lib/store/project"
 import { setTransportPattern } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
 import { settle } from "@/test/harness"
 
 import { readClipboard } from "./clipboard"
+import { MAX_PATTERN_TICKS } from "./edit-math"
 import PianoRollPanel from "./index"
 import { laneUpdates, paintValues } from "./lane-math"
-import { installPianoRollKeys } from "./shortcuts"
 import { usePianoRollStore } from "./store"
 import {
   at,
@@ -128,9 +129,12 @@ describe("draw tool", () => {
     })
   })
 
-  it("ignores snap while Shift is held", async () => {
-    await roll.click(at(500, 64, { shift: true }))
+  it("ignores snap while Alt is held, and only then", async () => {
+    await roll.click(at(500, 64, { alt: true }))
     expect(lead()).toEqual(["500:64:240"])
+    // Shift is for the selection. It leaves the snap on.
+    await roll.click(at(1300, 66, { shift: true }))
+    expect(lead()).toEqual(["500:64:240", "1200:66:240"])
   })
 
   it("grows the pattern to the next bar in the same undo step", async () => {
@@ -214,9 +218,46 @@ describe("moving and resizing", () => {
     expect(lead()).toEqual(["0:60:240", "0:67:480", "480:64:240"])
   })
 
-  it("moves freely with Shift held", async () => {
-    await roll.drag(at(100, 60), at(100 + 130, 60, { shift: true }))
+  it("moves freely with Alt held", async () => {
+    await roll.drag(at(100, 60), at(100 + 130, 60, { alt: true }))
     expect(lead()[0]).toBe("130:60:240")
+  })
+
+  it("moves on the snap with Shift held, and copies nothing", async () => {
+    const count = lead().length
+    await roll.drag(
+      at(100, 60, { shift: true }),
+      at(100 + 250, 60, { shift: true })
+    )
+    expect(lead()[0]).toBe("240:60:240")
+    expect(lead()).toHaveLength(count)
+  })
+
+  it("moves the selection on Shift+drag of another note, as the playlist does", async () => {
+    roll.editor.setSelection([notesOf("Lead")[0].id])
+    await roll.drag(
+      at(600, 64, { shift: true }),
+      at(600 + 240, 64, { shift: true })
+    )
+    // Shift added the pressed note to the selection, and both moved.
+    expect(lead()).toEqual(["240:60:240", "720:64:240", "960:67:480"])
+    expect(roll.editor.selection.size).toBe(2)
+  })
+
+  it("copies on Ctrl+drag of a note, with Ctrl held from the press on", async () => {
+    const before = undoSteps()
+    await roll.drag(
+      at(100, 60, { ctrl: true }),
+      at(100 + 480, 60, { ctrl: true })
+    )
+    expect(lead()).toEqual([
+      "0:60:240",
+      "480:60:240",
+      "480:64:240",
+      "960:67:480",
+    ])
+    expect(selectedBrief()).toEqual(["480:60:240"])
+    expect(undoSteps()).toBe(before + 1)
   })
 
   it("duplicates when Ctrl is held at the drop, and selects the copies", async () => {
@@ -557,11 +598,109 @@ describe("clipboard and keyboard edits", () => {
   })
 })
 
+describe("the end of the longest pattern", () => {
+  const END = MAX_PATTERN_TICKS
+  const refused = () =>
+    expect(toast.error).toHaveBeenLastCalledWith(
+      "Notes cannot go past step 1,024",
+      expect.objectContaining({
+        description: expect.stringContaining("could never play"),
+      })
+    )
+
+  beforeEach(() => vi.mocked(toast.error).mockClear())
+
+  it("refuses to duplicate notes past it, and says so", async () => {
+    // A phrase 500 steps long: one copy fits, the next would end at 2,000.
+    await openLead([n(0, 60), n(499 * 240, 64)])
+    roll.editor.selectAll()
+    await runAction("pianoRoll.duplicate")
+    await settle()
+    expect(lead()).toHaveLength(4)
+    expect(toast.error).not.toHaveBeenCalled()
+    // The pattern grew to the bar that holds the copy.
+    expect(currentPattern().lengthSteps).toBe(1008)
+
+    roll.editor.selectAll()
+    const before = undoSteps()
+    await runAction("pianoRoll.duplicate")
+    await settle()
+    refused()
+    expect(lead()).toHaveLength(4)
+    expect(undoSteps()).toBe(before)
+    expect(Math.max(...notesOf("Lead").map((note) => note.start))).toBeLessThan(
+      END
+    )
+  })
+
+  it("refuses to paste past it", async () => {
+    await openLead([n(0, 60), n(480, 64)])
+    roll.editor.selectAll()
+    await runAction("pianoRoll.copy")
+    roll.session.setPlayhead(END - 240)
+    const before = undoSteps()
+    await runAction("pianoRoll.paste")
+    await settle()
+    refused()
+    expect(lead()).toHaveLength(2)
+    expect(undoSteps()).toBe(before)
+  })
+
+  it("refuses to nudge or drag a note past it, and puts the note back", async () => {
+    await openLead([n(END - 240, 60)])
+    roll.editor.selectAll()
+    const before = undoSteps()
+    await runAction("pianoRoll.nudgeRight")
+    await settle()
+    refused()
+    expect(lead()).toEqual([`${END - 240}:60:240`])
+
+    vi.mocked(toast.error).mockClear()
+    await roll.drag(at(END - 120, 60), at(END + 600, 60))
+    refused()
+    expect(lead()).toEqual([`${END - 240}:60:240`])
+    expect(roll.editor.drag).toBeNull()
+    // Dragging the end of the note out is no way round it either.
+    vi.mocked(toast.error).mockClear()
+    await roll.drag(at(END - 2, 60), at(END + 480, 60))
+    refused()
+    expect(lead()).toEqual([`${END - 240}:60:240`])
+    expect(undoSteps()).toBe(before)
+
+    // Back towards the start is fine.
+    await runAction("pianoRoll.nudgeLeft")
+    await settle()
+    expect(lead()).toEqual([`${END - 480}:60:240`])
+  })
+
+  it("refuses to draw a note past it", async () => {
+    await openLead()
+    const before = undoSteps()
+    await roll.click(at(END + 10, 60))
+    refused()
+    expect(lead()).toEqual([])
+    expect(undoSteps()).toBe(before)
+
+    // The last step of the longest pattern still takes a note.
+    await roll.click(at(END - 230, 60))
+    expect(lead()).toEqual([`${END - 240}:60:240`])
+    expect(currentPattern().lengthSteps).toBe(1024)
+  })
+
+  it("paints up to it, leaves the rest out and says why", async () => {
+    await openLead()
+    usePianoRollStore.getState().setTool("paint")
+    await roll.drag(at(END - 470, 62), [at(END - 200, 62), at(END + 500, 62)])
+    refused()
+    expect(lead()).toEqual([`${END - 480}:62:240`, `${END - 240}:62:240`])
+  })
+})
+
 describe("shortcuts", () => {
   const otherDelete = vi.fn()
   let root: HTMLElement
+  let otherPanel: HTMLElement
   let outside: HTMLElement
-  let stopKeys: (() => void)[] = []
 
   function press(init: KeyboardEventInit, target: Element = root) {
     target.dispatchEvent(
@@ -572,14 +711,15 @@ describe("shortcuts", () => {
   beforeEach(async () => {
     roll.stop()
     otherDelete.mockClear()
-    // Another panel registered before the piano roll owns Delete in the
-    // app's keymap, as the channel rack does.
+    // Another panel gives Delete to an action of its own, as the channel
+    // rack does.
     roll = await startRoll({
       earlier: [
         {
           id: "other.delete",
           title: "Delete in another panel",
           section: "Test",
+          scope: "channelRack",
           defaultShortcut: "Delete",
           run: otherDelete,
         },
@@ -588,15 +728,17 @@ describe("shortcuts", () => {
     await openLead([n(960, 60), n(1200, 64)])
     root = document.createElement("div")
     root.tabIndex = 0
+    root.dataset.shortcutScope = "pianoRoll"
+    otherPanel = document.createElement("div")
+    otherPanel.dataset.shortcutScope = "channelRack"
     outside = document.createElement("button")
-    document.body.append(root, outside)
-    stopKeys = [installKeymap(), installPianoRollKeys(root)]
+    otherPanel.append(outside)
+    document.body.append(root, otherPanel)
     roll.editor.selectAll()
   })
   afterEach(() => {
-    for (const off of stopKeys) off()
     root.remove()
-    outside.remove()
+    otherPanel.remove()
   })
 
   it("gives Delete to the notes while the piano roll has the keyboard", async () => {
@@ -613,6 +755,27 @@ describe("shortcuts", () => {
     await settle()
     expect(lead()).toHaveLength(2)
     expect(otherDelete).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps the keyboard after a click on the grid leaves the focus nowhere", async () => {
+    outside.focus()
+    root.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }))
+    outside.blur()
+    press({ key: "Delete", code: "Delete" }, document.body)
+    await settle()
+    expect(lead()).toEqual([])
+    expect(otherDelete).not.toHaveBeenCalled()
+  })
+
+  it("shows each action the key it has inside the piano roll", () => {
+    expect(shortcutLabel("pianoRoll.delete")).toBe("Del")
+    expect(shortcutLabel("pianoRoll.duplicate")).toBe("Ctrl+D")
+    expect(shortcutLabel("pianoRoll.toolDraw")).toBe("D")
+    expect(shortcutLabel("other.delete")).toBe("Del")
+    useUiStore.getState().setKeymap("fl")
+    expect(shortcutLabel("pianoRoll.duplicate")).toBe("Ctrl+B")
+    expect(shortcutLabel("pianoRoll.toolDraw")).toBe("P")
+    expect(shortcutLabel("pianoRoll.deselect")).toBe("Ctrl+D")
   })
 
   it("moves notes with the arrows and leaves typing alone", async () => {
@@ -727,7 +890,7 @@ describe("the panel", () => {
 
   it("asks for a channel when the project has none", async () => {
     roll.stop()
-    roll = await startRoll({ project: newProject("Empty"), channel: null })
+    roll = await startRoll({ project: emptyProject("Empty"), channel: null })
     renderPanel()
     expect(
       screen.getByText("There is no channel to write notes for")

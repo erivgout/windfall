@@ -35,6 +35,7 @@ import {
   useAction,
   useActionEnabled,
   useAppSelector,
+  useShortcutLabel,
 } from "@/lib/actions"
 import { useHint } from "@/lib/store/hint"
 import { useProjectStore } from "@/lib/store/project"
@@ -42,8 +43,7 @@ import { useUiStore } from "@/lib/store/ui"
 import { colorToCss } from "@/lib/units"
 
 import { useSession } from "./context"
-import { useRollMenu, VIEW_MENU } from "./menu"
-import { usePianoRollShortcut } from "./shortcuts"
+import { VIEW_MENU } from "./menu"
 import { isSnapId, SNAP_OPTIONS, type SnapOption } from "./snap"
 import { usePianoRollStore } from "./store"
 
@@ -54,22 +54,17 @@ type RollButtonProps = {
 
 /**
  * A toolbar button for a piano roll action. Like the shell's action button,
- * but it shows the shortcut the action has inside the piano roll and
- * follows the piano roll's own state.
+ * but it lights up while its action is on and hands the keyboard back to
+ * the notes after a click.
  */
 function RollButton({ action: id, icon }: RollButtonProps) {
   const session = useSession()
   const action = useAction(id)
-  // Enabled and checked can depend on the piano roll's own state.
-  usePianoRollStore(
-    (state) =>
-      `${state.tool} ${state.snap} ${state.ghosts} ${state.follow} ${state.selectionCount > 0} ${state.clipboardCount > 0}`
-  )
   const enabled = useActionEnabled(id)
   const checked = useAppSelector((state) =>
     action ? isChecked(action, state) : false
   )
-  const shortcut = usePianoRollShortcut(id)
+  const shortcut = useShortcutLabel(id)
   const title = action?.title ?? id
   const hint = useHint(shortcut ? `${title} (${shortcut})` : title)
 
@@ -210,17 +205,15 @@ type ToolbarProps = {
 
 /** The strip above the grid: channel, tools, snap, view switches, readout. */
 export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
-  const menu = useRollMenu(VIEW_MENU)
   const readoutHint = useHint(
     "Position under the pointer as bar, beat and tick, and the key"
   )
 
   return (
-    <ContextActions items={menu.items}>
+    <ContextActions items={VIEW_MENU}>
       <div
         role="toolbar"
         aria-label="Piano roll"
-        onContextMenuCapture={menu.refresh}
         className="flex h-9 shrink-0 items-center gap-3 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
       >
         <ChannelPicker channelId={channelId} />

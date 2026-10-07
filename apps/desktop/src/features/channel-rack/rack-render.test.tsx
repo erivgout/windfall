@@ -1,9 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { ChannelId, Command } from "@/bindings"
-import { applyCommand } from "@/lib/ipc/sim/commands"
-import { newProject } from "@/lib/ipc/sim/project"
+import type { ChannelId } from "@/bindings"
+import { buildProject, emptyProject } from "@/lib/ipc/sim/project"
 import { dispatch } from "@/lib/store/project"
 import { useUiStore } from "@/lib/store/ui"
 import { settle } from "@/test/harness"
@@ -34,19 +33,15 @@ vi.mock("sonner", () => ({
 
 /** A project with `count` channels and a few steps in each. */
 function bigProject(count: number, steps: number) {
-  let built = newProject("Big")
-  const run = (command: Command) => {
-    const applied = applyCommand(built, command)
-    built = applied.project
-    return applied.created
-  }
-  const pattern = built.patterns[0].id
-  run({ type: "updatePattern", id: pattern, patch: { lengthSteps: steps } })
-  for (let index = 0; index < count; index += 1) {
-    const [id] = run({ type: "addChannel", name: `Channel ${index + 1}` })
-    run({ type: "toggleStep", pattern, channel: id, step: index % steps })
-  }
-  return built
+  const empty = emptyProject("Big")
+  const pattern = empty.patterns[0].id
+  return buildProject(empty, (run) => {
+    run({ type: "updatePattern", id: pattern, patch: { lengthSteps: steps } })
+    for (let index = 0; index < count; index += 1) {
+      const [id] = run({ type: "addChannel", name: `Channel ${index + 1}` })
+      run({ type: "toggleStep", pattern, channel: id, step: index % steps })
+    }
+  })
 }
 
 let stop: () => void

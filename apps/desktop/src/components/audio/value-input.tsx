@@ -11,12 +11,18 @@ type ValueInputProps = Omit<
   /** Select the text so typing replaces it. */
   selectAll?: boolean
   onCommit: (text: string) => void
-  onCancel: () => void
+  /**
+   * Called when the entry closes without a value: `"escape"` for the key,
+   * `"blur"` when the field lost the focus.
+   */
+  onCancel: (reason: "escape" | "blur") => void
 }
 
 /**
  * The inline text entry the value controls open on Enter, on a typed digit
- * or on double-click. Enter and leaving the field commit, Escape cancels.
+ * or on double-click. Enter and Tab commit. Escape cancels, and so does
+ * leaving the field any other way: a value is only ever set on purpose, so
+ * an entry opened by a stray key and then clicked away from changes nothing.
  */
 function ValueInput({
   initialText,
@@ -42,8 +48,8 @@ function ValueInput({
     }
   }, [selectAll])
 
-  function settle(commit: boolean, text: string) {
-    // Closing the field blurs it, which must not commit a second time.
+  function settle(how: "commit" | "escape" | "blur", text: string) {
+    // Closing the field blurs it, which must not settle it a second time.
     if (settled.current) {
       return
     }
@@ -51,10 +57,10 @@ function ValueInput({
     // Committing the untouched readout would round the value to what the
     // readout shows.
     const untouched = selectAll && text === initialText
-    if (commit && !untouched) {
+    if (how === "commit" && !untouched) {
       onCommit(text)
     } else {
-      onCancel()
+      onCancel(how === "blur" ? "blur" : "escape")
     }
   }
 
@@ -78,13 +84,16 @@ function ValueInput({
         event.stopPropagation()
         if (event.key === "Enter") {
           event.preventDefault()
-          settle(true, event.currentTarget.value)
+          settle("commit", event.currentTarget.value)
+        } else if (event.key === "Tab") {
+          // Not prevented: the focus moves on as Tab always does.
+          settle("commit", event.currentTarget.value)
         } else if (event.key === "Escape") {
           event.preventDefault()
-          settle(false, "")
+          settle("escape", "")
         }
       }}
-      onBlur={(event) => settle(true, event.currentTarget.value)}
+      onBlur={() => settle("blur", "")}
       onPointerDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       {...props}

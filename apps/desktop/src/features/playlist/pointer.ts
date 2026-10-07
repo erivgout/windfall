@@ -1,3 +1,5 @@
+import { createPointerFrame, type PointerFrame } from "@/lib/canvas"
+
 import { wheelInput, type GridMetrics } from "./metrics"
 import type { PlaylistSession, PointerInput } from "./session"
 import { usePlaylistStore } from "./store"
@@ -12,9 +14,9 @@ type Binding = {
   focus(): void
 }
 
-function inputOf(event: PointerEvent, binding: Binding): PointerInput {
+function inputOf(event: PointerEvent, frame: PointerFrame): PointerInput {
   return {
-    ...binding.localPoint(event),
+    ...frame.point(event),
     button: event.button,
     shift: event.shiftKey,
     mod: event.ctrlKey || event.metaKey,
@@ -32,24 +34,38 @@ export function attachPointer(
   metrics: GridMetrics,
   binding: Binding
 ): () => void {
+  // A press that selects a clip can change the layout around the grid.
+  // The drag is measured from where the grid was when it began, so the
+  // grid moving under a still pointer is never taken for a drag.
+  const frame = createPointerFrame(binding.localPoint)
+
   const onPointerDown = (event: PointerEvent) => {
     binding.focus()
     // Stops the browser's own middle-button scrolling.
     if (event.button === 1) event.preventDefault()
-    if (session.pointerDown(inputOf(event, binding))) {
+    frame.hold(event)
+    if (session.pointerDown(inputOf(event, frame))) {
       element.setPointerCapture(event.pointerId)
+    } else {
+      frame.release()
     }
   }
   const onPointerMove = (event: PointerEvent) => {
-    session.pointerMove(inputOf(event, binding))
+    session.pointerMove(inputOf(event, frame))
   }
   const onPointerUp = (event: PointerEvent) => {
     if (element.hasPointerCapture(event.pointerId)) {
       element.releasePointerCapture(event.pointerId)
     }
-    void session.pointerUp(inputOf(event, binding))
+    const input = inputOf(event, frame)
+    frame.release()
+    void session.pointerUp(input)
   }
-  const onPointerCancel = () => session.cancel()
+  const onPointerCancel = () => {
+    frame.release()
+    session.cancel()
+  }
+  const onPointerLeave = () => session.pointerLeave()
   const onMouseDown = (event: MouseEvent) => {
     if (event.button === 1) event.preventDefault()
   }
@@ -62,13 +78,14 @@ export function attachPointer(
   }
   const onWheel = (event: WheelEvent) => {
     event.preventDefault()
-    metrics.wheel(wheelInput(event, binding.localPoint(event)))
+    metrics.wheel(wheelInput(event, frame.point(event)))
   }
 
   element.addEventListener("pointerdown", onPointerDown)
   element.addEventListener("pointermove", onPointerMove)
   element.addEventListener("pointerup", onPointerUp)
   element.addEventListener("pointercancel", onPointerCancel)
+  element.addEventListener("pointerleave", onPointerLeave)
   element.addEventListener("mousedown", onMouseDown)
   element.addEventListener("contextmenu", onContextMenu)
   // Not passive, or Ctrl+wheel would zoom the whole window.
@@ -78,6 +95,7 @@ export function attachPointer(
     element.removeEventListener("pointermove", onPointerMove)
     element.removeEventListener("pointerup", onPointerUp)
     element.removeEventListener("pointercancel", onPointerCancel)
+    element.removeEventListener("pointerleave", onPointerLeave)
     element.removeEventListener("mousedown", onMouseDown)
     element.removeEventListener("contextmenu", onContextMenu)
     element.removeEventListener("wheel", onWheel)

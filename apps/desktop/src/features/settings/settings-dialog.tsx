@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react"
 
-import type { AudioSettings } from "@/bindings"
+import type { AudioSettings, EngineStatus } from "@/bindings"
 import {
   Dialog,
   DialogContent,
@@ -26,9 +26,17 @@ import { useUiStore, type KeymapPreset, type Theme } from "@/lib/store/ui"
 import { formatSampleRate } from "@/lib/time"
 import { cn } from "@/lib/utils"
 
-const BUFFER_SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-
-type Option<T> = { value: T; label: string }
+import {
+  bufferOptions,
+  DEFAULT_NUMBER,
+  DEFAULT_TEXT,
+  fixedBuffer,
+  nameOptions,
+  sampleRateOptions,
+  shownDevice,
+  withField,
+  type Option,
+} from "./audio-options"
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -86,83 +94,92 @@ function Choice<T extends string | number>({
   )
 }
 
+/** What the engine made of the request, in words. */
+function runningSummary(status: EngineStatus): string {
+  const device = status.device ?? "the default device"
+  return `Running on ${device} at ${formatSampleRate(status.sampleRate)} with a buffer of ${status.bufferFrames} samples: ${status.latencyMs.toFixed(1)} ms of output latency.`
+}
+
+/**
+ * The audio output. Each box shows what the user asked for, "Default" when
+ * they did not; the line below says what the engine is running at. The two
+ * differ whenever the device rounds a request or picks its own default, so
+ * what the engine reports is never sent back as if the user had chosen it.
+ */
 function AudioSection() {
   const status = useEngineStore((state) => state.status)
   const hosts = useEngineStore((state) => state.hosts)
+  const stored = useEngineStore((state) => state.request)
 
   useEffect(() => {
     void loadAudioDevices()
   }, [])
 
-  const host = hosts.find((item) => item.name === status?.host)
-  const device = host?.devices.find((item) => item.name === status?.device)
-  const requested: AudioSettings = {
-    host: status?.host,
-    device: status?.device ?? undefined,
-    sampleRate: status?.sampleRate,
-    bufferFrames: status?.bufferFrames,
-  }
-  const apply = (change: AudioSettings) =>
-    void configureEngine({ ...requested, ...change })
+  const request = stored ?? {}
+  const { host, device } = shownDevice(hosts, request, status)
+  const loading = hosts.length === 0 || stored === null
+  const fixed = fixedBuffer(device)
+  const hasAsio = hosts.some((item) => /asio/i.test(item.name))
 
-  const bufferSizes = BUFFER_SIZES.filter(
-    (size) =>
-      size >= (device?.minBufferFrames ?? 0) &&
-      size <= (device?.maxBufferFrames ?? Infinity)
-  )
-  const loading = hosts.length === 0
+  function change<K extends keyof AudioSettings>(
+    field: K,
+    value: AudioSettings[K] | typeof DEFAULT_TEXT | typeof DEFAULT_NUMBER
+  ) {
+    let next = withField(request, field, value)
+    // Another driver has other devices, so let it pick its default.
+    if (field === "host") next = withField(next, "device", DEFAULT_TEXT)
+    void configureEngine(next)
+  }
 
   return (
     <Section title="Audio output">
       <Row label="Driver">
         <Choice
           label="Audio driver"
-          value={status?.host ?? null}
+          value={request.host ?? DEFAULT_TEXT}
           disabled={loading}
-          options={hosts.map((item) => ({
-            value: item.name,
-            label: item.name,
-          }))}
-          // Another driver has other devices, so let it pick its default.
-          onChange={(name) => apply({ host: name, device: undefined })}
+          options={nameOptions(hosts, request.host)}
+          onChange={(name) => change("host", name)}
         />
       </Row>
       <Row label="Device">
         <Choice
           label="Output device"
-          value={status?.device ?? null}
+          value={request.device ?? DEFAULT_TEXT}
           disabled={loading}
-          options={(host?.devices ?? []).map((item) => ({
-            value: item.name,
-            label: item.name,
-          }))}
-          onChange={(name) => apply({ device: name })}
+          options={nameOptions(host?.devices ?? [], request.device)}
+          onChange={(name) => change("device", name)}
         />
       </Row>
       <Row label="Sample rate">
         <Choice
           label="Sample rate"
-          value={status?.sampleRate ?? null}
+          value={request.sampleRate ?? DEFAULT_NUMBER}
           disabled={loading || !device}
-          options={(device?.sampleRates ?? []).map((rate) => ({
-            value: rate,
-            label: formatSampleRate(rate),
-          }))}
-          onChange={(sampleRate) => apply({ sampleRate })}
+          options={sampleRateOptions(device, request.sampleRate)}
+          onChange={(sampleRate) => change("sampleRate", sampleRate)}
         />
       </Row>
       <Row label="Buffer size">
         <Choice
           label="Buffer size"
-          value={status?.bufferFrames ?? null}
+          value={request.bufferFrames ?? DEFAULT_NUMBER}
           disabled={loading || !device}
-          options={bufferSizes.map((size) => ({
-            value: size,
-            label: `${size} samples`,
-          }))}
-          onChange={(bufferFrames) => apply({ bufferFrames })}
+          options={bufferOptions(
+            device,
+            request.bufferFrames,
+            status?.sampleRate
+          )}
+          onChange={(bufferFrames) => change("bufferFrames", bufferFrames)}
         />
       </Row>
+      {fixed !== null && (
+        <p className="text-muted-foreground">
+          This driver uses a fixed buffer of {fixed} samples.
+          {!hasAsio &&
+            " Smaller buffers need an ASIO driver, which this build does not include."}
+        </p>
+      )}
       <p
         role="status"
         className={cn(
@@ -171,8 +188,10 @@ function AudioSection() {
         )}
       >
         {!status && "Waiting for the audio engine."}
+        {status?.running && runningSummary(status)}
         {status?.running &&
-          `Running with ${status.latencyMs.toFixed(1)} ms of output latency. A smaller buffer lowers latency and raises CPU load.`}
+          fixed === null &&
+          " A smaller buffer lowers latency and raises CPU load."}
         {status &&
           !status.running &&
           (status.error ?? "The audio output is not running.")}

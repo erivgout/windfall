@@ -189,13 +189,13 @@ describe("PianoKeyboard", () => {
     expect(events).toEqual([])
   })
 
-  it("plays the focused key with Space and moves with the arrows", () => {
+  it("plays the focused key with Enter and moves with the arrows", () => {
     const { events, key } = renderKeyboard({ keyboardVelocity: 0.5 })
     expect(key("C5")).toHaveAttribute("tabindex", "0")
     act(() => key("C5").focus())
-    fireEvent.keyDown(key("C5"), { key: " " })
-    fireEvent.keyDown(key("C5"), { key: " ", repeat: true })
-    fireEvent.keyUp(key("C5"), { key: " " })
+    fireEvent.keyDown(key("C5"), { key: "Enter" })
+    fireEvent.keyDown(key("C5"), { key: "Enter", repeat: true })
+    fireEvent.keyUp(key("C5"), { key: "Enter" })
     expect(events).toEqual(["on 60 0.5", "off 60"])
     fireEvent.keyDown(key("C5"), { key: "ArrowRight" })
     expect(key("C#5")).toHaveFocus()
@@ -205,7 +205,16 @@ describe("PianoKeyboard", () => {
     expect(key("C5")).toHaveFocus()
   })
 
-  it("releases a key held with Space when focus leaves", () => {
+  it("leaves Space to the app", () => {
+    const { events, key } = renderKeyboard()
+    act(() => key("C5").focus())
+    // Not handled and not prevented, so a transport shortcut can take it.
+    expect(fireEvent.keyDown(key("C5"), { key: " " })).toBe(true)
+    expect(fireEvent.keyUp(key("C5"), { key: " " })).toBe(true)
+    expect(events).toEqual([])
+  })
+
+  it("releases a key held with Enter when focus leaves", () => {
     const { events, key } = renderKeyboard()
     act(() => key("C5").focus())
     fireEvent.keyDown(key("C5"), { key: "Enter" })
@@ -240,7 +249,7 @@ describe("PianoKeyboard", () => {
   it("plays nothing when disabled", () => {
     const { events, key } = renderKeyboard({ disabled: true })
     fireEvent.pointerDown(key("C5"), { pointerId: 1, button: 0 })
-    fireEvent.keyDown(key("C5"), { key: " " })
+    fireEvent.keyDown(key("C5"), { key: "Enter" })
     expect(events).toEqual([])
     expect(key("C5")).toHaveAttribute("aria-disabled", "true")
   })

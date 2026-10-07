@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { isSoftwareGpu, resizedSpan } from "./renderer"
+import { isSoftwareGpu, resizedSpan, shadeChannel } from "./renderer"
 
 describe("isSoftwareGpu", () => {
   it("recognizes CPU rasterizers", () => {
@@ -22,6 +22,32 @@ describe("isSoftwareGpu", () => {
       "Mesa Intel(R) Xe Graphics (TGL GT2)",
     ]) {
       expect(isSoftwareGpu(name)).toBe(false)
+    }
+  })
+})
+
+describe("shadeChannel", () => {
+  it("darkens a channel to 62%", () => {
+    expect(shadeChannel(200)).toBe(124)
+    expect(shadeChannel(100)).toBe(62)
+    expect(shadeChannel(255)).toBe(158)
+    expect(shadeChannel(0)).toBe(0)
+  })
+
+  it("sends an exact half down, where a float32 and a float64 could differ", () => {
+    // 125 * 0.62 is 77.5, 25 * 0.62 is 15.5.
+    expect(shadeChannel(125)).toBe(77)
+    expect(shadeChannel(25)).toBe(15)
+    expect(shadeChannel(225)).toBe(139)
+  })
+
+  it("gives the same byte in float32 as in float64 for every channel value", () => {
+    const f = Math.fround
+    for (let value = 0; value <= 255; value++) {
+      // The shader's arithmetic: a normalized byte, scaled back up.
+      const normalized = f(value / 255)
+      const inShader = Math.floor(f(f(f(normalized * 255) * f(0.62)) + f(0.49)))
+      expect(inShader).toBe(shadeChannel(value))
     }
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import type { Command, Note } from "@/bindings"
-import { applyCommand } from "@/lib/ipc/sim/commands"
+import type { Command, Note, Project } from "@/bindings"
+import { SimDocument } from "@/lib/ipc/sim/document"
 import { demoProject } from "@/lib/ipc/sim/project"
 
 import { fitPitch, LEFT_WIDTH, MAX_STEP_PITCH, MIN_STEP_PITCH } from "./layout"
@@ -40,6 +40,18 @@ function note(start: number, patch: Partial<Note> = {}): Note {
 }
 
 const row = (steps: boolean[]) => steps.map((lit) => (lit ? "x" : ".")).join("")
+
+/** Runs a command on a document, and reads back the project and the label. */
+function applyCommand(project: Project, command: Command) {
+  const document = SimDocument.create(project)
+  try {
+    const { patch } = document.dispatch(command)
+    const label = patch.history.entries.at(-1)?.label
+    return { project: document.project(), label }
+  } finally {
+    document.dispose()
+  }
+}
 
 describe("steps and notes", () => {
   it("makes the note a lit step stands for", () => {
@@ -283,6 +295,38 @@ describe("tuning", () => {
     expect(splitTune(11.9)).toEqual({ semitones: 12, cents: -10 })
     expect(joinTune(7, 25, 48)).toBeCloseTo(7.25)
     expect(joinTune(-3, -40, 48)).toBeCloseTo(-3.4)
+  })
+
+  it("reads a tuning half way between two semitones as the one nearer zero", () => {
+    expect(splitTune(0.5)).toEqual({ semitones: 0, cents: 50 })
+    expect(splitTune(-0.5)).toEqual({ semitones: 0, cents: -50 })
+    expect(splitTune(1.5)).toEqual({ semitones: 1, cents: 50 })
+    expect(splitTune(-1.5)).toEqual({ semitones: -1, cents: -50 })
+    // Zero is plain zero, whichever side it was reached from.
+    expect(Object.is(splitTune(-0.2).semitones, 0)).toBe(true)
+    expect(Object.is(splitTune(-3).cents, 0)).toBe(true)
+  })
+
+  it("keeps the semitone on show for as long as the tuning is within 50 cents of it", () => {
+    // Fine all the way down on semitone 1 is 0.5, and stays "1, -50".
+    expect(splitTune(0.5, 1)).toEqual({ semitones: 1, cents: -50 })
+    expect(splitTune(0.5, 0)).toEqual({ semitones: 0, cents: 50 })
+    expect(splitTune(1.5, 2)).toEqual({ semitones: 2, cents: -50 })
+    expect(splitTune(7.25, 7)).toEqual({ semitones: 7, cents: 25 })
+    // Further away than that, the semitone on show is out of date.
+    expect(splitTune(0.5, 2)).toEqual({ semitones: 0, cents: 50 })
+    expect(splitTune(3.2, 1)).toEqual({ semitones: 3, cents: 20 })
+    // Every pair it gives joins back into the tuning it came from.
+    for (const [value, prefer] of [
+      [0.5, 1],
+      [0.5, 0],
+      [-11.5, -12],
+      [2.49, 2],
+    ]) {
+      const { semitones, cents } = splitTune(value, prefer)
+      expect(joinTune(semitones, cents, 48)).toBeCloseTo(value, 9)
+      expect(Math.abs(cents)).toBeLessThanOrEqual(50)
+    }
   })
 
   it("never leaves the range", () => {

@@ -1,3 +1,5 @@
+import { useState } from "react"
+
 import {
   Command,
   CommandDialog,
@@ -9,6 +11,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command"
 import {
+  disabledReason,
   isEnabled,
   runAction,
   shortcutLabel,
@@ -18,7 +21,7 @@ import {
 } from "@/lib/actions"
 import { useUiStore } from "@/lib/store/ui"
 
-import { scoreAction } from "./score"
+import { rank } from "./score"
 
 function bySection(actions: Action[]): [string, Action[]][] {
   const sections = new Map<string, Action[]>()
@@ -31,34 +34,66 @@ function bySection(actions: Action[]): [string, Action[]][] {
   return [...sections]
 }
 
+/** The actions a search finds, best first: what the palette lists for it. */
+export function searchActions(actions: readonly Action[], search: string) {
+  return rank(actions, search, (action) => ({
+    title: action.title,
+    keywords: `${action.section} ${action.keywords ?? ""}`,
+  }))
+}
+
+type ListProps = {
+  search: string
+  onRun(id: string): void
+}
+
 // Mounted only while the palette is open, so it can follow the app state.
-function PaletteList({ onRun }: { onRun(id: string): void }) {
+function PaletteList({ search, onRun }: ListProps) {
   const actions = useActions()
   const state = useAppState()
+  const searching = search.trim() !== ""
+
+  const row = (action: Action, where?: string) => {
+    const shortcut = shortcutLabel(action.id)
+    const reason = disabledReason(action, state)
+    return (
+      <CommandItem
+        key={action.id}
+        value={action.id}
+        disabled={!isEnabled(action, state)}
+        onSelect={() => onRun(action.id)}
+      >
+        {action.title.replace(/…$/, "")}
+        {where && (
+          <span className="text-[0.625rem] text-muted-foreground">{where}</span>
+        )}
+        {reason ? (
+          <CommandShortcut className="tracking-normal">{reason}</CommandShortcut>
+        ) : (
+          shortcut && <CommandShortcut>{shortcut}</CommandShortcut>
+        )}
+      </CommandItem>
+    )
+  }
 
   return (
     <CommandList className="max-h-[min(24rem,60vh)]">
       <CommandEmpty>No action matches that.</CommandEmpty>
-      {bySection(actions).map(([section, items]) => (
-        <CommandGroup key={section} heading={section}>
-          {items.map((action) => {
-            const shortcut = shortcutLabel(action.id)
-            return (
-              <CommandItem
-                key={action.id}
-                value={action.id}
-                // The filter below reads the title and the search words here.
-                keywords={[action.title, `${section} ${action.keywords ?? ""}`]}
-                disabled={!isEnabled(action, state)}
-                onSelect={() => onRun(action.id)}
-              >
-                {action.title.replace(/…$/, "")}
-                {shortcut && <CommandShortcut>{shortcut}</CommandShortcut>}
-              </CommandItem>
-            )
-          })}
+      {searching ? (
+        // One list, best match first. Under their headings the best match
+        // could sit below a whole section of worse ones.
+        <CommandGroup>
+          {searchActions(actions, search).map((action) =>
+            row(action, action.section)
+          )}
         </CommandGroup>
-      ))}
+      ) : (
+        bySection(actions).map(([section, items]) => (
+          <CommandGroup key={section} heading={section}>
+            {items.map((action) => row(action))}
+          </CommandGroup>
+        ))
+      )}
     </CommandList>
   )
 }
@@ -70,6 +105,13 @@ function PaletteList({ onRun }: { onRun(id: string): void }) {
 export function CommandPalette() {
   const open = useUiStore((state) => state.dialog === "palette")
   const closeDialog = useUiStore((state) => state.closeDialog)
+  const [search, setSearch] = useState("")
+  // A palette opened again starts with an empty search.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setSearch("")
+  }
 
   function run(id: string) {
     closeDialog()
@@ -86,15 +128,16 @@ export function CommandPalette() {
       description="Search for an action to run."
       className="sm:max-w-lg"
     >
-      {/* cmdk's vim keys would swallow Ctrl+K, which closes the palette. */}
-      <Command
-        vimBindings={false}
-        filter={(value, search, keywords = []) =>
-          scoreAction(keywords[0] ?? value, keywords[1] ?? "", search)
-        }
-      >
-        <CommandInput placeholder="Search actions…" />
-        <PaletteList onRun={run} />
+      {/* cmdk's vim keys would swallow Ctrl+K, which closes the palette.
+          The list is filtered and put in order here, not by cmdk: it sorts
+          sections as wholes, and loses track of some of them. */}
+      <Command vimBindings={false} shouldFilter={false}>
+        <CommandInput
+          placeholder="Search actions…"
+          value={search}
+          onValueChange={setSearch}
+        />
+        <PaletteList search={search} onRun={run} />
       </Command>
     </CommandDialog>
   )

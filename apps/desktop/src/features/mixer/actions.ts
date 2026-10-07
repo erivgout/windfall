@@ -1,14 +1,22 @@
-import { registry, type Action, type AppState } from "@/lib/actions"
+import {
+  invalidateActionsOn,
+  registry,
+  type Action,
+  type AppState,
+} from "@/lib/actions"
 import { useUiStore } from "@/lib/store"
 import { MASTER_TRACK, MAX_MIXER_TRACKS } from "@/lib/units"
 
+import { EFFECT_ACTIONS } from "./effect-actions"
+import { keepEffectOnSelectedTrack } from "./effect-ops"
+import { useEffectsUi } from "./effects-ui"
 import {
   addTrack,
   centerPan,
   deleteTrack,
+  moveSelection,
   resetAllPeaks,
   resetVolume,
-  selectStrip,
   setOutput,
   startColoring,
   startRename,
@@ -20,11 +28,10 @@ import {
 
 const SECTION = "Mixer"
 
-// The selection lives in the UI store, which the registry's state does not
-// carry, so the selected track is looked up from the document it was given.
 function selected(state: AppState) {
-  const id = useUiStore.getState().selectedTrack
-  return state.document.project.mixer.tracks.find((track) => track.id === id)
+  return state.document.project.mixer.tracks.find(
+    (track) => track.id === state.ui.selectedTrack
+  )
 }
 
 function selectedInsert(state: AppState) {
@@ -40,6 +47,10 @@ function onSelected(work: (id: number) => void | Promise<void>) {
   }
 }
 
+/**
+ * What can be done to the mixer and to the selected track. The plain keys
+ * belong to the mixer: they work while it has the keyboard.
+ */
 export const MIXER_ACTIONS: Action[] = [
   {
     id: "mixer.addTrack",
@@ -55,6 +66,8 @@ export const MIXER_ACTIONS: Action[] = [
     id: "mixer.renameTrack",
     title: "Rename mixer track",
     section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "F2",
     keywords: "name",
     enabled: (state) => selected(state) !== undefined,
     run: onSelected(startRename),
@@ -71,6 +84,9 @@ export const MIXER_ACTIONS: Action[] = [
     id: "mixer.deleteTrack",
     title: "Delete mixer track",
     section: SECTION,
+    scope: "mixer",
+    editCommand: "delete",
+    defaultShortcut: "Delete",
     keywords: "remove",
     enabled: (state) => selectedInsert(state) !== undefined,
     run: onSelected(deleteTrack),
@@ -79,6 +95,8 @@ export const MIXER_ACTIONS: Action[] = [
     id: "mixer.toggleMute",
     title: "Mute or unmute track",
     section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "M",
     keywords: "silence",
     enabled: (state) => selected(state) !== undefined,
     checked: (state) => selected(state)?.muted ?? false,
@@ -88,6 +106,8 @@ export const MIXER_ACTIONS: Action[] = [
     id: "mixer.toggleSolo",
     title: "Solo or unsolo track",
     section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "S",
     keywords: "isolate",
     enabled: (state) => selectedInsert(state) !== undefined,
     checked: (state) => selectedInsert(state)?.solo ?? false,
@@ -147,17 +167,35 @@ export const MIXER_ACTIONS: Action[] = [
     id: "mixer.selectNext",
     title: "Select next mixer track",
     section: SECTION,
-    run: () => {
-      selectStrip(1)
-    },
+    scope: "mixer",
+    defaultShortcut: "ArrowRight",
+    repeats: true,
+    run: () => moveSelection(1),
   },
   {
     id: "mixer.selectPrevious",
     title: "Select previous mixer track",
     section: SECTION,
-    run: () => {
-      selectStrip(-1)
-    },
+    scope: "mixer",
+    defaultShortcut: "ArrowLeft",
+    repeats: true,
+    run: () => moveSelection(-1),
+  },
+  {
+    id: "mixer.selectFirst",
+    title: "Select the master track",
+    section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "Home",
+    run: () => moveSelection("first"),
+  },
+  {
+    id: "mixer.selectLast",
+    title: "Select the last mixer track",
+    section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "End",
+    run: () => moveSelection("last"),
   },
 ]
 
@@ -171,7 +209,21 @@ let unregister: (() => void) | null = null
  */
 export function registerMixerActions(): () => void {
   holders += 1
-  unregister ??= registry.register(MIXER_ACTIONS)
+  if (unregister === null) {
+    const remove = registry.register([...MIXER_ACTIONS, ...EFFECT_ACTIONS])
+    // The effect actions follow which effect is selected, and "Show
+    // effects" whether the inspector is open; neither is in the app state.
+    const unfollow = invalidateActionsOn(useEffectsUi, (state) => [
+      state.selectedEffect,
+      state.inspectorOpen,
+    ])
+    const unwatch = keepEffectOnSelectedTrack()
+    unregister = () => {
+      remove()
+      unfollow()
+      unwatch()
+    }
+  }
   let released = false
   return () => {
     if (released) return

@@ -1,7 +1,9 @@
 import { useRef } from "react"
 
+import { songTempoMap } from "@/lib/automation/tempo-map"
 import { useProjectStore } from "@/lib/store/project"
 import { useRealtime } from "@/lib/store/realtime"
+import { useTransportStore } from "@/lib/store/transport"
 import {
   formatClock,
   formatPosition,
@@ -24,10 +26,17 @@ export function PositionReadout() {
   const pulse = useRef<HTMLSpanElement>(null)
 
   useRealtime((frame) => {
-    const { timeSignature, tempoBpm } =
-      useProjectStore.getState().project.settings
+    const project = useProjectStore.getState().project
+    const { timeSignature, tempoBpm } = project.settings
     setText(position.current, formatPosition(frame.tick, timeSignature))
-    setText(clock.current, formatClock(ticksToSeconds(frame.tick, tempoBpm)))
+    // The song's clock follows the tempo automation, so the time it took
+    // to get to a tick is summed along the curve. A pattern loops at the
+    // stored tempo.
+    const seconds =
+      useTransportStore.getState().mode === "song"
+        ? songTempoMap(project).secondsAt(frame.tick)
+        : ticksToSeconds(frame.tick, tempoBpm)
+    setText(clock.current, formatClock(seconds))
 
     if (pulse.current) {
       const beat = ticksPerBeat(timeSignature)

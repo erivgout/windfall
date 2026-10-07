@@ -2,7 +2,7 @@ import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useState, type DragEvent } from "react"
 
-import type { Channel, SampleId } from "@/bindings"
+import type { SampleId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
 import { formatMs, Waveform } from "@/components/audio"
 import { Button } from "@/components/ui/button"
@@ -10,12 +10,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import type { SamplerChannel } from "@/lib/channel-source"
 import { hasSampleDrag, readSampleDrag } from "@/lib/dnd"
 import { useHint } from "@/lib/store/hint"
 import { useProjectStore } from "@/lib/store/project"
@@ -25,13 +27,17 @@ import { formatSampleRate } from "@/lib/time"
 import { clamp, colorToCss } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
-import { assignProjectSample, replaceSampleFromFile } from "../channel-ops"
+import {
+  assignProjectSample,
+  replaceSampleFromFile,
+  replaceSampleFromPickedFile,
+} from "../channel-ops"
 import { useGestureValue } from "../use-gesture-value"
 import { Section } from "./parts"
 import { useSampleInfo } from "./sample-info"
 
 /** Lists the samples already in the project, to point the channel at one. */
-function ProjectSamples({ channel }: { channel: Channel }) {
+function ProjectSamples({ channel }: { channel: SamplerChannel }) {
   const samples = useProjectStore((state) => state.project.samples)
   return (
     <>
@@ -59,15 +65,20 @@ function ProjectSamples({ channel }: { channel: Channel }) {
           <DropdownMenuSeparator />
         </>
       )}
+      <DropdownMenuItem
+        onClick={() => void replaceSampleFromPickedFile(channel.id)}
+      >
+        From an audio file…
+      </DropdownMenuItem>
       <p className="px-2 py-1.5 text-muted-foreground">
-        To use a file, drag it from the browser onto the waveform or onto the
-        channel&apos;s name.
+        A file can also be dragged from the browser onto the waveform or onto
+        the channel&apos;s name.
       </p>
     </>
   )
 }
 
-function ChooseSample({ channel }: { channel: Channel }) {
+function ChooseSample({ channel }: { channel: SamplerChannel }) {
   const empty = channel.source.sample === null
   const hint = useHint(
     "Choose the sample this channel plays, or drag one in from the browser"
@@ -98,7 +109,13 @@ function ChooseSample({ channel }: { channel: Channel }) {
   )
 }
 
-function Trim({ channel, peaks }: { channel: Channel; peaks: number[] }) {
+function Trim({
+  channel,
+  peaks,
+}: {
+  channel: SamplerChannel
+  peaks: number[]
+}) {
   const { id, source } = channel
   // Each edge is its own control, so a drag is named after the edge it moved.
   const start = useGestureValue(source.start, (value, dispatch) =>
@@ -123,7 +140,6 @@ function Trim({ channel, peaks }: { channel: Channel; peaks: number[] }) {
     <Waveform
       aria-label="Sample waveform"
       peaks={peaks}
-      normalize
       color={colorToCss(channel.color)}
       start={start.value}
       end={end.value}
@@ -144,7 +160,7 @@ function Trim({ channel, peaks }: { channel: Channel; peaks: number[] }) {
 }
 
 /** The sample a channel plays: its waveform, trim handles and a way to change it. */
-export function SampleSection({ channel }: { channel: Channel }) {
+export function SampleSection({ channel }: { channel: SamplerChannel }) {
   const sample = useSample(channel.source.sample)
   const state = useSampleInfo(sample)
   const browserVisible = useUiStore((state) => state.panels.browser)
@@ -206,7 +222,19 @@ export function SampleSection({ channel }: { channel: Channel }) {
                 )}
               </>
             ) : state?.status === "error" ? (
-              <p>The waveform could not be read. {state.message}</p>
+              <>
+                <p>
+                  <span className="font-medium text-warn">
+                    The sample file is missing or cannot be read.
+                  </span>{" "}
+                  {state.message}
+                </p>
+                <ActionButton
+                  action="file.reloadSamples"
+                  variant="outline"
+                  size="xs"
+                />
+              </>
             ) : (
               <p>Reading the waveform…</p>
             )}

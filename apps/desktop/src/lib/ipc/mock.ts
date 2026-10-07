@@ -1,6 +1,5 @@
 import type {
   AudioHost,
-  AudioSettings,
   BrowserRoot,
   Command,
   DispatchResult,
@@ -10,10 +9,25 @@ import type {
   Project,
   ProjectPatch,
   RealtimeFrame,
+  SampleAsset,
   TransportState,
 } from "@/bindings"
 
-import type { Backend, Unsubscribe } from "./backend"
+import { mixerTrackOfSample } from "@/lib/audio-clips"
+import { ticksPerBar } from "@/lib/time"
+import {
+  MASTER_TRACK,
+  MAX_MIXER_TRACKS,
+  MAX_SONG_TICKS,
+  PPQ,
+} from "@/lib/units"
+
+import type {
+  AudioClipPlace,
+  Backend,
+  StoredAudioSettings,
+  Unsubscribe,
+} from "./backend"
 import {
   baseName,
   defaultRoots,
@@ -24,8 +38,8 @@ import {
   samplePathFor,
 } from "./sim/browser"
 import { SimDocument } from "./sim/document"
-import { demoProject, newProject } from "./sim/project"
-import { emptyTouched, type Touched } from "./sim/touched"
+import { simulatedLatencyFrames } from "./sim/effects"
+import { demoProject, starterProject } from "./sim/project"
 import { TransportSim } from "./sim/transport"
 
 /** Stand-ins for the native file dialogs. Each resolves to null on cancel. */
@@ -34,6 +48,7 @@ export type MockDialogs = {
   saveProject(suggestedPath: string): Promise<string | null>
   exportPath(suggestedPath: string): Promise<string | null>
   folder(): Promise<string | null>
+  audioFile(): Promise<string | null>
 }
 
 export type MockOptions = {
@@ -44,8 +59,27 @@ export type MockOptions = {
   project?: Project
 }
 
-const FILES_KEY = "windfall.mock.files"
-const RECENT_KEY = "windfall.mock.recent"
+/** A backend that lives in the page, and what tidies it up. */
+export type MockBackend = Backend & {
+  /**
+   * Stops the mock's timers and frees its document in the WebAssembly
+   * module. A call that needs the document rejects afterwards.
+   */
+  dispose(): void
+}
+
+// Each path maps to the text of a `.windfall` file.
+const FILES_KEY = "windfall.mock.project-files"
+const RECENT_KEY = "windfall.mock.recent-projects"
+/**
+ * How each saved project was being played: song or pattern, and whether the
+ * song loops. The shell keeps this with the project file. Here it is kept
+ * beside the files until the document itself carries it.
+ */
+const TRANSPORT_KEY = "windfall.mock.project-transport"
+
+type SavedTransport = Pick<TransportState, "mode" | "loopSong">
+const FILE_EXTENSION = ".windfall"
 const FRAME_MS = 1000 / 60
 
 const HOSTS: AudioHost[] = [
@@ -102,6 +136,8 @@ function promptDialogs(): MockDialogs {
     saveProject: (suggested) => ask("Save project as", suggested),
     exportPath: (suggested) => ask("Export audio to", suggested),
     folder: () => ask("Folder to add", "/samples/My samples"),
+    audioFile: () =>
+      ask("Audio file to load", `${FACTORY_ROOT}/Drums/Kicks/Kick 01.wav`),
   }
 }
 
@@ -124,13 +160,26 @@ class Emitter<T> {
   }
 }
 
-function describeStatus(settings: AudioSettings): EngineStatus {
+/**
+ * The stored request the way the shell's JSON has it: all four fields, and
+ * `null` for each one left to the system.
+ */
+function storedSettings(settings: StoredAudioSettings): StoredAudioSettings {
+  return {
+    host: settings.host ?? null,
+    device: settings.device ?? null,
+    sampleRate: settings.sampleRate ?? null,
+    bufferFrames: settings.bufferFrames ?? null,
+  }
+}
+
+function describeStatus(settings: StoredAudioSettings): EngineStatus {
   const host =
     HOSTS.find((item) => item.name === settings.host) ??
     HOSTS.find((item) => item.isDefault) ??
     HOSTS[0]
   const device =
-    settings.device === undefined
+    settings.device == null
       ? host.devices.find((item) => item.isDefault)
       : host.devices.find((item) => item.name === settings.device)
   const sampleRate = settings.sampleRate ?? 48_000
@@ -140,8 +189,10 @@ function describeStatus(settings: AudioSettings): EngineStatus {
     sampleRate,
     bufferFrames,
     latencyMs: (bufferFrames / sampleRate) * 1000,
+    // Filled in from the project each time the status is asked for.
+    latencyFrames: 0,
   }
-  if (settings.host !== undefined && host.name !== settings.host) {
+  if (settings.host != null && host.name !== settings.host) {
     return {
       ...base,
       running: false,
@@ -169,11 +220,29 @@ function describeStatus(settings: AudioSettings): EngineStatus {
 }
 
 /**
- * The whole backend, in the browser. It keeps a project, applies every
- * command the way the Rust document does, and fakes the engine: a playhead
- * that follows the tempo and meters that move with the beat.
+ * Starts a message from the document, which begins in lower case, with a
+ * capital, as the shell does for what it shows about files.
  */
-export function createMockBackend(options: MockOptions = {}): Backend {
+function sentence(error: unknown): Error {
+  const text = error instanceof Error ? error.message : String(error)
+  return new Error(text.charAt(0).toUpperCase() + text.slice(1))
+}
+
+/** Adds `.windfall` to a file name that does not end in it. */
+function withProjectExtension(filePath: string): string {
+  return filePath.toLowerCase().endsWith(FILE_EXTENSION)
+    ? filePath
+    : filePath + FILE_EXTENSION
+}
+
+/**
+ * The whole backend, in the browser. The project is a real document: the
+ * Rust `Document` compiled to WebAssembly, so every command, limit, label,
+ * error and saved file is the app's own. What is made up here is the shell
+ * around it and the engine: files that live in the browser's storage, a
+ * playhead that follows the tempo and meters that move with the beat.
+ */
+export function createMockBackend(options: MockOptions = {}): MockBackend {
   const storage =
     options.storage === undefined
       ? typeof localStorage === "undefined"
@@ -182,19 +251,22 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       : options.storage
   const dialogs = options.dialogs ?? promptDialogs()
 
-  let doc = new SimDocument(options.project ?? demoProject())
+  let doc = SimDocument.create(options.project ?? demoProject())
   let path: string | null = null
   let transport = new TransportSim(doc.project().patterns[0].id)
-  let engine = describeStatus({})
+  let audioSettings = storedSettings({})
+  let engine = describeStatus(audioSettings)
   let roots: BrowserRoot[] = defaultRoots()
-  let memoryFiles: Record<string, Project> = {}
+  let memoryFiles: Record<string, string> = {}
   let memoryRecent: string[] = []
+  let memoryTransports: Record<string, SavedTransport> = {}
 
   const patches = new Emitter<ProjectPatch>()
   const loaded = new Emitter<DocumentSnapshot>()
   const transportStates = new Emitter<TransportState>()
   const engineStatuses = new Emitter<EngineStatus>()
   const exportProgress = new Emitter<ExportProgress>()
+  const warnings = new Emitter<string[]>()
   const frames = new Emitter<RealtimeFrame>()
 
   let frameTimer: ReturnType<typeof setInterval> | null = null
@@ -209,7 +281,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     }
   }
 
-  function files(): Record<string, Project> {
+  function files(): Record<string, string> {
     return storage ? readJson(FILES_KEY, {}) : memoryFiles
   }
 
@@ -217,8 +289,27 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     return storage ? readJson(RECENT_KEY, []) : memoryRecent
   }
 
-  function remember(savedPath: string, project: Project) {
-    const nextFiles = { ...files(), [savedPath]: project }
+  function savedTransports(): Record<string, SavedTransport> {
+    return storage ? readJson(TRANSPORT_KEY, {}) : memoryTransports
+  }
+
+  /** Keeps how the project is being played with its file. */
+  function rememberTransport(savedPath: string) {
+    const { mode, loopSong } = transport.state
+    const next = { ...savedTransports(), [savedPath]: { mode, loopSong } }
+    if (!storage) {
+      memoryTransports = next
+      return
+    }
+    try {
+      storage.setItem(TRANSPORT_KEY, JSON.stringify(next))
+    } catch {
+      // The project itself was saved. It opens in pattern mode.
+    }
+  }
+
+  function remember(savedPath: string, fileText: string) {
+    const nextFiles = { ...files(), [savedPath]: fileText }
     const nextRecent = [
       savedPath,
       ...recent().filter((item) => item !== savedPath),
@@ -238,6 +329,14 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     }
   }
 
+  /** The status with the delay the project's effects and instruments add. */
+  function currentEngine(): EngineStatus {
+    return {
+      ...engine,
+      latencyFrames: simulatedLatencyFrames(doc.project(), engine.sampleRate),
+    }
+  }
+
   function emitTransport(): TransportState {
     transportStates.emit(transport.state)
     return transport.state
@@ -249,30 +348,85 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     if (patterns.some((pattern) => pattern.id === transport.state.pattern)) {
       return
     }
-    transport.set({ pattern: patterns[0].id })
+    transport.set({ pattern: patterns[0].id }, doc.project())
     emitTransport()
   }
 
-  function publish(touched: Touched): ProjectPatch {
-    const patch = doc.patch(touched)
+  /** Sends a patch the document just produced to everyone listening. */
+  function publish(patch: ProjectPatch): ProjectPatch {
     repairTransportPattern()
     patches.emit(patch)
     return patch
   }
 
   function dispatchNow(command: Command, gesture?: number): DispatchResult {
-    const applied = doc.dispatch(command, gesture)
-    return { created: applied.created, patch: publish(applied.touched) }
+    const result = doc.dispatch(command, gesture)
+    publish(result.patch)
+    return result
   }
 
-  function load(project: Project, loadedPath: string | null) {
-    doc = new SimDocument(project)
+  function sampleFile(sample: SampleAsset): string {
+    return sample.path.kind === "factory"
+      ? `${FACTORY_ROOT}/${sample.path.path}`
+      : sample.path.path
+  }
+
+  /** One warning for each sample whose file the made-up disk does not have. */
+  function missingSamples(): string[] {
+    return doc.project().samples.flatMap((sample) => {
+      try {
+        sampleInfoFor(roots, sampleFile(sample))
+        return []
+      } catch {
+        return [`The sample "${sample.name}" is missing: ${sampleFile(sample)}`]
+      }
+    })
+  }
+
+  /**
+   * Swaps in a document that is ready, as the shell does after new and
+   * open. A project that was saved comes back the way it was being played:
+   * a song opens in song mode. The transport is announced after the
+   * project, so whoever hears it already has the project it is for.
+   */
+  function load(next: SimDocument, loadedPath: string | null) {
+    doc.dispose()
+    doc = next
     path = loadedPath
-    transport = new TransportSim(project.patterns[0].id)
+    const saved =
+      loadedPath === null ? undefined : savedTransports()[loadedPath]
+    transport = new TransportSim(
+      doc.project().patterns[0].id,
+      saved?.loopSong ?? transport.state.loopSong
+    )
+    if (saved?.mode === "song") transport.set({ mode: "song" }, doc.project())
     const snapshot = doc.snapshot(path)
     loaded.emit(snapshot)
     emitTransport()
+    const missing = missingSamples()
+    if (missing.length > 0) warnings.emit(missing)
     return snapshot
+  }
+
+  /** The shell refuses to play a song that would be silent, and says why. */
+  function startPlayback() {
+    if (transport.state.mode === "song" && !transport.state.playing) {
+      const { clips, tracks } = doc.project().playlist
+      if (clips.length === 0) {
+        throw new Error(
+          "The playlist is empty. Add a clip to the playlist, or switch to pattern mode."
+        )
+      }
+      const muted = new Set(
+        tracks.filter((track) => track.muted).map((track) => track.id)
+      )
+      if (clips.every((clip) => clip.muted || muted.has(clip.track))) {
+        throw new Error(
+          "Every clip on the playlist is muted. Unmute a clip, or switch to pattern mode."
+        )
+      }
+    }
+    transport.play(doc.project())
   }
 
   function startFrames() {
@@ -322,10 +476,74 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     const name = baseName(filePath)
     return {
       name,
-      // Ids are handed out in order, so the id a new sample will get is known.
+      // A batch cannot pass an id from one command to the next, so the id
+      // the sample will get is worked out first, as the shell does: the one
+      // it already has, or the next the project hands out.
       sampleId: existing?.id ?? project.nextId,
       addSample: { type: "addSample", name, path: samplePath } as const,
     }
+  }
+
+  /**
+   * The commands that put a sample on the playlist as an audio clip, as the
+   * shell builds them: a playlist track and a mixer track where the place
+   * names none, then the clip, as long as the audio lasts at the tempo the
+   * project has now. `nextId` is the first id these commands will be given.
+   */
+  function audioClipCommands(
+    sample: number,
+    durationSecs: number,
+    name: string,
+    place: AudioClipPlace,
+    nextId: number
+  ): Command[] {
+    const project = doc.project()
+    const commands: Command[] = []
+    // Ids are handed out in the order the commands ask for them.
+    let next = nextId
+    const allocate = () => next++
+    let track = place.track
+    if (track === undefined) {
+      commands.push({ type: "addPlaylistTrack" })
+      track = allocate()
+    }
+    // With no track asked for, the clip joins the clips of the same sample
+    // on theirs, as the shell does.
+    let mixerTrack = place.mixerTrack ?? mixerTrackOfSample(project, sample)
+    if (mixerTrack === undefined) {
+      if (project.mixer.tracks.length < MAX_MIXER_TRACKS) {
+        commands.push({ type: "addMixerTrack", name })
+        mixerTrack = allocate()
+      } else {
+        // A full mixer must not stop the user adding audio.
+        mixerTrack = MASTER_TRACK
+      }
+    }
+    const start = Math.max(0, Math.round(place.start))
+    const ticks = (durationSecs * project.settings.tempoBpm * PPQ) / 60
+    const room = Math.max(1, MAX_SONG_TICKS - start)
+    commands.push({
+      type: "addClips",
+      clips: [
+        {
+          track,
+          start,
+          length: Math.min(Math.max(1, Math.ceil(ticks)), room),
+          content: {
+            type: "audio",
+            sample,
+            mixerTrack,
+            gain: 1,
+            pan: 0,
+            fadeIn: 0,
+            fadeOut: 0,
+            reverse: false,
+            pitch: 0,
+          },
+        },
+      ],
+    })
+    return commands
   }
 
   return {
@@ -335,41 +553,60 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     dispatch: (command, gesture) => ipc(() => dispatchNow(command, gesture)),
     undo: () =>
       ipc(() => {
-        const touched = doc.undo()
-        return touched ? publish(touched) : null
+        const patch = doc.undo()
+        return patch ? publish(patch) : null
       }),
     redo: () =>
       ipc(() => {
-        const touched = doc.redo()
-        return touched ? publish(touched) : null
+        const patch = doc.redo()
+        return patch ? publish(patch) : null
       }),
     historyJump: (cursor) => ipc(() => publish(doc.jump(cursor))),
 
-    projectNew: () => ipc(() => load(newProject(), null)),
+    projectNew: () =>
+      ipc(() => load(SimDocument.create(starterProject()), null)),
     projectOpen: (openPath) =>
       ipc(() => {
-        const project = files()[openPath]
-        if (!project) throw new Error(`Could not open "${openPath}".`)
-        remember(openPath, project)
-        return load(project, openPath)
+        const fileText = files()[openPath]
+        if (typeof fileText !== "string") {
+          throw new Error(
+            `Could not read ${openPath}: no such file is saved in this browser.`
+          )
+        }
+        let opened: SimDocument
+        try {
+          opened = SimDocument.open(fileText)
+        } catch (error) {
+          throw sentence(error)
+        }
+        const snapshot = load(opened, openPath)
+        remember(openPath, fileText)
+        return snapshot
       }),
     projectSave: (savePath) =>
       ipc(() => {
-        const target = savePath ?? path
+        const target = savePath ? withProjectExtension(savePath) : path
         if (!target) {
           throw new Error("This project has no file yet. Use Save as.")
         }
-        remember(target, doc.project())
+        let fileText: string
+        try {
+          fileText = doc.fileText()
+        } catch (error) {
+          throw sentence(error)
+        }
+        remember(target, fileText)
+        rememberTransport(target)
         path = target
-        doc.markSaved()
-        publish(emptyTouched())
+        // Changes nothing in the project. It carries the new dirty flag.
+        publish(doc.markSaved())
         return target
       }),
     recentProjects: () => ipc(() => recent()),
 
     transportPlay: () =>
       ipc(() => {
-        transport.play()
+        startPlayback()
         return emitTransport()
       }),
     transportStop: () =>
@@ -380,10 +617,10 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     transportToggle: () =>
       ipc(() => {
         if (transport.state.playing) transport.stop()
-        else transport.play()
+        else startPlayback()
         return emitTransport()
       }),
-    transportSeek: (tick) => ipc(() => transport.seek(tick)),
+    transportSeek: (tick) => ipc(() => transport.seek(tick, doc.project())),
     transportSet: (patch) =>
       ipc(() => {
         if (
@@ -394,22 +631,26 @@ export function createMockBackend(options: MockOptions = {}): Backend {
         ) {
           throw new Error(`pattern ${patch.pattern} does not exist`)
         }
-        transport.set(patch)
+        transport.set(patch, doc.project())
         return emitTransport()
       }),
     transportState: () => ipc(() => transport.state),
 
-    engineStatus: () => ipc(() => engine),
+    engineStatus: () => ipc(() => currentEngine()),
     engineDevices: () => ipc(() => HOSTS),
     engineConfigure: (settings) =>
       ipc(() => {
-        engine = describeStatus(settings)
-        engineStatuses.emit(engine)
-        return engine
+        audioSettings = storedSettings(settings)
+        engine = describeStatus(audioSettings)
+        engineStatuses.emit(currentEngine())
+        return currentEngine()
       }),
+    engineSettings: () => ipc(() => audioSettings),
 
-    auditionNoteOn: () => ipc(() => undefined),
-    auditionNoteOff: () => ipc(() => undefined),
+    auditionNoteOn: (channel, key, velocity) =>
+      ipc(() => transport.noteOn(channel, key, velocity)),
+    auditionNoteOff: (channel, key) =>
+      ipc(() => transport.noteOff(channel, key)),
     previewPlay: (filePath) =>
       ipc(() => {
         sampleInfoFor(roots, filePath)
@@ -444,11 +685,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       ipc(() => {
         const asset = doc.project().samples.find((item) => item.id === sample)
         if (!asset) throw new Error(`sample ${sample} does not exist`)
-        const filePath =
-          asset.path.kind === "factory"
-            ? `${FACTORY_ROOT}/${asset.path.path}`
-            : asset.path.path
-        return sampleInfoFor(roots, filePath)
+        return sampleInfoFor(roots, sampleFile(asset))
       }),
 
     addChannelFromFile: (filePath, index) =>
@@ -474,6 +711,94 @@ export function createMockBackend(options: MockOptions = {}): Backend {
             { type: "setChannelSample", id: channel, sample: sampleId },
           ],
         })
+      }),
+
+    addAudioClipFromFile: (filePath, place) =>
+      ipc(() => {
+        const { name, sampleId, addSample } = sampleCommands(filePath)
+        const info = sampleInfoFor(roots, filePath)
+        const project = doc.project()
+        // The sample takes an id only when the project does not have it.
+        const nextId =
+          sampleId === project.nextId ? project.nextId + 1 : project.nextId
+        return dispatchNow({
+          type: "batch",
+          label: "Add audio clip",
+          commands: [
+            addSample,
+            ...audioClipCommands(
+              sampleId,
+              info.durationSecs,
+              name,
+              place,
+              nextId
+            ),
+          ],
+        })
+      }),
+    addAudioClipFromSample: (sample, place) =>
+      ipc(() => {
+        const project = doc.project()
+        const asset = project.samples.find((item) => item.id === sample)
+        if (!asset) throw new Error(`sample ${sample} does not exist`)
+        let durationSecs: number
+        try {
+          durationSecs = sampleInfoFor(roots, sampleFile(asset)).durationSecs
+        } catch {
+          throw new Error(
+            `The audio of "${asset.name}" is not loaded, so a clip of it cannot be made. Check that its file is there, then reload the samples.`
+          )
+        }
+        return dispatchNow({
+          type: "batch",
+          label: "Add audio clip",
+          commands: audioClipCommands(
+            sample,
+            durationSecs,
+            asset.name,
+            place,
+            project.nextId
+          ),
+        })
+      }),
+    automate: (target) =>
+      ipc(() => {
+        const project = doc.project()
+        const song = project.playlist.clips.reduce(
+          (end, clip) => Math.max(end, clip.start + clip.length),
+          0
+        )
+        const bars = ticksPerBar(project.settings.timeSignature) * 4
+        // A batch cannot pass an id from one command to the next, so the
+        // ids the automation and the track will get are worked out first.
+        const automation = project.nextId
+        const track = project.nextId + 1
+        return dispatchNow({
+          type: "batch",
+          label: "Create automation clip",
+          commands: [
+            { type: "addAutomation", target },
+            { type: "addPlaylistTrack" },
+            {
+              type: "addClips",
+              clips: [
+                {
+                  track,
+                  start: 0,
+                  length: Math.min(Math.max(song, bars), MAX_SONG_TICKS),
+                  content: { type: "automation", automation },
+                },
+              ],
+            },
+          ],
+        })
+      }),
+
+    samplesReload: () =>
+      ipc(() => {
+        const missing = missingSamples()
+        warnings.emit(missing)
+        return missing.length
       }),
 
     exportAudio: (exportOptions) =>
@@ -502,8 +827,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     onTransportState: (handler) => transportStates.on(handler),
     onEngineStatus: (handler) => engineStatuses.on(handler),
     onExportProgress: (handler) => exportProgress.on(handler),
-    // The mock never loads a project with missing files.
-    onProjectWarnings: () => () => undefined,
+    onProjectWarnings: (handler) => warnings.on(handler),
 
     subscribeRealtime(handler) {
       const off = frames.on(handler)
@@ -520,6 +844,7 @@ export function createMockBackend(options: MockOptions = {}): Backend {
     pickExportPath: (suggestedName) =>
       dialogs.exportPath(`/exports/${suggestedName}.wav`),
     pickFolder: () => dialogs.folder(),
+    pickAudioFile: () => dialogs.audioFile(),
 
     setWindowTitle: (title) =>
       ipc(() => {
@@ -534,6 +859,12 @@ export function createMockBackend(options: MockOptions = {}): Backend {
       }
       window.addEventListener("beforeunload", handler)
       return () => window.removeEventListener("beforeunload", handler)
+    },
+
+    dispose() {
+      if (frameTimer !== null) clearInterval(frameTimer)
+      frameTimer = null
+      doc.dispose()
     },
   }
 }

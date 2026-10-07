@@ -11,6 +11,7 @@ import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { runAction } from "@/lib/actions"
+import { sourceSample } from "@/lib/channel-source"
 import { SAMPLE_DRAG_TYPE } from "@/lib/dnd"
 import type { Backend } from "@/lib/ipc"
 import { dispatch, redo, undo } from "@/lib/store/project"
@@ -162,7 +163,7 @@ describe("steps", () => {
     lift(stepButtons("Kick")[0])
     await settle()
     expect(shownRow("Kick")).toBe(".x..x...x...x...")
-    expect(labels()).toEqual(["Set step", "Clear step"])
+    expect(labels()).toEqual(["Toggle step", "Toggle step"])
   })
 
   it("paints a drag as one undo step", async () => {
@@ -257,17 +258,17 @@ describe("steps", () => {
     render(<ChannelRackPanel />)
     expect(stepButtons("Kick")).toHaveLength(16)
 
-    await user.click(
-      screen.getByRole("button", { name: "Set the pattern length to 32 steps" })
-    )
+    const length = screen.getByRole("group", { name: "Pattern length" })
+    await user.click(within(length).getByRole("button", { name: "32" }))
     await settle()
     expect(project().patterns[0].lengthSteps).toBe(32)
     expect(stepButtons("Kick")).toHaveLength(32)
     expect(shownRow("Kick")).toBe("x...x...x...x...................")
     expect(labels()).toEqual(["Change pattern length"])
-    expect(
-      screen.getByRole("button", { name: "Set the pattern length to 32 steps" })
-    ).toHaveAttribute("aria-pressed", "true")
+    expect(within(length).getByRole("button", { name: "32" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
 
     // The length field steps one at a time.
     const field = screen.getByRole("slider", {
@@ -302,6 +303,18 @@ describe("steps", () => {
 
   it("shows no playhead while the song plays instead of the pattern", async () => {
     render(<ChannelRackPanel />)
+    // The song needs a clip, or there is nothing to play.
+    const track = await backend.dispatch({ type: "addPlaylistTrack" })
+    await backend.dispatch({
+      type: "addClips",
+      clips: [
+        {
+          track: track.created[0],
+          start: 0,
+          content: { type: "pattern", pattern: project().patterns[0].id },
+        },
+      ],
+    })
     await backend.transportSet({ mode: "song" })
     await backend.transportPlay()
     await new Promise((resolve) => setTimeout(resolve, 80))
@@ -416,6 +429,7 @@ describe("mixing a channel", () => {
     render(<ChannelRackPanel />)
     const sent = vi.spyOn(backend, "dispatch")
     const knob = screen.getByRole("slider", { name: "Kick channel volume" })
+    const before = channel("Kick").volume
     press(knob, { clientY: 100 })
     fireEvent.pointerMove(knob, { pointerId: 1, clientY: 80 })
     fireEvent.pointerMove(knob, { pointerId: 1, clientY: 60 })
@@ -430,14 +444,18 @@ describe("mixing a channel", () => {
       })
     }
     const volume = channel("Kick").volume
-    expect(volume).toBeGreaterThan(0.8)
+    expect(volume).toBeGreaterThan(before)
     expect(volume).toBeLessThanOrEqual(2)
     expect(labels()).toEqual(["Change channel volume"])
-    expect(knob).toHaveAttribute("aria-valuenow", String(volume))
+    // The knob shows what was dragged until the project has answered, and
+    // the project stores a volume in fewer digits than the drag works in.
+    await waitFor(() =>
+      expect(knob).toHaveAttribute("aria-valuenow", String(volume))
+    )
 
     await undo()
-    expect(channel("Kick").volume).toBe(0.8)
-    expect(knob).toHaveAttribute("aria-valuenow", "0.8")
+    expect(channel("Kick").volume).toBe(before)
+    expect(knob).toHaveAttribute("aria-valuenow", String(before))
   })
 
   it("pans with a drag and never leaves the range", async () => {
@@ -532,6 +550,7 @@ describe("the channel button", () => {
       "Rename channel…F2",
       "Change channel color…",
       "Duplicate channelCtrl+D",
+      "Replace sample from an audio file…",
       "Mute",
       "Solo",
       "Clear steps",
@@ -670,7 +689,7 @@ describe("row actions", () => {
     expect(channelNames()).toEqual(["Kick", "Hat", "Snare"])
     expect(screen.queryByRole("group", { name: "Clap steps" })).toBeNull()
     expect(useUiStore.getState().selectedChannel).toBe(channel("Hat").id)
-    expect(labels()).toEqual(["Remove channel"])
+    expect(labels()).toEqual(["Delete channel"])
 
     await undo()
     expect(channelNames()).toEqual(["Kick", "Clap", "Hat", "Snare"])
@@ -759,7 +778,7 @@ describe("dragging", () => {
     await settle()
     expect(dropLine()).toBeNull()
     expect(channelNames()).toEqual(["Kick", "Rim 01", "Clap", "Hat", "Snare"])
-    expect(channel("Rim 01").source.sample).not.toBeNull()
+    expect(sourceSample(channel("Rim 01").source)).not.toBeNull()
     expect(useUiStore.getState().selectedChannel).toBe(channel("Rim 01").id)
     expect(labels()).toEqual(["Add channel"])
   })
@@ -775,7 +794,7 @@ describe("dragging", () => {
 
   it("replaces the sample when dropped on a channel's button", async () => {
     render(<ChannelRackPanel />)
-    const before = channel("Clap").source.sample
+    const before = sourceSample(channel("Clap").source)
     fireDrag("dragOver", nameButton("Clap"), sample(rim), 40)
     expect(dropLine()).toBeNull()
     expect(nameButton("Clap")).toHaveTextContent("replace")
@@ -783,7 +802,7 @@ describe("dragging", () => {
     fireDrag("drop", nameButton("Clap"), sample(rim), 40)
     await settle()
     expect(channelNames()).toEqual(["Kick", "Clap", "Hat", "Snare"])
-    const after = channel("Clap").source.sample
+    const after = sourceSample(channel("Clap").source)
     expect(after).not.toBe(before)
     expect(project().samples.find((item) => item.id === after)?.name).toBe(
       "Rim 01"

@@ -123,8 +123,26 @@ export function useProjectPath(): string | null {
   return useProjectStore((state) => state.path)
 }
 
+/** A file's name without its folder and extension. */
+function fileStem(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? path
+  return name.replace(/\.[^.]+$/, "") || name
+}
+
+/**
+ * What the project is called wherever it is shown: the name of its file
+ * once it has one, and until then the name in its settings.
+ */
+export function projectDisplayName(state: {
+  path: string | null
+  project: Project
+}): string {
+  if (state.path !== null) return fileStem(state.path)
+  return state.project.settings.name || "Untitled"
+}
+
 export function useProjectName(): string {
-  return useProjectStore((state) => state.project.settings.name)
+  return useProjectStore(projectDisplayName)
 }
 
 /** The transport's pattern, or the first pattern when that one is gone. */

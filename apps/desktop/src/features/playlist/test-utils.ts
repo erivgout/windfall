@@ -189,7 +189,7 @@ export function clips() {
     length: clip.length,
     offset: clip.offset,
     muted: clip.muted,
-    pattern: clip.content.pattern,
+    pattern: clip.content.type === "pattern" ? clip.content.pattern : null,
   }))
 }
 

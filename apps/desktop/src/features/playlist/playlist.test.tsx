@@ -28,7 +28,7 @@ vi.mock("sonner", () => ({
 
 // jsdom has no canvas to draw on. The grid's pointer handling is tested on
 // a stand-in surface in session.test.ts; here it is everything around it.
-vi.mock("@/lib/canvas/TimeGridCanvas", () => ({
+vi.mock("@/lib/canvas/react", () => ({
   TimeGridCanvas: () => null,
 }))
 
@@ -57,7 +57,7 @@ async function seed(...spots: [row: number, start: number, length?: number][]) {
         length,
         offset: 0,
         muted: false,
-        pattern: project().patterns[0].id,
+        content: { type: "pattern", pattern: project().patterns[0].id },
       })),
       "Seed"
     )
@@ -128,10 +128,10 @@ describe("pattern picker", () => {
 
   it("hides and shows with its toolbar button", async () => {
     render(<PlaylistPanel />)
-    fireEvent.click(screen.getByRole("button", { name: "Pattern list" }))
+    fireEvent.click(screen.getByRole("button", { name: "Clip list" }))
     await flush()
     expect(screen.queryByRole("group", { name: "Pattern to place" })).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Pattern list" }))
+    fireEvent.click(screen.getByRole("button", { name: "Clip list" }))
     await flush()
     expect(
       screen.getByRole("group", { name: "Pattern to place" })
@@ -226,6 +226,58 @@ describe("track headers", () => {
     })
   })
 
+  it("reorders tracks by dragging a header up or down", async () => {
+    render(<PlaylistPanel />)
+    await seed([0, 0], [1, BAR], [2, 2 * BAR])
+    const [first, second, third] = tracks().map((track) => track.id)
+    const headers = screen.getByRole("group", { name: "Tracks" })
+    const before = labels().length
+
+    // Track 1, pressed and carried to below Track 3. A row is 38 pixels.
+    const header = within(headers).getByRole("group", { name: "Track 1" })
+    fireEvent.pointerDown(header, { pointerId: 1, button: 0, clientY: 10 })
+    fireEvent.pointerMove(headers, { pointerId: 1, clientY: 60 })
+    expect(header).toHaveAttribute("data-lifted")
+    fireEvent.pointerMove(headers, { pointerId: 1, clientY: 110 })
+    // A line shows the gap the track will land in.
+    expect(headers.querySelector("[data-slot=track-drop-line]")).toHaveStyle({
+      top: "114px",
+    })
+    fireEvent.pointerUp(headers, { pointerId: 1, clientY: 110 })
+    await flush()
+
+    expect(tracks().map((track) => track.id)).toEqual([second, third, first])
+    // The clips went with their tracks.
+    expect(clips().map((clip) => [clip.row, clip.start])).toEqual([
+      [2, 0],
+      [0, BAR],
+      [1, 2 * BAR],
+    ])
+    expect(labels().slice(before)).toEqual(["Move playlist track"])
+    expect(headers.querySelector("[data-slot=track-drop-line]")).toBeNull()
+  })
+
+  it("leaves the tracks alone for a click, and for a drop back in place", async () => {
+    render(<PlaylistPanel />)
+    await seed([0, 0], [1, BAR])
+    const headers = screen.getByRole("group", { name: "Tracks" })
+    const order = tracks().map((track) => track.id)
+    const before = labels().length
+    const header = within(headers).getByRole("group", { name: "Track 2" })
+
+    fireEvent.pointerDown(header, { pointerId: 1, button: 0, clientY: 50 })
+    fireEvent.pointerUp(headers, { pointerId: 1, clientY: 51 })
+    // The gap right under the track is where it already is.
+    fireEvent.pointerDown(header, { pointerId: 1, button: 0, clientY: 50 })
+    fireEvent.pointerMove(headers, { pointerId: 1, clientY: 74 })
+    expect(headers.querySelector("[data-slot=track-drop-line]")).toBeNull()
+    fireEvent.pointerUp(headers, { pointerId: 1, clientY: 74 })
+    await flush()
+
+    expect(tracks().map((track) => track.id)).toEqual(order)
+    expect(labels()).toHaveLength(before)
+  })
+
   it("adds a track from the corner button", async () => {
     render(<PlaylistPanel />)
     fireEvent.click(screen.getByRole("button", { name: "Add playlist track" }))
@@ -307,7 +359,7 @@ describe("ruler", () => {
     expect(seek).toHaveBeenCalledWith(4 * BAR)
   })
 
-  it("seeks off the grid with Shift", async () => {
+  it("seeks off the grid with Alt, which lets go of the snap", async () => {
     render(<PlaylistPanel />)
     await act(() => setPlayMode("song"))
     const seek = vi.spyOn(backend, "transportSeek")
@@ -315,7 +367,7 @@ describe("ruler", () => {
       pointerId: 1,
       button: 0,
       clientX: 100,
-      shiftKey: true,
+      altKey: true,
     })
     await flush()
     expect(seek).toHaveBeenCalledWith(Math.round((100 / 72) * BAR))

@@ -20,6 +20,9 @@ import {
   type Rgba,
   type Viewport,
 } from "@/lib/canvas"
+import { ignoresSnap } from "@/lib/edit-modifiers"
+import { MAX_PATTERN_STEPS } from "@/lib/units"
+
 import { readClipboard, writeClipboard } from "./clipboard"
 import {
   cellsBetween,
@@ -28,7 +31,9 @@ import {
   duplicateRight,
   endAfterUpdates,
   endOfInits,
+  initsFit,
   MAX_KEY,
+  MAX_PATTERN_TICKS,
   moveDelta,
   moveLimits,
   moveUpdates,
@@ -41,6 +46,7 @@ import {
   resizeDelta,
   resizeUpdates,
   rowsAlongSegment,
+  updatesFit,
   withExtension,
   type MoveDelta,
   type MoveLimits,
@@ -100,6 +106,8 @@ export type EditorHost = {
   context(): EditorContext | null
   settings(): EditorSettings
   remember(length: number, velocity: number): void
+  /** Tells the user an edit was not made. */
+  refuse(what: string, why: string): void
   noteOn(channel: ChannelId, key: number, velocity: number): void
   noteOff(channel: ChannelId, key: number): void
 }
@@ -174,19 +182,22 @@ type Gesture =
       velocity: number
       cells: Map<number, Note>
       lastCell: number
+      /** The stroke reached past the longest pattern, where nothing is painted. */
+      pastEnd: boolean
     }
   | { kind: "erase"; ids: Set<number>; tick: number; row: number }
 
 const IDLE: Gesture = { kind: "idle" }
+const PAST_END = `Notes cannot go past step ${MAX_PATTERN_STEPS.toLocaleString("en-US")}`
+// Kept to one line of a toast, which sits over the end of the tab row.
+const PAST_END_WHY = "No pattern is longer, so it could never play."
 /** A press has to travel this far before it counts as a drag. */
 const DEAD_ZONE_PX = 3
 /** Ids of notes that are drawn but not in the project yet count down from here. */
 const PROVISIONAL_ID = -1000
 const ERASED_ALPHA = 0.22
 
-function noSnap(input: PointerInput): boolean {
-  return input.shift || input.alt
-}
+const noSnap = ignoresSnap
 
 /**
  * The piano roll without its canvas: the notes on screen, the selection,
@@ -509,6 +520,10 @@ export class Editor {
           this.clearPreview()
           break
         }
+        if (!updatesFit(gesture.notes, updates)) {
+          this.refusePastEnd()
+          break
+        }
         const grabbed = updates.find(
           (update) => update.id === gesture.grabbed.id
         )
@@ -535,6 +550,8 @@ export class Editor {
         const painted = [...gesture.cells.values()].sort(
           (a, b) => a.start - b.start
         )
+        // What fits is kept; the rest of the stroke is explained.
+        if (gesture.pastEnd) this.host.refuse(PAST_END, PAST_END_WHY)
         if (painted.length === 0) break
         const notes = movedCopies(painted, { ticks: 0, keys: 0 })
         this.commitDrag(
@@ -645,6 +662,7 @@ export class Editor {
       ctx.pattern.signature
     )
     const notes = pasteInits(contents, start)
+    if (!initsFit(notes)) return this.refusePastEnd()
     await this.commit(
       withExtension(
         {
@@ -670,6 +688,7 @@ export class Editor {
       this.host.settings().snap
     )
     if (inits.length === 0) return
+    if (!initsFit(inits)) return this.refusePastEnd()
     await this.commit(
       withExtension(
         {
@@ -731,6 +750,7 @@ export class Editor {
   ): Promise<void> {
     const ctx = this.ctx
     if (!ctx || updates.length === 0) return
+    if (!updatesFit(notes, updates)) return this.refusePastEnd()
     await this.commit(
       withExtension(
         {
@@ -848,6 +868,15 @@ export class Editor {
   }
 
   /**
+   * Turns down an edit that would put a note past the longest pattern
+   * there can be, where it could never play, and puts the preview back.
+   */
+  private refusePastEnd(): void {
+    this.host.refuse(PAST_END, PAST_END_WHY)
+    this.follow(this.host.context(), true)
+  }
+
+  /**
    * Dispatches a command and follows the project to its result. With
    * `selectCreated` the notes it made become the selection.
    */
@@ -910,6 +939,7 @@ export class Editor {
     if (gesture.provisional) {
       const inits = movedCopies(notes, delta)
       this.selected = new Set()
+      if (!initsFit(inits)) return this.refusePastEnd()
       this.commitDrag(
         withExtension(
           { type: "addNotes", ...target, notes: inits },
@@ -933,6 +963,7 @@ export class Editor {
     }
     if (input.ctrl) {
       const inits = movedCopies(notes, delta)
+      if (!initsFit(inits)) return this.refusePastEnd()
       this.commitDrag(
         withExtension(
           { type: "addNotes", ...target, notes: inits },
@@ -945,6 +976,7 @@ export class Editor {
       return
     }
     const updates = moveUpdates(notes, delta)
+    if (!updatesFit(notes, updates)) return this.refusePastEnd()
     this.commitDrag(
       withExtension(
         { type: "updateNotes", ...target, updates },
@@ -1035,6 +1067,7 @@ export class Editor {
       velocity: settings.lastVelocity,
       cells: new Map(),
       lastCell: 0,
+      pastEnd: false,
     }
     this.gesture = gesture
     if (this.selected.size > 0) this.setSelection([])
@@ -1054,6 +1087,10 @@ export class Editor {
       if (gesture.cells.has(cell)) continue
       const start = gesture.origin + cell * gesture.spacing
       if (start < 0) continue
+      if (start + gesture.length > MAX_PATTERN_TICKS) {
+        gesture.pastEnd = true
+        continue
+      }
       // A cell that already holds a note on this key is left alone.
       const taken = queryRect(
         this.scene.items,

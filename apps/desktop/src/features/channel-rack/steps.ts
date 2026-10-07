@@ -238,10 +238,29 @@ export function moveIndex(
   return target === from ? null : target
 }
 
-/** Splits a tuning into whole semitones and the cents left over. */
-export function splitTune(tune: number): { semitones: number; cents: number } {
-  const semitones = Math.round(tune)
-  return { semitones, cents: Math.round((tune - semitones) * 100) }
+/**
+ * Splits a tuning into whole semitones and the cents left over, from -50
+ * to 50. A tuning exactly between two semitones reads either way: 0.5 is
+ * +50 cents on 0, and -50 cents on 1. `prefer` is the semitone on show,
+ * which keeps the tuning for as long as it is within 50 cents of it, so
+ * Fine can be turned to either end without Tune jumping to the neighbour.
+ * With nothing to prefer, the half goes to the semitone nearer zero.
+ */
+export function splitTune(
+  tune: number,
+  prefer?: number
+): { semitones: number; cents: number } {
+  const split = (semitones: number) => ({
+    // Plain zero, never the negative one rounding can leave.
+    semitones: semitones + 0,
+    cents: Math.round((tune - semitones) * 100) + 0,
+  })
+  if (prefer !== undefined && Math.abs(split(prefer).cents) <= 50) {
+    return split(prefer)
+  }
+  const nearest = Math.round(tune)
+  const halfway = Math.abs(tune - nearest) === 0.5
+  return split(halfway ? Math.trunc(tune) : nearest)
 }
 
 export function joinTune(semitones: number, cents: number, max: number) {

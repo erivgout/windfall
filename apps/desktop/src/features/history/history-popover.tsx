@@ -1,5 +1,6 @@
 import { Clock04Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { useRef } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -12,18 +13,22 @@ import {
 } from "@/components/ui/popover"
 import { useHint } from "@/lib/store/hint"
 import { useHistory } from "@/lib/store/selectors"
+import { useUiStore } from "@/lib/store/ui"
 
 import { HistoryList } from "./history-list"
 
-/** A button that opens the undo history. */
+/** A button that opens the undo history. Edit > History opens it too. */
 export function HistoryPopover() {
   const { entries } = useHistory()
+  const open = useUiStore((state) => state.historyOpen)
+  const setOpen = useUiStore((state) => state.setHistoryOpen)
+  const content = useRef<HTMLDivElement>(null)
   const hint = useHint(
     "History: every edit, in order. Click one to go back to it"
   )
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
           <Button
@@ -36,7 +41,18 @@ export function HistoryPopover() {
       >
         <HugeiconsIcon icon={Clock04Icon} strokeWidth={2} />
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-64 gap-2 p-2">
+      <PopoverContent
+        ref={content}
+        align="end"
+        className="w-64 gap-2 p-2"
+        // The focus goes to the current step, not to the top of the list,
+        // which would scroll a long history back to its start.
+        initialFocus={() =>
+          content.current?.querySelector<HTMLElement>(
+            "[aria-current='step']"
+          ) ?? true
+        }
+      >
         <PopoverHeader className="px-1">
           <PopoverTitle className="text-xs">History</PopoverTitle>
           <PopoverDescription>

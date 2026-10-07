@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  EFFECT_ROW_HEIGHT,
+  INSPECTOR_MIN_WIDTH,
+  INSPECTOR_WIDTH,
+  inspectorWidthFor,
+  MAX_EFFECT_ROWS,
   MAX_SEND_ROWS,
+  MIN_EFFECT_ROWS,
   scrollToReveal,
   SEND_ROW_HEIGHT,
   STRIP_WIDTH,
@@ -9,63 +15,116 @@ import {
   visibleRange,
 } from "./layout"
 
+describe("the width the effects start at", () => {
+  it("is wide enough for an editor's wide layout when the window has room", () => {
+    expect(inspectorWidthFor(1440)).toBe(INSPECTOR_WIDTH)
+    expect(inspectorWidthFor(1920)).toBe(INSPECTOR_WIDTH)
+    // An editor lays its controls beside its display from 26rem, and the
+    // panel around it takes 16 pixels.
+    expect(INSPECTOR_WIDTH - 16).toBeGreaterThanOrEqual(26 * 16)
+  })
+
+  it("leaves most of the mixer to the strips in a small window", () => {
+    expect(inspectorWidthFor(960)).toBe(346)
+    expect(inspectorWidthFor(960)).toBeLessThan(960 / 2)
+    expect(inspectorWidthFor(640)).toBe(INSPECTOR_MIN_WIDTH)
+  })
+})
+
 describe("stripLayout", () => {
   const mode = (height: number, sends = 0) => stripLayout(height, sends).mode
+
+  // The lowest panel that shows everything inline with no sends and no
+  // effects: the rack is two rows then.
+  const FULL = 335
 
   it("shows everything inline when the panel is tall", () => {
     expect(stripLayout(460, 0)).toEqual({
       mode: "full",
       sendRows: 0,
-      sparseScale: false,
+      effectRows: MIN_EFFECT_ROWS,
     })
-    expect(mode(293)).toBe("full")
+    expect(mode(FULL)).toBe("full")
   })
 
   it("moves the routing into a popover when the fader would get short", () => {
-    expect(mode(292)).toBe("compact")
-    expect(mode(196)).toBe("compact")
+    expect(mode(FULL - 1)).toBe("compact")
+    expect(mode(238)).toBe("compact")
   })
 
   it("drops the chips and the peak readout to keep the fader upright", () => {
-    expect(mode(195)).toBe("tight")
-    expect(mode(154)).toBe("tight")
+    expect(mode(237)).toBe("tight")
+    expect(mode(196)).toBe("tight")
   })
 
   it("lays the fader flat at the lowest heights", () => {
-    expect(mode(153)).toBe("flat")
-    expect(mode(112)).toBe("flat")
-    expect(mode(111)).toBe("mini")
+    expect(mode(195)).toBe("flat")
+    expect(mode(130)).toBe("flat")
+    expect(mode(129)).toBe("mini")
     expect(mode(80, 4)).toBe("mini")
   })
 
   it("asks for more height before it shows send rows inline", () => {
-    expect(stripLayout(293 + SEND_ROW_HEIGHT, 1)).toMatchObject({
+    expect(stripLayout(FULL + SEND_ROW_HEIGHT, 1)).toMatchObject({
       mode: "full",
       sendRows: 1,
     })
-    expect(stripLayout(293 + SEND_ROW_HEIGHT - 1, 1)).toMatchObject({
+    expect(stripLayout(FULL + SEND_ROW_HEIGHT - 1, 1)).toMatchObject({
       mode: "compact",
       sendRows: 0,
     })
+  })
+
+  it("makes the rack one row taller than the longest chain", () => {
+    expect(stripLayout(900, 0, 0).effectRows).toBe(MIN_EFFECT_ROWS)
+    expect(stripLayout(900, 0, 1).effectRows).toBe(2)
+    expect(stripLayout(900, 0, 2).effectRows).toBe(3)
+    expect(stripLayout(900, 0, 10).effectRows).toBe(MAX_EFFECT_ROWS)
+  })
+
+  it("asks for more height before it shows a longer chain in full", () => {
+    const taller = FULL + 2 * EFFECT_ROW_HEIGHT
+    expect(stripLayout(taller, 0, 3)).toMatchObject({
+      mode: "full",
+      effectRows: 4,
+    })
+    expect(stripLayout(taller - 1, 0, 3)).toMatchObject({
+      mode: "compact",
+      effectRows: 4,
+    })
+  })
+
+  it("gives the rack what the shortest fader leaves, and scrolls the rest", () => {
+    expect(stripLayout(238, 0, 10)).toMatchObject({
+      mode: "compact",
+      effectRows: 2,
+    })
+    expect(stripLayout(238 + EFFECT_ROW_HEIGHT, 0, 10)).toMatchObject({
+      mode: "compact",
+      effectRows: 3,
+    })
+    expect(stripLayout(330, 0, 10).effectRows).toBe(MAX_EFFECT_ROWS)
+    // The upright fader of the tight layout gets the room instead.
+    expect(stripLayout(237, 0, 10)).toMatchObject({
+      mode: "tight",
+      effectRows: MIN_EFFECT_ROWS,
+    })
+  })
+
+  it("turns the rack into a badge when the fader lies flat", () => {
+    expect(stripLayout(195, 0, 6).effectRows).toBe(0)
+    expect(stripLayout(100, 0, 6).effectRows).toBe(0)
   })
 
   it("never reserves more than a few send rows", () => {
     expect(stripLayout(900, 12).sendRows).toBe(MAX_SEND_ROWS)
   })
 
-  it("labels fewer dB marks while the fader is short", () => {
-    expect(stripLayout(293, 0).sparseScale).toBe(true)
-    expect(stripLayout(330, 0).sparseScale).toBe(false)
-    expect(stripLayout(200, 0).sparseScale).toBe(true)
-    expect(stripLayout(270, 0).sparseScale).toBe(false)
-    expect(stripLayout(160, 0).sparseScale).toBe(true)
-  })
-
   it("uses the full layout until the panel has been measured", () => {
     expect(stripLayout(0, 2)).toEqual({
       mode: "full",
       sendRows: 2,
-      sparseScale: false,
+      effectRows: MIN_EFFECT_ROWS,
     })
   })
 })

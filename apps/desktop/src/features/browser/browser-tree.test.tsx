@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { BrowserEntry } from "@/bindings"
+import { registry } from "@/lib/actions"
 import type { Backend } from "@/lib/ipc"
 
 import BrowserPanel from "."
@@ -345,7 +346,7 @@ describe("keyboard", () => {
     // Each press is a new search, because the presses are far apart.
     const now = vi.spyOn(performance, "now")
     const names: (string | null)[] = []
-    for (const time of [10_000, 20_000, 30_000, 40_000]) {
+    for (const time of [10_000, 20_000, 30_000, 40_000, 50_000]) {
       now.mockReturnValue(time)
       press("k")
       names.push(selectedName())
@@ -355,6 +356,7 @@ describe("keyboard", () => {
       "Kick 01.wav",
       "Kick 02.wav",
       "Kick 03.wav",
+      "Kick Punch.wav",
       "Kicks",
     ])
   })
@@ -376,9 +378,25 @@ describe("keyboard", () => {
     expect(selectedName()).toBe("Claps")
   })
 
-  it("keeps Delete from reaching the rest of the app", async () => {
+  it("keeps Delete from another panel's action, and leaves the key alone", async () => {
+    const deleteChannel = vi.fn()
+    const remove = registry.register([
+      {
+        id: "test.deleteChannel",
+        title: "Delete channel",
+        section: "Test",
+        scope: "channelRack",
+        defaultShortcut: ["Delete", "Backspace"],
+        run: deleteChannel,
+      },
+    ])
     await openDrums()
-    expect(press("Delete")).toBe(false)
+    act(() => tree().focus())
+    // Nothing in the browser uses the keys, so they are not cancelled.
+    expect(press("Delete", { code: "Delete" })).toBe(true)
+    expect(press("Backspace", { code: "Backspace" })).toBe(true)
+    expect(deleteChannel).not.toHaveBeenCalled()
+    remove()
   })
 
   it("skips files Windfall cannot use, and shows them as disabled", async () => {
@@ -446,23 +464,84 @@ describe("filter", () => {
     expect(item("Drums")).toHaveAttribute("aria-expanded", "true")
   })
 
-  it("says honestly what was searched when nothing matches", async () => {
-    const user = await openKicks()
-    // Snares was never opened, so its files are not known yet.
-    await user.type(box(), "snare 01")
+  it("finds factory sounds in folders that were never opened", async () => {
+    const user = userEvent.setup()
+    const backend = await start()
+    const list = vi.spyOn(backend, "browserList")
+    render(<BrowserPanel />)
+    await findItem("Drums")
+    // Nothing below the factory's top folders has been read.
+    expect(list.mock.calls).toEqual([["/factory"]])
 
+    await user.type(box(), "snare 01")
+    expect(await findItem("Snare 01.wav")).toBeInTheDocument()
+    expect(itemNames()).toEqual(["Factory", "Drums", "Snares", "Snare 01.wav"])
+    // The whole library was read for it, each folder once, however many
+    // letters were typed.
+    const read = list.mock.calls.map(([path]) => path)
+    expect(read).toContain("/factory/Drums/Snares")
+    expect(read).toContain("/factory/Loops")
+    expect(new Set(read).size).toBe(read.length)
+
+    // Another search reads nothing more.
+    const calls = list.mock.calls.length
+    await user.clear(box())
+    await user.type(box(), "hat")
+    expect((await screen.findAllByRole("treeitem")).length).toBeGreaterThan(1)
+    expect(list.mock.calls).toHaveLength(calls)
+    // With only the factory in the browser there is nothing to explain.
+    expect(screen.queryByText(/looks only in folders you have opened/)).toBeNull()
+  })
+
+  it("says so when no factory sound matches", async () => {
+    const user = await openKicks()
+    await user.type(box(), "zither")
+    expect(
+      await screen.findByText("Nothing is named like “zither”")
+    ).toBeInTheDocument()
     expect(screen.queryAllByRole("treeitem")).toHaveLength(0)
     expect(
-      screen.getByText("Nothing is named like “snare 01”")
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(/looks only in folders you have opened/)
+      screen.getByText(/No factory sound has that in its name/)
     ).toBeInTheDocument()
 
     await user.click(screen.getByRole("button", { name: "Show everything" }))
     expect(box()).toHaveValue("")
     expect(box()).toHaveFocus()
     expect(item("Snares")).toBeInTheDocument()
+  })
+
+  it("searches a folder of the user's only where it was opened, and says so whenever it filters", async () => {
+    const user = userEvent.setup()
+    const backend = await start()
+    const list = vi.spyOn(backend, "browserList")
+    await backend.browserAddRoot("/samples/Mine")
+    render(<BrowserPanel />)
+    await findItem("Drums")
+    const note = () =>
+      document.querySelector("[data-slot=browser-search-note]")
+    expect(note()).toBeNull()
+
+    // With matches: the note is there, since a sound in a closed folder of
+    // the user's would not be among them.
+    await user.type(box(), "kick")
+    await waitFor(() => expect(itemNames()).toContain("Kick 01.wav"))
+    expect(note()).toHaveTextContent(/looks only in folders you have opened/)
+    expect(note()).toHaveTextContent("The factory sounds are all searched")
+    // The user's folder was not read for the search.
+    expect(
+      list.mock.calls.some(([path]) => path.startsWith("/samples/Mine"))
+    ).toBe(false)
+
+    // With none: the same note, in place of the factory's line.
+    await user.clear(box())
+    await user.type(box(), "zither")
+    expect(
+      await screen.findByText("Nothing is named like “zither”")
+    ).toBeInTheDocument()
+    expect(note()).toHaveTextContent(/looks only in folders you have opened/)
+
+    await user.clear(box())
+    expect(note()).toBeNull()
   })
 
   it("clears with its button and with Escape", async () => {

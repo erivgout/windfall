@@ -10,15 +10,29 @@ export const FACTORY_ROOT = "/factory"
 
 type FakeFolder = { [name: string]: FakeFolder | number }
 
-/** A made-up factory library. Leaves are sample lengths in seconds. */
+/**
+ * A made-up factory library. Leaves are sample lengths in seconds. The four
+ * sounds a new project starts with are here under their real names, so its
+ * samples are found.
+ */
 const FACTORY: FakeFolder = {
   Drums: {
-    Kicks: { "Kick 01.wav": 0.42, "Kick 02.wav": 0.55, "Kick 03.wav": 0.3 },
-    Snares: { "Snare 01.wav": 0.28, "Snare 02.wav": 0.34 },
-    Claps: { "Clap 01.wav": 0.31, "Clap 02.wav": 0.4 },
+    Kicks: {
+      "Kick 01.wav": 0.42,
+      "Kick 02.wav": 0.55,
+      "Kick 03.wav": 0.3,
+      "Kick Punch.wav": 0.38,
+    },
+    Snares: {
+      "Snare 01.wav": 0.28,
+      "Snare 02.wav": 0.34,
+      "Snare Tight.wav": 0.22,
+    },
+    Claps: { "Clap 01.wav": 0.31, "Clap 02.wav": 0.4, "Clap Wide.wav": 0.36 },
     Hats: {
       "Closed Hat 01.wav": 0.09,
       "Closed Hat 02.wav": 0.12,
+      "Hat Closed 1.wav": 0.07,
       "Open Hat 01.wav": 0.48,
     },
     Percussion: {

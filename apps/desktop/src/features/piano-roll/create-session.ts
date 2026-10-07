@@ -1,4 +1,5 @@
 import type { ChannelId, Note, PatternId, TimeSignature } from "@/bindings"
+import { refuse } from "@/lib/errors"
 import { dispatch, useProjectStore } from "@/lib/store/project"
 
 import { auditionOff, auditionOn } from "./audition"
@@ -59,6 +60,7 @@ export function createSession(): PianoRollSession {
     },
     remember: (length, velocity) =>
       usePianoRollStore.getState().rememberNote(length, velocity),
+    refuse,
     noteOn: auditionOn,
     noteOff: auditionOff,
   }

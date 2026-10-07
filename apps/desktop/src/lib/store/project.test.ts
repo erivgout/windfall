@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { ProjectPatch } from "@/bindings"
+import type { DocumentSnapshot, ProjectPatch } from "@/bindings"
 import type { Backend } from "@/lib/ipc"
 import { settle, startTestApp } from "@/test/harness"
 
@@ -9,6 +9,7 @@ import {
   historyJump,
   receivePatch,
   redo,
+  setProjectPath,
   undo,
   useProjectStore,
 } from "./project"
@@ -32,6 +33,15 @@ beforeEach(async () => {
 afterEach(() => stop())
 
 const state = () => useProjectStore.getState()
+
+/** A patch that carries nothing but the history of a snapshot. */
+function patchAt(snapshot: DocumentSnapshot): ProjectPatch {
+  return {
+    revision: snapshot.revision,
+    history: snapshot.history,
+    dirty: snapshot.dirty,
+  }
+}
 
 describe("project store", () => {
   it("loads the snapshot when the app connects", () => {
@@ -69,7 +79,8 @@ describe("project store", () => {
   it("shows a failed command and returns null", async () => {
     const result = await dispatch({ type: "removeChannel", id: 4242 })
     expect(result).toBeNull()
-    expect(toast.error).toHaveBeenCalledWith("channel 4242 does not exist")
+    // The document says "channel 4242 does not exist". It is shown as a sentence.
+    expect(toast.error).toHaveBeenCalledWith("Channel 4242 does not exist")
     expect(state().revision).toBe(0)
   })
 
@@ -116,6 +127,38 @@ describe("project store", () => {
     expect(snapshot).toHaveBeenCalledTimes(1)
     expect(state().revision).toBe(2)
     expect(state().project.patterns).toHaveLength(3)
+  })
+
+  it("fetches again when a patch newer than the snapshot came in meanwhile", async () => {
+    await dispatch({ type: "addPattern" })
+    const first = await backend.documentSnapshot()
+    await backend.dispatch({ type: "addPattern" })
+    await backend.dispatch({ type: "addPattern" })
+    // This window missed both edits. The snapshot it asks for is slow: it
+    // was taken before them, and the patch of the third edit overtakes it.
+    useProjectStore.setState({ revision: 1, project: first.project })
+    const newest = await backend.documentSnapshot()
+    const snapshot = vi
+      .spyOn(backend, "documentSnapshot")
+      .mockResolvedValueOnce({ ...first, revision: 2 })
+
+    receivePatch({ ...patchAt(newest), revision: 3 })
+    receivePatch({ ...patchAt(newest), revision: 4 })
+    await settle()
+
+    // The first answer was older than a patch already seen, so it asked again.
+    expect(snapshot).toHaveBeenCalledTimes(2)
+    expect(state().revision).toBe(newest.revision)
+    expect(state().project.patterns).toHaveLength(4)
+  })
+
+  it("records where a save went and leaves the unsaved mark to the backend", async () => {
+    await dispatch({ type: "addPattern" })
+    setProjectPath("/projects/song.windfall")
+    expect(state()).toMatchObject({
+      path: "/projects/song.windfall",
+      dirty: true,
+    })
   })
 
   it("keeps a channel's reference when another channel changes", async () => {

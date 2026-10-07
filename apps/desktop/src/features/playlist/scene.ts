@@ -1,13 +1,28 @@
 import type {
+  AutomationId,
+  AutomationPoint,
   Clip,
   ClipId,
-  Pattern,
-  PatternId,
   PlaylistTrack,
   PlaylistTrackId,
+  Project,
+  SampleId,
 } from "@/bindings"
 import {
+  compileLanes,
+  holdSegments,
+  type HoldSegment,
+} from "@/lib/automation/lanes"
+import {
+  FULL_VIEW,
+  viewOfAutomation,
+  type ViewRange,
+} from "@/lib/automation/view-range"
+import {
   indexBatch,
+  queryRect,
+  xToTick,
+  yToRow,
   type Hit,
   type IndexedBatch,
   type Marquee,
@@ -16,14 +31,30 @@ import {
 import { useProjectStore } from "@/lib/store/project"
 import { ticksPerBar } from "@/lib/time"
 
+import { onPeaksChanged, samplePeaks, type SamplePeaks } from "./audio/peaks"
 import { buildClipBatch } from "./clip-batch"
 import { patternTicks, rowIndex, songEnd, type NewClip } from "./edit"
+import { formatAutomationValue } from "./automation/format"
+import { POINT_RADIUS } from "./automation/hit"
+import { useCurveViews } from "./automation/view-store"
+import { innerHit, type InnerHit } from "./inner"
 import { contentTicksFor, EDGE_PX, rowCountFor } from "./layout"
+import {
+  clipPattern,
+  colorSignature,
+  lookupsOf,
+  NO_LOOKUPS,
+  type ClipLookups,
+} from "./look"
 import type { GridMetrics } from "./metrics"
 import {
   ClipPainter,
   NO_DRAG,
+  type AudioDraft,
+  type Badge,
+  type CurveDraft,
   type DragState,
+  type DropPreview,
   type PaintSource,
 } from "./painter"
 import { project } from "./selectors"
@@ -31,10 +62,16 @@ import { gridSpecFor } from "./snap"
 import { usePlaylistStore } from "./store"
 import type { GridSurface } from "./surface"
 
+/** A point or a bend handle of a curve, and the clip that shows it. */
+export type CurveMark = {
+  clip: Clip
+  inner: Extract<InnerHit, { kind: "point" | "bend" }>
+}
+
 const ui = () => usePlaylistStore.getState()
 const NOTHING: ReadonlySet<ClipId> = new Set()
-/** A clip drawn narrower than this can be pressed from just beside it. */
-const SLIVER_PX = 4
+const NO_HOLDS: readonly HoldSegment[] = []
+const NOT_SHARED: ReadonlySet<AutomationId> = new Set()
 
 /**
  * What the grid shows: the clips of the project as a batch on the canvas,
@@ -50,18 +87,33 @@ export class PlaylistScene implements PaintSource {
   items: IndexedBatch | null = null
   clips: readonly Clip[] = []
   clipById: ReadonlyMap<ClipId, Clip> = new Map()
-  patterns: ReadonlyMap<PatternId, Pattern> = new Map()
+  lookups: ClipLookups = NO_LOOKUPS
   drag: DragState = NO_DRAG
   ghosts: readonly NewClip[] = []
   marked: ReadonlySet<ClipId> = NOTHING
   cloneHint = false
   songEnd = 0
+  tempoBpm = 120
+  draft: CurveDraft | null = null
+  audioDraft: AudioDraft | null = null
+  holds: readonly HoldSegment[] = NO_HOLDS
+  shared: ReadonlySet<AutomationId> = NOT_SHARED
+  hover: ClipId | null = null
+  badge: Badge | null = null
+  dropPreview: DropPreview | null = null
+  /**
+   * The view a curve is held in while one of its points is dragged. The
+   * default view follows the points, and would slide under the pointer
+   * that is moving one of them.
+   */
+  viewHold: { automation: AutomationId; range: ViewRange } | null = null
 
   private readonly surface: GridSurface
   private readonly metrics: GridMetrics
   private readonly stops: (() => void)[]
   private tracks: readonly PlaylistTrack[] = []
-  private patternList: readonly Pattern[] = []
+  private seen: Project | null = null
+  private colors = ""
   private rows = new Map<PlaylistTrackId, number>()
   private mutedTracks = new Set<PlaylistTrackId>()
   private rowCount = 0
@@ -75,11 +127,16 @@ export class PlaylistScene implements PaintSource {
       surface.onThemeChange(() => this.rebuild()),
       surface.onViewportChange(() => this.fitRows()),
       useProjectStore.subscribe((state, previous) => {
+        const now = state.project
+        const before = previous.project
         if (
-          state.project.playlist !== previous.project.playlist ||
-          state.project.patterns !== previous.project.patterns ||
-          state.project.settings.timeSignature !==
-            previous.project.settings.timeSignature
+          now.playlist !== before.playlist ||
+          now.patterns !== before.patterns ||
+          now.samples !== before.samples ||
+          now.mixer !== before.mixer ||
+          now.automations !== before.automations ||
+          now.settings.timeSignature !== before.settings.timeSignature ||
+          now.settings.tempoBpm !== before.settings.tempoBpm
         ) {
           this.sync()
         }
@@ -88,6 +145,9 @@ export class PlaylistScene implements PaintSource {
         if (state.selection !== previous.selection) this.showSelection()
         if (state.snap !== previous.snap) this.showGrid()
       }),
+      // A waveform that has been read is drawn into its clips.
+      onPeaksChanged(() => this.redraw()),
+      useCurveViews.subscribe(() => this.redraw()),
     ]
     this.sync()
   }
@@ -101,45 +161,170 @@ export class PlaylistScene implements PaintSource {
 
   rowOf = (track: PlaylistTrackId): number => this.rows.get(track) ?? 0
 
-  /** One pass of the pattern a clip plays, in ticks. */
-  passTicks = (clip: Clip): number => {
-    const pattern = this.patterns.get(clip.content.pattern)
-    return pattern ? patternTicks(pattern) : clip.length
+  trackRow = (track: PlaylistTrackId): number | undefined =>
+    this.rows.get(track)
+
+  peaksOf = (sample: SampleId): SamplePeaks | null => {
+    const asset = this.lookups.samples.get(sample)
+    return asset ? samplePeaks(asset) : null
+  }
+
+  /** The curve an automation clip shows, as it is being edited if it is. */
+  pointsOf(automation: AutomationId): readonly AutomationPoint[] | null {
+    if (this.draft?.automation === automation) return this.draft.points
+    return this.lookups.automations.get(automation)?.points ?? null
   }
 
   /**
-   * The clip under a point given in CSS pixels. The grid lets a press land
-   * a couple of pixels outside a rect so that slivers can be clicked; that
-   * is kept for slivers only, or a press just past a clip's end would grab
-   * the clip instead of placing the next one.
+   * The part of its range an automation's clips show, bottom to top: the
+   * one a drag is holding, the one chosen for it, or its default.
    */
+  viewOf = (automation: AutomationId): ViewRange => {
+    if (this.viewHold?.automation === automation) return this.viewHold.range
+    const found = this.lookups.automations.get(automation)
+    if (!found) return FULL_VIEW
+    return viewOfAutomation(
+      found,
+      this.tempoBpm,
+      useCurveViews.getState().views[automation]
+    )
+  }
+
+  /** The two ends of an automation's view in the unit of what it moves. */
+  viewLabelsOf = (
+    automation: AutomationId
+  ): { top: string; bottom: string } | null => {
+    const found = this.lookups.automations.get(automation)
+    if (!found) return null
+    const view = this.viewOf(automation)
+    const current = project()
+    return {
+      top: formatAutomationValue(current, found.target, view.hi),
+      bottom: formatAutomationValue(current, found.target, view.lo),
+    }
+  }
+
+  setViewHold(hold: { automation: AutomationId; range: ViewRange } | null) {
+    this.viewHold = hold
+  }
+
+  /**
+   * The part of a clip under a point, in CSS pixels, that has an edit of
+   * its own: a fade or gain handle, a point of a curve.
+   */
+  innerAt(clip: Clip, x: number, y: number): InnerHit | null {
+    const automation =
+      clip.content.type === "automation" ? clip.content.automation : null
+    return innerHit(
+      this.surface.viewport,
+      clip,
+      this.rowOf(clip.track),
+      automation === null ? null : this.pointsOf(automation),
+      x,
+      y,
+      automation === null ? undefined : this.viewOf(automation)
+    )
+  }
+
+  /**
+   * One pass of the pattern a clip plays, in ticks. 0 for a clip of audio
+   * or automation, which does not loop.
+   */
+  passTicks = (clip: Clip): number => {
+    if (clip.content.type !== "pattern") return 0
+    const pattern = clipPattern(clip, this.lookups)
+    return pattern ? patternTicks(pattern) : clip.length
+  }
+
+  /** The clip under a point given in CSS pixels. */
   hitAt(x: number, y: number): Hit | null {
-    const exact = this.surface.hitTest(x, y, { edgePx: EDGE_PX, slopPx: 0 })
-    if (exact || !this.items) return exact
-    const near = this.surface.hitTest(x, y, { edgePx: EDGE_PX })
-    if (!near) return null
-    const width =
-      this.items.batch.length(near.index) * this.surface.viewport.pxPerTick
-    return width < SLIVER_PX ? near : null
+    return this.surface.hitTest(x, y, { edgePx: EDGE_PX })
+  }
+
+  /**
+   * A point or a bend handle of a curve under a spot of the grid, whatever
+   * clip or empty grid the spot itself is on. These are looked for first:
+   * the dot of a point on a clip's edge hangs over the edge, and a press on
+   * that half of it is a press on the point, not on what lies beside the
+   * clip. A point wins over a handle.
+   */
+  curveMarkAt(x: number, y: number): CurveMark | null {
+    const items = this.items
+    if (!items) return null
+    const viewport = this.surface.viewport
+    const tick = xToTick(viewport, x)
+    const row = yToRow(viewport, y)
+    const ticks = POINT_RADIUS / viewport.pxPerTick
+    const rows = POINT_RADIUS / viewport.rowHeight
+    let handle: CurveMark | null = null
+    for (const index of queryRect(
+      items,
+      tick - ticks,
+      tick + ticks,
+      row - rows,
+      row + rows
+    )) {
+      const clip = this.clipById.get(items.batch.ids[index])
+      if (clip?.content.type !== "automation") continue
+      const inner = this.innerAt(clip, x, y)
+      if (inner?.kind === "point") return { clip, inner }
+      if (inner?.kind === "bend") handle ??= { clip, inner }
+    }
+    return handle
   }
 
   /** Reads the project again and redraws. Runs after every edit. */
   private sync(): void {
-    const { playlist, patterns } = project()
+    const current = project()
+    const seen = this.seen
+    this.seen = current
+    const { playlist } = current
     const clipsChanged = playlist.clips !== this.clips
+    const tracksChanged = playlist.tracks !== this.tracks
+    const lookupsChanged =
+      !seen ||
+      seen.patterns !== current.patterns ||
+      seen.samples !== current.samples ||
+      seen.mixer !== current.mixer ||
+      seen.automations !== current.automations
+    if (lookupsChanged) this.lookups = lookupsOf(current)
+    const colors = lookupsChanged ? colorSignature(this.lookups) : this.colors
+    const colorsChanged = colors !== this.colors
+    this.colors = colors
+    // A fader move changes the mixer and nothing that is drawn here.
+    const onlyMixer =
+      seen !== null &&
+      !clipsChanged &&
+      !tracksChanged &&
+      !colorsChanged &&
+      seen.patterns === current.patterns &&
+      seen.samples === current.samples &&
+      seen.automations === current.automations &&
+      seen.settings === current.settings
+    if (onlyMixer) return
+
     this.tracks = playlist.tracks
     this.clips = playlist.clips
-    this.rows = rowIndex(playlist.tracks)
-    this.mutedTracks = new Set(
-      playlist.tracks.filter((track) => track.muted).map((track) => track.id)
-    )
-    this.clipById = new Map(playlist.clips.map((clip) => [clip.id, clip]))
-    if (patterns !== this.patternList) {
-      this.patternList = patterns
-      this.patterns = new Map(patterns.map((pattern) => [pattern.id, pattern]))
+    if (tracksChanged) {
+      this.rows = rowIndex(playlist.tracks)
+      this.mutedTracks = new Set(
+        playlist.tracks.filter((track) => track.muted).map((track) => track.id)
+      )
     }
-    this.songEnd = songEnd(playlist.clips)
-    if (clipsChanged) this.onClipsChanged()
+    if (clipsChanged) {
+      this.clipById = new Map(playlist.clips.map((clip) => [clip.id, clip]))
+      this.songEnd = songEnd(playlist.clips)
+      this.onClipsChanged()
+    }
+    this.tempoBpm = current.settings.tempoBpm
+    if (
+      clipsChanged ||
+      tracksChanged ||
+      !seen ||
+      seen.automations !== current.automations
+    ) {
+      this.followAutomation(current)
+    }
 
     const { selection } = ui()
     if ([...selection].some((id) => !this.clipById.has(id))) {
@@ -148,7 +333,32 @@ export class PlaylistScene implements PaintSource {
     }
     this.showGrid()
     this.fitRows(true)
-    this.rebuild()
+    // The batch holds places and colors. What is inside a clip (its notes,
+    // its curve, its waveform) is painted over it and needs no new batch.
+    if (clipsChanged || tracksChanged || colorsChanged) this.rebuild()
+    else this.redraw()
+  }
+
+  /**
+   * Works out what the automation clips leave behind them: where each
+   * target holds a clip's end value, and which curves several clips show.
+   */
+  private followAutomation(current: Project): void {
+    if (current.automations.length === 0) {
+      this.holds = NO_HOLDS
+      this.shared = NOT_SHARED
+      return
+    }
+    this.holds = holdSegments(compileLanes(current), this.songEnd)
+    const seen = new Set<AutomationId>()
+    const shared = new Set<AutomationId>()
+    for (const clip of current.playlist.clips) {
+      if (clip.content.type !== "automation") continue
+      const id = clip.content.automation
+      if (seen.has(id)) shared.add(id)
+      seen.add(id)
+    }
+    this.shared = shared
   }
 
   private rebuild(): void {
@@ -156,7 +366,7 @@ export class PlaylistScene implements PaintSource {
       buildClipBatch(
         this.clips,
         this.rowOf,
-        this.patterns,
+        this.lookups,
         this.isMuted,
         ui().selection,
         this.surface.theme
@@ -255,10 +465,53 @@ export class PlaylistScene implements PaintSource {
     this.surface.setMarquee(marquee)
   }
 
+  /** Shows a curve as it is being edited, in every clip of its automation. */
+  setDraft(draft: CurveDraft | null): void {
+    this.draft = draft
+    this.redraw()
+  }
+
+  /** Shows an audio clip with settings a handle is being dragged to. */
+  setAudioDraft(draft: AudioDraft | null): void {
+    this.audioDraft = draft
+    this.redraw()
+  }
+
+  setBadge(badge: Badge | null): void {
+    if (badge === null && this.badge === null) return
+    this.badge = badge
+    this.redraw()
+  }
+
+  /** Marks the clip under the pointer, which shows its handles. */
+  setHover(clip: ClipId | null): void {
+    if (clip === this.hover) return
+    this.hover = clip
+    this.redraw()
+  }
+
+  setDropPreview(preview: DropPreview | null): void {
+    const current = this.dropPreview
+    if (
+      preview?.row === current?.row &&
+      preview?.start === current?.start &&
+      preview?.length === current?.length &&
+      preview?.name === current?.name
+    ) {
+      return
+    }
+    this.dropPreview = preview
+    this.redraw()
+  }
+
   clearPreview(): void {
     this.ghosts = []
     this.marked = NOTHING
     this.cloneHint = false
+    this.draft = null
+    this.viewHold = null
+    this.audioDraft = null
+    this.badge = null
     this.surface.setMarquee(null)
     this.setDrag(NO_DRAG)
   }

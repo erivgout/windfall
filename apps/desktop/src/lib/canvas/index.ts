@@ -39,6 +39,7 @@ export {
   type NoteBatchOptions,
   type NoteLike,
 } from "./notes"
+export { createPointerFrame, type PointerFrame } from "./pointer-frame"
 export {
   GEOMETRY_STRIDE,
   RECT_FLAT,
@@ -55,6 +56,7 @@ export {
   RendererUnavailableError,
   isSoftwareGpu,
   resizedSpan,
+  shadeChannel,
   type DrawOptions,
   type RectRenderer,
   type RendererInfo,

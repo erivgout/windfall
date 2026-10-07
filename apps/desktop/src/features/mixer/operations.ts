@@ -8,6 +8,9 @@ import {
 } from "@/lib/store"
 import { clamp, MASTER_TRACK, MAX_GAIN, MAX_MIXER_TRACKS } from "@/lib/units"
 
+import { automationGoingWith } from "@/features/automation/owned"
+
+import { effectName } from "./effect-ops"
 import { useMixerUi } from "./mixer-ui"
 import { resetAllPeaks } from "./peaks"
 import { feedersOf } from "./routing"
@@ -67,11 +70,15 @@ function listNames(names: string[]): string {
   return rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(", ")
 }
 
-/** What deleting a track undoes for everything that plays into it. */
+/**
+ * What deleting a track takes with it and undoes for everything that plays
+ * into it.
+ */
 export function deleteWarning(track: MixerTrack): string | null {
-  const { channels, outputs, sends } = feedersOf(
+  const { channels, clips, outputs, sends } = feedersOf(
     mixerTracks(),
     project().channels,
+    project().playlist.clips,
     track.id
   )
   const parts: string[] = []
@@ -82,6 +89,15 @@ export function deleteWarning(track: MixerTrack): string | null {
   } else if (channels.length > 1) {
     parts.push(
       `${channels.length} channels play into this track: ${listNames(channels.map((channel) => channel.name))}. They will fall back to the master.`
+    )
+  }
+  if (clips.length === 1) {
+    parts.push(
+      "An audio clip on the playlist plays into this track. It will play into the master instead."
+    )
+  } else if (clips.length > 1) {
+    parts.push(
+      `${clips.length} audio clips on the playlist play into this track. They will play into the master instead.`
     )
   }
   if (outputs.length === 1) {
@@ -100,10 +116,22 @@ export function deleteWarning(track: MixerTrack): string | null {
         : `Sends from ${sends.length} tracks will be removed.`
     )
   }
+  const effects = track.effects.length
+  if (effects === 1) {
+    parts.push(`Its ${effectName(track.effects[0].params.type)} goes with it.`)
+  } else if (effects > 1) {
+    parts.push(`Its ${effects} effects go with it.`)
+  }
+  // Of its fader and pan, of its effects, and of the sends from and to it.
+  const automation = automationGoingWith({ type: "track", track: track.id })
+  if (automation !== null) parts.push(automation)
   return parts.length > 0 ? parts.join(" ") : null
 }
 
-/** Deletes a track. Asks first when anything plays into it. */
+/**
+ * Deletes a track. Asks first when it has effects, when anything plays
+ * into it, or when automation goes with it.
+ */
 export async function deleteTrack(id: TrackId): Promise<void> {
   const track = findTrack(id)
   if (!track || id === MASTER_TRACK) return
@@ -209,8 +237,28 @@ export function addSend(from: TrackId, to: TrackId) {
   return dispatch({ type: "setSend", from, to, gain: 1 })
 }
 
-export function removeSend(from: TrackId, to: TrackId) {
-  return dispatch({ type: "setSend", from, to })
+/**
+ * Removes a send. Asks first only when automation of its level would be
+ * deleted with it; a send nothing automates goes at once.
+ */
+export async function removeSend(from: TrackId, to: TrackId): Promise<void> {
+  const automation = automationGoingWith({
+    type: "send",
+    track: from,
+    target: to,
+  })
+  if (automation !== null) {
+    const target = findTrack(to)?.name ?? "the track"
+    const choice = await askConfirm({
+      title: `Remove the send to "${target}"?`,
+      description: `${automation} Undo brings them back.`,
+      choices: [
+        { id: "remove", label: "Remove send", variant: "destructive" },
+      ],
+    })
+    if (choice !== "remove") return
+  }
+  await dispatch({ type: "setSend", from, to })
 }
 
 /** Moves the selection one strip left (-1) or right (1), or to an end. */
@@ -226,6 +274,12 @@ export function selectStrip(move: -1 | 1 | "first" | "last"): TrackId | null {
   const id = tracks[next].id
   ui().selectTrack(id)
   return id
+}
+
+/** Moves the selection as a key does: the strip it lands on takes the focus. */
+export function moveSelection(move: -1 | 1 | "first" | "last") {
+  const id = selectStrip(move)
+  if (id !== null) useMixerUi.setState({ focusing: id })
 }
 
 export { resetAllPeaks }

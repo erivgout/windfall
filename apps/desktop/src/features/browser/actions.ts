@@ -1,8 +1,9 @@
-import { registry, type Action } from "@/lib/actions"
+import { invalidateActionsOn, registry, type Action } from "@/lib/actions"
 import { useUiStore } from "@/lib/store/ui"
 
 import {
   addFolder,
+  addToPlaylist,
   addToRack,
   refreshSelection,
   replaceChannelSample,
@@ -82,11 +83,27 @@ export const BROWSER_ACTIONS: Action[] = [
     },
   },
   {
+    id: "browser.addSelectedToPlaylist",
+    title: "Add selected sound to the playlist",
+    section: SECTION,
+    keywords: "audio clip timeline song place",
+    enabled: () => selectedSound() !== null,
+    run: async () => {
+      const sound = selectedSound()
+      if (sound) await addToPlaylist(sound.path)
+    },
+  },
+  {
     id: "browser.replaceChannelSample",
     title: "Replace selected channel's sample",
     section: SECTION,
     keywords: "swap sound load",
-    enabled: () => selectedSound() !== null && selectedChannel() !== null,
+    enabled: () =>
+      selectedSound() !== null && selectedChannel()?.source.type === "sampler",
+    whyDisabled: () =>
+      selectedChannel()?.source.type === "instrument"
+        ? "Samplers only"
+        : undefined,
     run: async () => {
       const sound = selectedSound()
       if (sound) await replaceChannelSample(sound.path)
@@ -103,5 +120,14 @@ export const BROWSER_ACTIONS: Action[] = [
 
 /** Adds the browser's actions. Returns a function that removes them again. */
 export function registerBrowserActions(): () => void {
-  return registry.register(BROWSER_ACTIONS)
+  const stops = [
+    registry.register(BROWSER_ACTIONS),
+    invalidateActionsOn(useBrowserStore, (state) => [
+      state.autoPreview,
+      state.selected,
+    ]),
+  ]
+  return () => {
+    for (const stop of stops) stop()
+  }
 }

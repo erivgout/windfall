@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
 import * as React from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   FADER_DB_TICKS,
+  FADER_LABEL_GAP,
   FADER_MAX_GAIN,
   Fader,
   faderPositionToGain,
   faderTaper,
+  fitFaderLabels,
   gainToFaderPosition,
 } from "./fader"
 import { dbToGain, gainToDb } from "./units"
@@ -84,6 +86,73 @@ describe("fader taper", () => {
   })
 })
 
+describe("fader labels", () => {
+  const placed = FADER_DB_TICKS.map((tick) => ({
+    ...tick,
+    position: gainToFaderPosition(tick.value),
+  }))
+  const labels = (length: number, gap = FADER_LABEL_GAP.vertical) =>
+    fitFaderLabels(placed, length, gap)
+      .map((mark) => mark.label)
+      .filter((label) => label !== undefined)
+
+  it("labels every mark when there is room", () => {
+    expect(labels(160)).toEqual(["+6", "0", "−6", "−12", "−24", "−48", "−∞"])
+  })
+
+  it("drops labels as the travel shortens, the least important first", () => {
+    expect(labels(120)).toEqual(["+6", "0", "−6", "−12", "−24", "−∞"])
+    expect(labels(60)).toEqual(["+6", "0", "−12", "−24", "−∞"])
+    expect(labels(47)).toEqual(["+6", "0", "−12", "−∞"])
+    expect(labels(40)).toEqual(["0", "−12", "−∞"])
+    expect(labels(20)).toEqual(["0", "−∞"])
+    expect(labels(5)).toEqual(["0"])
+  })
+
+  it("never puts two labels closer than the gap", () => {
+    for (let length = 1; length <= 400; length += 1) {
+      for (const gap of [10, 20]) {
+        const kept = fitFaderLabels(placed, length, gap).filter(
+          (mark) => mark.label !== undefined
+        )
+        expect(kept.length).toBeGreaterThan(0)
+        for (const a of kept) {
+          for (const b of kept) {
+            if (a === b) continue
+            expect(
+              Math.abs(a.position - b.position) * length
+            ).toBeGreaterThanOrEqual(gap)
+          }
+        }
+      }
+    }
+  })
+
+  it("keeps every mark, with or without its label", () => {
+    const fitted = fitFaderLabels(placed, 20, 10)
+    expect(fitted.map((mark) => mark.value)).toEqual(
+      placed.map((mark) => mark.value)
+    )
+  })
+
+  it("prefers strong marks to the ends in any set of marks", () => {
+    const marks = [0, 25, 50, 75, 100].map((value) => ({
+      value,
+      label: String(value),
+      strong: value === 25,
+      position: value / 100,
+    }))
+    const kept = (length: number) =>
+      fitFaderLabels(marks, length, 10)
+        .filter((mark) => mark.label !== undefined)
+        .map((mark) => mark.value)
+    // The strong mark at 25 keeps its label and the end beside it gives way.
+    expect(kept(30)).toEqual([25, 100])
+    expect(kept(39)).toEqual([25, 100])
+    expect(kept(40)).toEqual([0, 25, 50, 75, 100])
+  })
+})
+
 function GainFader(props: Partial<React.ComponentProps<typeof Fader>>) {
   const [gain, setGain] = React.useState(props.value ?? 1)
   return (
@@ -92,6 +161,56 @@ function GainFader(props: Partial<React.ComponentProps<typeof Fader>>) {
 }
 
 describe("Fader", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("labels only the dB marks that fit a short fader, and keeps the lines", () => {
+    // 60 pixels of travel.
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(60)
+    const { container } = render(<GainFader />)
+    const scale = container.querySelector('[data-slot="fader-scale"]')
+    const shown = [...(scale?.querySelectorAll("span") ?? [])]
+      .map((span) => span.textContent)
+      .filter((text) => text !== "")
+    expect(shown).toEqual(["+6", "0", "−12", "−24", "−∞"])
+    expect(scale?.querySelectorAll("span:empty")).toHaveLength(
+      FADER_DB_TICKS.length * 2 - shown.length
+    )
+  })
+
+  it("measures a horizontal fader along its width", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100)
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(16)
+    const { container } = render(<GainFader orientation="horizontal" />)
+    const scale = container.querySelector('[data-slot="fader-scale"]')
+    const shown = [...(scale?.querySelectorAll("span") ?? [])]
+      .map((span) => span.textContent)
+      .filter((text) => text !== "")
+    // 20 pixels apart at least: 0 dB, the ends, then −12 and −24.
+    expect(shown).toEqual(["+6", "0", "−12", "−24", "−∞"])
+  })
+
+  it("comes in two thicknesses, in both directions", () => {
+    const control = (props: Partial<React.ComponentProps<typeof Fader>>) => {
+      const { container, unmount } = render(<GainFader {...props} />)
+      const classes = [
+        ...(container.querySelector('[data-slot="fader-control"]')?.classList ??
+          []),
+      ]
+      unmount()
+      return classes
+    }
+    expect(control({})).toContain("w-7")
+    expect(control({ size: "sm" })).toContain("w-5")
+    expect(control({ size: "sm" })).not.toContain("w-7")
+    expect(control({ orientation: "horizontal" })).toContain("h-7")
+    expect(control({ orientation: "horizontal", size: "sm" })).toContain("h-5")
+    expect(control({ orientation: "horizontal", size: "sm" })).not.toContain(
+      "h-7"
+    )
+  })
+
   it("is a gain slider with a dB readout by default", () => {
     render(<GainFader value={0.5} showValue />)
     const slider = screen.getByRole("slider", { name: "Level" })

@@ -1,14 +1,22 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { toast } from "sonner"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { BrowserEntry } from "@/bindings"
 import { registry } from "@/lib/actions"
+import { sourceSample } from "@/lib/channel-source"
 import { SAMPLE_DRAG_TYPE } from "@/lib/dnd"
 import type { Backend } from "@/lib/ipc"
 import { dispatch, useProjectStore } from "@/lib/store/project"
 import { usePromptStore } from "@/lib/store/prompts"
+import { usePlaylistStore } from "@/features/playlist/store"
 import { useUiStore } from "@/lib/store/ui"
 
 import BrowserPanel from "."
@@ -98,6 +106,7 @@ describe("adding a sound to the rack", () => {
     expect(await openMenu("Kick 01.wav")).toEqual([
       "Preview",
       "Add to new channelEnter",
+      "Add to playlist",
       "Replace selected channel's sample",
       "Copy path",
     ])
@@ -146,6 +155,41 @@ describe("adding a sound to the rack", () => {
   })
 })
 
+describe("adding a sound to the playlist", () => {
+  const clips = () => useProjectStore.getState().project.playlist.clips
+
+  it("adds an audio clip from the right-click menu and shows the playlist", async () => {
+    const { backend } = await openKicks()
+    const add = vi.spyOn(backend, "addAudioClipFromFile")
+    useUiStore.getState().showCenterTab("channelRack")
+
+    await openMenu("Kick 02.wav")
+    fireEvent.click(menuItem("Add to playlist"))
+    await waitFor(() => expect(clips()).toHaveLength(1))
+
+    // At the song position, on a new track of its own.
+    expect(add.mock.calls).toEqual([[KICK, { track: undefined, start: 0 }]])
+    expect(clips()[0].content).toMatchObject({ type: "audio" })
+    const { history, project } = useProjectStore.getState()
+    expect(history.entries.map((entry) => entry.label)).toEqual([
+      "Add audio clip",
+    ])
+    expect(project.playlist.tracks).toHaveLength(1)
+    expect(useUiStore.getState().centerTab).toBe("playlist")
+    expect([...usePlaylistStore.getState().selection]).toEqual([clips()[0].id])
+  })
+
+  it("adds one from the button under the waveform", async () => {
+    const { user } = await openKicks()
+    await user.click(item("Kick 02.wav"))
+    await user.click(
+      await screen.findByRole("button", { name: "Add to playlist" })
+    )
+    await waitFor(() => expect(clips()).toHaveLength(1))
+    expect(clips()[0]).toMatchObject({ start: 0 })
+  })
+})
+
 describe("replacing the selected channel's sample", () => {
   it("is off until a channel is selected, then names that channel", async () => {
     const { user, backend } = await openKicks()
@@ -168,8 +212,9 @@ describe("replacing the selected channel's sample", () => {
     await user.click(on)
 
     await waitFor(() => expect(replace.mock.calls).toEqual([[snare.id, KICK]]))
-    const sampleId = channels().find((channel) => channel.id === snare.id)!
-      .source.sample
+    const sampleId = sourceSample(
+      channels().find((channel) => channel.id === snare.id)?.source
+    )
     const sample = useProjectStore
       .getState()
       .project.samples.find((asset) => asset.id === sampleId)
@@ -423,13 +468,25 @@ describe("folders in the right-click menu", () => {
     )
   })
 
-  it("offers to add a folder below the last row", async () => {
+  it("offers what can be done to the browser below the last row", async () => {
     await start()
     fireEvent.contextMenu(document.querySelector("[data-slot=browser-scroll]")!)
-    await screen.findByRole("menu")
+    const menu = await screen.findByRole("menu")
     expect(
-      screen.getAllByRole("menuitem").map((entry) => entry.textContent)
-    ).toEqual(["Add folder to the browser…"])
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((entry) => entry.textContent)
+    ).toEqual([
+      "Add folder to the browser…",
+      "Refresh browser folder",
+      "Filter the browserCtrl+F",
+    ])
+    // Previewing on selection is switched on and off from here too.
+    expect(
+      within(menu)
+        .getAllByRole("menuitemcheckbox")
+        .map((entry) => entry.textContent)
+    ).toEqual(["Preview sounds when selected", "BrowserCtrl+B"])
   })
 })
 

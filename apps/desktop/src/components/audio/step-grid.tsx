@@ -51,6 +51,11 @@ type StepGridProps = Omit<
   disabled?: boolean
   /** Right-click and right-drag clear steps. Turn off to allow a context menu. */
   rightClickClears?: boolean
+  /**
+   * Let Space toggle the focused step as well as Enter. Off by default, so
+   * an app can keep Space for its transport.
+   */
+  spaceToggles?: boolean
   /** Names a step for screen readers. Defaults to "Step 1", "Step 2"... */
   stepLabel?: (step: number) => string
 }
@@ -79,6 +84,7 @@ const StepGrid = React.memo(function StepGrid({
   size = "md",
   disabled = false,
   rightClickClears = true,
+  spaceToggles = false,
   stepLabel = defaultStepLabel,
   ...props
 }: StepGridProps) {
@@ -217,7 +223,8 @@ const StepGrid = React.memo(function StepGrid({
 
   function handleClick(event: React.MouseEvent<HTMLDivElement>) {
     // Pointer presses were handled on the way down. A click with no detail
-    // comes from Space, Enter or assistive technology.
+    // comes from Enter, from Space where that is allowed, or from assistive
+    // technology.
     const step = (event.target as HTMLElement).closest<HTMLElement>(
       "[data-step]"
     )?.dataset.step
@@ -318,6 +325,7 @@ const StepGrid = React.memo(function StepGrid({
           alt={Math.floor(step / groupSize) % 2 === 1}
           tabIndex={step === tabStop ? 0 : -1}
           disabled={disabled}
+          spaceToggles={spaceToggles}
           aria-label={stepLabel(step)}
           className="size-full"
         />

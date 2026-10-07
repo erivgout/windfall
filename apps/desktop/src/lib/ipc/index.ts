@@ -1,18 +1,23 @@
 import type { Backend } from "./backend"
-import { createMockBackend } from "./mock"
 import { createTauriBackend } from "./tauri"
 
 export { errorMessage } from "./backend"
-export type { Backend, Unsubscribe } from "./backend"
+export type { Backend, StoredAudioSettings, Unsubscribe } from "./backend"
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 }
 
+// The mock brings the document as a WebAssembly module, which the app never
+// needs. It is fetched as a chunk of its own, and only outside the app. The
+// module waits here until that chunk is ready, so everything that imports
+// `backend` can go on using it at once.
+const mock = isTauri() ? null : await import("./mock")
+
 let current: Backend | null = null
 
 function resolve(): Backend {
-  current ??= isTauri() ? createTauriBackend() : createMockBackend()
+  current ??= mock ? mock.createMockBackend() : createTauriBackend()
   return current
 }
 

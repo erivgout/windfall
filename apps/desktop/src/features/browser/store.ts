@@ -55,6 +55,11 @@ export type BrowserState = {
   autoPreview: boolean
   /** True while the folders that were open last time are being read again. */
   restoring: boolean
+  /**
+   * True while the factory library is being read to its last folder for
+   * the filter, so "nothing matches" is not said before it is known.
+   */
+  searchingFactory: boolean
   /** Facts and waveform of the sound the preview pane is showing. */
   info: InfoState | null
   /** The sound the engine was last told to play, and when it started. */
@@ -93,6 +98,7 @@ function initialState(): BrowserState {
     filter: "",
     autoPreview: saved.autoPreview,
     restoring: true,
+    searchingFactory: false,
     info: null,
     playing: null,
     previewError: null,
@@ -124,6 +130,7 @@ const set = useBrowserStore.setState
 export function resetBrowserStore() {
   generation += 1
   pendingLoads = 0
+  factorySearches = 0
   loadTokens.clear()
   dropPendingScrollTop()
   hydrating = true
@@ -272,6 +279,8 @@ export function applyRoots(roots: BrowserRoot[]) {
       void loadFolder(root.path)
     }
   }
+  // A filter typed before the roots were known still gets its search.
+  if (get().filter.trim() !== "") searchWholeFactory()
   finishRestoreWhenIdle()
 }
 
@@ -332,6 +341,47 @@ export function refreshFolder(path: string) {
 
 export function setFilter(filter: string) {
   set({ filter })
+  if (filter.trim() !== "") searchWholeFactory()
+}
+
+/** Reads every folder under `path` that has not been read yet. */
+async function loadAllUnder(path: string, mine: number): Promise<void> {
+  const before = get().listings[path]
+  if (before === undefined || before.status === "error") await loadFolder(path)
+  if (mine !== generation) return
+  const listing = get().listings[path]
+  if (listing?.status !== "ready") return
+  await Promise.all(
+    listing.entries
+      .filter((entry) => entry.kind === "folder")
+      .map((entry) => loadAllUnder(entry.path, mine))
+  )
+}
+
+let factorySearches = 0
+
+/**
+ * Reads the whole factory library, so the filter finds every factory sound
+ * and not only those in folders that happen to have been opened. It is
+ * small and it is known, which a folder of the user's is not: that could
+ * be a whole disk, and is still searched only where it was opened.
+ *
+ * Folders that are read already are not read again, so this costs nothing
+ * the second time.
+ */
+export function searchWholeFactory() {
+  const mine = generation
+  const factory = get().roots.filter((root) => root.kind === "factory")
+  if (factory.length === 0) return
+  factorySearches += 1
+  set({ searchingFactory: true })
+  void Promise.all(factory.map((root) => loadAllUnder(root.path, mine))).then(
+    () => {
+      if (mine !== generation) return
+      factorySearches -= 1
+      if (factorySearches === 0) set({ searchingFactory: false })
+    }
+  )
 }
 
 export function setAutoPreview(autoPreview: boolean) {

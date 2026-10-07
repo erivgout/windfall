@@ -1,5 +1,6 @@
 import {
   ArrowDown01Icon,
+  ArrowVerticalIcon,
   CursorRectangleSelection01Icon,
   Eraser01Icon,
   FitToScreenIcon,
@@ -14,6 +15,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 
+import { ContextActions } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -31,14 +33,17 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { ModeSwitch } from "@/features/transport/mode-switch"
-import { runAction, useAction } from "@/lib/actions"
+import { runAction, useAction, useShortcutLabel } from "@/lib/actions"
 import { useHint } from "@/lib/store/hint"
+import { useProjectStore } from "@/lib/store/project"
 import { useTransportStore } from "@/lib/store/transport"
 import { cn } from "@/lib/utils"
 
 import { toolActionId } from "./actions"
 import { TOOLS, type Tool } from "./intents"
-import { usePlaylistShortcut } from "./keys"
+import { OverlapWarning } from "./audio/overlap-warning"
+import { PANEL_MENU } from "./menu"
+import { useViewportValue, type GridMetrics } from "./metrics"
 import { SNAP_MODES, type SnapMode } from "./snap"
 import { usePlaylistStore } from "./store"
 
@@ -51,8 +56,8 @@ const TOOL_ICONS: Record<Tool, IconSvgElement> = {
 }
 
 const TOOL_ABOUT: Record<Tool, string> = {
-  draw: "click to place the selected pattern, drag clips to move or resize",
-  paint: "drag to lay the selected pattern down back to back",
+  draw: "click to place what is picked on the left, drag clips to move or resize, click in an automation clip to add a point",
+  paint: "drag to lay what is picked on the left down back to back",
   select: "drag a box around clips, then move, copy or delete them",
   erase: "click or drag across clips to delete them",
   mute: "click or drag across clips to mute or unmute them",
@@ -70,9 +75,8 @@ type IconActionProps = {
 }
 
 /**
- * A toolbar button for one of the playlist's actions. It shows the shortcut
- * the action has inside the playlist, which the app-wide keymap may have
- * given to another panel.
+ * A toolbar button for one of the playlist's actions, for the ones that
+ * are on or off or need more of a hint than their title.
  */
 function IconAction({
   action: id,
@@ -82,7 +86,7 @@ function IconAction({
   className,
 }: IconActionProps) {
   const action = useAction(id)
-  const shortcut = usePlaylistShortcut(id)
+  const shortcut = useShortcutLabel(id)
   const title = action?.title.replace(/…$/, "") ?? id
   const hint = useHint(
     [title, shortcut ? ` (${shortcut})` : "", about ? `: ${about}` : ""].join(
@@ -209,16 +213,28 @@ function SongControls() {
   const playing = useTransportStore((state) => state.playing)
   const loop = useTransportStore((state) => state.loopSong)
   const follow = usePlaylistStore((state) => state.follow)
+  // Audio and automation are the song's: a looping pattern plays neither.
+  const silentInPattern = useProjectStore((state) =>
+    state.project.playlist.clips.some((clip) => clip.content.type !== "pattern")
+  )
   const playHint = useHint(
     "Play the song: switches the transport from the pattern to the playlist and starts it"
   )
+  const notice = mode === "pattern" && silentInPattern
+  const modeHint = useHint(
+    notice
+      ? "The transport loops one pattern, so the audio and automation clips on the playlist are not playing. Switch to Song to hear them"
+      : mode === "song"
+        ? "Play plays the playlist from the song position"
+        : "Play loops the selected pattern. Switch to Song to play the playlist"
+  )
 
   return (
-    <div className="ml-auto flex items-center gap-1.5 pl-2">
+    <div className="ml-auto flex min-w-0 items-center gap-1.5 pl-2">
       {mode === "pattern" && (
         <Button
           size="sm"
-          className="gap-1 bg-brand text-brand-foreground hover:bg-brand/85"
+          className="shrink-0 gap-1 bg-brand text-brand-foreground hover:bg-brand/85"
           onClick={() => void runAction("playlist.playSong")}
           {...playHint}
         >
@@ -227,14 +243,21 @@ function SongControls() {
         </Button>
       )}
       <span
+        role="status"
+        data-slot="playlist-mode"
+        data-notice={notice ? "" : undefined}
         className={cn(
-          "text-muted-foreground",
+          // In a narrow window the words give way before the buttons do.
+          "min-w-0 truncate text-muted-foreground data-notice:text-warn",
           mode === "song" && playing && "text-brand"
         )}
+        {...modeHint}
       >
         {mode === "song"
           ? "Playing from the playlist"
-          : "Play loops the pattern"}
+          : notice
+            ? "Play loops the pattern: audio and automation play in Song mode"
+            : "Play loops the pattern"}
       </span>
       <ModeSwitch />
       <IconAction
@@ -253,30 +276,40 @@ function SongControls() {
   )
 }
 
-/** The strip above the timeline: pattern list, tools, snap, zoom, song mode. */
-export function PlaylistToolbar() {
+/** The strip above the timeline: clip list, tools, snap, zoom, song mode. */
+export function PlaylistToolbar({ metrics }: { metrics: GridMetrics }) {
   const pickerOpen = usePlaylistStore((state) => state.pickerOpen)
+  const tall = useViewportValue(metrics, () => metrics.tall)
 
   return (
-    <div
-      role="toolbar"
-      aria-label="Playlist"
-      className="flex h-9 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
-    >
-      <IconAction
-        action="playlist.patterns"
-        icon={LeftToRightListBulletIcon}
-        pressed={pickerOpen}
-        about="show or hide the patterns to place"
-      />
-      <Tools />
-      <SnapMenu />
-      <IconAction
-        action="playlist.zoomToFit"
-        icon={FitToScreenIcon}
-        about="show the whole song"
-      />
-      <SongControls />
-    </div>
+    <ContextActions items={PANEL_MENU}>
+      <div
+        role="toolbar"
+        aria-label="Playlist"
+        className="flex h-9 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
+      >
+        <IconAction
+          action="playlist.patterns"
+          icon={LeftToRightListBulletIcon}
+          pressed={pickerOpen}
+          about="show or hide the patterns, sounds and automations to place"
+        />
+        <Tools />
+        <SnapMenu />
+        <IconAction
+          action="playlist.zoomToFit"
+          icon={FitToScreenIcon}
+          about="show the whole song"
+        />
+        <IconAction
+          action="playlist.tallTracks"
+          icon={ArrowVerticalIcon}
+          pressed={tall}
+          about="make the tracks tall enough to draw automation curves in. Alt+wheel sets any height"
+        />
+        <OverlapWarning metrics={metrics} />
+        <SongControls />
+      </div>
+    </ContextActions>
   )
 }

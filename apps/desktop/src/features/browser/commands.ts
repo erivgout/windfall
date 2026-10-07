@@ -1,6 +1,9 @@
 import { toast } from "sonner"
 
 import type { BrowserRoot, Channel, DispatchResult } from "@/bindings"
+import { addAudioFile } from "@/features/playlist/audio/ops"
+import { songTick } from "@/features/playlist/ops"
+import { revealClip } from "@/features/playlist/reveal"
 import { attempt, reportError } from "@/lib/errors"
 import { openProjectPath } from "@/lib/flows/project"
 import { backend } from "@/lib/ipc"
@@ -89,6 +92,16 @@ export async function addToRack(path: string): Promise<void> {
   const ui = useUiStore.getState()
   if (created !== undefined) ui.selectChannel(created)
   ui.showCenterTab("channelRack")
+}
+
+/**
+ * Puts the file on the playlist as an audio clip: at the song position, on
+ * a new track of its own, playing into a new mixer track. Shows the
+ * playlist with the clip selected.
+ */
+export async function addToPlaylist(path: string): Promise<void> {
+  const clip = await addAudioFile(path, { start: songTick() })
+  if (clip !== null) revealClip(clip)
 }
 
 /** Makes the channel selected in the rack play the file instead. */

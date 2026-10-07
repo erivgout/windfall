@@ -7,6 +7,24 @@ import type { PlaylistTrackId } from "./PlaylistTrackId";
  */
 export type ClipInit = { track: PlaylistTrackId, start: number, 
 /**
- * Defaults to the natural length of the content: one pass of a pattern.
+ * Defaults to the natural length of the content: one pass of a
+ * pattern, or an automation's curve up to its last point and at least
+ * one bar. An audio clip has to be given its length, because how long
+ * its audio lasts is not something the project knows. The shell's
+ * `add_audio_clip_from_file` and `add_audio_clip_from_sample` work it
+ * out from the file.
  */
-length?: number, content: ClipContent, };
+length?: number, 
+/**
+ * How far into its content the clip starts, in ticks. Defaults to 0.
+ */
+offset?: number, 
+/**
+ * Defaults to false.
+ */
+muted?: boolean, 
+/**
+ * What the clip plays. The values of an audio clip are brought into
+ * their ranges like those of any command.
+ */
+content: ClipContent, };

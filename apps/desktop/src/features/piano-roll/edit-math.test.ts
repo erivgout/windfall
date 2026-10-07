@@ -8,7 +8,9 @@ import {
   duplicateRight,
   endAfterUpdates,
   extendedLengthSteps,
+  initsFit,
   lengthStepsAt,
+  MAX_PATTERN_TICKS,
   moveDelta,
   moveLimits,
   moveUpdates,
@@ -22,6 +24,7 @@ import {
   resizeDelta,
   resizeUpdates,
   rowsAlongSegment,
+  updatesFit,
   withExtension,
 } from "./edit-math"
 
@@ -275,6 +278,60 @@ describe("pattern length", () => {
     expect(lengthStepsAt(-50, FOUR_FOUR, false)).toBe(16)
     expect(lengthStepsAt(-50, FOUR_FOUR, true)).toBe(1)
     expect(lengthStepsAt(9_999_999, FOUR_FOUR, false)).toBe(1024)
+  })
+})
+
+describe("the end of the longest pattern", () => {
+  const note = (id: number, start: number, length = 240): Note => ({
+    id,
+    start,
+    length,
+    key: 60,
+    velocity: 0.8,
+    pan: 0,
+  })
+
+  it("is 1,024 steps in", () => {
+    expect(MAX_PATTERN_TICKS).toBe(1024 * 240)
+  })
+
+  it("takes new notes up to it and none past it", () => {
+    const last = MAX_PATTERN_TICKS - 240
+    expect(initsFit([{ start: last, length: 240, key: 60 }])).toBe(true)
+    expect(initsFit([{ start: last, length: 241, key: 60 }])).toBe(false)
+    expect(
+      initsFit([
+        { start: 0, length: 240, key: 60 },
+        { start: MAX_PATTERN_TICKS, length: 1, key: 62 },
+      ])
+    ).toBe(false)
+  })
+
+  it("lets no update move or stretch a note past it", () => {
+    const notes = [note(1, MAX_PATTERN_TICKS - 480)]
+    const move = (start: number) => [{ id: 1, patch: { start } }]
+    expect(updatesFit(notes, move(MAX_PATTERN_TICKS - 240))).toBe(true)
+    expect(updatesFit(notes, move(MAX_PATTERN_TICKS - 239))).toBe(false)
+    expect(updatesFit(notes, [{ id: 1, patch: { length: 480 } }])).toBe(true)
+    expect(updatesFit(notes, [{ id: 1, patch: { length: 481 } }])).toBe(false)
+    // A change that leaves the note's place in time alone always fits.
+    expect(updatesFit(notes, [{ id: 1, patch: { velocity: 1 } }])).toBe(true)
+  })
+
+  it("lets a note that is already out there come back, but not go further", () => {
+    const stray = [note(1, MAX_PATTERN_TICKS + 9600)]
+    const move = (start: number) => [{ id: 1, patch: { start } }]
+    expect(updatesFit(stray, move(MAX_PATTERN_TICKS + 4800))).toBe(true)
+    expect(updatesFit(stray, move(0))).toBe(true)
+    expect(updatesFit(stray, move(MAX_PATTERN_TICKS + 9840))).toBe(false)
+  })
+
+  it("grows the pattern up to 1,024 steps and no further", () => {
+    expect(extendedLengthSteps(16, MAX_PATTERN_TICKS, FOUR_FOUR)).toBe(1024)
+    expect(extendedLengthSteps(16, MAX_PATTERN_TICKS * 4, FOUR_FOUR)).toBe(1024)
+    expect(
+      extendedLengthSteps(1024, MAX_PATTERN_TICKS * 4, FOUR_FOUR)
+    ).toBeNull()
   })
 })
 

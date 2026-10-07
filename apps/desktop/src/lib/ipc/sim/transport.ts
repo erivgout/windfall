@@ -1,17 +1,28 @@
 import type {
-  Channel,
+  AutomatedValue,
   Pattern,
   Project,
   RealtimeFrame,
   TransportPatch,
   TransportState,
 } from "@/bindings"
-import { PPQ, TICKS_PER_STEP } from "@/lib/units"
+import { automatedAt, compileLanes, type Lane } from "@/lib/automation/lanes"
+import { songTempoMap } from "@/lib/automation/tempo-map"
+import { soloSet } from "@/lib/mixer-graph"
+import { MASTER_TRACK, PPQ, TICKS_PER_STEP } from "@/lib/units"
+
+import { simulatedGainReductions } from "./effects"
 
 type Onset = { channel: number; velocity: number }
 
 /** How fast a simulated meter falls back, as a time constant in seconds. */
 const METER_FALL_SECS = 0.14
+
+/** The highest level a simulated meter shows. */
+const METER_CEILING = 1.4
+
+/** The level a simulated audio clip plays at, at unity gain. */
+const AUDIO_CLIP_LEVEL = 0.55
 
 function patternOnsets(pattern: Pattern, from: number, to: number): Onset[] {
   const onsets: Onset[] = []
@@ -25,14 +36,27 @@ function patternOnsets(pattern: Pattern, from: number, to: number): Onset[] {
   return onsets
 }
 
+/**
+ * Where the song ends: the end of its last clip, and 0 with no clips. A
+ * muted clip still takes up room, as it does in the engine.
+ */
 function songLength(project: Project): number {
-  const end = project.playlist.clips.reduce(
+  return project.playlist.clips.reduce(
     (latest, clip) => Math.max(latest, clip.start + clip.length),
     0
   )
-  const { numerator, denominator } = project.settings.timeSignature
-  const bar = (numerator * PPQ * 4) / denominator
-  return end > 0 ? end : bar * 4
+}
+
+/**
+ * Where the song is `seconds` after it was at `from`. The song's clock
+ * follows the tempo automation, as the engine's does.
+ */
+function songPosition(project: Project, from: number, seconds: number): number {
+  const map = songTempoMap(project)
+  if (map.steady) {
+    return from + (seconds * project.settings.tempoBpm * PPQ) / 60
+  }
+  return map.tickAt(map.secondsAt(from) + seconds)
 }
 
 function songOnsets(project: Project, from: number, to: number): Onset[] {
@@ -41,9 +65,9 @@ function songOnsets(project: Project, from: number, to: number): Onset[] {
     const track = project.playlist.tracks.find((item) => item.id === clip.track)
     if (clip.muted || track?.muted) continue
     if (clip.start >= to || clip.start + clip.length <= from) continue
-    const pattern = project.patterns.find(
-      (item) => item.id === clip.content.pattern
-    )
+    const content = clip.content
+    if (content.type !== "pattern") continue
+    const pattern = project.patterns.find((item) => item.id === content.pattern)
     if (!pattern) continue
     const length = pattern.lengthSteps * TICKS_PER_STEP
     for (const lane of pattern.lanes) {
@@ -63,9 +87,30 @@ function songOnsets(project: Project, from: number, to: number): Onset[] {
   return onsets
 }
 
-function audibleChannel(channel: Channel, anySolo: boolean): boolean {
-  if (channel.muted) return false
-  return anySolo ? channel.solo : true
+/**
+ * The audio clips that sound at a tick of the song, as the mixer track each
+ * plays into and its level. A clip is taken to sound for its whole length:
+ * the mock has no audio to run out.
+ */
+function audioClipLevels(project: Project, tick: number): [number, number][] {
+  const muted = new Set(
+    project.playlist.tracks
+      .filter((track) => track.muted)
+      .map((track) => track.id)
+  )
+  const levels: [number, number][] = []
+  for (const clip of project.playlist.clips) {
+    if (clip.content.type !== "audio") continue
+    if (clip.muted || muted.has(clip.track)) continue
+    if (tick < clip.start || tick >= clip.start + clip.length) continue
+    // A little movement, so a held clip does not read as a stuck meter.
+    const wobble = 0.85 + 0.15 * Math.abs(Math.sin(tick / 173))
+    levels.push([
+      clip.content.mixerTrack,
+      AUDIO_CLIP_LEVEL * clip.content.gain * wobble,
+    ])
+  }
+  return levels
 }
 
 /**
@@ -74,57 +119,118 @@ function audibleChannel(channel: Channel, anySolo: boolean): boolean {
  */
 export class TransportSim {
   state: TransportState
+  /** The playhead. */
   tick = 0
+  /**
+   * Where playback last started or was moved to by a seek. Stopping
+   * returns the playhead here, and the next play starts here.
+   */
+  private position = 0
   private levels = new Map<number, number>()
+  /** Notes played by hand since the last frame. */
+  private struck: Onset[] = []
+  /** Keys held by hand and their velocities, by channel. */
+  private held = new Map<number, Map<number, number>>()
+  /** The automation lanes of the project they were last made for. */
+  private lanes: {
+    playlist: Project["playlist"]
+    automations: Project["automations"]
+    lanes: Lane[]
+  } | null = null
 
-  constructor(pattern: number) {
-    this.state = { playing: false, mode: "pattern", pattern, loopSong: true }
+  constructor(pattern: number, loopSong = false) {
+    this.state = { playing: false, mode: "pattern", pattern, loopSong }
   }
 
-  play() {
+  play(project: Project) {
+    if (this.state.playing) return
     this.state = { ...this.state, playing: true }
+    this.tick = this.position
+    this.keepInRange(project)
   }
 
   stop() {
     this.state = { ...this.state, playing: false }
-    this.tick = 0
+    this.tick = this.position
   }
 
-  seek(tick: number) {
-    this.tick = Math.max(0, tick)
+  seek(tick: number, project: Project) {
+    this.position = Number.isFinite(tick) ? Math.max(0, tick) : 0
+    this.tick = this.position
+    this.keepInRange(project)
   }
 
-  set(patch: TransportPatch) {
+  set(patch: TransportPatch, project: Project) {
     const modeChanged =
       patch.mode !== undefined && patch.mode !== this.state.mode
-    const patternChanged =
-      patch.pattern !== undefined && patch.pattern !== this.state.pattern
     this.state = {
       ...this.state,
       mode: patch.mode ?? this.state.mode,
       pattern: patch.pattern ?? this.state.pattern,
       loopSong: patch.loopSong ?? this.state.loopSong,
     }
-    if (modeChanged || (patternChanged && this.state.mode === "pattern")) {
+    // A place in a pattern means nothing on the playlist, and the other
+    // way round.
+    if (modeChanged) {
+      this.position = 0
       this.tick = 0
     }
+    this.keepInRange(project)
+  }
+
+  /** A key played by hand: from the rack, the keyboard or the piano roll. */
+  noteOn(channel: number, key: number, velocity: number) {
+    this.struck.push({ channel, velocity })
+    const keys = this.held.get(channel) ?? new Map<number, number>()
+    keys.set(key, velocity)
+    this.held.set(channel, keys)
+  }
+
+  noteOff(channel: number, key: number) {
+    const keys = this.held.get(channel)
+    if (!keys?.delete(key)) return
+    if (keys.size === 0) this.held.delete(channel)
   }
 
   /** Moves time forward and reports what the engine would. */
   advance(project: Project, seconds: number): RealtimeFrame {
     const onsets = this.state.playing ? this.step(project, seconds) : []
+    onsets.push(...this.struck)
+    this.struck = []
+    // An instrument sounds for as long as a key is down. A sampler hit has
+    // already been counted when it was struck.
+    for (const [channel, keys] of this.held) {
+      const source = project.channels.find((item) => item.id === channel)
+      if (source?.source.type !== "instrument") continue
+      onsets.push({ channel, velocity: Math.max(...keys.values()) })
+    }
     const fall = Math.exp(-seconds / METER_FALL_SECS)
     for (const [id, level] of this.levels) {
       this.levels.set(id, level < 0.001 ? 0 : level * fall)
     }
 
+    const tracks = new Set(project.mixer.tracks.map((track) => track.id))
     const anySolo = project.channels.some((channel) => channel.solo)
     for (const onset of onsets) {
       const channel = project.channels.find((item) => item.id === onset.channel)
-      if (!channel || !audibleChannel(channel, anySolo)) continue
-      const hit = onset.velocity * channel.volume * channel.source.gain
-      const current = this.levels.get(channel.mixerTrack) ?? 0
-      this.levels.set(channel.mixerTrack, Math.max(current, hit))
+      if (!channel || channel.muted || (anySolo && !channel.solo)) continue
+      // A sampler has its sample gain, an instrument its output level.
+      const gain =
+        channel.source.type === "sampler"
+          ? channel.source.gain
+          : channel.source.params.gain
+      const hit = onset.velocity * channel.volume * gain
+      // A channel whose track is gone plays into the master.
+      const track = tracks.has(channel.mixerTrack)
+        ? channel.mixerTrack
+        : MASTER_TRACK
+      this.levels.set(track, Math.max(this.levels.get(track) ?? 0, hit))
+    }
+    if (this.inSong()) {
+      for (const [id, level] of audioClipLevels(project, this.tick)) {
+        const track = tracks.has(id) ? id : MASTER_TRACK
+        this.levels.set(track, Math.max(this.levels.get(track) ?? 0, level))
+      }
     }
 
     const meters = this.meters(project)
@@ -136,61 +242,140 @@ export class TransportSim {
       cpu: 0.03 + voices.length * 0.012 + Math.random() * 0.006,
       xruns: 0,
       voices: voices.length,
+      gainReductions: simulatedGainReductions(
+        project,
+        (track) => meters[track * 2] ?? 0
+      ),
+      automated: this.automated(project),
+    }
+  }
+
+  /** True while the song, not a pattern, is playing. */
+  private inSong(): boolean {
+    return this.state.playing && this.state.mode === "song"
+  }
+
+  /**
+   * What automation is doing at the playhead, read from the curves the way
+   * the engine reads them. Nothing while stopped and in pattern mode.
+   */
+  private automated(project: Project): AutomatedValue[] {
+    if (!this.inSong() || project.automations.length === 0) return []
+    const kept = this.lanes
+    const lanes =
+      kept &&
+      kept.playlist === project.playlist &&
+      kept.automations === project.automations
+        ? kept.lanes
+        : compileLanes(project)
+    this.lanes = {
+      playlist: project.playlist,
+      automations: project.automations,
+      lanes,
+    }
+    return automatedAt(
+      lanes,
+      project.automations.map((automation) => automation.id),
+      this.tick
+    )
+  }
+
+  /** Length in ticks of what is playing: the pattern, or the whole song. */
+  private length(project: Project): number {
+    if (this.state.mode === "song") return songLength(project)
+    const pattern =
+      project.patterns.find((item) => item.id === this.state.pattern) ??
+      project.patterns[0]
+    return pattern.lengthSteps * TICKS_PER_STEP
+  }
+
+  private loops(): boolean {
+    return this.state.mode === "pattern" || this.state.loopSong
+  }
+
+  /** Playback ran out by itself. */
+  private finish() {
+    this.state = { ...this.state, playing: false }
+    this.position = 0
+    this.tick = 0
+  }
+
+  /**
+   * Brings a playhead that is past the end back inside the pattern or
+   * song. A song with nothing on it has no inside, so it stops at once.
+   */
+  private keepInRange(project: Project) {
+    if (!this.state.playing) return
+    const length = this.length(project)
+    if (length <= 0) this.finish()
+    else if (this.tick >= length) {
+      if (this.loops()) this.tick %= length
+      else this.finish()
     }
   }
 
   private step(project: Project, seconds: number): Onset[] {
+    this.keepInRange(project)
+    if (!this.state.playing) return []
+    const length = this.length(project)
     const from = this.tick
-    const to = from + (seconds * project.settings.tempoBpm * PPQ) / 60
-
-    if (this.state.mode === "song") {
-      const length = songLength(project)
-      if (to < length) {
-        this.tick = to
-        return songOnsets(project, from, to)
-      }
-      const onsets = songOnsets(project, from, length)
-      if (!this.state.loopSong) {
-        this.stop()
-        return onsets
-      }
-      this.tick = to - length
-      return [...onsets, ...songOnsets(project, 0, this.tick)]
-    }
-
+    const to =
+      this.state.mode === "song"
+        ? songPosition(project, from, seconds)
+        : from + (seconds * project.settings.tempoBpm * PPQ) / 60
     const pattern = project.patterns.find(
       (item) => item.id === this.state.pattern
     )
-    if (!pattern) return []
-    const length = pattern.lengthSteps * TICKS_PER_STEP
+    const between = (low: number, high: number) =>
+      this.state.mode === "song"
+        ? songOnsets(project, low, high)
+        : pattern
+          ? patternOnsets(pattern, low, high)
+          : []
+
     if (to < length) {
       this.tick = to
-      return patternOnsets(pattern, from, to)
+      return between(from, to)
+    }
+    const onsets = between(from, length)
+    if (!this.loops()) {
+      this.finish()
+      return onsets
     }
     this.tick = (to - length) % length
-    return [
-      ...patternOnsets(pattern, from, length),
-      ...patternOnsets(pattern, 0, this.tick),
-    ]
+    return [...onsets, ...between(0, this.tick)]
   }
 
-  /** Two values per mixer track, in mixer order, the master first. */
+  /**
+   * Two values per mixer track, in mixer order, the master first. A track
+   * shows what plays into it, after its fader: its channels, plus what
+   * other tracks pass on through their outputs and sends. Mute and solo
+   * silence a track the way the engine's mixer does.
+   */
   private meters(project: Project): number[] {
     const tracks = project.mixer.tracks
-    const anySolo = tracks.some((track) => track.solo)
+    const heard = soloSet(tracks)
     const outputs = new Map<number, number>()
 
     const outputOf = (id: number, depth: number): number => {
       const cached = outputs.get(id)
       if (cached !== undefined) return cached
       const track = tracks.find((item) => item.id === id)
+      // Routing never loops. The depth limit is for a project that broke
+      // that rule anyway.
       if (!track || depth > tracks.length) return 0
       let input = this.levels.get(id) ?? 0
       for (const other of tracks) {
-        if (other.output === id) input += outputOf(other.id, depth + 1) * 0.7
+        if (other.id === id || other.id === MASTER_TRACK) continue
+        if (other.output === id) input += outputOf(other.id, depth + 1)
+        for (const send of other.sends) {
+          if (send.target === id) {
+            input += outputOf(other.id, depth + 1) * send.gain
+          }
+        }
       }
-      const silent = track.muted || (anySolo && !track.solo && id !== 0)
-      const level = silent ? 0 : Math.min(1.4, input * track.volume)
+      const silent = track.muted || !heard.has(id)
+      const level = silent ? 0 : Math.min(METER_CEILING, input * track.volume)
       outputs.set(id, level)
       return level
     }

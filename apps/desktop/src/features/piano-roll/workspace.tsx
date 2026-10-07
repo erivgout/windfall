@@ -26,7 +26,8 @@ import {
   type TimeGridView,
   type TimeGridViewOptions,
 } from "@/lib/canvas"
-import { TimeGridCanvas } from "@/lib/canvas/TimeGridCanvas"
+import { TimeGridCanvas } from "@/lib/canvas/react"
+import { useShortcutScope } from "@/lib/actions"
 import { errorMessage } from "@/lib/ipc"
 import { useProjectStore } from "@/lib/store/project"
 import { usePlayhead } from "@/lib/store/realtime"
@@ -45,7 +46,7 @@ import { hintFor } from "./intents"
 import { KeyGutter } from "./key-gutter"
 import { KeyLights } from "./key-lights"
 import { LaneHeader, LaneResizer } from "./lane-header"
-import { NOTE_MENU, useRollMenu } from "./menu"
+import { NOTE_MENU, PANEL_MENU } from "./menu"
 import {
   duplicateOutlinePainter,
   noteLabelPainter,
@@ -54,7 +55,6 @@ import {
 import { Ruler } from "./ruler"
 import { Scrollbar } from "./scrollbar"
 import { setCurrentSession } from "./session"
-import { installPianoRollKeys, installSpacePlays } from "./shortcuts"
 import { gridSpecFor, snapTicks } from "./snap"
 import { usePianoRollStore } from "./store"
 import { PianoRollToolbar } from "./toolbar"
@@ -123,7 +123,7 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   const color = channel?.color ?? 0x888888
   const laneKey = `${patternId}:${channelId}`
 
-  const rootRef = useRef<HTMLDivElement>(null)
+  const scope = useShortcutScope("pianoRoll")
   const gridRef = useRef<HTMLDivElement>(null)
   const readoutRef = useRef<HTMLOutputElement>(null)
   const wasPlaying = useRef(false)
@@ -137,7 +137,6 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   )
   const [view, setView] = useState<TimeGridView | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
-  const menu = useRollMenu(NOTE_MENU)
 
   const lastEnd = useMemo(
     () =>
@@ -184,15 +183,6 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
       session.dispose()
     }
   }, [session])
-
-  useEffect(() => {
-    const root = rootRef.current
-    if (!root) return
-    const stop = [installPianoRollKeys(root), installSpacePlays(root)]
-    return () => {
-      for (const off of stop) off()
-    }
-  }, [])
 
   // Shortcuts go to the notes as soon as the panel opens, unless the
   // keyboard focus is somewhere on purpose.
@@ -346,80 +336,81 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
 
   return (
     <SessionContext value={session}>
-      <div
-        ref={rootRef}
-        className="flex h-full min-h-0 min-w-0 flex-col bg-background"
-      >
-        <PianoRollToolbar channelId={channelId} readoutRef={readoutRef} />
+      <ContextActions items={PANEL_MENU}>
         <div
-          className="grid min-h-0 flex-1"
-          style={{
-            gridTemplateColumns: `${GUTTER_WIDTH}px minmax(0, 1fr) ${SCROLLBAR_SIZE}px`,
-            gridTemplateRows: `${RULER_HEIGHT}px minmax(0, 1fr) auto ${laneHeight}px ${SCROLLBAR_SIZE}px`,
-          }}
+          className="flex h-full min-h-0 min-w-0 flex-col bg-background"
+          {...scope}
         >
-          <div className="border-r border-b bg-chassis/60" />
-          <div className="border-b bg-chassis/60">
-            <Ruler />
-          </div>
-          <div className="border-b border-l bg-chassis/40" />
-
-          <div className="min-h-0 border-r">
-            <KeyGutter
-              channelId={channelId}
-              color={colorToCss(color)}
-              keyboardRef={attachKeyboard}
-            />
-          </div>
-          <ContextActions items={menu.items}>
-            <div
-              ref={gridRef}
-              tabIndex={0}
-              role="application"
-              aria-label="Note grid"
-              className="relative min-h-0 min-w-0 outline-none focus-visible:outline-none"
-              onContextMenuCapture={menu.refresh}
-            >
-              {failure === null ? (
-                <TimeGridCanvas
-                  options={options}
-                  onReady={onReady}
-                  onError={onError}
-                  className="absolute inset-0"
-                />
-              ) : (
-                <p
-                  role="alert"
-                  className="absolute inset-0 flex items-center justify-center p-6 text-center text-muted-foreground"
-                >
-                  The note grid could not start: {failure}
-                </p>
-              )}
+          <PianoRollToolbar channelId={channelId} readoutRef={readoutRef} />
+          <div
+            className="grid min-h-0 flex-1"
+            style={{
+              gridTemplateColumns: `${GUTTER_WIDTH}px minmax(0, 1fr) ${SCROLLBAR_SIZE}px`,
+              gridTemplateRows: `${RULER_HEIGHT}px minmax(0, 1fr) auto ${laneHeight}px ${SCROLLBAR_SIZE}px`,
+            }}
+          >
+            <div className="border-r border-b bg-chassis/60" />
+            <div className="border-b bg-chassis/60">
+              <Ruler />
             </div>
-          </ContextActions>
-          <div className="min-h-0 border-l">
-            <Scrollbar axis="rows" />
-          </div>
+            <div className="border-b border-l bg-chassis/40" />
 
-          <div className="col-span-3">
-            <LaneResizer />
-          </div>
+            <div className="min-h-0 border-r">
+              <KeyGutter
+                channelId={channelId}
+                color={colorToCss(color)}
+                keyboardRef={attachKeyboard}
+              />
+            </div>
+            <ContextActions items={NOTE_MENU}>
+              <div
+                ref={gridRef}
+                tabIndex={0}
+                role="application"
+                aria-label="Note grid"
+                className="focus-frame relative min-h-0 min-w-0"
+              >
+                {failure === null ? (
+                  <TimeGridCanvas
+                    options={options}
+                    onReady={onReady}
+                    onError={onError}
+                    className="absolute inset-0"
+                  />
+                ) : (
+                  <p
+                    role="alert"
+                    className="absolute inset-0 flex items-center justify-center p-6 text-center text-muted-foreground"
+                  >
+                    The note grid could not start: {failure}
+                  </p>
+                )}
+              </div>
+            </ContextActions>
+            <div className="min-h-0 border-l">
+              <Scrollbar axis="rows" />
+            </div>
 
-          <div className="border-r bg-chassis/40">
-            <LaneHeader />
-          </div>
-          <div className="min-w-0">
-            <ValueLane kind={laneKind} color={color} />
-          </div>
-          <div className="border-l bg-chassis/40" />
+            <div className="col-span-3">
+              <LaneResizer />
+            </div>
 
-          <div className="border-t border-r bg-chassis/40" />
-          <div className="min-w-0 border-t">
-            <Scrollbar axis="time" />
+            <div className="border-r bg-chassis/40">
+              <LaneHeader />
+            </div>
+            <div className="min-w-0">
+              <ValueLane kind={laneKind} color={color} />
+            </div>
+            <div className="border-l bg-chassis/40" />
+
+            <div className="border-t border-r bg-chassis/40" />
+            <div className="min-w-0 border-t">
+              <Scrollbar axis="time" />
+            </div>
+            <div className="border-t border-l bg-chassis/40" />
           </div>
-          <div className="border-t border-l bg-chassis/40" />
         </div>
-      </div>
+      </ContextActions>
     </SessionContext>
   )
 }

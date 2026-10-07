@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef } from "react"
 
 import type { TimeGridView, TimeGridViewOptions } from "@/lib/canvas"
-import { TimeGridCanvas } from "@/lib/canvas/TimeGridCanvas"
+import { TimeGridCanvas } from "@/lib/canvas/react"
 
 import { SONG_TICKS, TICKS_PER_BAR } from "./generate-notes"
 import { ROW_COUNT } from "./model"

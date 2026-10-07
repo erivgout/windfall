@@ -3,7 +3,9 @@ import type { NoteId } from "./NoteId";
 
 export type Note = { id: NoteId, 
 /**
- * Start in ticks from the beginning of the pattern.
+ * Start in ticks from the beginning of the pattern. An edit can put a
+ * note anywhere before [`MAX_PATTERN_TICKS`], the end of the longest
+ * pattern.
  */
 start: number, 
 /**

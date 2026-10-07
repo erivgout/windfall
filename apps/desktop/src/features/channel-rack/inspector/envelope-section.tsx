@@ -8,8 +8,10 @@ import {
   powerScale,
 } from "@/components/audio"
 import { Switch } from "@/components/ui/switch"
+import type { SamplerChannel } from "@/lib/channel-source"
 import { useHint } from "@/lib/store/hint"
 import { dispatch } from "@/lib/store/project"
+import { onProjectReplaced } from "@/lib/store/replaced"
 import { clamp, colorToCss } from "@/lib/units"
 
 import { useGestureValue } from "../use-gesture-value"
@@ -28,6 +30,8 @@ const { maxAttackMs, maxDecayMs, maxReleaseMs } = DEFAULT_ENVELOPE_LIMITS
 
 // Turning the envelope off and on again brings back the shape it had.
 const remembered = new Map<ChannelId, Envelope>()
+// Channel ids start over in every project.
+onProjectReplaced(() => remembered.clear())
 
 function withinLimits(envelope: Envelope): Envelope {
   return {
@@ -74,10 +78,11 @@ function EnvelopeControls({
   return (
     <>
       <EnvelopeEditor
-        role="group"
         aria-label="Envelope shape"
         {...value}
         defaults={DEFAULT_ENVELOPE}
+        // The sampler's envelope: a straight attack, exponential falls.
+        curve="exponential"
         color={colorToCss(channel.color)}
         onChange={set}
         className="h-28"
@@ -142,7 +147,7 @@ function EnvelopeControls({
 }
 
 /** The sampler's volume envelope: on or off, and its shape when on. */
-export function EnvelopeSection({ channel }: { channel: Channel }) {
+export function EnvelopeSection({ channel }: { channel: SamplerChannel }) {
   const { id } = channel
   const envelope = channel.source.envelope
   const hint = useHint(

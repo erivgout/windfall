@@ -17,7 +17,7 @@ import { auditionOff, auditionOn } from "./audition"
 import { useSession } from "./context"
 import { HOME_KEY, MAX_KEY } from "./edit-math"
 import { handleWheel } from "./grid-input"
-import { useRollMenu, VIEW_MENU } from "./menu"
+import { VIEW_MENU } from "./menu"
 import { ROW_COUNT } from "./view-math"
 
 /** Below this row height the C labels would run into each other. */
@@ -59,7 +59,6 @@ export function KeyGutter({ channelId, color, keyboardRef }: KeyGutterProps) {
     contextSeparator,
     ...VIEW_MENU,
   ]
-  const menu = useRollMenu(entries)
 
   useEffect(() => {
     const sync = () => {
@@ -94,7 +93,7 @@ export function KeyGutter({ channelId, color, keyboardRef }: KeyGutterProps) {
   }, [session])
 
   return (
-    <ContextActions items={menu.items}>
+    <ContextActions items={entries}>
       <div
         ref={windowRef}
         className="relative h-full w-full overflow-hidden bg-(--wf-key-black,oklch(0.2_0_0))"
@@ -103,7 +102,6 @@ export function KeyGutter({ channelId, color, keyboardRef }: KeyGutterProps) {
             "[data-key]"
           )?.dataset.key
           if (key !== undefined) setMenuKey(Number(key))
-          menu.refresh()
         }}
         {...hint}
       >

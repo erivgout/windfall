@@ -29,7 +29,7 @@ export function LaneHeader() {
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label={`Lane shows ${label.toLowerCase()}`}
-        className="flex h-6 w-full items-center justify-between gap-0.5 px-1 text-[0.625rem] text-muted-foreground outline-none hover:bg-foreground/5 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground"
+        className="flex h-6 w-full items-center justify-between gap-0.5 px-1 text-[0.625rem] text-muted-foreground outline-none hover:bg-foreground/5 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         {...hint}
       >
         <span className="truncate">{label}</span>
@@ -74,7 +74,7 @@ export function LaneResizer() {
       aria-valuemax={MAX_LANE_HEIGHT}
       aria-valuenow={height}
       tabIndex={0}
-      className="h-[5px] cursor-ns-resize touch-none border-y bg-chassis outline-none hover:bg-brand/50 focus-visible:bg-brand/60 active:bg-brand/70"
+      className="h-[5px] cursor-ns-resize touch-none border-y bg-chassis outline-none hover:bg-brand/50 focus-visible:bg-brand/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset active:bg-brand/70"
       onPointerDown={(event) => {
         if (event.button !== 0) return
         drag.current = { y: event.clientY, height }

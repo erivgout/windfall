@@ -1,18 +1,16 @@
 import { describe, expect, it } from "vitest"
 
-import type { Clip, Playlist, PlaylistTrack } from "@/bindings"
+import type { Clip, ClipContent } from "@/bindings"
 
 import {
   clampMove,
   clampNudge,
   clipboardFrom,
-  clipFollowUps,
   clipInits,
   clipUpdates,
   cloneMoved,
   duplicateRight,
   endResizeDelta,
-  insertTrackCommands,
   minResizeLength,
   moveChanges,
   paintStarts,
@@ -23,6 +21,7 @@ import {
   songEnd,
   startTrimDelta,
   strokeBox,
+  trackDropIndex,
   tracksNeeded,
   withoutStacked,
   wrapTicks,
@@ -256,7 +255,7 @@ describe("withoutStacked", () => {
     length: BAR,
     offset: 0,
     muted: false,
-    pattern,
+    content: { type: "pattern", pattern },
   })
 
   it("drops a clip that would sit exactly on the same thing", () => {
@@ -285,7 +284,7 @@ describe("copies", () => {
         length: 2 * BAR,
         offset: 240,
         muted: true,
-        pattern: 1,
+        content: { type: "pattern", pattern: 1 },
       },
     ])
   })
@@ -323,10 +322,15 @@ describe("copies", () => {
 
   it("leaves out clips whose pattern is gone", () => {
     const copied: NewClip[] = [
-      { ...clipboardFrom([first], rowOf)[0], pattern: 7 },
+      {
+        ...clipboardFrom([first], rowOf)[0],
+        content: { type: "pattern", pattern: 7 },
+      },
       ...clipboardFrom([second], rowOf),
     ]
-    expect(pasteAt(copied, 0, BAR, (id) => id === 1)).toHaveLength(1)
+    const exists = (content: ClipContent) =>
+      content.type === "pattern" && content.pattern === 1
+    expect(pasteAt(copied, 0, BAR, exists)).toHaveLength(1)
   })
 })
 
@@ -345,7 +349,7 @@ describe("tracks for rows", () => {
       length: 0,
       offset: 0,
       muted: false,
-      pattern: 3,
+      content: { type: "pattern", pattern: 3 },
     }
     expect(clipInits([made], [10, 11])).toEqual([
       {
@@ -357,23 +361,42 @@ describe("tracks for rows", () => {
     ])
   })
 
-  it("follows up only for copies with an offset or a mute", () => {
+  it("gives a copy its offset and its mute in the one command", () => {
     const plain: NewClip = {
       row: 0,
       start: 0,
       length: BAR,
       offset: 0,
       muted: false,
-      pattern: 1,
+      content: { type: "pattern", pattern: 1 },
     }
-    expect(
-      clipFollowUps(
-        [plain, { ...plain, offset: 240 }, { ...plain, muted: true }],
-        [7, 8, 9]
-      )
-    ).toEqual([
-      { id: 8, patch: { offset: 240 } },
-      { id: 9, patch: { muted: true } },
+    const inits = clipInits(
+      [plain, { ...plain, offset: 240.4 }, { ...plain, muted: true }],
+      [7]
+    )
+    expect(inits.map((init) => [init.offset, init.muted])).toEqual([
+      [undefined, undefined],
+      [240, undefined],
+      [undefined, true],
+    ])
+  })
+
+  it("carries an audio clip's own settings into its copy", () => {
+    const content: ClipContent = {
+      type: "audio",
+      sample: 4,
+      mixerTrack: 9,
+      gain: 0.5,
+      pan: -1,
+      fadeIn: 240,
+      fadeOut: 480,
+      reverse: true,
+      pitch: -12,
+    }
+    const audio: Clip = { ...clip(5, 1, BAR, 2 * BAR), offset: 960, content }
+    const [copy] = cloneMoved([audio], rowOf, BAR, 0)
+    expect(clipInits([copy], [10, 11])).toEqual([
+      { track: 11, start: 2 * BAR, length: 2 * BAR, offset: 960, content },
     ])
   })
 
@@ -395,57 +418,72 @@ describe("tracks for rows", () => {
   })
 })
 
-describe("insertTrackCommands", () => {
-  const track = (id: number, name: string, muted = false): PlaylistTrack => ({
-    id,
-    name,
-    muted,
+describe("clips that do not loop", () => {
+  const audio = (id: number, start: number, offset: number): Clip => ({
+    ...clip(id, 0, start, 2 * BAR),
+    offset,
+    content: {
+      type: "audio",
+      sample: 1,
+      mixerTrack: 0,
+      gain: 1,
+      pan: 0,
+      fadeIn: 0,
+      fadeOut: 0,
+      reverse: false,
+      pitch: 0,
+    },
   })
-  const playlist: Playlist = {
-    tracks: [track(100, "Drums"), track(101, "Bass", true), track(102, "Lead")],
-    clips: [clip(1, 0, 0), clip(2, 1, 0), clip(3, 2, 0), clip(4, 2, BAR)],
-  }
-  const added = track(103, "Track 4")
+  const noLoop = () => 0
 
-  it("moves clips, names and mutes down one row from the insertion on", () => {
-    expect(insertTrackCommands(playlist, 1, added)).toEqual([
-      {
-        type: "updateClips",
-        updates: [
-          { id: 2, patch: { track: 102 } },
-          { id: 3, patch: { track: 103 } },
-          { id: 4, patch: { track: 103 } },
-        ],
-      },
-      {
-        type: "updatePlaylistTrack",
-        id: 103,
-        patch: { name: "Lead", muted: false },
-      },
-      {
-        type: "updatePlaylistTrack",
-        id: 102,
-        patch: { name: "Bass", muted: true },
-      },
-      {
-        type: "updatePlaylistTrack",
-        id: 101,
-        patch: { name: "Track 4", muted: false },
-      },
+  it("stops a left edge where the audio begins", () => {
+    const trimmed = audio(1, 4 * BAR, 960)
+    // There is a beat of audio before the clip's start, and no more.
+    expect(startTrimDelta([trimmed], trimmed, 0, BAR, noLoop)).toBe(-960)
+    expect(startTrimDelta([trimmed], trimmed, 5 * BAR, BAR, noLoop)).toBe(BAR)
+    // A pattern clip in the same place loops, so it can go all the way.
+    const looping = clip(2, 0, 4 * BAR)
+    expect(startTrimDelta([looping], looping, 0, BAR, pass)).toBe(-4 * BAR)
+    // The tightest clip of the selection holds the others back.
+    const byKind = (item: Clip) => (item.content.type === "pattern" ? BAR : 0)
+    expect(startTrimDelta([trimmed, looping], looping, 0, BAR, byKind)).toBe(
+      -960
+    )
+  })
+
+  it("moves the offset with the left edge, and never below zero", () => {
+    const trimmed = audio(1, 4 * BAR, 960)
+    expect(resizeChanges([trimmed], 480, 0, 60, noLoop)).toEqual([
+      { id: 1, start: 4 * BAR + 480, offset: 1440, length: 2 * BAR - 480 },
+    ])
+    expect(resizeChanges([trimmed], -960, 0, 60, noLoop)).toEqual([
+      { id: 1, start: 4 * BAR - 960, offset: 0, length: 2 * BAR + 960 },
+    ])
+    expect(resizeChanges([trimmed], -2000, 0, 60, noLoop)[0].offset).toBe(0)
+  })
+
+  it("lets the right edge run past the end of the audio", () => {
+    const whole = audio(1, 0, 0)
+    expect(resizeChanges([whole], 0, 6 * BAR, 60, noLoop)).toEqual([
+      { id: 1, length: 8 * BAR },
     ])
   })
+})
 
-  it("has nothing to do when the new track is already at the bottom", () => {
-    expect(insertTrackCommands(playlist, 3, added)).toEqual([])
+describe("trackDropIndex", () => {
+  it("turns a gap between tracks into the place the track ends up in", () => {
+    // Four tracks. Gap 0 is above the first, gap 4 below the last.
+    expect(trackDropIndex(0, 4, 4)).toBe(3)
+    expect(trackDropIndex(0, 2, 4)).toBe(1)
+    expect(trackDropIndex(3, 0, 4)).toBe(0)
+    expect(trackDropIndex(2, 1, 4)).toBe(1)
   })
 
-  it("skips the clip command when no clip has to move", () => {
-    const empty: Playlist = { ...playlist, clips: [clip(1, 0, 0)] }
-    const commands = insertTrackCommands(empty, 2, added)
-    expect(commands.map((command) => command.type)).toEqual([
-      "updatePlaylistTrack",
-      "updatePlaylistTrack",
-    ])
+  it("is null for the two gaps beside the track, and for no track", () => {
+    expect(trackDropIndex(1, 1, 4)).toBeNull()
+    expect(trackDropIndex(1, 2, 4)).toBeNull()
+    expect(trackDropIndex(7, 0, 4)).toBeNull()
+    expect(trackDropIndex(-1, 0, 4)).toBeNull()
   })
 })
 

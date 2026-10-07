@@ -230,6 +230,23 @@
   }
 }
 
+/* Keyboard focus for a surface whose own outline its children would cover,
+   such as an editor filled by a canvas: a frame drawn over them instead.
+   The element has to be positioned. */
+@utility focus-frame {
+  &:focus-visible {
+    outline: none;
+  }
+  &:focus-visible::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 2px var(--ring);
+  }
+}
+
 /* Numbers that have to be read at a glance while they change: position,
    tempo, levels. Set narrow so a long readout stays compact. */
 @utility font-readout {

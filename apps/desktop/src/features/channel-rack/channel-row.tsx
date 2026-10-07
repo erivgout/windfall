@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
 } from "react"
 
-import type { ChannelId, PatternId } from "@/bindings"
+import type { Channel, ChannelId, PatternId } from "@/bindings"
 import {
   faderTaper,
   formatGain,
@@ -19,15 +19,19 @@ import {
   PanControl,
   StepGrid,
 } from "@/components/audio"
+import { ValueContextItems } from "@/components/value-context-menu"
+import { automationFeed, useAutomationMarker } from "@/features/automation/live"
+import { instrumentParams, sourceSample } from "@/lib/channel-source"
 import { useGesture } from "@/lib/store/gesture"
 import { useHint } from "@/lib/store/hint"
-import { useChannel, useLane } from "@/lib/store/selectors"
+import { useChannel, useLane, useSample } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 import { colorToCss, DEFAULT_CHANNEL_VOLUME, MAX_GAIN } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
 import { ChannelButton } from "./channel-button"
 import { selectChannel } from "./channel-ops"
+import { useSampleMissing } from "./inspector/sample-info"
 import {
   LEFT_COLUMNS,
   LEFT_WIDTH,
@@ -38,11 +42,12 @@ import {
   STEPS_INSET,
   STEPS_TRAIL,
 } from "./layout"
+import { channelTarget, channelValueItems } from "./menus"
 import { MixerBadge } from "./mixer-badge"
 import { MuteLamp } from "./mute-lamp"
 import { detailSteps, litSteps } from "./steps"
+import type { WaveShape } from "./synth/wave-glyph"
 import { useGestureValue } from "./use-gesture-value"
-import { useLiveHint } from "./use-live-hint"
 
 const STEPS_HINT =
   "Click a step to turn it on or off, drag to paint, right-drag to erase. Enter toggles the focused step, Space plays or stops"
@@ -56,8 +61,8 @@ type ChannelRowProps = {
   groupSize: number
   /** Some channel is soloed. */
   anySolo: boolean
-  /** A dragged sample is over this row's button. */
-  dropTarget: boolean
+  /** What a sample dragged over this row's button would do, if one is. */
+  drop: "replace" | "refuse" | null
 }
 
 function Grip({ id, name }: { id: ChannelId; name: string }) {
@@ -99,34 +104,62 @@ function Mix({
   const volumeControl = useGestureValue(volume, (value, dispatch) =>
     dispatch({ type: "updateChannel", id, patch: { volume: value } })
   )
-  const panHint = useLiveHint(
+  const panHint = useHint(
     `${name} pan: ${formatPan(panControl.value)}. Drag up or down, Shift for fine, double-click to center`
   )
-  const volumeHint = useLiveHint(
+  const volumeHint = useHint(
     `${name} volume: ${formatGain(volumeControl.value)} (${formatPercent(volumeControl.value)}). Drag up or down, Shift for fine, double-click to reset`
   )
 
+  // What the knobs are bound to adds its own entries to their menus, and
+  // automation of it moves them while the song plays.
+  const panItems = useMemo(() => channelValueItems(id, "pan"), [id])
+  const volumeItems = useMemo(() => channelValueItems(id, "volume"), [id])
+  const panLive = useMemo(() => automationFeed(channelTarget(id, "pan")), [id])
+  const volumeLive = useMemo(
+    () => automationFeed(channelTarget(id, "volume")),
+    [id]
+  )
+  const panMarker = useAutomationMarker(channelTarget(id, "pan"))
+  const volumeMarker = useAutomationMarker(channelTarget(id, "volume"))
+
   return (
     <>
-      <PanControl
-        size="sm"
-        aria-label={`${name} channel pan`}
-        {...panControl}
-        {...panHint}
-      />
-      <Knob
-        size="sm"
-        aria-label={`${name} channel volume`}
-        min={0}
-        max={MAX_GAIN}
-        scale={faderTaper}
-        defaultValue={DEFAULT_CHANNEL_VOLUME}
-        {...gainUnit}
-        {...volumeControl}
-        {...volumeHint}
-      />
+      <ValueContextItems items={panItems}>
+        <PanControl
+          size="sm"
+          aria-label={`${name} channel pan`}
+          live={panLive}
+          marker={panMarker}
+          {...panControl}
+          {...panHint}
+        />
+      </ValueContextItems>
+      <ValueContextItems items={volumeItems}>
+        <Knob
+          size="sm"
+          aria-label={`${name} channel volume`}
+          min={0}
+          max={MAX_GAIN}
+          scale={faderTaper}
+          defaultValue={DEFAULT_CHANNEL_VOLUME}
+          live={volumeLive}
+          marker={volumeMarker}
+          {...gainUnit}
+          {...volumeControl}
+          {...volumeHint}
+        />
+      </ValueContextItems>
     </>
   )
+}
+
+/** The wave of the first oscillator that sounds, to stand for a synth. */
+function instrumentGlyph(channel: Channel): WaveShape | null {
+  const params = instrumentParams(channel)
+  if (!params) return null
+  const sounding = params.oscillators.find((oscillator) => oscillator.level > 0)
+  return (sounding ?? params.oscillators[0]).waveform
 }
 
 /**
@@ -140,11 +173,13 @@ export const ChannelRow = memo(function ChannelRow({
   lengthSteps,
   groupSize,
   anySolo,
-  dropTarget,
+  drop,
 }: ChannelRowProps) {
   const channel = useChannel(id)
   const lane = useLane(pattern, id)
   const selected = useUiStore((state) => state.selectedChannel === id)
+  const sample = sourceSample(channel?.source)
+  const sampleMissing = useSampleMissing(useSample(sample))
   const gesture = useGesture()
 
   const notes = lane?.notes
@@ -248,8 +283,10 @@ export const ChannelRow = memo(function ChannelRow({
           muted={channel.muted}
           dimmed={quiet}
           solo={channel.solo}
-          hasSample={channel.source.sample !== null}
-          dropTarget={dropTarget}
+          instrument={instrumentGlyph(channel)}
+          hasSample={sample !== null}
+          sampleMissing={sampleMissing}
+          drop={drop}
         />
         <MixerBadge
           channel={id}

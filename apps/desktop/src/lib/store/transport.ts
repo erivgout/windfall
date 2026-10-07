@@ -17,32 +17,51 @@ export const useTransportStore = create<TransportState>(() => ({
   loopSong: true,
 }))
 
+/** Counts `transport:state` events, to tell which news is newer. */
+let eventsSeen = 0
+
+/** Takes the state from a `transport:state` event. Events are the truth. */
 export function receiveTransportState(state: TransportState) {
+  eventsSeen += 1
   useTransportStore.setState(state)
 }
 
-async function run(work: Promise<TransportState>) {
+/**
+ * Sends a transport command. The reply holds the state as it was when the
+ * command ran, and it can arrive after an event that is newer: the engine
+ * stops at once when there is nothing to play, and that "stopped" event can
+ * overtake the "playing" reply. So the reply is used only when no event has
+ * come in since the command was sent.
+ */
+async function run(work: () => Promise<TransportState>, what?: string) {
+  const sentAt = eventsSeen
   try {
-    receiveTransportState(await work)
+    const state = await work()
+    if (eventsSeen === sentAt) useTransportStore.setState(state)
   } catch (error) {
-    reportError(error)
+    reportError(error, what)
   }
 }
 
+/** Reads the transport from the backend. Used once, at startup. */
+export function refreshTransport(): Promise<void> {
+  return run(() => backend.transportState(), "Could not read the transport")
+}
+
 export function play(): Promise<void> {
-  return run(backend.transportPlay())
+  return run(() => backend.transportPlay())
 }
 
 export function stop(): Promise<void> {
-  return run(backend.transportStop())
+  return run(() => backend.transportStop())
 }
 
 export function togglePlayback(): Promise<void> {
-  return run(backend.transportToggle())
+  return run(() => backend.transportToggle())
 }
 
 export function setTransport(patch: TransportPatch): Promise<void> {
-  return run(backend.transportSet(patch))
+  return run(() => backend.transportSet(patch))
 }
 
 export function setPlayMode(mode: PlayMode): Promise<void> {

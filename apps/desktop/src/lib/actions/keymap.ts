@@ -1,6 +1,11 @@
 import type { KeymapPreset } from "@/lib/store/ui"
 
-import type { Action } from "./registry"
+import type {
+  Action,
+  EditCommand,
+  PresetShortcuts,
+  ShortcutScope,
+} from "./registry"
 
 /*
  * A shortcut is written as modifiers and one key joined by "+", such as
@@ -14,8 +19,9 @@ import type { Action } from "./registry"
  * shortcut list in the FL Studio manual. `null` leaves an action without a
  * key: FL uses Ctrl+N for "Save new version", so it must not start a new
  * project. Actions not listed keep their Windfall shortcut when it is free.
+ * A panel hands its own FL shortcuts to `registry.register` with its actions.
  */
-export const FL_KEYMAP: Record<string, string[] | null> = {
+export const FL_KEYMAP: PresetShortcuts = {
   "file.new": null,
   "file.open": ["Mod+O"],
   "file.save": ["Mod+S"],
@@ -34,14 +40,6 @@ export const FL_KEYMAP: Record<string, string[] | null> = {
   "view.browser": ["Alt+F8"],
   "view.mixer": ["F9"],
   "options.settings": ["F10"],
-}
-
-/**
- * Adds FL Studio shortcuts for a panel's own actions, in the same form as
- * `FL_KEYMAP`. Call it before the panel registers those actions.
- */
-export function addFlShortcuts(shortcuts: Record<string, string[] | null>) {
-  Object.assign(FL_KEYMAP, shortcuts)
 }
 
 export const KEYMAP_PRESETS: {
@@ -163,44 +161,112 @@ function shortcutList(value: string | string[] | undefined): string[] {
 }
 
 export type Keymap = {
-  /** Normalized chord to the id of the action it runs. */
-  byChord: Map<string, string>
+  /** For each scope, normalized chord to the id of the action it runs there. */
+  byScope: Map<ShortcutScope, Map<string, string>>
   /** Action id to its shortcuts as written, the main one first. */
   byAction: Map<string, string[]>
 }
 
 /**
- * Works out which key runs which action. A preset's own bindings come
- * first; an action the preset does not mention keeps its Windfall shortcut
- * unless the preset already uses that key for something else.
+ * Works out which key runs which action in which scope. A key is taken
+ * once per scope, so a panel may use a key another panel or the whole app
+ * uses too. The preset's own bindings come first; an action the preset does
+ * not mention keeps its Windfall shortcut unless the preset already uses
+ * that key in the same scope.
  */
 export function resolveKeymap(
   actions: Action[],
-  preset: KeymapPreset,
+  overrides: PresetShortcuts,
   isMac: boolean
 ): Keymap {
-  const byChord = new Map<string, string>()
+  const byScope: Keymap["byScope"] = new Map()
   const byAction = new Map<string, string[]>()
-  const overrides = preset === "fl" ? FL_KEYMAP : {}
-  const known = new Set(actions.map((action) => action.id))
 
-  const bind = (id: string, shortcuts: string[]) => {
+  const bind = (action: Action, shortcuts: string[]) => {
+    const scope = action.scope ?? "global"
+    const chords = byScope.get(scope) ?? new Map<string, string>()
+    byScope.set(scope, chords)
     for (const shortcut of shortcuts) {
       const normalized = normalizeShortcut(shortcut, isMac)
-      if (byChord.has(normalized)) continue
-      byChord.set(normalized, id)
-      byAction.set(id, [...(byAction.get(id) ?? []), shortcut])
+      if (chords.has(normalized)) continue
+      chords.set(normalized, action.id)
+      byAction.set(action.id, [...(byAction.get(action.id) ?? []), shortcut])
     }
   }
 
-  for (const [id, shortcuts] of Object.entries(overrides)) {
-    if (shortcuts && known.has(id)) bind(id, shortcuts)
+  for (const action of actions) {
+    const shortcuts = overrides[action.id]
+    if (shortcuts) bind(action, shortcuts)
   }
   for (const action of actions) {
     if (action.id in overrides) continue
-    bind(action.id, shortcutList(action.defaultShortcut))
+    bind(action, shortcutList(action.defaultShortcut))
   }
-  return { byChord, byAction }
+  return { byScope, byAction }
+}
+
+/**
+ * The action a key runs: the first one bound to it that can run right now,
+ * looking in `scopes` from the innermost outward and in "global" last. A
+ * disabled action does not hold on to its key, so the same key can fall
+ * through to an outer scope.
+ */
+export function resolveChord(
+  keymap: Keymap,
+  chord: string,
+  scopes: readonly ShortcutScope[],
+  enabled: (id: string) => boolean
+): string | undefined {
+  for (const scope of [...scopes, "global" as const]) {
+    const id = keymap.byScope.get(scope)?.get(chord)
+    if (id !== undefined && enabled(id)) return id
+  }
+  return undefined
+}
+
+/** One scope a key passes through, and what it keeps from the ones after it. */
+export type ChainLink = {
+  scope: ShortcutScope
+  keeps: readonly EditCommand[]
+}
+
+export type Resolved =
+  /** The action the key runs. */
+  | { action: string }
+  /**
+   * The key would have run an Edit command further out that a scope on the
+   * way keeps for itself, so it does nothing, and nothing else gets it.
+   */
+  | { kept: true }
+  | undefined
+
+/**
+ * Like `resolveChord`, for a chain whose scopes may keep Edit commands from
+ * the scopes around them: Delete in a channel's settings must not go on to
+ * delete the channel. `describe` says whether an action can run and which
+ * Edit command it is, if any.
+ */
+export function resolveInChain(
+  keymap: Keymap,
+  chord: string,
+  chain: readonly ChainLink[],
+  describe: (
+    id: string
+  ) => { enabled: boolean; editCommand?: EditCommand } | undefined
+): Resolved {
+  const kept = new Set<EditCommand>()
+  const links: ChainLink[] = [...chain, { scope: "global", keeps: [] }]
+  for (const link of links) {
+    const id = keymap.byScope.get(link.scope)?.get(chord)
+    const found = id === undefined ? undefined : describe(id)
+    if (id !== undefined && found?.enabled) {
+      return found.editCommand !== undefined && kept.has(found.editCommand)
+        ? { kept: true }
+        : { action: id }
+    }
+    for (const command of link.keeps) kept.add(command)
+  }
+  return undefined
 }
 
 const TEXT_EDITING_KEYS = new Set(["Z", "Y", "A", "C", "X", "V"])
@@ -211,8 +277,19 @@ const TEXT_ENTRY_SELECTOR =
 const OVERLAY_SELECTOR =
   "[role='menu'], [role='listbox'], [role='dialog'], [role='alertdialog']"
 
-const ACTIVATED_BY_KEY_SELECTOR =
+const PRESSED_BY_ENTER_SELECTOR =
   "button, a[href], summary, [role='button'], [role='tab'], [role='menuitem'], [role='option'], [role='switch'], [role='checkbox'], [role='radio'], [role='slider'], [role='separator']"
+
+/**
+ * Keys that run their action whatever control has the focus. Space plays
+ * and stops, and it must keep doing that after a click on a button or a
+ * fader has left the focus there.
+ */
+const TRANSPORT_CHORDS = new Set(["Space"])
+
+export function isTransportChord(normalized: string): boolean {
+  return TRANSPORT_CHORDS.has(normalized)
+}
 
 function splitChord(normalized: string) {
   const modifiers = normalized.split("+")
@@ -253,32 +330,28 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   )
 }
 
-function isOverlayTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(OVERLAY_SELECTOR) !== null
-}
-
-/** True when the focused control uses this key itself, as a button uses Space. */
-export function targetUsesKey(
+/**
+ * Whether the keymap may act on a key, given what has the focus. This is
+ * the one rule for it; no panel decides this for itself.
+ *
+ * - While typing (an input, a text area, editable text, a combo box, the
+ *   inline value entry of a knob), only function keys and the Ctrl or Cmd
+ *   shortcuts that are not text editing get through.
+ * - An open menu, list or dialog keeps every plain key, Space included.
+ * - Anywhere else every shortcut is allowed. That includes Space on a
+ *   focused button, slider, step or tab, which the keymap takes before the
+ *   control sees it. Enter is the key that presses the focused control, so
+ *   a shortcut on plain Enter does not fire there.
+ */
+export function shortcutAllowed(
   target: EventTarget | null,
   normalized: string
 ): boolean {
-  if (!(target instanceof Element)) return false
-  if (normalized !== "Space" && normalized !== "Enter") return false
-  return target.closest(ACTIVATED_BY_KEY_SELECTOR) !== null
-}
-
-/** The action a key press should run, if any. */
-export function matchEvent(
-  keymap: Keymap,
-  event: KeyboardEvent
-): string | undefined {
-  const normalized = eventChord(event)
-  if (normalized === null) return undefined
-  if (isTypingTarget(event.target)) {
-    if (!firesWhileTyping(normalized)) return undefined
-  } else if (isOverlayTarget(event.target) && !firesInOverlay(normalized)) {
-    return undefined
+  if (!(target instanceof Element)) return true
+  if (target.closest(TEXT_ENTRY_SELECTOR)) return firesWhileTyping(normalized)
+  if (target.closest(OVERLAY_SELECTOR)) return firesInOverlay(normalized)
+  if (normalized === "Enter") {
+    return target.closest(PRESSED_BY_ENTER_SELECTOR) === null
   }
-  if (targetUsesKey(event.target, normalized)) return undefined
-  return keymap.byChord.get(normalized)
+  return true
 }

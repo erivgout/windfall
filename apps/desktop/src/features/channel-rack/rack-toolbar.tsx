@@ -7,6 +7,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 
 import { ActionButton } from "@/components/action-button"
 import { ActionMenuItem } from "@/components/action-menu-item"
+import { ContextActions } from "@/components/context-actions"
 import { Knob, NumberField, percentUnit } from "@/components/audio"
 import { Button } from "@/components/ui/button"
 import {
@@ -22,24 +23,32 @@ import { useSelectedPatternId } from "@/lib/store/selectors"
 import { clamp, DEFAULT_PATTERN_STEPS, MAX_PATTERN_STEPS } from "@/lib/units"
 
 import { LENGTH_PRESETS } from "./actions"
+import { RACK_MENU } from "./menus"
 import { useRackStore } from "./rack-store"
 import { clampPatternLength, describeLength } from "./steps"
 import { useGestureValue } from "./use-gesture-value"
-import { useLiveHint } from "./use-live-hint"
 
 function AddChannelMenuItems() {
   const actions = useActions()
   const state = useAppState()
   const add = actions.find((action) => action.id === "channel.add")
+  const instruments = actions.filter((action) =>
+    action.id.startsWith("channel.addInstrument.")
+  )
+  const fromFile = actions.find((action) => action.id === "channel.addFromFile")
   const browser = actions.find((action) => action.id === "view.browser")
 
   return (
     <>
       {add && <ActionMenuItem action={add} state={state} />}
+      {instruments.map((action) => (
+        <ActionMenuItem key={action.id} action={action} state={state} />
+      ))}
+      {fromFile && <ActionMenuItem action={fromFile} state={state} />}
       <DropdownMenuSeparator />
       <p className="px-2 py-1.5 text-muted-foreground">
-        To add a sound from a file, drag it from the browser onto the rack. Drop
-        it on a channel&apos;s name to replace that channel&apos;s sound.
+        A sound can also be dragged from the browser onto the rack. Drop it on a
+        sampler&apos;s name to replace that channel&apos;s sound.
       </p>
       {browser && !state.ui.panels.browser && (
         <ActionMenuItem action={browser} state={state} />
@@ -50,7 +59,7 @@ function AddChannelMenuItems() {
 
 function AddChannelMenu() {
   const hint = useHint(
-    "Add a channel: an empty sampler, or drag a sample in from the browser"
+    "Add a channel: an empty sampler or a synth, or drag a sample in from the browser"
   )
   return (
     <DropdownMenu>
@@ -97,7 +106,7 @@ function PatternLength() {
       patch: { lengthSteps: clampPatternLength(value) },
     })
   })
-  const hint = useLiveHint(
+  const hint = useHint(
     `Pattern length: ${length.value} steps, ${describeLength(length.value, signature)}. Drag up or down, or double-click to type`
   )
 
@@ -146,7 +155,7 @@ function Swing() {
       patch: { swing: clamp(value, 0, 1) },
     })
   )
-  const hint = useLiveHint(
+  const hint = useHint(
     `Swing: ${percentUnit.format(swing.value)}. Delays every second step for a shuffle feel. Double-click to turn it off`
   )
 
@@ -187,17 +196,19 @@ function SettingsToggle() {
 /** The strip above the rows: add a channel, pattern length, swing. */
 export function RackToolbar() {
   return (
-    <div
-      role="toolbar"
-      aria-label="Channel rack"
-      className="flex h-9 shrink-0 items-center gap-4 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
-    >
-      <AddChannelMenu />
-      <PatternLength />
-      <Swing />
-      <div className="ml-auto flex items-center">
-        <SettingsToggle />
+    <ContextActions items={RACK_MENU}>
+      <div
+        role="toolbar"
+        aria-label="Channel rack"
+        className="flex h-9 shrink-0 items-center gap-4 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
+      >
+        <AddChannelMenu />
+        <PatternLength />
+        <Swing />
+        <div className="ml-auto flex items-center">
+          <SettingsToggle />
+        </div>
       </div>
-    </div>
+    </ContextActions>
   )
 }

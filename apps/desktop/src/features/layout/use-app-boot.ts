@@ -1,15 +1,8 @@
 import { useEffect } from "react"
 
-import { registerBrowserActions } from "@/features/browser/actions"
-import { registerChannelRackActions } from "@/features/channel-rack/actions"
-import { registerMixerActions } from "@/features/mixer/actions"
-import { registerPianoRollActions } from "@/features/piano-roll/actions"
-import { registerPlaylistActions } from "@/features/playlist/actions"
+import { watchAutomatedEdits } from "@/features/automation/notice"
 import { installKeymap } from "@/lib/actions"
-import {
-  registerBuiltinActions,
-  syncRecentActions,
-} from "@/lib/actions/builtin"
+import { syncRecentActions } from "@/lib/actions/builtin"
 import {
   confirmDiscardChanges,
   refreshRecentProjects,
@@ -17,7 +10,11 @@ import {
 } from "@/lib/flows/project"
 import { backend, errorMessage } from "@/lib/ipc"
 import { connectStores } from "@/lib/store/connect"
+import { installTextFieldMenu } from "@/lib/text-field-menu"
 import { useDirty, useProjectName } from "@/lib/store/selectors"
+import { installWebviewGuard } from "@/lib/webview-guard"
+
+import { registerAllActions } from "./register-actions"
 
 type BootOptions = {
   /** The main window asks before closing with unsaved edits. */
@@ -33,15 +30,14 @@ export function useAppBoot({ guardClose }: BootOptions) {
   useEffect(() => {
     const stop = [
       connectStores(),
-      registerBuiltinActions(),
-      registerBrowserActions(),
-      registerChannelRackActions(),
-      registerMixerActions(),
-      registerPianoRollActions(),
-      registerPlaylistActions(),
+      registerAllActions(),
       installKeymap(),
+      installTextFieldMenu(),
+      watchAutomatedEdits(),
       useRecentStore.subscribe((state) => syncRecentActions(state.paths)),
     ]
+    // In development the webview's reload, menu and tools are wanted.
+    if (!import.meta.env.DEV) stop.push(installWebviewGuard())
     if (guardClose) stop.push(backend.onCloseRequested(confirmDiscardChanges))
     void refreshRecentProjects()
     return () => {
@@ -56,7 +52,7 @@ export function useWindowTitle() {
   const dirty = useDirty()
 
   useEffect(() => {
-    const title = `${name || "Untitled"}${dirty ? "*" : ""} - Windfall`
+    const title = `${name}${dirty ? "*" : ""} - Windfall`
     // Not something the user did or can fix, so it is logged, not shown.
     backend.setWindowTitle(title).catch((error: unknown) => {
       console.warn("Could not set the window title:", errorMessage(error))

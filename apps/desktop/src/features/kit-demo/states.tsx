@@ -16,6 +16,7 @@ import {
   Waveform,
   gainToFaderPosition,
   percentUnit,
+  type LevelMeterHandle,
   type StepGridGroupHandle,
   type WaveformHandle,
 } from "@/components/audio"
@@ -84,6 +85,105 @@ function createFeed() {
 }
 
 const SIZES = ["sm", "md", "lg"] as const
+// Fader heights from roomy to cramped, to show the labels thinning out.
+const FADER_HEIGHTS = [
+  { height: 176, caption: "176 px" },
+  { height: 128, caption: "128 px" },
+  { height: 88, caption: "88 px" },
+  { height: 60, caption: "60 px" },
+  { height: 40, caption: "40 px" },
+]
+
+/** The clip light owned by the app: a `clipped` prop and `onClipChange`. */
+function ControlledClip({ feed }: { feed: ReturnType<typeof createFeed> }) {
+  const [clipped, setClipped] = React.useState(false)
+  return (
+    <Cell caption="clipped prop">
+      <div className="flex items-end gap-2" data-testid="clip-controlled">
+        <LevelMeter
+          subscribe={feed.subscribe}
+          clipped={clipped}
+          onClipChange={setClipped}
+        />
+        <ToggleLed
+          pressed={clipped}
+          onPressedChange={setClipped}
+          color="var(--wf-meter-high)"
+          aria-label="Clip light on"
+        >
+          C
+        </ToggleLed>
+      </div>
+    </Cell>
+  )
+}
+
+/** A meter that takes the latch it missed when it mounts. */
+function HeldMeter({
+  held,
+  onHeldChange,
+}: {
+  held: boolean
+  onHeldChange: (held: boolean) => void
+}) {
+  const meter = React.useRef<LevelMeterHandle>(null)
+  React.useEffect(() => {
+    meter.current?.setClipped(held)
+  }, [held])
+  return <LevelMeter ref={meter} onClipChange={onHeldChange} />
+}
+
+/**
+ * The clip light set through the ref, as a list does that unmounts its
+ * meters: the latch is kept here and put back when the meter returns.
+ */
+function RemountedClip() {
+  const [mounted, setMounted] = React.useState(true)
+  const [held, setHeld] = React.useState(false)
+
+  return (
+    <Cell caption="set through the ref">
+      <div className="flex items-end gap-2" data-testid="clip-ref">
+        <div className="flex h-32 w-2.5 items-end">
+          {mounted ? <HeldMeter held={held} onHeldChange={setHeld} /> : null}
+        </div>
+        <div className="flex flex-col gap-1">
+          <ToggleLed
+            pressed={held}
+            onPressedChange={setHeld}
+            color="var(--wf-meter-high)"
+            aria-label="Latch a clip"
+          >
+            C
+          </ToggleLed>
+          <ToggleLed
+            pressed={mounted}
+            onPressedChange={setMounted}
+            aria-label="Meter mounted"
+          >
+            M
+          </ToggleLed>
+        </div>
+      </div>
+    </Cell>
+  )
+}
+
+/** Region handles that start at both ends of the waveform. */
+function FullRegion({ peaks }: { peaks: Float32Array }) {
+  const [region, setRegion] = React.useState({ start: 0, end: 1 })
+  return (
+    <Waveform
+      data-testid="waveform-ends"
+      peaks={peaks}
+      start={region.start}
+      end={region.end}
+      onStartChange={(start) => setRegion((was) => ({ ...was, start }))}
+      onEndChange={(end) => setRegion((was) => ({ ...was, end }))}
+      className="h-12"
+    />
+  )
+}
 const STRESS_ROWS = 50
 const STRESS_STEPS = 64
 
@@ -170,6 +270,10 @@ export function KitStates() {
   const [single, setSingle] = React.useState(true)
   const [stress, setStress] = React.useState(false)
   const peaks = React.useMemo(() => makeDemoPeaks(240), [])
+  const quietPeaks = React.useMemo(
+    () => peaks.map((peak) => peak * 0.12),
+    [peaks]
+  )
 
   const waveform = React.useRef<WaveformHandle>(null)
   // The meters take their values through `subscribe`, the other way to
@@ -295,12 +399,33 @@ export function KitStates() {
         <Cell caption="disabled">
           <Fader value={0.5} disabled aria-label="Disabled level" />
         </Cell>
+        {FADER_HEIGHTS.map(({ height, caption }) => (
+          <Cell key={height} caption={caption}>
+            <Fader
+              {...gain}
+              aria-label={`Level, ${caption} tall`}
+              data-testid={`fader-${height}`}
+              className="h-auto"
+              style={{ height }}
+            />
+          </Cell>
+        ))}
         <div className="flex flex-col gap-4">
           <Cell caption="horizontal gain">
             <Fader
               orientation="horizontal"
               {...wideFader}
               aria-label="Send level"
+            />
+          </Cell>
+          <Cell caption="horizontal, short and thin">
+            <Fader
+              orientation="horizontal"
+              size="sm"
+              {...wideFader}
+              aria-label="Short send level"
+              data-testid="fader-thin"
+              className="w-24"
             />
           </Cell>
           <Cell caption="horizontal, plain range">
@@ -335,6 +460,8 @@ export function KitStates() {
         <Cell caption="no clip light">
           <LevelMeter subscribe={feed.subscribe} showClip={false} />
         </Cell>
+        <ControlledClip feed={feed} />
+        <RemountedClip />
         <div className="flex flex-col gap-4">
           <Cell caption="horizontal stereo">
             <LevelMeter
@@ -354,7 +481,8 @@ export function KitStates() {
         </div>
         <p className="max-w-52 self-center text-[11px] text-muted-foreground">
           The clip light stays on after a peak above 0 dB. Click a meter to
-          clear it.
+          clear it. The C buttons own or set the light from outside, and M
+          unmounts a meter that gets its latch back when it returns.
         </p>
       </Group>
 
@@ -522,7 +650,26 @@ export function KitStates() {
             caption="waveform with a playhead, no region"
             className="items-stretch"
           >
-            <Waveform ref={waveform} peaks={peaks} normalize className="h-12" />
+            <Waveform ref={waveform} peaks={peaks} className="h-12" />
+          </Cell>
+          <Cell
+            caption="handles resting at both ends"
+            className="items-stretch"
+          >
+            <FullRegion peaks={peaks} />
+          </Cell>
+          <Cell
+            caption="quiet sample, magnified, and the same at full scale"
+            className="items-stretch"
+          >
+            <div className="grid w-full grid-cols-2 gap-2">
+              <Waveform
+                data-testid="waveform-quiet"
+                peaks={quietPeaks}
+                className="h-12"
+              />
+              <Waveform peaks={quietPeaks} normalize={false} className="h-12" />
+            </div>
           </Cell>
           <Cell caption="envelope, disabled" className="items-stretch">
             <EnvelopeEditor

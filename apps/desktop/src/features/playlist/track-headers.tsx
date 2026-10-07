@@ -1,6 +1,13 @@
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { memo, useEffect, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react"
 
 import type { PlaylistTrack } from "@/bindings"
 import { ToggleLed } from "@/components/audio"
@@ -13,17 +20,20 @@ import {
 import { useHint } from "@/lib/store/hint"
 import { cn } from "@/lib/utils"
 
-import { HEADER_WIDTH } from "./layout"
+import { trackDropIndex } from "./edit"
+import { DRAG_THRESHOLD_PX, HEADER_WIDTH } from "./layout"
 import { useViewportValue, wheelInput, type GridMetrics } from "./metrics"
-import { setTrackName, toggleTrackMute } from "./ops"
-import { usePlaylistTracks } from "./selectors"
+import { moveTrack, setTrackName, toggleTrackMute } from "./ops"
+import { playlist, usePlaylistTracks } from "./selectors"
 import { usePlaylistStore } from "./store"
-import { useLiveHint } from "./use-live-hint"
 
 /** A header's menu acts on the target track; a press on the header sets it. */
 const TRACK_MENU: ContextItem[] = [
   "playlist.renameTrack",
   "playlist.muteTrack",
+  contextSeparator,
+  "playlist.moveTrackUp",
+  "playlist.moveTrackDown",
   contextSeparator,
   "playlist.insertTrack",
   "playlist.addTrack",
@@ -84,6 +94,9 @@ type TrackHeaderProps = {
   top: number
   height: number
   target: boolean
+  /** The header is being dragged to another place among the tracks. */
+  lifted: boolean
+  onGrab(event: ReactPointerEvent<HTMLElement>, row: number): void
 }
 
 const TrackHeader = memo(function TrackHeader({
@@ -92,13 +105,15 @@ const TrackHeader = memo(function TrackHeader({
   top,
   height,
   target,
+  lifted,
+  onGrab,
 }: TrackHeaderProps) {
   const [renaming, setRenaming] = useState(false)
   const setTargetTrack = usePlaylistStore((state) => state.setTargetTrack)
-  const hint = useLiveHint(
-    `${track.name}${track.muted ? ", muted" : ""}. Double-click the name to rename, right-click for more`
+  const hint = useHint(
+    `${track.name}${track.muted ? ", muted" : ""}. Drag up or down to reorder, double-click the name to rename, right-click for more`
   )
-  const lampHint = useLiveHint(
+  const lampHint = useHint(
     `${track.name} is ${track.muted ? "muted" : "on"}. Click to ${track.muted ? "unmute" : "mute"} every clip on it`
   )
   const compact = height < 22
@@ -110,10 +125,14 @@ const TrackHeader = memo(function TrackHeader({
         aria-label={track.name}
         data-track={track.id}
         data-target={target ? "" : undefined}
-        onPointerDown={() => setTargetTrack(track.id)}
+        data-lifted={lifted ? "" : undefined}
+        onPointerDown={(event) => {
+          setTargetTrack(track.id)
+          if (!renaming) onGrab(event, row)
+        }}
         style={{ top, height }}
         className={cn(
-          "absolute inset-x-0 flex items-center gap-1.5 border-t border-(--wf-grid-line) pr-1.5 pl-1",
+          "absolute inset-x-0 flex items-center gap-1.5 border-t border-(--wf-grid-line) pr-1.5 pl-1 data-lifted:opacity-45",
           target ? "bg-accent/70" : "hover:bg-accent/30"
         )}
         {...hint}
@@ -150,6 +169,12 @@ const TrackHeader = memo(function TrackHeader({
     </ContextActions>
   )
 })
+
+/** A header being dragged: the row it came from and the gap it is over. */
+type Reorder = { row: number; gap: number }
+type Grab = { row: number; y: number; pointer: number }
+
+const tracksNow = () => playlist().tracks
 
 /** A row with no track yet. Placing a clip on it makes the track. */
 const SpareHeader = memo(function SpareHeader({
@@ -220,6 +245,77 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
   const rowCount = useViewportValue(metrics, (_, limits) => limits.rowCount)
   const rootRef = useRef<HTMLDivElement>(null)
   const scrolledRef = useRef<HTMLDivElement>(null)
+  const [reorder, setReorder] = useState<Reorder | null>(null)
+  const grab = useRef<Grab | null>(null)
+  const lifted = useRef<Reorder | null>(null)
+
+  // A press on a header that then moves up or down carries the track to
+  // the gap between two others. The lamp and the name keep their clicks.
+  const onGrab = useCallback(
+    (event: ReactPointerEvent<HTMLElement>, row: number) => {
+      const pressed = event.target
+      if (
+        event.button !== 0 ||
+        (pressed instanceof Element && pressed.closest("button, input"))
+      ) {
+        return
+      }
+      grab.current = { row, y: event.clientY, pointer: event.pointerId }
+    },
+    []
+  )
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const gapAt = (clientY: number) => {
+      const { scrollRow, rowHeight } = metrics.viewport
+      const y = clientY - root.getBoundingClientRect().top
+      return Math.round(scrollRow + y / rowHeight)
+    }
+    const onMove = (event: PointerEvent) => {
+      const held = grab.current
+      if (!held || event.pointerId !== held.pointer) return
+      const count = tracksNow().length
+      if (
+        !root.hasPointerCapture(held.pointer) &&
+        Math.abs(event.clientY - held.y) < DRAG_THRESHOLD_PX
+      ) {
+        return
+      }
+      root.setPointerCapture(held.pointer)
+      const gap = Math.min(count, Math.max(0, gapAt(event.clientY)))
+      if (lifted.current?.gap === gap) return
+      lifted.current = { row: held.row, gap }
+      setReorder(lifted.current)
+    }
+    const finish = (event: PointerEvent, drop: boolean) => {
+      const held = grab.current
+      if (!held || event.pointerId !== held.pointer) return
+      grab.current = null
+      if (root.hasPointerCapture(held.pointer)) {
+        root.releasePointerCapture(held.pointer)
+      }
+      const current = lifted.current
+      lifted.current = null
+      setReorder(null)
+      if (!drop || !current) return
+      const tracks = tracksNow()
+      const index = trackDropIndex(current.row, current.gap, tracks.length)
+      const track = tracks[current.row]
+      if (index !== null && track) void moveTrack(track.id, index)
+    }
+    const onUp = (event: PointerEvent) => finish(event, true)
+    const onCancel = (event: PointerEvent) => finish(event, false)
+    root.addEventListener("pointermove", onMove)
+    root.addEventListener("pointerup", onUp)
+    root.addEventListener("pointercancel", onCancel)
+    return () => {
+      root.removeEventListener("pointermove", onMove)
+      root.removeEventListener("pointerup", onUp)
+      root.removeEventListener("pointercancel", onCancel)
+    }
+  }, [metrics])
 
   useEffect(() => {
     const place = () => {
@@ -259,6 +355,8 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
           top={box.top}
           height={box.height}
           target={track.id === target}
+          lifted={reorder?.row === row}
+          onGrab={onGrab}
         />
       ) : (
         <SpareHeader
@@ -281,6 +379,15 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
     >
       <div ref={scrolledRef} className="absolute inset-x-0 top-0">
         {rows}
+        {reorder !== null &&
+          trackDropIndex(reorder.row, reorder.gap, tracks.length) !== null && (
+            <div
+              aria-hidden
+              data-slot="track-drop-line"
+              className="pointer-events-none absolute inset-x-0 z-10 h-0.5 -translate-y-px bg-brand"
+              style={{ top: rowBox(reorder.gap, rowHeight, dpr).top }}
+            />
+          )}
       </div>
     </div>
   )
