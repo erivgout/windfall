@@ -3229,10 +3229,10 @@
       "summary": "Packs the project together with the samples it uses into one archive.",
       "windfall_name": "Project archive",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Native bounded schema-1 ZIP export/open includes captured project/session/plugin state and exact-deduplicated audio. Validated staged extraction, missing-source reports, cancellation and no-overwrite publication are implemented. Independent combined review is pending. See docs/PORTABLE-PROJECTS.md."
     },
     {
       "id": "fmt-save-new-version",
@@ -3241,10 +3241,10 @@
       "summary": "Saves the project under the next numbered file name.",
       "windfall_name": "Save new version",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Native numbered saves atomically publish the next unused filename through existing plugin capture/sample-carry flow. Earlier versions stay intact and concurrent edits remain dirty. Focused native/UI checks pass; independent integration review is pending. See docs/PORTABLE-PROJECTS.md."
     },
     {
       "id": "fmt-autosave-backup",

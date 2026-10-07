@@ -122,4 +122,25 @@ listing remaining behavior as in progress. Utility rows also remain in
 progress pending review. Current totals are 57 done, 52 in progress, 231 todo
 and two won't-do rows, preserving all 342 requirements.
 
+## Portable files and combined validation checkpoint
+
+Portable ZIP archives and numbered saves `099969f2` are merged through
+`bfe1be6c`. The session/commands/backend/actions/report UI are integrated.
+The dependency conflict preserves library file identity and native staging
+support. Ordinary and archive Open both retain the parent's loaded-event
+authority instead of reloading a delayed reply. The archive crate is outside
+the simulator dependency tree; the 163 bindings and 1,775,678-byte WASM remain
+current after this merge.
+
+The implementation task passed eight archive-crate tests, eight session archive
+tests including native CLAP capture, six numbered-save tests, 25 existing file
+tests, two plugin tests, three recording-guard tests and 31 UI tests. Those
+are worker evidence, not parent combined results. Independent archive review
+and full parent UI/Rust validation were started at `bfe1be6c`; their results
+are still pending at this checkpoint. The matrix holds both file rows in
+progress, totaling 57 done, 54 in progress, 229 todo and two won't-do rows.
+
+All changes remain local pending open review repairs and validation. The
+private repository and immutable `v0.1.0-alpha.1` release are unchanged.
+
 Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.

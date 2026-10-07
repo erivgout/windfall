@@ -18,8 +18,8 @@ As of 2026-10-07. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 231 |
-| In progress | 52 |
+| Todo | 229 |
+| In progress | 54 |
 | Done | 57 |
 | Won't do | 2 |
 
@@ -31,13 +31,13 @@ As of 2026-10-07. Sources:
 | Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
-| File formats and plugin hosting | 36 | 18 | 4 | 14 | 0 |
+| File formats and plugin hosting | 36 | 16 | 6 | 14 | 0 |
 | Workflow, MIDI and settings | 39 | 29 | 5 | 5 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 9 | 6 | 22 | 2 |
+| 1. Make a beat | 39 | 7 | 8 | 22 | 2 |
 | 2. Write a song | 99 | 50 | 26 | 23 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
@@ -347,8 +347,8 @@ As of 2026-10-07. Sources:
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Project file save and open (.flp) | Windfall project format | 1 | done | Windfall uses its own open format: readable JSON plus audio in a folder or zip, with a version number. Windfall saves its own readable JSON format, .windfall. Reading .flp files is a separate row. |
-| Zipped project (.zip) | Project archive | 1 | todo |  |
-| Save new version | Save new version | 1 | todo |  |
+| Zipped project (.zip) | Project archive | 1 | in-progress | Native bounded schema-1 ZIP export/open includes captured project/session/plugin state and exact-deduplicated audio. Validated staged extraction, missing-source reports, cancellation and no-overwrite publication are implemented. Independent combined review is pending. See docs/PORTABLE-PROJECTS.md. |
+| Save new version | Save new version | 1 | in-progress | Native numbered saves atomically publish the next unused filename through existing plugin capture/sample-carry flow. Earlier versions stay intact and concurrent edits remain dirty. Focused native/UI checks pass; independent integration review is pending. See docs/PORTABLE-PROJECTS.md. |
 | Autosave and backups | Autosave and backups | 1 | done | The plan builds autosave and timestamped backups into the project format. |
 | New from template and Save as template | Project templates | 2 | todo | FL's bundled templates reference Image-Line content; needs own. |
 | FL Studio project (.flp) as an import source | FL project import | 4 | in-progress | Desktop picker prepares a reviewed conversion with category reports, bounded sample searches, missing-audio warnings, unsaved-project confirmation and stale-request guards. Unsupported plugin bytes and metadata persist in .windfall files and an Imported sounds report. Two real FL 20.8.4 reader projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate; proprietary restoration and identical playback remain unavailable. See docs/flp/coverage.md. |
