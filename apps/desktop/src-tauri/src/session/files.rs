@@ -211,6 +211,7 @@ impl Session {
         };
         #[cfg(test)]
         self.pause("save:write");
+        project = self.capture_plugins(project)?;
 
         // Where the file will look for its own samples when it is opened.
         let target_dir = file::sample_dir(&target);
@@ -300,6 +301,7 @@ impl Session {
         };
         #[cfg(test)]
         self.pause("backup:write");
+        let project = self.capture_plugins(project)?;
         file::write_backup_with(
             &project,
             Some(&played),
@@ -379,11 +381,14 @@ impl Session {
                 loop_song: None,
             },
         };
+        if let Some(manager) = &*lock(&self.inner.plugins) {
+            manager.runtime.retry();
+        }
         *state = State {
             document: Document::new(project),
             path: save_to,
             sample_dir,
-            pool: decoded.pool,
+            pool: self.plugin_pool(decoded.pool),
             loaded: decoded.loaded,
             loading: HashSet::new(),
             failed: decoded.failed,

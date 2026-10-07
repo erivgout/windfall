@@ -9,6 +9,8 @@ mod export_formats;
 mod files;
 mod library;
 mod playback;
+#[cfg(windows)]
+mod plugins;
 mod song;
 
 use std::collections::HashMap;

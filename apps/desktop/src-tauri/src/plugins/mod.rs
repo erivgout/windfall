@@ -1,0 +1,379 @@
+//! Cached, isolated discovery and a native owner thread for audio instances.
+mod runtime;
+pub use runtime::Runtime;
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+use windfall_ipc::{PluginEntry, PluginManagerState};
+use windfall_plugin_host::{
+    PluginFormat, PluginKind, paths,
+    scan::{PluginCatalog, ProcessRunner},
+};
+use windfall_project::{PluginBinding, PluginTarget};
+
+pub struct PluginManager {
+    catalog: Mutex<PluginCatalog>,
+    status: Mutex<PluginManagerState>,
+    cache: PathBuf,
+    folders_file: PathBuf,
+    pub runtime: Arc<Runtime>,
+    session: Mutex<Option<crate::session::WeakSession>>,
+}
+impl PluginManager {
+    #[cfg(test)]
+    pub(crate) fn fixture(folder: &Path, file: &Path, scanner: &Path) -> Arc<Self> {
+        let manager = Self::new(folder).unwrap();
+        let files = paths::find_plugins(&[file.parent().unwrap().to_path_buf()]);
+        manager
+            .catalog
+            .lock()
+            .unwrap()
+            .refresh(&files, &ProcessRunner::new(scanner), &mut |_| {})
+            .unwrap();
+        manager.update_entries();
+        manager.runtime.approve(&manager.state().entries);
+        manager
+    }
+    pub fn new(folder: &Path) -> Result<Arc<Self>, String> {
+        let cache = folder.join("plugins.json");
+        let folders_file = folder.join("plugin-folders.json");
+        let mut folders = paths::standard_folders(PluginFormat::Clap);
+        folders.extend(paths::standard_folders(PluginFormat::Vst3));
+        let custom: Vec<String> = std::fs::read(&folders_file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        folders.extend(custom.into_iter().map(PathBuf::from));
+        folders.sort();
+        folders.dedup();
+        let manager = Arc::new(Self {
+            catalog: Mutex::new(PluginCatalog::load(&cache)),
+            status: Mutex::new(PluginManagerState {
+                folders: folders
+                    .iter()
+                    .map(|folder| folder.to_string_lossy().into_owned())
+                    .collect(),
+                ..Default::default()
+            }),
+            cache,
+            folders_file,
+            runtime: Arc::new(Runtime::new()?),
+            session: Mutex::new(None),
+        });
+        manager.update_entries();
+        Ok(manager)
+    }
+    pub fn state(&self) -> PluginManagerState {
+        let mut state = self
+            .status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        state.instances = self
+            .runtime
+            .errors()
+            .into_iter()
+            .map(|(target, error)| windfall_ipc::PluginInstanceStatus { target, error })
+            .collect();
+        state
+    }
+    pub fn attach(self: &Arc<Self>, session: crate::session::WeakSession) {
+        *self
+            .session
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(session);
+        let manager = Arc::downgrade(self);
+        std::thread::spawn(move || {
+            let mut pending: Vec<(u64, u64, u64, windfall_project::Command, Option<u64>)> =
+                Vec::new();
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                let Some(manager) = manager.upgrade() else {
+                    break;
+                };
+                let Some(session) = manager
+                    .session
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_ref()
+                    .and_then(crate::session::WeakSession::upgrade)
+                else {
+                    break;
+                };
+                for update in manager.runtime.drain() {
+                    match update.update {
+                        runtime::Update::Parameter {
+                            target,
+                            id,
+                            value,
+                            gesture,
+                        } => {
+                            pending.retain(|(_, _, _, command, _)| !matches!(command, windfall_project::Command::SetPluginParam { target: before, id: before_id, .. } if *before == target && *before_id == id));
+                            pending.push((
+                                update.revision,
+                                update.token,
+                                update.binding,
+                                windfall_project::Command::SetPluginParam { target, id, value },
+                                Some(gesture),
+                            ));
+                        }
+                        runtime::Update::State { target, state } => {
+                            pending.retain(|(_, _, _, command, _)| !matches!(command, windfall_project::Command::SetPluginState { target: before, .. } if *before == target));
+                            pending.push((
+                                update.revision,
+                                update.token,
+                                update.binding,
+                                windfall_project::Command::SetPluginState { target, state },
+                                None,
+                            ));
+                        }
+                        runtime::Update::Restart => {
+                            manager.runtime.retry();
+                            session.refresh_plugins();
+                        }
+                    }
+                }
+                let project = (!pending.is_empty()).then(|| session.document_snapshot().project);
+                pending.retain(|(before, token, binding, command, gesture)| {
+                    let target = match command {
+                        windfall_project::Command::SetPluginParam { target, .. }
+                        | windfall_project::Command::SetPluginState { target, .. } => *target,
+                        _ => return false,
+                    };
+                    if !project
+                        .as_ref()
+                        .and_then(|project| project.plugin(target))
+                        .is_some_and(|current| runtime::binding_identity(current) == *binding)
+                    {
+                        return false;
+                    }
+                    if !manager.runtime.is_current(*before, *token) {
+                        return false;
+                    }
+                    match session.dispatch(command.clone(), *gesture) {
+                        Ok(_) => false,
+                        Err(error) => {
+                            manager
+                                .status
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .error = Some(format!("Native plugin edit is waiting: {error}"));
+                            true
+                        }
+                    }
+                });
+                if pending.len() > 4096 {
+                    pending.drain(..pending.len() - 4096);
+                    manager.status.lock().unwrap_or_else(|error| error.into_inner()).error = Some("Too many pending native plugin edits; reopen the plugin to reconcile its state".into());
+                }
+            }
+        });
+    }
+    fn update_entries(&self) {
+        let catalog = self
+            .catalog
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.entries = catalog
+            .plugins()
+            .take(4096)
+            .map(|(path, plugin)| PluginEntry {
+                path: path.to_string_lossy().into_owned(),
+                format: match plugin.descriptor.format {
+                    PluginFormat::Clap => "clap",
+                    PluginFormat::Vst3 => "vst3",
+                }
+                .into(),
+                id: plugin.descriptor.id.clone(),
+                name: plugin.descriptor.name.clone(),
+                vendor: plugin.descriptor.vendor.clone(),
+                instrument: plugin.descriptor.kind == PluginKind::Instrument,
+                usable: plugin.is_usable() && plugin.descriptor.format == PluginFormat::Clap,
+                error: if plugin.descriptor.format == PluginFormat::Vst3 { Some("VST3 desktop integration is waiting for safe active-instance state capture".into()) } else { plugin.failure.as_ref().map(|failure| failure.message.clone()) },
+            })
+            .collect();
+        state.blocked = catalog
+            .blocked()
+            .into_iter()
+            .take(4096)
+            .map(|blocked| PluginEntry {
+                path: blocked.path.to_string_lossy().into_owned(),
+                format: "clap".into(),
+                id: blocked
+                    .plugin
+                    .as_ref()
+                    .map_or(String::new(), |plugin| plugin.0.clone()),
+                name: blocked
+                    .plugin
+                    .map_or_else(|| "Blocked file".into(), |plugin| plugin.1),
+                vendor: String::new(),
+                instrument: false,
+                usable: false,
+                error: Some(blocked.failure.message),
+            })
+            .collect();
+    }
+    pub fn add_folder(&self, folder: String) -> Result<(), String> {
+        if !Path::new(&folder).is_dir() {
+            return Err("Choose an existing plugin folder".into());
+        }
+        let folders = {
+            let mut state = self
+                .status
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if state.folders.len() >= 64 {
+                return Err("At most 64 plugin folders can be configured".into());
+            }
+            if !state.folders.contains(&folder) {
+                state.folders.push(folder);
+            }
+            state.folders.clone()
+        };
+        std::fs::write(
+            &self.folders_file,
+            serde_json::to_vec(&folders).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())
+    }
+    pub fn scan(self: &Arc<Self>, retry: Option<String>) -> Result<(), String> {
+        {
+            let mut state = self
+                .status
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if state.scanning {
+                return Err("A plugin scan is already running".into());
+            }
+            state.scanning = true;
+            state.completed = 0;
+            state.total = 0;
+            state.error = None;
+        }
+        let manager = self.clone();
+        std::thread::Builder::new()
+            .name("plugin-scan".into())
+            .spawn(move || {
+                let result = (|| {
+                    let folders = manager
+                        .state()
+                        .folders
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .collect::<Vec<_>>();
+                    let files = paths::find_plugins(&folders);
+                    if files.len() > 4096 {
+                        return Err(
+                            "More than 4096 plugin files were found; narrow the configured folders"
+                                .to_owned(),
+                        );
+                    }
+                    manager
+                        .status
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .total = files.len() as u32;
+                    let mut catalog = manager
+                        .catalog
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if let Some(path) = retry {
+                        catalog.retry(Path::new(&path));
+                    }
+                    let program = std::env::current_exe().map_err(|error| error.to_string())?;
+                    catalog
+                        .refresh(&files, &ProcessRunner::new(program), &mut |path| {
+                            let mut state = manager
+                                .status
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner());
+                            state.current = Some(path.to_string_lossy().into_owned());
+                            state.completed += 1;
+                        })
+                        .map_err(|error| error.to_string())?;
+                    catalog
+                        .save(&manager.cache)
+                        .map_err(|error| error.to_string())
+                })();
+                manager.update_entries();
+                if result.is_ok() {
+                    manager.runtime.approve(&manager.state().entries);
+                }
+                manager.runtime.retry();
+                if let Some(session) = manager
+                    .session
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_ref()
+                    .and_then(crate::session::WeakSession::upgrade)
+                {
+                    session.refresh_plugins();
+                }
+                let mut state = manager
+                    .status
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                state.scanning = false;
+                state.current = None;
+                state.completed = state.total;
+                state.error = result.err();
+            })
+            .map_err(|error| {
+                self.status
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .scanning = false;
+                error.to_string()
+            })?;
+        Ok(())
+    }
+    pub fn binding(
+        &self,
+        path: &str,
+        id: &str,
+        target: PluginTarget,
+    ) -> Result<PluginBinding, String> {
+        let entry = self
+            .state()
+            .entries
+            .into_iter()
+            .find(|entry| entry.path == path && entry.id == id && entry.usable)
+            .ok_or_else(|| "Scan this plugin successfully before loading it".to_owned())?;
+        self.runtime.discover(PluginBinding {
+            target,
+            format: entry.format,
+            path: entry.path,
+            id: entry.id,
+            name: entry.name,
+            state: Vec::new(),
+            parameters: Vec::new(),
+        })
+    }
+}
+
+/// Scanner helper mode uses the same installed executable, in a child process.
+pub fn scanner_entry() -> bool {
+    let mut args = std::env::args_os().skip(1);
+    let Some(path) = args.next().map(PathBuf::from) else {
+        return false;
+    };
+    if PluginFormat::of(&path).is_none() {
+        return false;
+    }
+    let mut skip = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--skip"
+            && let Some(id) = args.next()
+        {
+            skip.push(id.to_string_lossy().into_owned());
+        }
+    }
+    windfall_plugin_host::scan::probe::silence_error_dialogs();
+    windfall_plugin_host::scan::probe::run(&path, &skip, &mut std::io::stdout().lock());
+    true
+}

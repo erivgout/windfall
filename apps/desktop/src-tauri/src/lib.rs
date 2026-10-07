@@ -10,6 +10,7 @@ pub mod browser;
 mod commands;
 pub mod events;
 pub mod paths;
+pub mod plugins;
 pub mod samples;
 pub mod session;
 pub mod settings;

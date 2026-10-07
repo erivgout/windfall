@@ -143,6 +143,7 @@ impl WeakSession {
 }
 
 struct Inner {
+    plugins: Mutex<Option<Arc<crate::plugins::PluginManager>>>,
     /// Held by a save or a backup from before it copies the project until
     /// its file is written. Taken before `state`, never under it.
     save: Mutex<()>,
@@ -216,6 +217,31 @@ impl State {
 }
 
 impl Session {
+    pub fn install_plugins(&self, manager: Arc<crate::plugins::PluginManager>) {
+        self.state()
+            .pool
+            .set_plugin_factory(manager.runtime.clone());
+        *lock(&self.inner.plugins) = Some(manager);
+    }
+    pub fn refresh_plugins(&self) {
+        self.push_project(&self.state());
+    }
+    fn plugin_pool(&self, mut pool: SamplePool) -> SamplePool {
+        if let Some(manager) = &*lock(&self.inner.plugins) {
+            pool.set_plugin_factory(manager.runtime.clone());
+        }
+        pool
+    }
+    fn capture_plugins(
+        &self,
+        project: windfall_project::Project,
+    ) -> Result<windfall_project::Project, String> {
+        let manager = lock(&self.inner.plugins).clone();
+        match manager {
+            Some(manager) => manager.runtime.capture(project),
+            None => Ok(project),
+        }
+    }
     /// Starts a session on the default project and hands it to the engine.
     ///
     /// Decodes the default kit, which takes a few milliseconds. A kit file
@@ -241,6 +267,7 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                plugins: Mutex::new(None),
                 save: Mutex::new(()),
                 state: Mutex::new(State {
                     document: Document::new(project),

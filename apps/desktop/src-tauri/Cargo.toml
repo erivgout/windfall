@@ -22,6 +22,7 @@ windfall-ipc.workspace = true
 windfall-engine.workspace = true
 windfall-codec.workspace = true
 windfall-factory.workspace = true
+windfall-plugin-host.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log = "0.4"

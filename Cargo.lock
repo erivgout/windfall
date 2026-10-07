@@ -4867,6 +4867,7 @@ dependencies = [
  "windfall-engine",
  "windfall-factory",
  "windfall-ipc",
+ "windfall-plugin-host",
  "windfall-project",
 ]
 
