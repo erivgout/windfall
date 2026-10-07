@@ -1,13 +1,13 @@
 //! What the app remembers between runs: the audio device, the browser's
 //! folders and the recent projects.
 
-use std::ffi::OsString;
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use windfall_ipc::AudioSettings;
+use windfall_project::file::write_atomic;
 
 use crate::paths;
 
@@ -99,30 +99,14 @@ impl SettingsStore {
         self.settings.recent_projects.clone()
     }
 
-    /// Writes to a temporary file and renames it into place, so a crash
-    /// cannot leave half a settings file.
+    /// Writes the file the way a project is written: to a temporary file
+    /// of this write's own that is then renamed into place. A crash cannot
+    /// leave half a settings file, and two copies of Windfall writing at
+    /// once cannot write into each other's.
     fn write(&self) -> io::Result<()> {
         let mut json = serde_json::to_string_pretty(&self.settings).map_err(io::Error::other)?;
         json.push('\n');
-        if let Some(folder) = self.file.parent() {
-            fs::create_dir_all(folder)?;
-        }
-        let mut temp_name = OsString::from(".");
-        temp_name.push(self.file.file_name().unwrap_or_default());
-        temp_name.push(".tmp");
-        let temp = self.file.with_file_name(temp_name);
-
-        let written = (|| {
-            let mut file = File::create(&temp)?;
-            file.write_all(json.as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            fs::rename(&temp, &self.file)
-        })();
-        if written.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
-        written
+        write_atomic(&self.file, json.as_bytes())
     }
 }
 
@@ -188,7 +172,12 @@ mod tests {
             SettingsStore::load(file.clone()).settings(),
             store.settings()
         );
-        assert!(!file.with_file_name(".settings.json.tmp").exists());
+        // The write left nothing but the file behind.
+        let left: Vec<_> = fs::read_dir(file.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [SETTINGS_FILE]);
 
         fs::write(
             &file,
@@ -198,6 +187,47 @@ mod tests {
         let store = SettingsStore::load(file);
         assert_eq!(store.settings().audio.buffer_frames, Some(512));
         assert!(store.settings().browser_roots.is_empty());
+    }
+
+    #[test]
+    fn two_stores_writing_one_file_at_once_leave_a_whole_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join(SETTINGS_FILE);
+        // Two copies of the app, each writing its settings over and over.
+        let writers: Vec<_> = (0..2_u32)
+            .map(|writer| {
+                let file = file.clone();
+                std::thread::spawn(move || {
+                    let mut store = SettingsStore::load(file);
+                    for round in 0..40 {
+                        store.update(|settings| {
+                            settings.audio.buffer_frames = Some(64 + writer);
+                            settings.browser_roots = vec![format!("{writer}"); round % 7 + 1];
+                        });
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        // Whichever wrote last, the file is all of one write.
+        let json = fs::read_to_string(&file).unwrap();
+        let settings: Settings = serde_json::from_str(&json).unwrap();
+        let writer = settings.audio.buffer_frames.unwrap() - 64;
+        assert!(writer < 2);
+        assert!(
+            settings
+                .browser_roots
+                .iter()
+                .all(|root| *root == writer.to_string())
+        );
+        let left: Vec<_> = fs::read_dir(folder.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [SETTINGS_FILE]);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use windfall_engine::Engine;
 
 use crate::events::{Event, EventSink};
-use crate::session::{AUTOSAVE_INTERVAL, Session, SessionConfig};
+use crate::session::{AUTOSAVE_INTERVAL, Session, SessionConfig, openable};
 use crate::settings::{SETTINGS_FILE, SettingsStore};
 
 /// Set to `1` to run the whole audio path with the output turned all the
@@ -48,9 +48,14 @@ pub fn start(app: &AppHandle) -> Result<Session, Box<dyn Error>> {
     let settings = SettingsStore::load(config_dir.join(SETTINGS_FILE));
 
     // Returns once the device is open or has refused. That is quick for a
-    // driver that works, and the window does not respond until then.
+    // driver that works, and the window does not respond until then. The
+    // devices are listed first only if the remembered request names a
+    // sample rate or a buffer size to check against them.
     let opening = Instant::now();
-    let engine = Arc::new(Engine::start(&settings.settings().audio));
+    let engine = Arc::new(Engine::start(&openable(
+        &settings.settings().audio,
+        Engine::devices,
+    )));
     let opened_in = opening.elapsed();
     let controller = engine.controller();
     if std::env::var(SILENT_ENV).is_ok_and(|value| value == "1") {

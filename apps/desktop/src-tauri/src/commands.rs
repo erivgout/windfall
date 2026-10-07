@@ -15,10 +15,11 @@ use windfall_ipc::{
     RealtimeFrame, SampleInfo, TransportPatch, TransportState,
 };
 use windfall_project::{
-    ChannelId, Command, DispatchResult, DocumentSnapshot, ProjectPatch, SampleId,
+    AutomationTarget, ChannelId, Command, DispatchResult, DocumentSnapshot, PlaylistTrackId,
+    ProjectPatch, SampleId, TrackId,
 };
 
-use crate::session::Session;
+use crate::session::{ClipPlace, Session};
 
 /// Runs slow work off the async runtime's own threads.
 async fn blocking<T, F>(work: F) -> Result<T, String>
@@ -46,6 +47,14 @@ fn dispatch(
 }
 
 #[tauri::command]
+fn automate(
+    session: State<'_, Session>,
+    target: AutomationTarget,
+) -> Result<DispatchResult, String> {
+    session.automate(target)
+}
+
+#[tauri::command]
 fn undo(session: State<'_, Session>) -> Option<ProjectPatch> {
     session.undo()
 }
@@ -63,7 +72,7 @@ fn history_jump(session: State<'_, Session>, cursor: u32) -> ProjectPatch {
 #[tauri::command]
 async fn project_new(session: State<'_, Session>) -> Result<DocumentSnapshot, String> {
     let session = session.inner().clone();
-    blocking(move || Ok(session.project_new())).await
+    blocking(move || session.project_new()).await
 }
 
 #[tauri::command]
@@ -88,7 +97,7 @@ async fn recent_projects(session: State<'_, Session>) -> Result<Vec<String>, Str
 }
 
 #[tauri::command]
-fn transport_play(session: State<'_, Session>) -> TransportState {
+fn transport_play(session: State<'_, Session>) -> Result<TransportState, String> {
     session.transport_play()
 }
 
@@ -98,7 +107,7 @@ fn transport_stop(session: State<'_, Session>) -> TransportState {
 }
 
 #[tauri::command]
-fn transport_toggle(session: State<'_, Session>) -> TransportState {
+fn transport_toggle(session: State<'_, Session>) -> Result<TransportState, String> {
     session.transport_toggle()
 }
 
@@ -141,6 +150,12 @@ fn engine_status(session: State<'_, Session>) -> EngineStatus {
 async fn engine_devices(session: State<'_, Session>) -> Result<Vec<AudioHost>, String> {
     let session = session.inner().clone();
     blocking(move || Ok(session.engine_devices())).await
+}
+
+#[tauri::command]
+async fn engine_settings(session: State<'_, Session>) -> Result<AudioSettings, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.engine_settings())).await
 }
 
 #[tauri::command]
@@ -222,6 +237,12 @@ async fn sample_info_by_id(
 }
 
 #[tauri::command]
+async fn samples_reload(session: State<'_, Session>) -> Result<u32, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.samples_reload())).await
+}
+
+#[tauri::command]
 async fn add_channel_from_file(
     session: State<'_, Session>,
     path: String,
@@ -242,6 +263,39 @@ async fn set_channel_sample_from_file(
 }
 
 #[tauri::command]
+async fn add_audio_clip_from_file(
+    session: State<'_, Session>,
+    path: String,
+    track: Option<PlaylistTrackId>,
+    start: u32,
+    mixer_track: Option<TrackId>,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    let place = ClipPlace {
+        track,
+        start,
+        mixer_track,
+    };
+    blocking(move || session.add_audio_clip_from_file(&path, place)).await
+}
+
+#[tauri::command]
+fn add_audio_clip_from_sample(
+    session: State<'_, Session>,
+    sample: SampleId,
+    track: Option<PlaylistTrackId>,
+    start: u32,
+    mixer_track: Option<TrackId>,
+) -> Result<DispatchResult, String> {
+    let place = ClipPlace {
+        track,
+        start,
+        mixer_track,
+    };
+    session.add_audio_clip_from_sample(sample, place)
+}
+
+#[tauri::command]
 async fn export_audio(session: State<'_, Session>, options: ExportOptions) -> Result<(), String> {
     let session = session.inner().clone();
     blocking(move || session.export_audio(options)).await
@@ -252,6 +306,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         document_snapshot,
         dispatch,
+        automate,
         undo,
         redo,
         history_jump,
@@ -268,6 +323,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         realtime_subscribe,
         engine_status,
         engine_devices,
+        engine_settings,
         engine_configure,
         audition_note_on,
         audition_note_off,
@@ -279,8 +335,11 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         browser_list,
         sample_info,
         sample_info_by_id,
+        samples_reload,
         add_channel_from_file,
         set_channel_sample_from_file,
+        add_audio_clip_from_file,
+        add_audio_clip_from_sample,
         export_audio,
     ]
 }

@@ -8,6 +8,7 @@ use windfall_project::{ClipContent, ClipInit, Command, PatternId, PlaylistTrackI
 
 use super::{Rig, SAMPLE_RATE, rms};
 use crate::events::Event;
+use crate::session::ClipPlace;
 use crate::sync::lock;
 
 fn options(rig: &Rig, name: &str) -> ExportOptions {
@@ -19,6 +20,7 @@ fn options(rig: &Rig, name: &str) -> ExportOptions {
         mode: PlayMode::Pattern,
         pattern_loops: 1,
         tail_secs: 0.0,
+        auto_tail: false,
     }
 }
 
@@ -121,7 +123,7 @@ fn a_second_export_is_refused_while_one_runs_and_edits_do_not_reach_it() {
             None,
         )
         .unwrap();
-    session.project_new();
+    session.project_new().unwrap();
 
     release.send(()).unwrap();
     let done = rig.events.wait_for_export();
@@ -198,7 +200,13 @@ fn song_mode_exports_the_playlist_to_the_end_of_its_last_clip() {
     let session = &rig.session;
     kick_on_the_beat(&rig);
     let track = session
-        .dispatch(Command::AddPlaylistTrack { name: None }, None)
+        .dispatch(
+            Command::AddPlaylistTrack {
+                name: None,
+                index: None,
+            },
+            None,
+        )
         .unwrap()
         .created[0];
     let bar = rig.project().patterns[0].length_ticks();
@@ -210,6 +218,8 @@ fn song_mode_exports_the_playlist_to_the_end_of_its_last_clip() {
                     // One silent bar, then three bars of the pattern.
                     start: bar,
                     length: Some(bar * 3),
+                    offset: None,
+                    muted: None,
                     content: ClipContent::Pattern {
                         pattern: rig.pattern(),
                     },
@@ -242,4 +252,99 @@ fn song_mode_exports_the_playlist_to_the_end_of_its_last_clip() {
     // Exporting does not move the transport.
     assert!(!session.transport_state().playing);
     assert_eq!(session.transport_state().mode, PlayMode::Pattern);
+}
+
+#[test]
+fn an_export_named_without_an_extension_is_written_as_a_wav_file() {
+    let rig = Rig::new();
+    let session = &rig.session;
+    kick_on_the_beat(&rig);
+
+    for (typed, written) in [
+        ("typed name", "typed name.wav"),
+        ("take.2", "take.2.wav"),
+        ("01. Intro", "01. Intro.wav"),
+        ("Loud.WAV", "Loud.WAV"),
+    ] {
+        rig.events.take();
+        let options = options(&rig, typed);
+        session.export_audio(options.clone()).unwrap();
+        let done = rig.events.wait_for_export();
+        assert_eq!(done.error, None, "{typed}");
+        // Progress is reported under the path as it was given.
+        assert_eq!(done.path, options.path);
+        let audio = windfall_codec::decode_file(rig.file(written)).unwrap();
+        assert!(rms(audio.samples()) > 0.02, "{written}");
+        if typed != written {
+            assert!(!Path::new(&options.path).exists(), "{typed}");
+        }
+    }
+
+    rig.events.take();
+    assert_eq!(
+        session.export_audio(options(&rig, "beat.mp3")).unwrap_err(),
+        "Windfall exports WAV files, so the file name cannot end in .mp3. End it in .wav, or leave the ending off."
+    );
+    assert!(rig.events.take().is_empty());
+    assert!(!Path::new(&rig.file("beat.mp3")).exists());
+    assert!(!Path::new(&rig.file("beat.mp3.wav")).exists());
+}
+
+#[test]
+fn an_export_says_how_many_audio_clips_it_had_no_room_for() {
+    let rig = Rig::new();
+    let session = &rig.session;
+    let file = super::factory_file("Bass/Bass Sub.wav");
+    let place = ClipPlace {
+        track: None,
+        start: 0,
+        mixer_track: None,
+    };
+    let created = session.add_audio_clip_from_file(&file, place).unwrap();
+    let first = rig
+        .project()
+        .playlist
+        .clips
+        .iter()
+        .find(|clip| Some(&clip.id.0) == created.created.last())
+        .cloned()
+        .unwrap();
+    let song = ExportOptions {
+        mode: PlayMode::Song,
+        ..options(&rig, "crowd.wav")
+    };
+
+    // One clip, and then 128 of it: everything is in the file.
+    let copies = |count: usize| Command::AddClips {
+        clips: vec![
+            ClipInit {
+                track: first.track,
+                start: first.start,
+                length: Some(first.length),
+                offset: None,
+                muted: None,
+                content: first.content.clone(),
+            };
+            count
+        ],
+    };
+    session.dispatch(copies(127), None).unwrap();
+    session.export_audio(song.clone()).unwrap();
+    let done = rig.events.wait_for_export();
+    assert_eq!((done.error, done.dropped_clips), (None, 0));
+
+    // Five more start on the same tick, and the engine plays 128 at once.
+    // The file is written all the same, and the last event counts the
+    // clips that are not in it. No event before it does.
+    session.dispatch(copies(5), None).unwrap();
+    rig.events.take();
+    session.export_audio(song.clone()).unwrap();
+    let done = rig.events.wait_for_export();
+    assert_eq!((done.error, done.dropped_clips), (None, 5));
+    for event in rig.events.take() {
+        if let Event::ExportProgress(progress) = event {
+            assert_eq!(progress.dropped_clips, if progress.done { 5 } else { 0 });
+        }
+    }
+    assert!(Path::new(&song.path).is_file());
 }

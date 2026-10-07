@@ -7,11 +7,10 @@ use windfall_codec::{WavSampleFormat, write_wav};
 use windfall_core::AudioBuffer;
 use windfall_ipc::TransportPatch;
 use windfall_project::{
-    ChannelId, ChannelSource, Command, PatternId, ProjectPatch, SampleId, SamplePath,
-    SettingsPatch, TrackId,
+    ChannelId, Command, PatternId, ProjectPatch, SampleId, SamplePath, SettingsPatch, TrackId,
 };
 
-use super::{Rig, factory_file};
+use super::{Rig, factory_file, rms};
 use crate::events::Event;
 
 fn add_pattern() -> Command {
@@ -36,8 +35,7 @@ fn write_tone(rig: &Rig, name: &str) -> String {
 }
 
 fn sample_of(rig: &Rig, channel: usize) -> Option<SampleId> {
-    let ChannelSource::Sampler(sampler) = &rig.project().channels[channel].source;
-    sampler.sample
+    rig.project().channels[channel].source.sample()
 }
 
 #[test]
@@ -425,4 +423,128 @@ fn deleting_the_pattern_the_transport_plays_moves_the_transport_first() {
     // Undo brings the pattern back; the transport stays where it is.
     session.undo().unwrap();
     assert_eq!(session.transport_state().pattern, first);
+}
+
+#[test]
+fn a_file_that_finishes_decoding_after_its_project_is_gone_is_not_added() {
+    let rig = Rig::new();
+    let session = &rig.session;
+    let clap = rig.channel(1);
+
+    for onto_a_channel in [false, true] {
+        // The file is decoded, and the edit that uses it is next.
+        let hold = session.hold("import:decoded");
+        let importing = session.background(move |session| {
+            let file = factory_file("Drums/Percussion/Cowbell.wav");
+            if onto_a_channel {
+                session.set_channel_sample_from_file(clap, &file)
+            } else {
+                session.add_channel_from_file(&file, None)
+            }
+        });
+        hold.wait();
+
+        // Every new project hands out the same ids, so the id of the clap
+        // names a channel in this one too.
+        let fresh = session.project_new().unwrap();
+        assert!(fresh.project.channels.iter().any(|c| c.id == clap));
+        rig.events.take();
+
+        hold.release();
+        assert_eq!(
+            importing.join().unwrap().unwrap_err(),
+            "\"Cowbell.wav\" was not added, because another project was opened while it was loading."
+        );
+        assert_eq!(session.document_snapshot(), fresh);
+        assert!(rig.events.take().is_empty());
+        assert_eq!(session.state().pool.len(), 4);
+    }
+}
+
+#[test]
+fn reloading_samples_picks_up_files_that_have_turned_up() {
+    let mut rig = Rig::new();
+    let session = rig.session.clone();
+    let late = rig.file("late.wav");
+    let added = session
+        .dispatch(
+            Command::AddSample {
+                name: "Late".to_owned(),
+                path: SamplePath::External(late.clone()),
+            },
+            None,
+        )
+        .unwrap();
+    let sample = SampleId(added.created[0]);
+    let added = session
+        .dispatch(
+            Command::AddChannel {
+                name: None,
+                sample: Some(sample),
+                instrument: None,
+                index: None,
+                mixer_track: None,
+            },
+            None,
+        )
+        .unwrap();
+    let channel = ChannelId(added.created[0]);
+    rig.wait_until_loaded_or_failed(sample);
+    assert!(!rig.has_audio(sample));
+    let before = session.document_snapshot();
+    rig.events.take();
+
+    // Still not there: it is reported again, and nothing else happens.
+    assert_eq!(session.samples_reload(), 1);
+    assert_eq!(
+        rig.events.take(),
+        [Event::ProjectWarnings(vec![format!(
+            "Missing sample: {late}"
+        )])]
+    );
+
+    write_tone(&rig, "late.wav");
+    assert_eq!(session.samples_reload(), 0);
+    assert!(rig.has_audio(sample));
+    // The engine was handed it: the channel sounds.
+    session.audition_note_on(channel, 60, 1.0);
+    assert!(rms(&rig.run(1_200)) > 0.01);
+    // The project itself is as it was.
+    assert_eq!(session.document_snapshot(), before);
+    assert!(rig.events.take().is_empty());
+
+    assert_eq!(session.samples_reload(), 0);
+    assert!(rig.events.take().is_empty());
+}
+
+#[test]
+fn a_reload_that_outlives_its_project_leaves_the_next_one_alone() {
+    let rig = Rig::new();
+    let session = &rig.session;
+    let add = |file: String| Command::AddSample {
+        name: "Late".to_owned(),
+        path: SamplePath::External(file),
+    };
+    let added = session.dispatch(add(rig.file("late.wav")), None).unwrap();
+    let sample = SampleId(added.created[0]);
+    rig.wait_until_loaded_or_failed(sample);
+    write_tone(&rig, "late.wav");
+
+    // The file is decoded and about to go into the pool.
+    let hold = session.hold("samples:decoded");
+    let reloading = session.background(|session| session.samples_reload());
+    hold.wait();
+
+    // The next project gives the same id to a sample whose file is missing.
+    session.project_new().unwrap();
+    let added = session.dispatch(add(rig.file("other.wav")), None).unwrap();
+    let other = SampleId(added.created[0]);
+    assert_eq!(other, sample);
+    rig.wait_until_loaded_or_failed(other);
+
+    hold.release();
+    // It is still missing, and must not have been given the other's audio.
+    assert_eq!(reloading.join().unwrap(), 1);
+    assert!(!rig.has_audio(other));
+    assert!(!session.state().pool.contains(other));
 }

@@ -10,10 +10,52 @@
 //! The document sits behind one mutex, and every method takes it for as long
 //! as an edit takes and no longer. Whatever is slow, such as decoding audio,
 //! reading and writing files, rendering an export or opening an audio
-//! device, runs with no lock held, on the thread of the caller: the app
-//! calls those methods from worker threads and the quick ones from anywhere.
-//! Events are emitted while the lock that guards their subject is held,
-//! which is what keeps them in order.
+//! device, runs with the document lock released, on the thread of the
+//! caller: the app calls those methods from worker threads and the quick
+//! ones from anywhere. Events are emitted while the lock that guards their
+//! subject is held, which is what keeps them in order.
+//!
+//! A thread takes the locks it needs in this order and never the other way
+//! round:
+//!
+//! 1. `save` or `configuring`. Each puts one kind of slow work in a queue:
+//!    `save` is held from before a save or a backup copies the project until
+//!    its file is written and the document is marked, so files reach the
+//!    disk in the order their copies were taken; `configuring` is held while
+//!    the audio device is reopened. Nothing is held when either is taken,
+//!    and no thread holds both.
+//! 2. `state`, the document lock.
+//! 3. `transport`, the sample cache and the engine's controller, each for a
+//!    moment, under `state` or alone.
+//!
+//! `preview` is held only around handing a preview to the controller.
+//! `status`, `settings` and `subscribers` are never held together with
+//! `state` or with each other. The settings file is written under
+//! `settings`, which is why that lock stays clear of the document.
+//!
+//! Who takes what:
+//!
+//! - Edits, undo and the transport: `state`, then `transport`.
+//! - Save and backup (the autosave thread): `save`, then `state` to copy
+//!   the project, nothing but `save` while the file is written, then
+//!   `state` again; `settings` once `save` is released.
+//! - New and open: `state` to take a ticket, no lock while the file is read
+//!   and decoded, then `state` to swap the project in; `settings` after.
+//! - The sample loader, file imports and sample reload: no lock while
+//!   decoding, then `state`.
+//! - Export: `state` to copy the project, then no lock at all on its own
+//!   thread.
+//! - The realtime thread: `subscribers`, then `transport`, and once a second
+//!   `status`. It never takes `state`, so no slow edit can stall the meters.
+//! - Reopening the audio device: `configuring` throughout, `settings`, then
+//!   `state` to hand the project to the new stream, then `status`.
+//!
+//! # Work that outlives its document
+//!
+//! Slow work is done for the document that was open when it started. Each
+//! document has a number, `generation`, and everything that works with no
+//! lock held and then touches the document or the sample pool compares it
+//! first and gives up if another document has taken its place.
 
 mod audio;
 mod autosave;
@@ -29,7 +71,7 @@ mod transport;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use windfall_engine::{Controller, Engine, SamplePool};
@@ -42,9 +84,12 @@ use crate::settings::SettingsStore;
 use crate::sync::lock;
 use crate::template::default_project;
 
+pub use audio::openable;
 pub use autosave::{AUTOSAVE_INTERVAL, backup_timestamp};
-pub use files::NO_FILE_YET;
+pub use files::{EDITED_WHILE_MOVING, NO_FILE_YET};
+pub use library::{ClipPlace, PROJECT_REPLACED};
 pub use realtime::{FRAME_INTERVAL, FrameSender};
+pub use transport::{EMPTY_PLAYLIST, MUTED_PLAYLIST, SILENT_PLAYLIST};
 
 /// The audio output as the session needs it. [`Engine`] is the real one.
 pub trait AudioDevice: Send + Sync {
@@ -98,10 +143,16 @@ impl WeakSession {
 }
 
 struct Inner {
+    /// Held by a save or a backup from before it copies the project until
+    /// its file is written. Taken before `state`, never under it.
+    save: Mutex<()>,
     state: Mutex<State>,
     /// The transport as the UI was last told. Locked after `state`, never
     /// before it.
     transport: Mutex<TransportState>,
+    /// Held while the audio device is reopened, so the settings remembered
+    /// are the ones of the stream that ends up open.
+    configuring: Mutex<()>,
     /// The engine status as the UI was last told.
     status: Mutex<EngineStatus>,
     settings: Mutex<SettingsStore>,
@@ -113,33 +164,48 @@ struct Inner {
     factory_dir: PathBuf,
     exporting: AtomicBool,
     /// Counts preview requests, so a file that finishes decoding after a
-    /// newer request was made is not played.
-    preview: AtomicU64,
+    /// newer request was made is not played. Held while a preview is
+    /// handed to the engine or stopped, so neither can slip in between
+    /// another's look at the count and what it then does.
+    preview: Mutex<u64>,
+    #[cfg(test)]
+    pauses: tests::Pauses,
 }
 
 /// The open project and the audio that goes with it.
 struct State {
     document: Document,
-    /// Where the project was last saved or opened from.
+    /// The file that saving writes to: where the project was last saved or
+    /// opened from. `None` for a project that was never saved and for one
+    /// opened from a backup, so that saving either asks for a place first.
     path: Option<PathBuf>,
+    /// The folder project samples are relative to: the one `path` is in or,
+    /// for a project opened from a backup, the one that holds the project
+    /// the backup was made of.
+    sample_dir: Option<PathBuf>,
     pool: SamplePool,
     /// The samples in `pool`, which cannot list them itself.
     loaded: HashSet<SampleId>,
     /// Samples being decoded on another thread.
     loading: HashSet<SampleId>,
     /// Samples whose file could not be read. They are reported once and not
-    /// tried again while this document is open.
+    /// tried again until the user asks for the samples to be reloaded.
     failed: HashSet<SampleId>,
     /// Counts the documents this session has held. Work that started for an
     /// earlier document checks it and gives up.
     generation: u64,
+    /// Counts the changes made to this document's project, undo and redo
+    /// included. Equal counts mean the project is the same as it was.
+    edits: u64,
+    /// Counts the requests to replace the document, whether or not they got
+    /// to. Only the last one made may still do it.
+    replacements: u64,
 }
 
 impl State {
-    /// The folder the project file is in, which project samples are
-    /// relative to.
+    /// The folder project samples are relative to.
     fn project_dir(&self) -> Option<&Path> {
-        self.path.as_deref().and_then(Path::parent)
+        self.sample_dir.as_deref()
     }
 
     fn path_text(&self) -> Option<String> {
@@ -173,16 +239,21 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                save: Mutex::new(()),
                 state: Mutex::new(State {
                     document: Document::new(project),
                     path: None,
+                    sample_dir: None,
                     pool: decoded.pool,
                     loaded: decoded.loaded,
                     loading: HashSet::new(),
                     failed: decoded.failed,
                     generation: 0,
+                    edits: 0,
+                    replacements: 0,
                 }),
                 transport: Mutex::new(controller.transport()),
+                configuring: Mutex::new(()),
                 status: Mutex::new(audio.status()),
                 settings: Mutex::new(settings),
                 subscribers: Mutex::new(Vec::new()),
@@ -192,7 +263,9 @@ impl Session {
                 cache,
                 factory_dir,
                 exporting: AtomicBool::new(false),
-                preview: AtomicU64::new(0),
+                preview: Mutex::new(0),
+                #[cfg(test)]
+                pauses: tests::Pauses::default(),
             }),
         }
     }

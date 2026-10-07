@@ -1,10 +1,49 @@
 //! The transport: play, stop, and where the playhead is.
 
-use windfall_ipc::{TransportPatch, TransportState};
+use windfall_ipc::{PlayMode, TransportPatch, TransportState};
+use windfall_project::{ClipContent, Project};
 
 use super::Session;
 use crate::events::Event;
 use crate::sync::lock;
+
+/// What playing a song says when the playlist has no clips.
+pub const EMPTY_PLAYLIST: &str =
+    "The playlist is empty. Add a clip to the playlist, or switch to pattern mode.";
+
+/// What playing a song says when the playlist has clips and all are muted.
+pub const MUTED_PLAYLIST: &str =
+    "Every clip on the playlist is muted. Unmute a clip, or switch to pattern mode.";
+
+/// What playing a song says when the only clips that are not muted are
+/// automation clips.
+pub const SILENT_PLAYLIST: &str = "Only automation clips would play, and they make no sound by themselves. Add or unmute a pattern or audio clip, or switch to pattern mode.";
+
+/// Why playing the song would make no sound, if it would not: there is no
+/// clip, every clip is muted or sits on a muted track, or the clips that
+/// are left are all automation, which moves controls and plays nothing.
+fn nothing_to_play(project: &Project) -> Option<&'static str> {
+    let playlist = &project.playlist;
+    if playlist.clips.is_empty() {
+        return Some(EMPTY_PLAYLIST);
+    }
+    let mut playing = playlist.clips.iter().filter(|clip| {
+        let track_muted = playlist
+            .tracks
+            .iter()
+            .any(|track| track.id == clip.track && track.muted);
+        !clip.muted && !track_muted
+    });
+    let Some(first) = playing.next() else {
+        return Some(MUTED_PLAYLIST);
+    };
+    let sounds = |content: &ClipContent| match content {
+        ClipContent::Pattern { .. } | ClipContent::Audio { .. } => true,
+        ClipContent::Automation { .. } => false,
+    };
+    let heard = sounds(&first.content) || playing.any(|clip| sounds(&clip.content));
+    (!heard).then_some(SILENT_PLAYLIST)
+}
 
 impl Session {
     pub fn transport_state(&self) -> TransportState {
@@ -13,9 +52,23 @@ impl Session {
 
     /// Starts playback. With no audio device open nothing plays, and the
     /// state returned says so.
-    pub fn transport_play(&self) -> TransportState {
+    ///
+    /// In song mode with nothing on the playlist to hear, playback is not
+    /// started and the error says what to do: the engine would stop again
+    /// at once and leave the user with a dead Play button.
+    pub fn transport_play(&self) -> Result<TransportState, String> {
+        // Held across the check and the start, so the last clip cannot be
+        // removed in between.
+        let state = self.state();
+        let transport = self.controller().transport();
+        if transport.mode == PlayMode::Song
+            && !transport.playing
+            && let Some(reason) = nothing_to_play(state.document.project())
+        {
+            return Err(reason.to_owned());
+        }
         self.controller().play();
-        self.sync_transport()
+        Ok(self.sync_transport())
     }
 
     /// Stops playback. The playhead returns to where playback started.
@@ -24,9 +77,11 @@ impl Session {
         self.sync_transport()
     }
 
-    pub fn transport_toggle(&self) -> TransportState {
+    /// Stops playback if it is running, and starts it if it is not, with
+    /// the refusal of [`transport_play`](Self::transport_play).
+    pub fn transport_toggle(&self) -> Result<TransportState, String> {
         if self.controller().transport().playing {
-            self.transport_stop()
+            Ok(self.transport_stop())
         } else {
             self.transport_play()
         }

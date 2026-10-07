@@ -89,15 +89,16 @@ impl Session {
     pub(super) fn sync_samples(&self, state: &mut State) {
         let State {
             document,
-            path,
+            sample_dir,
             pool,
             loaded,
             loading,
             failed,
             generation,
+            ..
         } = state;
         let project = document.project();
-        let project_dir = path.as_deref().and_then(Path::parent);
+        let project_dir = sample_dir.as_deref();
 
         let wanted: HashSet<SampleId> = project.samples.iter().map(|sample| sample.id).collect();
         loaded.retain(|id| {
@@ -145,7 +146,9 @@ impl Session {
         let ids: Vec<SampleId> = pending.iter().map(|(id, _)| *id).collect();
         let spawned = std::thread::Builder::new()
             .name("windfall-sample-loader".to_owned())
-            .spawn(move || session.load_samples(generation, pending));
+            .spawn(move || {
+                session.load_samples(generation, pending, Vec::new(), false);
+            });
         if let Err(error) = spawned {
             log::error!("could not start a thread to load samples: {error}");
             for id in ids {
@@ -154,19 +157,73 @@ impl Session {
         }
     }
 
+    /// Tries again to load every sample that has no audio because its file
+    /// was missing or could not be read: looks each file up afresh, decodes
+    /// what is there now and hands the project to the engine again. What
+    /// is still missing is reported as warnings, in one event. Returns how
+    /// many samples of the open project are still without audio.
+    ///
+    /// Slow when files have turned up: they are decoded on the caller's
+    /// thread, with no lock held.
+    pub fn samples_reload(&self) -> u32 {
+        let (generation, pending, warnings) = {
+            let mut state = self.state();
+            let State {
+                document,
+                sample_dir,
+                loading,
+                failed,
+                generation,
+                ..
+            } = &mut *state;
+            let mut pending = Vec::new();
+            let mut warnings = Vec::new();
+            for sample in &document.project().samples {
+                if !failed.contains(&sample.id) {
+                    continue;
+                }
+                match locate(sample, sample_dir.as_deref(), &self.inner.factory_dir) {
+                    Ok(file) => {
+                        // Marked as loading, so an edit made meanwhile
+                        // does not start a second attempt.
+                        failed.remove(&sample.id);
+                        loading.insert(sample.id);
+                        pending.push((sample.id, file));
+                    }
+                    Err(warning) => warnings.push(warning),
+                }
+            }
+            (*generation, pending, warnings)
+        };
+        self.load_samples(generation, pending, warnings, true)
+    }
+
     /// Decodes files for the document numbered `generation` and hands the
     /// audio to the engine, unless that document has been replaced.
-    fn load_samples(&self, generation: u64, pending: Vec<(SampleId, PathBuf)>) {
+    ///
+    /// `warnings` are sent along with those of the files that fail here.
+    /// The engine is handed the project when a sample got its audio, or
+    /// whatever happened if `push` is set. Returns how many samples of the
+    /// open project are without audio afterwards.
+    fn load_samples(
+        &self,
+        generation: u64,
+        pending: Vec<(SampleId, PathBuf)>,
+        mut warnings: Vec<String>,
+        push: bool,
+    ) -> u32 {
         let results: Vec<(SampleId, Result<AudioBuffer, String>)> = pending
             .into_iter()
             .map(|(id, file)| (id, decode(&self.inner.cache, &file)))
             .collect();
+        #[cfg(test)]
+        self.pause("samples:decoded");
 
         let mut state = self.state();
+        let missing = |state: &State| u32::try_from(state.failed.len()).unwrap_or(u32::MAX);
         if state.generation != generation {
-            return;
+            return missing(&state);
         }
-        let mut warnings = Vec::new();
         let mut changed = false;
         for (id, result) in results {
             state.loading.remove(&id);
@@ -186,12 +243,13 @@ impl Session {
                 }
             }
         }
-        if changed {
+        if changed || push {
             self.controller()
                 .set_project(state.document.project(), &state.pool);
         }
         if !warnings.is_empty() {
             self.emit(Event::ProjectWarnings(warnings));
         }
+        missing(&state)
     }
 }

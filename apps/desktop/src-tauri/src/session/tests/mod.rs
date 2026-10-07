@@ -3,13 +3,17 @@
 
 mod beat;
 mod document;
+mod effects;
 mod export;
 mod files;
 mod library;
 mod playback;
+mod song;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
@@ -91,10 +95,131 @@ impl Recorder {
     }
 }
 
+/// Points in the session's slow work where a test can stop a thread, to
+/// run something else at exactly that moment.
+///
+/// The session reaches a point by calling [`Session::pause`] with its
+/// name, which returns at once unless a test holds the point.
+#[derive(Default)]
+pub(super) struct Pauses {
+    points: Mutex<HashMap<&'static str, Stage>>,
+    moved: Condvar,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    /// The next thread to reach the point stops there.
+    Armed,
+    /// A thread is stopped at the point. Others pass it.
+    Reached,
+}
+
+impl Pauses {
+    /// Waits, with the points locked, until `done` says so.
+    fn wait_until(&self, what: &str, done: impl Fn(&HashMap<&'static str, Stage>) -> bool) {
+        let deadline = Instant::now() + PATIENCE;
+        let mut points = lock(&self.points);
+        while !done(&points) {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| panic!("timed out waiting {what}"));
+            points = self
+                .moved
+                .wait_timeout(points, left)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+    }
+}
+
+impl Session {
+    /// A point a test may hold a thread at.
+    pub(super) fn pause(&self, point: &'static str) {
+        let pauses = &self.inner.pauses;
+        {
+            let mut points = lock(&pauses.points);
+            if points.get(point) != Some(&Stage::Armed) {
+                return;
+            }
+            points.insert(point, Stage::Reached);
+            pauses.moved.notify_all();
+        }
+        pauses.wait_until(&format!("to be released from {point}"), |points| {
+            !points.contains_key(point)
+        });
+    }
+
+    /// Makes the next thread that reaches `point` stop there until the
+    /// hold is released.
+    fn hold(&self, point: &'static str) -> Hold {
+        lock(&self.inner.pauses.points).insert(point, Stage::Armed);
+        Hold {
+            session: self.clone(),
+            point,
+        }
+    }
+
+    /// Runs `work` on another thread, as the app runs a slow command.
+    fn background<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Session) -> T + Send + 'static,
+    ) -> JoinHandle<T> {
+        let session = self.clone();
+        std::thread::spawn(move || work(&session))
+    }
+}
+
+/// A thread stopped, or about to be, at a point of the session's work.
+struct Hold {
+    session: Session,
+    point: &'static str,
+}
+
+impl Hold {
+    /// Waits until a thread is stopped at the point.
+    fn wait(&self) {
+        let point = self.point;
+        self.session
+            .inner
+            .pauses
+            .wait_until(&format!("for a thread to reach {point}"), |points| {
+                points.get(point) == Some(&Stage::Reached)
+            });
+    }
+
+    /// Lets the stopped thread go on.
+    fn release(self) {}
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let pauses = &self.session.inner.pauses;
+        lock(&pauses.points).remove(self.point);
+        pauses.moved.notify_all();
+    }
+}
+
+/// How long a test gives a thread to finish something it must not be able
+/// to finish. The test is right whether or not the time runs out; a wait
+/// only makes sure that code which lets the thread through is caught.
+const GRACE: Duration = Duration::from_millis(150);
+
+/// Whether a thread that must be waiting for another is in fact still
+/// running once [`GRACE`] is up.
+fn still_running<T>(thread: &JoinHandle<T>) -> bool {
+    let deadline = Instant::now() + GRACE;
+    while Instant::now() < deadline && !thread.is_finished() {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    !thread.is_finished()
+}
+
 /// An audio device that opens whatever it is asked for, except a device
 /// named "Unplugged".
 struct FakeDevice {
     status: Mutex<EngineStatus>,
+    /// What [`AudioDevice::devices`] lists.
+    hosts: Mutex<Vec<AudioHost>>,
 }
 
 impl FakeDevice {
@@ -109,6 +234,7 @@ impl FakeDevice {
             sample_rate,
             buffer_frames,
             latency_ms: buffer_frames as f32 * 1000.0 / sample_rate as f32,
+            latency_frames: 0,
             error: unplugged.then(|| "audio output device \"Unplugged\" was not found".to_owned()),
         }
     }
@@ -124,7 +250,7 @@ impl AudioDevice for FakeDevice {
     }
 
     fn devices(&self) -> Vec<AudioHost> {
-        Vec::new()
+        lock(&self.hosts).clone()
     }
 }
 
@@ -152,6 +278,7 @@ impl Rig {
         let events = Arc::new(Recorder::default());
         let device = Arc::new(FakeDevice {
             status: Mutex::new(FakeDevice::describe(&settings.settings().audio)),
+            hosts: Mutex::new(Vec::new()),
         });
         let session = Session::new(SessionConfig {
             controller,

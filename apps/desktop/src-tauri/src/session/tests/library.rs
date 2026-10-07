@@ -8,6 +8,7 @@ use windfall_project::{Command, SampleId, SamplePath};
 use super::{Rig, factory_file};
 use crate::paths;
 use crate::samples::PEAK_BUCKETS;
+use crate::session::PROJECT_REPLACED;
 
 #[test]
 fn the_factory_content_is_the_first_root_and_lists_as_folders_of_sounds() {
@@ -210,4 +211,21 @@ fn sample_info_by_id_resolves_the_samples_of_the_project() {
             .unwrap_err(),
         "Missing sample: sounds/own.wav"
     );
+}
+
+#[test]
+fn sample_info_for_a_project_that_is_gone_is_not_handed_out() {
+    let rig = Rig::new();
+    let session = &rig.session;
+    let kick = rig.project().samples[0].id;
+
+    let hold = session.hold("sample-info:read");
+    let asking = session.background(move |session| session.sample_info_by_id(kick));
+    hold.wait();
+    // The id means a sample of the new project now.
+    session.project_new().unwrap();
+    hold.release();
+    assert_eq!(asking.join().unwrap().unwrap_err(), PROJECT_REPLACED);
+
+    assert_eq!(session.sample_info_by_id(kick).unwrap().name, "Kick Punch");
 }

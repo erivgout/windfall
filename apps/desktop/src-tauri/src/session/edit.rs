@@ -1,6 +1,9 @@
 //! Edits to the document, and telling everyone about them.
 
-use windfall_project::{Command, DispatchResult, DocumentSnapshot, ProjectPatch, Touched};
+use windfall_project::{
+    AutomationId, AutomationTarget, ClipContent, ClipInit, Command, DispatchResult,
+    DocumentSnapshot, MAX_SONG_TICKS, PlaylistTrackId, ProjectPatch, Touched,
+};
 
 use super::{Session, State};
 use crate::events::Event;
@@ -22,6 +25,63 @@ impl Session {
         let applied = state
             .document
             .dispatch(command, gesture)
+            .map_err(|error| error.to_string())?;
+        Ok(DispatchResult {
+            created: applied.created,
+            patch: self.publish(&mut state, &applied.touched),
+        })
+    }
+
+    /// Makes an automation of `target` and puts it on the playlist, as one
+    /// undo step: what "Create automation clip" on a knob or fader does.
+    ///
+    /// The automation starts as one point at the value the target has now,
+    /// so nothing changes until the curve is drawn. Its clip goes on a new
+    /// playlist track, at the end, from the start of the song for as long
+    /// as the song is, and at least four bars.
+    ///
+    /// Creates, in this order: the automation, the playlist track and the
+    /// clip. Fails when the project has nothing of that kind to automate.
+    pub fn automate(&self, target: AutomationTarget) -> Result<DispatchResult, String> {
+        let mut state = self.state();
+        let project = state.document.project();
+        let clips = project.playlist.clips.iter();
+        let song = clips
+            .map(|clip| clip.start.saturating_add(clip.length))
+            .max();
+        let bars = project.settings.time_signature.ticks_per_bar() * 4;
+        let length = song.unwrap_or(0).max(bars).min(MAX_SONG_TICKS);
+        // A batch cannot pass an id from one command to the next, so the
+        // ids the automation and the track will get are worked out first.
+        let automation = AutomationId(project.next_id);
+        let track = PlaylistTrackId(project.next_id.saturating_add(1));
+        let batch = Command::Batch {
+            label: Some("Create automation clip".to_owned()),
+            commands: vec![
+                Command::AddAutomation {
+                    name: None,
+                    target,
+                    points: None,
+                },
+                Command::AddPlaylistTrack {
+                    name: None,
+                    index: None,
+                },
+                Command::AddClips {
+                    clips: vec![ClipInit {
+                        track,
+                        start: 0,
+                        length: Some(length),
+                        offset: None,
+                        muted: None,
+                        content: ClipContent::Automation { automation },
+                    }],
+                },
+            ],
+        };
+        let applied = state
+            .document
+            .dispatch(batch, None)
             .map_err(|error| error.to_string())?;
         Ok(DispatchResult {
             created: applied.created,
@@ -58,6 +118,7 @@ impl Session {
             self.sync_samples(state);
         }
         if !touched.is_empty() {
+            state.edits += 1;
             self.push_project(state);
         }
         self.emit(Event::ProjectPatch(patch.clone()));

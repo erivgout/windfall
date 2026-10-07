@@ -114,7 +114,7 @@ fn a_beat_can_be_built_played_saved_reopened_and_exported() {
 
     // It plays: the playhead moves and the meters show the kick.
     rig.events.take();
-    assert!(session.transport_play().playing);
+    assert!(session.transport_play().unwrap().playing);
     rig.run(SAMPLE_RATE as usize / 4);
     let first = session.realtime_tick();
     assert!(first.playing);
@@ -143,7 +143,7 @@ fn a_beat_can_be_built_played_saved_reopened_and_exported() {
     assert!(!session.document_snapshot().dirty);
 
     // Start over, then open what was saved.
-    session.project_new();
+    session.project_new().unwrap();
     assert_ne!(rig.project(), saved);
     rig.events.take();
     let opened = session.project_open(&path).unwrap();
@@ -183,6 +183,7 @@ fn a_beat_can_be_built_played_saved_reopened_and_exported() {
                 mode: PlayMode::Pattern,
                 pattern_loops: LOOPS,
                 tail_secs: TAIL_SECS,
+                auto_tail: false,
             })
             .unwrap();
         let done = rig.events.wait_for_export();

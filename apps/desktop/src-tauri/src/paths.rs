@@ -41,6 +41,12 @@ pub fn stem(path: &Path) -> String {
         .map_or_else(|| display(path), |name| name.to_string_lossy().into_owned())
 }
 
+/// A file or folder name with its extension, for messages.
+pub fn name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(|| display(path), |name| name.to_string_lossy().into_owned())
+}
+
 /// The path as text for the UI and for messages.
 pub fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
