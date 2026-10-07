@@ -14,19 +14,19 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**59 of 342 rows accounted for (17.3%).** A row is accounted for when it is done or won't do.
+**65 of 342 rows accounted for (19.0%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
 | Todo | 229 |
-| In progress | 54 |
-| Done | 57 |
+| In progress | 48 |
+| Done | 63 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 13 | 7 | 2 | 1 |
-| Main windows | 113 | 56 | 23 | 33 | 1 |
+| Main windows | 113 | 56 | 17 | 39 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,7 +38,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 7 | 8 | 22 | 2 |
-| 2. Write a song | 99 | 50 | 26 | 23 | 0 |
+| 2. Write a song | 99 | 50 | 20 | 29 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
 | 5. The long tail | 129 | 122 | 7 | 0 | 0 |
@@ -117,18 +117,18 @@ As of 2026-10-07. Sources:
 | Piano roll: snap to grid | Piano roll snap | 2 | done |  |
 | Piano roll: time markers and per-pattern time signatures | Pattern markers | 2 | todo |  |
 | Piano roll: waveform helper view | Waveform helper | 2 | todo |  |
-| Piano roll: Quantizer tool | Quantize | 2 | in-progress | Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass; independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Quantizer tool | Quantize | 2 | done | Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Articulator tool and Quick legato | Articulate | 2 | in-progress | Selected-note legato and staccato length transformations are implemented with atomic undo and stale-review guards. Portamento phrasing remains pending. See docs/PIANO-TOOLS.md. |
-| Piano roll: Chopper tool and Quick chop | Chop | 2 | in-progress | Selected notes split at absolute grid boundaries with bounded output and one undo entry. User-authored slicing patterns are not implemented; independent integration review is pending. See docs/PIANO-TOOLS.md. |
-| Piano roll: Glue | Glue | 2 | in-progress | Touching/overlapping selected notes with matching pitch, velocity and pan union deterministically; incompatible and unselected notes remain separate. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Chopper tool and Quick chop | Chop | 2 | in-progress | Selected notes split at absolute grid boundaries with bounded output, one undo entry, and recovered selection after missed events. Independent review of this workflow is closed; user-authored slicing patterns remain unfinished. See docs/PIANO-TOOLS.md and docs/DOCUMENT-REPLIES.md. |
+| Piano roll: Glue | Glue | 2 | done | Touching/overlapping selected notes with matching pitch, velocity and pan union deterministically; incompatible and unselected notes remain separate. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Arpeggiator tool | Arpeggiate | 2 | todo |  |
-| Piano roll: Strum tool | Strum | 2 | in-progress | Selected simultaneous chords stagger timing and velocity in either pitch order, preserving lengths and unrelated properties in one undo step. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Strum tool | Strum | 2 | done | Selected simultaneous chords stagger timing and velocity in either pitch order, preserving lengths and unrelated properties in one undo step. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Flam tool | Flam | 2 | todo |  |
 | Piano roll: Claw machine tool | Rhythm reshaper | 2 | todo |  |
-| Piano roll: Key limiter tool | Key limiter | 2 | in-progress | Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass; independent integration review is pending. See docs/PIANO-TOOLS.md. |
-| Piano roll: Flip tool | Flip | 2 | in-progress | Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Key limiter tool | Key limiter | 2 | done | Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
+| Piano roll: Flip tool | Flip | 2 | done | Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Randomizer tool | Randomize | 2 | todo |  |
-| Piano roll: Scale levels tool | Scale levels | 2 | in-progress | Selected velocities scale while retaining relative differences until clipping at full velocity. Other note properties are preserved. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Scale levels tool | Scale levels | 2 | done | Selected velocities scale while retaining relative differences until clipping at full velocity. Other note properties are preserved. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: LFO tool | LFO tool | 2 | todo |  |
 | Piano roll: Riff machine | Riff generator | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | Piano roll scripting (Python) | Piano roll scripting | 6 | todo | Part of the plan's phase-6 scripting. |

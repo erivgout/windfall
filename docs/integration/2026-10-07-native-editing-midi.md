@@ -143,4 +143,64 @@ progress, totaling 57 done, 54 in progress, 229 todo and two won't-do rows.
 All changes remain local pending open review repairs and validation. The
 private repository and immutable `v0.1.0-alpha.1` release are unchanged.
 
-Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.
+At this portable-file checkpoint, production VST3 additions remained disabled;
+the later delivery below supersedes that gate state. MIDI note recording/
+controller mapping/sequenced output, playable slice mapping, advanced audio-
+editor tools and independent sampler stretch remain unfinished. Physical MIDI/
+audio hardware, installed native UI and new macOS/Linux desktop workflows have
+not been verified by these synthetic tests. Hosted CI evidence for the earlier
+sampler/portability commit is recorded separately from these unpublished changes.
+
+## Recovery follow-up and VST3 delivery
+
+Editing review round three closed the inspector lifetime finding. Its delayed
+browser-token wrong-document reproduction is the same P1 already assigned to
+the browser repair owner. Document-reply review round two closed the New/Open
+and original Chop-selection findings but reproduced a new starvation case:
+dispatch awaited later recursive recovery even after its own result was mirrored.
+
+Parent repair `314ac502` waits for its captured generation and own revision,
+while later recovery proceeds independently. Deferred real-WASM regressions
+cover continuing edits, immediate replacement cancellation and failed recovery
+followed by retry. The starvation case failed before repair. After repair, 63
+focused tests, ESLint and TypeScript/Vite build passed; the full combined UI
+suite at that source passed **2,274 tests across 148 files**. The prior full run's
+only failure was an inventory count expecting 122 automation ranges rather than
+141 after the utility additions. The forward/inverse value checks were retained.
+Independent document-reply review round three closed starvation and preserved
+the earlier fixes, with 23 pinned in-memory checks passing. No actionable issue
+remained in revision waits, listener cleanup, replacement ordering, failed-fetch
+retry, created-ID following or loaded-event authority.
+
+Portable review found a P1 where ZIP parser fallback can select metadata outside
+the preflighted directory, and a P2 where a timestamp-shaped backup base name
+produces mismatched numbered-save sample roots. One dedicated repair task owns
+both bounded regressions and fixes. Utility review found three P2 issues in
+asymmetric-delay unbypass warmup, rapid delay retargeting, and UI chain latency
+accounting. Another dedicated task owns those repairs. Their rows remain in
+progress.
+
+The first combined native suite at `bfe1be6c` passed 1,405 tests with five ignored
+before stopping at the VST3 scanner's six-versus-seven fixture-class assertion.
+The source defined six classes, but the test copied a seven-class DLL from the
+older fixture cache. Removing only the fixture package's cached build artifacts
+(23.3 MiB) and rerunning that scanner test passed. No assertion was relaxed.
+The full suite had not reached its Clippy/format stages; this is not a native
+workspace-green claim.
+
+VST3 delivery `7476b074` was cherry-picked as `72718071`. Scanned VST3 additions
+are now enabled. Deferred native state capture carries token/revision/binding
+identity through recording exclusion; queued owner jobs cancel safely, and
+already-running native calls are joined through recovery. Fallible deactivation
+returns exact ownership on refusal. Bounded desired parameter/current-note
+reconciliation also fixes the independently reproduced committed CLAP parameter
+loss under saturation. The worker passed 106 host, 202 desktop, 314 engine and
+six plugin UI tests, plus scoped strict Clippy, formatting, types and lint.
+These are worker results at the feature commit. Independent runtime review round
+three and a fresh combined native suite at `72718071` are pending.
+
+The generated 163 bindings and 1,775,678-byte WASM remain current: no exported
+model/IPC/DSP descriptor or simulator dependency changed in the recovery/VST3
+repairs. Parent parity and simulator freshness checks passed. No new release,
+tag, visibility or access change was made. The batch remains local pending
+open review repairs and appropriate combined checks.
