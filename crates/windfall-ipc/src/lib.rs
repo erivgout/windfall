@@ -239,6 +239,38 @@ pub enum ExportFormat {
     Wav,
     /// Lossless and about half the size of WAV, at 16 or 24 bits.
     Flac,
+    /// Lossy Ogg Vorbis; bit depth is ignored.
+    Ogg,
+    /// Lossy MPEG Layer III; bit depth is ignored.
+    Mp3,
+}
+
+/// MP3 rate policy. VBR quality runs from 0 (best) to 9 (smallest).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+#[ts(export)]
+pub enum Mp3Rate {
+    Cbr { bitrate: u16 },
+    Vbr { quality: u8 },
+}
+
+/// Channel coding of an MP3 export. Mono averages the rendered stereo pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Mp3Channels {
+    Mono,
+    Stereo,
+    JointStereo,
+}
+
+/// MP3 settings. Absent settings mean 192 kbit/s joint stereo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Mp3Settings {
+    pub rate: Mp3Rate,
+    pub channels: Mp3Channels,
 }
 
 /// How samples are stored in a WAV or FLAC file. The other formats have no
@@ -284,6 +316,14 @@ pub struct ExportOptions {
     #[serde(default)]
     #[ts(optional)]
     pub flac_level: Option<u8>,
+    /// Vorbis quality from -1 to 10. Absent means 6.
+    #[serde(default)]
+    #[ts(optional)]
+    pub ogg_quality: Option<f32>,
+    /// MP3 rate and channel coding; absent means 192 kbit/s joint stereo.
+    #[serde(default)]
+    #[ts(optional)]
+    pub mp3: Option<Mp3Settings>,
     /// Exports stems instead of one file. Absent means one file, the mix.
     #[serde(default)]
     #[ts(optional)]
@@ -304,6 +344,8 @@ impl Default for ExportOptions {
             tail_secs: 0.0,
             auto_tail: false,
             flac_level: None,
+            ogg_quality: None,
+            mp3: None,
             stems: None,
         }
     }

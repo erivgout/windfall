@@ -126,6 +126,8 @@ fn every_format_is_exported_and_reads_back_as_the_song() {
     for (format, name, codec) in [
         (ExportFormat::Wav, "beat.wav", "pcm_s24le"),
         (ExportFormat::Flac, "beat.flac", "flac"),
+        (ExportFormat::Ogg, "beat.ogg", "vorbis"),
+        (ExportFormat::Mp3, "beat.mp3", "mp3"),
     ] {
         for sample_rate in [44_100, 48_000] {
             let options = ExportOptions {
@@ -162,7 +164,81 @@ fn every_format_is_exported_and_reads_back_as_the_song() {
             );
         }
     }
-    assert_eq!(written(&rig), ["beat.flac", "beat.wav"]);
+    assert_eq!(
+        written(&rig),
+        ["beat.flac", "beat.mp3", "beat.ogg", "beat.wav"]
+    );
+}
+
+#[test]
+fn lossy_stems_in_both_modes_and_mono_mp3_read_back() {
+    let rig = Rig::new();
+    beat(&rig);
+    for (format, extension) in [(ExportFormat::Ogg, "ogg"), (ExportFormat::Mp3, "mp3")] {
+        for mode in [StemMode::TrackOutputs, StemMode::ToMaster] {
+            let name = format!("{mode:?}.{extension}");
+            let options = ExportOptions {
+                stems: Some(stems(mode)),
+                ..options(&rig, &name, format)
+            };
+            let done = export(&rig, &options);
+            assert_eq!(done.error, None);
+            let files = done.files.unwrap();
+            assert_eq!(files.len(), 5);
+            for file in files {
+                let audio = decode(&file.path);
+                assert_eq!(
+                    (audio.sample_rate(), audio.channels(), audio.frames()),
+                    (SAMPLE_RATE, 2, BAR)
+                );
+                assert!(rms(audio.samples()) > 0.001, "{}", file.path);
+            }
+        }
+    }
+    let options = ExportOptions {
+        bit_depth: BitDepth::Float32,
+        mp3: Some(windfall_ipc::Mp3Settings {
+            rate: windfall_ipc::Mp3Rate::Vbr { quality: 2 },
+            channels: windfall_ipc::Mp3Channels::Mono,
+        }),
+        ..options(&rig, "mono.mp3", ExportFormat::Mp3)
+    };
+    let done = export(&rig, &options);
+    assert_eq!(done.error, None);
+    let audio = decode(&options.path);
+    assert_eq!((audio.channels(), audio.frames()), (1, BAR));
+    assert!(rms(audio.samples()) > 0.02);
+}
+
+#[test]
+fn invalid_lossy_export_settings_return_readable_errors() {
+    let rig = Rig::new();
+    let invalid = [
+        ExportOptions {
+            ogg_quality: Some(11.0),
+            ..options(&rig, "bad.ogg", ExportFormat::Ogg)
+        },
+        ExportOptions {
+            sample_rate: 96_000,
+            ..options(&rig, "bad.mp3", ExportFormat::Mp3)
+        },
+        ExportOptions {
+            sample_rate: 24_000,
+            ..options(&rig, "bad.mp3", ExportFormat::Mp3)
+        },
+        ExportOptions {
+            mp3: Some(windfall_ipc::Mp3Settings {
+                rate: windfall_ipc::Mp3Rate::Vbr { quality: 10 },
+                channels: windfall_ipc::Mp3Channels::Stereo,
+            }),
+            ..options(&rig, "bad.mp3", ExportFormat::Mp3)
+        },
+    ];
+    for options in invalid {
+        let error = rig.session.export_audio(options).unwrap_err();
+        assert!(!error.is_empty() && error.ends_with('.'), "{error}");
+        assert!(written(&rig).is_empty());
+    }
 }
 
 #[test]
@@ -353,10 +429,24 @@ fn a_cancelled_export_leaves_no_file_and_keeps_the_ones_it_would_replace() {
     fs::create_dir(rig.file("Kept")).unwrap();
     fs::write(rig.file("Kept/Kept - Mix.flac"), b"an earlier mix").unwrap();
 
-    for (name, stems) in [
-        ("Long.flac", None),
-        ("Fresh.flac", Some(stems(StemMode::TrackOutputs))),
-        ("Kept.flac", Some(stems(StemMode::ToMaster))),
+    for (name, format, stems) in [
+        ("Long.flac", ExportFormat::Flac, None),
+        (
+            "Fresh.flac",
+            ExportFormat::Flac,
+            Some(stems(StemMode::TrackOutputs)),
+        ),
+        (
+            "Kept.flac",
+            ExportFormat::Flac,
+            Some(stems(StemMode::ToMaster)),
+        ),
+        ("Long.ogg", ExportFormat::Ogg, None),
+        (
+            "Long.mp3",
+            ExportFormat::Mp3,
+            Some(stems(StemMode::ToMaster)),
+        ),
     ] {
         // Holds the export at its first progress event, with most of an
         // hour of audio still to render, until the test has cancelled it.
@@ -373,7 +463,7 @@ fn a_cancelled_export_leaves_no_file_and_keeps_the_ones_it_would_replace() {
         let options = ExportOptions {
             pattern_loops: 1_000,
             stems,
-            ..options(&rig, name, ExportFormat::Flac)
+            ..options(&rig, name, format)
         };
         rig.events.take();
         rig.session.export_audio(options.clone()).unwrap();
@@ -421,6 +511,7 @@ fn stems_that_cannot_all_be_written_are_not_written_at_all() {
     // A folder has the name the clap's stem is to get.
     fs::create_dir(rig.file("Out")).unwrap();
     fs::create_dir(rig.file("Out/Out - 02 Clap Wide.wav")).unwrap();
+    fs::write(rig.file("Out/Out - Mix.wav"), b"the previous mix").unwrap();
     let options = ExportOptions {
         stems: Some(stems(StemMode::TrackOutputs)),
         ..options(&rig, "Out.wav", ExportFormat::Wav)
@@ -432,7 +523,14 @@ fn stems_that_cannot_all_be_written_are_not_written_at_all() {
     assert_eq!((done.files, done.cancelled), (None, None));
     // The kick and the mix were on their way and are gone again. The
     // folder was not this export's to remove.
-    assert_eq!(written(&rig), ["Out/Out - 02 Clap Wide.wav"]);
+    assert_eq!(
+        written(&rig),
+        ["Out/Out - 02 Clap Wide.wav", "Out/Out - Mix.wav"]
+    );
+    assert_eq!(
+        fs::read(rig.file("Out/Out - Mix.wav")).unwrap(),
+        b"the previous mix"
+    );
     assert!(Path::new(&rig.file("Out/Out - 02 Clap Wide.wav")).is_dir());
 
     // A file where the stems' folder is to be is in the way too.

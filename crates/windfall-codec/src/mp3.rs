@@ -27,15 +27,20 @@ pub enum Mp3Rate {
 /// How stereo channels are encoded. Mono input requires Mono.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mp3Channels {
+    /// A single channel.
     Mono,
+    /// Independent stereo channel coding.
     Stereo,
+    /// Stereo with shared information where it improves compression.
     JointStereo,
 }
 
 /// Settings for an MP3 stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mp3Settings {
+    /// Constant bitrate or variable bitrate quality.
     pub rate: Mp3Rate,
+    /// Channel coding, matching the input channel count.
     pub channels: Mp3Channels,
 }
 

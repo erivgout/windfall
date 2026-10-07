@@ -4,12 +4,12 @@
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use windfall_codec::{
-    AudioFormat, DEFAULT_FLAC_LEVEL, Encoder, EncoderSettings, FlacBitDepth, MAX_FLAC_LEVEL,
-    WavSampleFormat,
+    AudioFormat, DEFAULT_FLAC_LEVEL, DEFAULT_VORBIS_QUALITY, Encoder, EncoderSettings,
+    FlacBitDepth, MAX_FLAC_LEVEL, Mp3Channels, Mp3Rate, Mp3Settings, WavSampleFormat,
 };
 use windfall_core::samples_per_tick;
 use windfall_engine::{
@@ -39,6 +39,92 @@ const MAX_WAV_BYTES: f64 = 4_294_967_000.0;
 
 /// Shortest time between two progress events.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
+
+static NEXT_TRANSACTION: AtomicU64 = AtomicU64::new(0);
+
+/// Holds finished files beside their destinations until every encoder succeeds.
+struct FileTransaction {
+    files: Vec<TransactionFile>,
+    committed: bool,
+}
+
+struct TransactionFile {
+    destination: PathBuf,
+    stage: PathBuf,
+    backup: PathBuf,
+    backed_up: bool,
+    placed: bool,
+}
+
+impl FileTransaction {
+    fn new(targets: &[Target]) -> Self {
+        let serial = NEXT_TRANSACTION.fetch_add(1, Ordering::Relaxed);
+        let files = targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| {
+                let name = target
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let prefix = format!(".{name}.{}-{serial}-{index}", std::process::id());
+                TransactionFile {
+                    destination: target.path.clone(),
+                    stage: target.path.with_file_name(format!("{prefix}.stage")),
+                    backup: target.path.with_file_name(format!("{prefix}.backup")),
+                    backed_up: false,
+                    placed: false,
+                }
+            })
+            .collect();
+        Self {
+            files,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) -> Result<(), String> {
+        for file in &mut self.files {
+            if file.destination.exists() {
+                if !file.destination.is_file() {
+                    return Err(format!(
+                        "\"{}\": the destination is not a file",
+                        paths::name(&file.destination)
+                    ));
+                }
+                fs::rename(&file.destination, &file.backup).map_err(|error| error.to_string())?;
+                file.backed_up = true;
+            }
+            fs::rename(&file.stage, &file.destination).map_err(|error| error.to_string())?;
+            file.placed = true;
+        }
+        self.committed = true;
+        for file in &self.files {
+            if file.backed_up {
+                let _ = fs::remove_file(&file.backup);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FileTransaction {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for file in self.files.iter().rev() {
+            let _ = fs::remove_file(&file.stage);
+            if file.placed {
+                let _ = fs::remove_file(&file.destination);
+            }
+            if file.backed_up {
+                let _ = fs::rename(&file.backup, &file.destination);
+            }
+        }
+    }
+}
 
 /// One file an export writes.
 struct Target {
@@ -303,6 +389,8 @@ fn audio_format(format: ExportFormat) -> AudioFormat {
     match format {
         ExportFormat::Wav => AudioFormat::Wav,
         ExportFormat::Flac => AudioFormat::Flac,
+        ExportFormat::Ogg => AudioFormat::Ogg,
+        ExportFormat::Mp3 => AudioFormat::Mp3,
     }
 }
 
@@ -311,6 +399,24 @@ fn audio_format(format: ExportFormat) -> AudioFormat {
 /// not looked at.
 fn encoder_settings(options: &ExportOptions) -> Result<EncoderSettings, String> {
     let settings = match options.format {
+        ExportFormat::Ogg => EncoderSettings::Vorbis {
+            quality: options.ogg_quality.unwrap_or(DEFAULT_VORBIS_QUALITY),
+        },
+        ExportFormat::Mp3 => EncoderSettings::Mp3 {
+            settings: options
+                .mp3
+                .map_or_else(Mp3Settings::default, |settings| Mp3Settings {
+                    rate: match settings.rate {
+                        windfall_ipc::Mp3Rate::Cbr { bitrate } => Mp3Rate::Cbr(bitrate),
+                        windfall_ipc::Mp3Rate::Vbr { quality } => Mp3Rate::Vbr(quality),
+                    },
+                    channels: match settings.channels {
+                        windfall_ipc::Mp3Channels::Mono => Mp3Channels::Mono,
+                        windfall_ipc::Mp3Channels::Stereo => Mp3Channels::Stereo,
+                        windfall_ipc::Mp3Channels::JointStereo => Mp3Channels::JointStereo,
+                    },
+                }),
+        },
         ExportFormat::Wav => EncoderSettings::Wav {
             format: match options.bit_depth {
                 BitDepth::Int16 => WavSampleFormat::Int16,
@@ -340,9 +446,25 @@ fn encoder_settings(options: &ExportOptions) -> Result<EncoderSettings, String> 
     };
     // Whatever else the format cannot hold, in the encoder's own words.
     settings
-        .check(options.sample_rate, CHANNELS)
+        .check(options.sample_rate, encoder_channels(&settings))
         .map_err(|error| sentence(&error.to_string()))?;
     Ok(settings)
+}
+
+fn encoder_channels(settings: &EncoderSettings) -> u16 {
+    if matches!(
+        settings,
+        EncoderSettings::Mp3 {
+            settings: Mp3Settings {
+                channels: Mp3Channels::Mono,
+                ..
+            }
+        }
+    ) {
+        1
+    } else {
+        CHANNELS
+    }
 }
 
 /// A message as a sentence: with a capital and a full stop.
@@ -371,7 +493,9 @@ fn longest_frames(settings: &EncoderSettings, sample_rate: u32) -> f64 {
             };
             day.min((MAX_WAV_BYTES / (bytes * f64::from(CHANNELS))).floor())
         }
-        EncoderSettings::Flac { .. } => day,
+        EncoderSettings::Flac { .. }
+        | EncoderSettings::Vorbis { .. }
+        | EncoderSettings::Mp3 { .. } => day,
     }
 }
 
@@ -476,17 +600,39 @@ fn write_files(
     // Dropping an encoder removes what it has written, so every way out of
     // here before the files are in place leaves nothing behind.
     let mut encoders = Vec::with_capacity(job.targets.len());
-    for target in &job.targets {
-        let encoder = Encoder::open(&target.path, &job.settings, options.sample_rate, CHANNELS);
+    let mut transaction = FileTransaction::new(&job.targets);
+    for (target, file) in job.targets.iter().zip(&transaction.files) {
+        let encoder = Encoder::open(
+            &file.stage,
+            &job.settings,
+            options.sample_rate,
+            encoder_channels(&job.settings),
+        );
         encoders.push(encoder.map_err(|error| named(&target.path, job, &error.to_string()))?);
     }
 
     let mut failure = None;
-    let mut write = |stream: usize, block: &[f32]| match encoders[stream].write(block) {
-        Ok(()) => true,
-        Err(error) => {
-            failure = Some(named(&job.targets[stream].path, job, &error.to_string()));
-            false
+    let mut mono = Vec::with_capacity(render.block_frames);
+    let mut write = |stream: usize, block: &[f32]| {
+        let samples = if encoder_channels(&job.settings) == 1 {
+            mono.clear();
+            mono.extend(
+                block
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| (pair[0] + pair[1]) * 0.5),
+            );
+            mono.as_slice()
+        } else {
+            block
+        };
+        match encoders[stream].write(samples) {
+            Ok(()) => true,
+            Err(error) => {
+                failure = Some(named(&job.targets[stream].path, job, &error.to_string()));
+                false
+            }
         }
     };
     let mut report = |fraction: f32| {
@@ -514,25 +660,25 @@ fn write_files(
     if let Some(reason) = failure {
         return Err(reason);
     }
-    if !streamed.completed {
+    if !streamed.completed || cancelled() {
         return Ok(Outcome::Cancelled);
     }
     if streamed.frames == 0 {
         return Err("there is nothing to export".to_owned());
     }
 
-    // If a file cannot be put in place, the ones already there are taken
-    // away again: an export is all of its files or none.
-    let mut placed: Vec<&Path> = Vec::with_capacity(job.targets.len());
+    // Finalize under staging names so a later encoder failure cannot
+    // replace an earlier destination. The transaction restores backups
+    // if moving a completed set fails part way through.
     for (encoder, target) in encoders.into_iter().zip(&job.targets) {
         if let Err(error) = encoder.finalize() {
-            for path in placed {
-                let _ = fs::remove_file(path);
-            }
             return Err(named(&target.path, job, &error.to_string()));
         }
-        placed.push(&target.path);
     }
+    if cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
+    transaction.commit()?;
     let files = job.targets.iter().map(|target| ExportedFile {
         path: paths::display(&target.path),
         track: target.track,

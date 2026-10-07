@@ -10,7 +10,7 @@ crates/
   windfall-core/           AudioBuffer, PPQ, gain and pan helpers. No dependencies.
   windfall-project/        Project model, Command, Document (undo history), .windfall file format.
   windfall-ipc/            Runtime types the engine, shell and UI exchange (transport, meters, devices, browser, export).
-  windfall-codec/          Decode WAV, FLAC, MP3, OGG. Encode WAV and FLAC. Waveform overviews.
+  windfall-codec/          Decode and encode WAV, FLAC, MP3, OGG. Waveform overviews.
   windfall-engine/         Realtime audio engine, offline renderer, soak-test CLI.
   windfall-dsp/            Effects and instruments: the internal plugin interface, shared DSP blocks,
                            EQ, compressor, limiter, reverb, delay and a subtractive synth.
@@ -391,10 +391,16 @@ An export renders a copy of the project straight into its encoders: `render_stre
 |---|---|---|---|---|
 | `wav` | `.wav` | `int16`, `int24`, `float32` | 8,000 to 384,000 Hz | none |
 | `flac` | `.flac` | `int16`, `int24` | 8,000 to 384,000 Hz | `flacLevel`, 0 to 8, 5 if absent |
+| `ogg` | `.ogg` | ignored | 8,000 to 192,000 Hz | `oggQuality`, -1 to 10, 6 if absent |
+| `mp3` | `.mp3` | ignored | 8,000, 11,025, 12,000, 16,000, 22,050, 24,000, 32,000, 44,100, 48,000 Hz | `mp3: { rate, channels }`, 192 kbit/s joint stereo if absent |
+
+MP3 `rate` is `{ "mode": "cbr", "bitrate": 192 }` (128, 192, 256 or 320 kbit/s) or `{ "mode": "vbr", "quality": 2 }` (V0 best through V9 smallest). `channels` is `mono`, `stereo` or `jointStereo`; mono averages the engine's stereo pair. CBR 128 requires at least 16,000 Hz; higher CBR rates require 32,000, 44,100 or 48,000 Hz. Lower rates accept VBR. Unsupported combinations fail before rendering; the dialog should choose a supported render rate, as the encoder never silently resamples.
+
+Vorbis uses `vorbis_rs` 0.5.6 (BSD-3-Clause), whose vendored libogg and aoTuV/Lancer libvorbis sources build through `cc` without system codec packages. MP3 uses `mp3lame-encoder` 0.2.5 and `mp3lame-sys` 0.1.11 (both LGPL-3.0), with vendored LAME 3.100 (LGPL-2.0-or-later). Those licenses are compatible with GPL-3.0. LAME builds directly with `cc` on Windows/MSVC and uses its bundled configure scripts through `autotools` on Unix, which needs a C compiler, make and a POSIX shell. Neither format is feature gated. The Ogg stream serial is fixed; canonical input blocks keep Vorbis bytes independent of the renderer's block size. The final MP3 Xing/Info and LAME header is patched with frame counts, encoder delay and padding for gapless decoding. Determinism is verified within one build; floating point codec implementations on different architectures need not produce identical lossy bytes.
 
 - Integer files are dithered with triangular noise from a fixed seed, the same for WAV and FLAC, so a FLAC file holds exactly the numbers a WAV file of its bit depth holds and the same export gives the same bytes every time. The FLAC encoder is Windfall's own (`windfall_codec::FlacWriter`): fixed and fitted predictors, Rice coding, the MD5 sum of the audio in the header.
 - A setting of a format that is not the one chosen is not looked at. What the chosen format cannot be is refused before anything is rendered, each with its own message: a file name that ends in another format's extension, 32-bit float FLAC, a level out of range, and an export longer than its file can hold (4 GB for WAV, which is 186 minutes of 32-bit float stereo at 48 kHz; a day for the others).
-- Every file is written under a temporary name beside where it belongs (`.<name>.<pid>-e<serial>.tmp`) and takes its own name only when the whole export has gone through. An export that fails or is cancelled therefore leaves no file and leaves the files it would have replaced as they were. If the last step, the renaming, fails part way through a stem export, the files already in place are removed: an export is all of its files or none.
+- Every encoder writes under a temporary name beside its destination (`.<name>.<pid>-e<serial>.tmp`). The shell finalizes all files under staging names before placing any destination. Existing destinations move to backups during placement; a failed placement removes new files and restores those backups. Failure or cancellation before placement leaves existing destinations untouched and removes temporary and staging files. A group of renames is not crash atomic: interruption of the process during placement can leave staging or backup files for recovery.
 - With `stems: { mode, tracks?, includeMix, numbered, folder }` the export writes the streams of `render_stems`, all in the one format. For the path `Song.flac` the files are `Song - Mix.flac`, `Song - Bass.flac` (`Song - 03 Bass.flac` with `numbered`) and so on, in the folder `Song` beside it with `folder`, and where `Song.flac` would have been without. `Song.flac` itself is not written. A folder the export made is removed again if the export does not go through. What cannot be a stem is refused up front: the master, a track the project does not have, and no track at all without the mix.
 - One export runs at a time. `export_cancel` takes effect at the next block rendered.
 

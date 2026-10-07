@@ -119,6 +119,28 @@ fn supported_mp3_rates_keep_their_rate_and_length() {
 }
 
 #[test]
+fn vorbis_rate_boundaries_and_quality_extremes_decode_gaplessly() {
+    let dir = TempDir::new("vorbis-rates");
+    for rate in [8_000, 22_050, 44_100, 48_000, 96_000, 192_000] {
+        for channels in [1_u16, 2] {
+            for quality in [-1.0, 6.0, 10.0] {
+                let audio = tones(rate, &vec![440.0; usize::from(channels)], 4097, 0.4);
+                let settings = EncoderSettings::Vorbis { quality };
+                let path = dir.path("rate.ogg");
+                let mut encoder = Encoder::open(&path, &settings, rate, channels).unwrap();
+                encoder.write(audio.samples()).unwrap();
+                encoder.finalize().unwrap();
+                let decoded = decode_file(&path).unwrap();
+                assert_eq!(
+                    (decoded.sample_rate(), decoded.channels(), decoded.frames()),
+                    (rate, channels, audio.frames())
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn quality_presets_order_file_sizes_and_a_sweep_keeps_its_spectrum() {
     let dir = TempDir::new("lossy-spectrum");
     let mut phase = 0.0_f64;

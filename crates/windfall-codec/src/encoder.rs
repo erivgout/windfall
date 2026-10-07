@@ -15,6 +15,7 @@ pub enum AudioFormat {
     Flac,
     /// Vorbis audio in an Ogg file.
     Ogg,
+    /// MPEG Layer III audio with gapless delay and padding metadata.
     Mp3,
 }
 
@@ -44,25 +45,17 @@ impl AudioFormat {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EncoderSettings {
     /// Uncompressed. See [`WavWriter`].
-    Wav {
-        format: WavSampleFormat,
-    },
+    Wav { format: WavSampleFormat },
     /// Lossless. `level` is the compression level, 0 to
     /// [`MAX_FLAC_LEVEL`](crate::MAX_FLAC_LEVEL). See [`FlacWriter`].
-    Flac {
-        depth: FlacBitDepth,
-        level: u8,
-    },
+    Flac { depth: FlacBitDepth, level: u8 },
     /// Lossy. `quality` runs from
     /// [`MIN_VORBIS_QUALITY`](crate::MIN_VORBIS_QUALITY) to
     /// [`MAX_VORBIS_QUALITY`](crate::MAX_VORBIS_QUALITY). One or two
     /// channels. See [`VorbisWriter`].
-    Vorbis {
-        quality: f32,
-    },
-    Mp3 {
-        settings: Mp3Settings,
-    },
+    Vorbis { quality: f32 },
+    /// Lossy MP3 rate and channel coding. See [`Mp3Writer`].
+    Mp3 { settings: Mp3Settings },
 }
 
 impl EncoderSettings {
