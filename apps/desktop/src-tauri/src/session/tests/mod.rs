@@ -13,6 +13,7 @@ mod import_formats;
 mod import_recording;
 mod library;
 mod midi;
+mod midi_hardware;
 mod playback;
 mod plugin_recording;
 #[cfg(windows)]

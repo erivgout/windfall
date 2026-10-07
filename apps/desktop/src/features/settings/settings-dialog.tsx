@@ -25,6 +25,7 @@ import {
 import { useUiStore, type KeymapPreset, type Theme } from "@/lib/store/ui"
 import { formatSampleRate } from "@/lib/time"
 import { cn } from "@/lib/utils"
+import { MidiHardwareSettingsSection } from "./midi-hardware"
 
 import {
   bufferOptions,
@@ -259,7 +260,7 @@ export function SettingsDialog() {
         if (!next) closeDialog()
       }}
     >
-      <DialogContent className="gap-5 sm:max-w-md">
+      <DialogContent className="max-h-[85vh] gap-5 overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -267,6 +268,7 @@ export function SettingsDialog() {
           </DialogDescription>
         </DialogHeader>
         <AudioSection />
+        <MidiHardwareSettingsSection />
         <AppearanceSection />
         <KeyboardSection />
       </DialogContent>

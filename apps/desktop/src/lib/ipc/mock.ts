@@ -45,6 +45,7 @@ import { simulatedLatencyFrames } from "./sim/effects"
 import { demoProject, starterProject } from "./sim/project"
 import { TransportSim } from "./sim/transport"
 import { createMidiMock, type MockMidiOptions } from "./sim/midi"
+import { createMidiHardwareMock } from "./sim/midi-hardware"
 
 /** Stand-ins for the native file dialogs. Each resolves to null on cancel. */
 export type MockDialogs = {
@@ -572,6 +573,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    ...createMidiHardwareMock(),
     ...createMidiMock(options, () => doc, publish, dialogs.exportPath),
     pluginsState: async () => ({
       folders: [],

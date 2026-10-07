@@ -24,6 +24,8 @@ windfall-ipc.workspace = true
 cpal = { version = "0.18.2", features = ["realtime"] }
 # MIT OR Apache-2.0.
 rtrb = "0.4"
+# MIT. Native WinMM/CoreMIDI/ALSA port control, owned by a dedicated worker.
+midir = "0.11"
 
 [[bin]]
 name = "windfall-soak"

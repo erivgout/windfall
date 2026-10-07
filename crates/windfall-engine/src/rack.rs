@@ -335,6 +335,7 @@ pub(crate) struct InstrumentUnit {
     ends: [f64; KEYS],
     /// The note on the key was played by hand.
     live: [bool; KEYS],
+    hardware: [bool; KEYS],
     /// Keys held.
     held: usize,
     /// The output of the block being processed, a side each.
@@ -359,6 +360,7 @@ impl InstrumentUnit {
             params: *params,
             ends: [f64::NAN; KEYS],
             live: [false; KEYS],
+            hardware: [false; KEYS],
             held: 0,
             left: vec![0.0; MAX_BLOCK].into_boxed_slice(),
             right: vec![0.0; MAX_BLOCK].into_boxed_slice(),
@@ -470,6 +472,7 @@ impl InstrumentUnit {
         }
         self.ends[index] = end;
         self.live[index] = live;
+        self.hardware[index] = false;
         if let Some(external) = &mut self.external {
             if let Some(unit) = external {
                 unit.note_on(key, velocity);
@@ -482,10 +485,41 @@ impl InstrumentUnit {
     /// Ends the note played by hand on `key`, on the next frame.
     pub fn release_live(&mut self, key: u8) {
         let index = usize::from(key).min(KEYS - 1);
-        if self.live[index] && !self.ends[index].is_nan() {
+        if self.live[index] && !self.hardware[index] && !self.ends[index].is_nan() {
             // Before anything the clock can read.
             self.ends[index] = f64::NEG_INFINITY;
         }
+    }
+
+    pub fn mark_hardware(&mut self, key: u8) {
+        self.hardware[usize::from(key)] = true;
+    }
+
+    pub fn release_hardware(&mut self, key: u8) {
+        let index = usize::from(key);
+        if self.hardware[index] && !self.ends[index].is_nan() {
+            self.ends[index] = f64::NEG_INFINITY;
+        }
+    }
+
+    pub fn silence_hardware(&mut self) {
+        let any = (0..KEYS).any(|key| self.hardware[key]);
+        if !any {
+            return;
+        }
+        let others = (0..KEYS).any(|key| !self.hardware[key] && !self.ends[key].is_nan());
+        if !others {
+            self.silence();
+        } else {
+            for key in 0..KEYS {
+                if self.hardware[key] && !self.ends[key].is_nan() {
+                    self.ends[key] = f64::NAN;
+                    self.held -= 1;
+                    self.release_key(key as u8);
+                }
+            }
+        }
+        self.hardware.fill(false);
     }
 
     /// Stops every note with a short fade, as when the transport stops.

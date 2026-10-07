@@ -60,6 +60,17 @@ export type AudioClipPlace = {
  * plain text that can be shown to the user.
  */
 export interface Backend {
+  midiHardwareState(): Promise<import("@/bindings").MidiHardwareState>
+  midiHardwareRefresh(): Promise<import("@/bindings").MidiHardwareState>
+  midiHardwareConfigure(
+    settings: import("@/bindings").MidiHardwareSettings
+  ): Promise<import("@/bindings").MidiHardwareState>
+  midiHardwareTarget(
+    channel: ChannelId | null,
+    generation: number,
+    revision: number
+  ): Promise<import("@/bindings").MidiHardwareState>
+  midiHardwarePanic(): Promise<void>
   recordingInputs(): Promise<import("@/bindings").RecordingInput[]>
   recordingState(): Promise<import("@/bindings").RecordingState>
   recordingStart(

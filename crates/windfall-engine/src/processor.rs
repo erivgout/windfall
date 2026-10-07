@@ -1,6 +1,7 @@
 //! The whole audio path with no device attached.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use rtrb::{Consumer, Producer};
 use windfall_core::AudioBuffer;
@@ -47,6 +48,7 @@ pub struct Processor {
     fades: Fades,
     /// Sequence number of the last play or stop request handled.
     transport_sequence: u32,
+    hardware_epoch: u64,
     /// Automated values were published the last time there were any to
     /// publish, so their going away has to be published once as well.
     reported: bool,
@@ -105,6 +107,7 @@ impl Processor {
             output_gain: Ramp::at_rest(output_gain),
             fades: Fades::at(sample_rate),
             transport_sequence: 0,
+            hardware_epoch: shared.hardware_epoch.load(Ordering::Acquire),
             reported: false,
             landed: false,
             hold: None,
@@ -194,6 +197,7 @@ impl Processor {
     }
 
     fn handle_messages(&mut self) {
+        self.sync_hardware_epoch();
         // Handling a message can retire values, and those must have
         // somewhere to go.
         let mut handled = false;
@@ -209,6 +213,17 @@ impl Processor {
         // not at the next step of its grid.
         if handled {
             self.automate();
+        }
+    }
+
+    fn sync_hardware_epoch(&mut self) {
+        let epoch = self.shared.hardware_epoch.load(Ordering::Acquire);
+        if epoch != self.hardware_epoch {
+            self.voices.fade_origin(Origin::Hardware);
+            for unit in self.state.instrument_units() {
+                unit.silence_hardware();
+            }
+            self.hardware_epoch = epoch;
         }
     }
 
@@ -297,6 +312,14 @@ impl Processor {
     }
 
     fn handle(&mut self, message: Message) {
+        // A stale hardware note must not even release a stopped song's
+        // automation hold. Discard it before any transport/tail side effects.
+        if let Message::HardwareNote { epoch, .. } = &message {
+            self.sync_hardware_epoch();
+            if *epoch != self.hardware_epoch {
+                return;
+            }
+        }
         let now = self.frame;
         // Where the song is, in case this is what stops it.
         let song_at = self.sequencer.song_tick_at(&self.plan, now);
@@ -308,10 +331,14 @@ impl Processor {
             | Message::Stop { .. }
             | Message::Seek(_)
             | Message::NoteOn { .. }
+            | Message::HardwareNote {
+                velocity: 1..=127, ..
+            }
             | Message::Preview(_) => true,
             Message::SetTransport { mode, .. } => *mode != self.sequencer.mode(),
             Message::SetPlan { .. }
             | Message::NoteOff { .. }
+            | Message::HardwareNote { .. }
             | Message::StopPreview
             | Message::SetOutputGain(_) => false,
         };
@@ -335,6 +362,7 @@ impl Processor {
                 self.clips.release_all();
                 self.voices.fade_origin(Origin::Sequenced);
                 self.voices.fade_origin(Origin::Live);
+                self.voices.fade_origin(Origin::Hardware);
                 for unit in self.state.instrument_units() {
                     unit.silence();
                 }
@@ -378,6 +406,38 @@ impl Processor {
                 let index = self.plan.channel(channel);
                 if let Some(unit) = index.and_then(|index| self.state.instrument(index)) {
                     unit.release_live(key);
+                }
+            }
+            Message::HardwareNote {
+                epoch,
+                channel,
+                key,
+                velocity,
+            } => {
+                self.sync_hardware_epoch();
+                if epoch == self.hardware_epoch {
+                    if velocity == 0 {
+                        self.voices.release_origin(channel, key, Origin::Hardware);
+                        if let Some(unit) = self
+                            .plan
+                            .channel(channel)
+                            .and_then(|i| self.state.instrument(i))
+                        {
+                            unit.release_hardware(key);
+                        }
+                    } else if let Some(channel) = self.plan.channel(channel) {
+                        self.start(
+                            Note {
+                                channel,
+                                key,
+                                velocity: f32::from(velocity) / 127.0,
+                                pan: 0.0,
+                                end: f64::INFINITY,
+                                origin: Origin::Hardware,
+                            },
+                            now,
+                        );
+                    }
                 }
             }
             Message::Preview(sample) => self.preview(sample),
@@ -436,8 +496,11 @@ impl Processor {
     fn start(&mut self, note: Note, now: u64) {
         match self.state.instrument(note.channel) {
             Some(unit) => {
-                let live = note.origin == Origin::Live;
+                let live = note.origin != Origin::Sequenced;
                 unit.note_on(note.key, note.velocity, note.end, live);
+                if note.origin == Origin::Hardware {
+                    unit.mark_hardware(note.key);
+                }
             }
             None => self.voices.start(&self.plan, &mut self.garbage, note, now),
         }
@@ -662,5 +725,28 @@ impl Processor {
                 };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windfall_project::ChannelId;
+
+    #[test]
+    fn stale_hardware_notes_preserve_stopped_automation_hold() {
+        let (mut processor, controller) = Processor::new(48_000);
+        processor.hold = Some(960.0);
+        let epoch = controller.hardware_epoch();
+        controller.panic_hardware();
+
+        processor.handle(Message::HardwareNote {
+            epoch,
+            channel: ChannelId(123),
+            key: 60,
+            velocity: 127,
+        });
+
+        assert_eq!(processor.hold, Some(960.0));
     }
 }

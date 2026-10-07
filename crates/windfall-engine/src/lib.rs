@@ -122,6 +122,7 @@ mod clips;
 mod controller;
 mod device;
 mod message;
+pub mod midi_hardware;
 mod mixer;
 mod plan;
 pub mod plugins;

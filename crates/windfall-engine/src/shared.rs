@@ -19,6 +19,8 @@ pub(crate) const MAX_REPORTED_AUTOMATIONS: usize = 128;
 const READ_ATTEMPTS: u32 = 4;
 
 pub(crate) struct Shared {
+    /// Invalidates queued hardware notes and silences their voices without queue space.
+    pub hardware_epoch: AtomicU64,
     /// The transport sequence number of the last play or stop the audio
     /// thread handled, shifted left one bit, with the playing flag in the
     /// lowest bit. Publishing both in one value lets the control side tell
@@ -58,6 +60,7 @@ pub(crate) struct Shared {
 impl Shared {
     pub fn new() -> Self {
         Self {
+            hardware_epoch: AtomicU64::new(0),
             transport: AtomicU64::new(0),
             tick: AtomicU64::new(0.0_f64.to_bits()),
             start: AtomicU64::new(0.0_f64.to_bits()),

@@ -2,6 +2,7 @@
 //! audio thread.
 
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use rtrb::{Consumer, Producer, PushError, RingBuffer};
@@ -223,6 +224,7 @@ impl Controller {
     /// returns it to the stored values right away, over 100 ms.
     pub fn stop(&self) {
         let mut state = self.lock();
+        self.panic_hardware();
         state.transport.playing = false;
         state.sequence = state.sequence.wrapping_add(1);
         let sequence = state.sequence;
@@ -298,6 +300,45 @@ impl Controller {
             channel,
             key: key.min(MAX_KEY),
         });
+    }
+
+    /// Hardware input uses this epoch both at capture and at audio delivery.
+    pub fn hardware_epoch(&self) -> u64 {
+        self.inner.shared.hardware_epoch.load(Ordering::Acquire)
+    }
+
+    /// Queue-independent panic. The next audio buffer fades hardware voices and
+    /// discards old hardware messages, even when its message/garbage queues are full.
+    pub fn panic_hardware(&self) {
+        self.inner
+            .shared
+            .hardware_epoch
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Control-worker only. Never grows the general control backlog for MIDI.
+    /// False means unavailable/full/stale; the MIDI worker must panic on failure.
+    pub fn hardware_note(&self, epoch: u64, channel: ChannelId, key: u8, velocity: u8) -> bool {
+        let mut state = self.lock();
+        state.maintain();
+        if epoch != self.hardware_epoch()
+            || key > MAX_KEY
+            || velocity > 127
+            || !state.backlog.is_empty()
+            || state.plan.channel(channel).is_none()
+        {
+            return false;
+        }
+        state.link.as_mut().is_some_and(|link| {
+            link.messages
+                .push(Message::HardwareNote {
+                    epoch,
+                    channel,
+                    key,
+                    velocity,
+                })
+                .is_ok()
+        })
     }
 
     /// Plays a sample once, straight into the master track, whether or not
@@ -403,6 +444,7 @@ impl Controller {
         let shared = self.inner.shared.clone();
 
         let mut state = self.lock();
+        self.panic_hardware();
         // Every effect and instrument is built anew, prepared for this
         // stream's sample rate. What the last stream ran went with it.
         let (plan_state, hosted) = PlanState::build(&state.plan, sample_rate, None);
@@ -451,6 +493,7 @@ impl Controller {
     /// stream carries on from where the playhead is now.
     pub(crate) fn suspend(&self) {
         let mut state = self.lock();
+        self.panic_hardware();
         state.resume = self.playing(&state);
         state.link = None;
         state.hosted = None;
@@ -469,6 +512,7 @@ impl Controller {
     /// the control side only.
     pub(crate) fn detach(&self) {
         let mut state = self.lock();
+        self.panic_hardware();
         state.link = None;
         state.hosted = None;
         state.backlog.clear();

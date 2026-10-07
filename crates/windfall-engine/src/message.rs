@@ -57,6 +57,13 @@ pub(crate) enum Message {
         channel: ChannelId,
         key: u8,
     },
+    HardwareNote {
+        epoch: u64,
+        channel: ChannelId,
+        key: u8,
+        /// Zero ends the note; 1..=127 starts it.
+        velocity: u8,
+    },
     Preview(AudioBuffer),
     StopPreview,
     SetOutputGain(f32),

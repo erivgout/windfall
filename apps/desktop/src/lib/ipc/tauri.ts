@@ -62,6 +62,13 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    midiHardwareState: () => call("midi_hardware_state"),
+    midiHardwareRefresh: () => call("midi_hardware_refresh"),
+    midiHardwareConfigure: (settings) =>
+      call("midi_hardware_configure", { settings }),
+    midiHardwareTarget: (channel, generation, revision) =>
+      call("midi_hardware_target", { channel, generation, revision }),
+    midiHardwarePanic: () => call("midi_hardware_panic"),
     pluginsState: () => call("plugins_state"),
     pluginsScan: (retry) => call("plugins_scan", { retry }),
     pluginsAddFolder: (folder) => call("plugins_add_folder", { folder }),
