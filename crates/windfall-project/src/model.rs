@@ -686,6 +686,41 @@ impl Clip {
 }
 
 /// What a clip plays.
+/// Offline-prepared spectral quality for playlist audio clips.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ClipStretchQuality {
+    Fast,
+    #[default]
+    Standard,
+    High,
+}
+
+/// How a playlist audio clip changes time and pitch. Source files remain intact.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+#[ts(export)]
+pub enum ClipStretch {
+    /// Existing tape playback: pitch also changes speed.
+    #[default]
+    Tape,
+    /// Cached spectral rendering: ratio changes duration and pitch stays independent.
+    Spectral {
+        /// Output duration divided by source duration, from 0.25 to 4.
+        ratio: f64,
+        quality: ClipStretchQuality,
+        /// Approximate voiced-spectrum formant preservation.
+        formants: bool,
+    },
+}
+
+impl ClipStretch {
+    fn is_tape(&self) -> bool {
+        matches!(self, Self::Tape)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
@@ -707,6 +742,8 @@ pub enum ClipContent {
     /// starts as far into it as would have played by then, had the clip
     /// begun `offset` ticks earlier at the project's tempo. In seconds of
     /// the file that is `offset * 60 / (tempoBpm * 960) * 2^(pitch / 12)`,
+    /// In spectral mode the original source advances at `1 / ratio` instead,
+    /// independently of pitch; the prepared source plays at unity speed.
     /// with `tempoBpm` the tempo stored in the project's settings. Dragging
     /// the clip's left edge to the right by `n` ticks (`start + n`,
     /// `offset + n`, `length - n`) therefore leaves the rest of the audio
@@ -759,9 +796,14 @@ pub enum ClipContent {
         fade_out: u32,
         /// Plays the audio backwards, from its last frame.
         reverse: bool,
-        /// Pitch in semitones, -48 to 48. It changes speed and pitch
-        /// together, like a tape: 12 plays an octave up in half the time.
+        /// Pitch in semitones, -48 to 48 for tape, -24 to 24 for spectral.
+        /// Tape changes speed and pitch together: 12 plays an octave up
+        /// in half the time. Spectral pitch does not change duration.
         pitch: f32,
+        /// Defaults to tape for older projects. Spectral mode supports +/-24 semitones.
+        #[serde(default, skip_serializing_if = "ClipStretch::is_tape")]
+        #[ts(as = "Option<ClipStretch>", optional)]
+        stretch: ClipStretch,
     },
     /// Puts an [`Automation`] on the timeline. While the song plays through
     /// the clip, the automation's target follows its curve. It does

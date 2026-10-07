@@ -829,6 +829,13 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       }),
     browserList: (folderPath) => ipc(() => listFolder(roots, folderPath)),
     sampleInfo: (filePath) => ipc(() => sampleInfoFor(roots, filePath)),
+    prepareClipCommand: (command) => ipc(() => dispatchNow(command)),
+    detectClipTempo: () =>
+      Promise.reject(
+        new Error(
+          "Tempo detection requires the desktop app. Enter a source BPM or beat count."
+        )
+      ),
     sampleInfoById: (sample) =>
       ipc(() => {
         const asset = doc.project().samples.find((item) => item.id === sample)

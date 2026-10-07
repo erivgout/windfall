@@ -73,6 +73,10 @@ export interface Backend {
 
   documentSnapshot(): Promise<DocumentSnapshot>
   dispatch(command: Command, gesture?: number): Promise<DispatchResult>
+  prepareClipCommand(command: Command): Promise<DispatchResult>
+  detectClipTempo(
+    sample: SampleId
+  ): Promise<{ bpm: number; confidence: number }[]>
   undo(): Promise<ProjectPatch | null>
   redo(): Promise<ProjectPatch | null>
   historyJump(cursor: number): Promise<ProjectPatch>

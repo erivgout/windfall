@@ -247,8 +247,7 @@ impl Session {
             }
         }
         if changed || push {
-            self.controller()
-                .set_project(state.document.project(), &state.pool);
+            self.push_project(&state);
         }
         if !warnings.is_empty() {
             self.emit(Event::ProjectWarnings(warnings));

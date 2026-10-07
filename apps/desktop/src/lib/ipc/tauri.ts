@@ -135,6 +135,8 @@ export function createTauriBackend(): Backend {
     browserRemoveRoot: (path) => call("browser_remove_root", { path }),
     browserList: (path) => call("browser_list", { path }),
     sampleInfo: (path) => call("sample_info", { path }),
+    prepareClipCommand: (command) => call("prepare_clip_command", { command }),
+    detectClipTempo: (sample) => call("detect_clip_tempo", { sample }),
     sampleInfoById: (sample) => call("sample_info_by_id", { sample }),
     addChannelFromFile: (path, index) =>
       call("add_channel_from_file", { path, index }),

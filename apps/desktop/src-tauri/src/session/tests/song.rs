@@ -103,6 +103,8 @@ fn an_audio_clip_from_a_file_is_one_undo_step_and_plays_in_the_song() {
                 fade_out: 0,
                 reverse: false,
                 pitch: 0.0,
+
+                stretch: Default::default(),
             },
         }
     );
@@ -860,4 +862,135 @@ fn a_song_with_drums_a_melody_audio_effects_and_automation_is_made_and_exported(
     // Back as it was, it exports as it did.
     let (restored, _) = export_song(&rig, "phase two restored.wav");
     assert_eq!(restored, bytes);
+}
+
+fn spectral_command(clip: u32) -> Command {
+    Command::UpdateAudioClips {
+        updates: vec![AudioClipUpdate {
+            id: ClipId(clip),
+            patch: AudioClipPatch {
+                stretch: Some(windfall_project::ClipStretch::Spectral {
+                    ratio: 1.5,
+                    quality: windfall_project::ClipStretchQuality::Standard,
+                    formants: true,
+                }),
+                pitch: Some(7.0),
+                ..Default::default()
+            },
+        }],
+    }
+}
+#[test]
+fn spectral_worker_settings_save_open_and_undo_without_touching_original_sample() {
+    let rig = Rig::new();
+    let session = rig.session.clone();
+    let added = session
+        .add_audio_clip_from_file(&factory_file("Bass/Bass Sub.wav"), new_tracks(0))
+        .unwrap();
+    let clip = *added.created.last().unwrap();
+    let before = rig.project();
+    session
+        .prepare_clip_command(spectral_command(clip))
+        .unwrap();
+    let after = rig.project();
+    assert_eq!(after.samples, before.samples);
+    assert_eq!(clip_of(&after, clip).length, clip_of(&before, clip).length);
+    let saved = session.project_save(Some(&rig.file("spectral"))).unwrap();
+    session.undo().unwrap();
+    assert!(same_content(&rig.project(), &before));
+    session.redo().unwrap();
+    assert!(same_content(&rig.project(), &after));
+    session.project_open(&saved).unwrap();
+    assert!(same_content(&rig.project(), &after));
+}
+#[test]
+fn spectral_worker_releases_state_and_rejects_an_edit_during_preparation() {
+    let rig = Rig::new();
+    let session = rig.session.clone();
+    let added = session
+        .add_audio_clip_from_file(&factory_file("Bass/Bass Sub.wav"), new_tracks(0))
+        .unwrap();
+    let clip = *added.created.last().unwrap();
+    let hold = session.hold("clip:prepared");
+    let worker = session.clone();
+    let task = std::thread::spawn(move || worker.prepare_clip_command(spectral_command(clip)));
+    hold.wait();
+    // This would deadlock if preparation retained the session lock.
+    session
+        .dispatch(
+            Command::UpdateAudioClips {
+                updates: vec![AudioClipUpdate {
+                    id: ClipId(clip),
+                    patch: AudioClipPatch {
+                        gain: Some(0.5),
+                        ..Default::default()
+                    },
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    hold.release();
+    assert!(
+        task.join()
+            .unwrap()
+            .unwrap_err()
+            .contains("project changed")
+    );
+    assert!(matches!(
+        clip_of(&rig.project(), clip).content,
+        ClipContent::Audio {
+            gain: 0.5,
+            stretch: windfall_project::ClipStretch::Tape,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn uncached_clip_publications_prepare_off_lock_and_install_the_latest_edit() {
+    let rig = Rig::new();
+    let session = rig.session.clone();
+    let added = session
+        .add_audio_clip_from_file(&factory_file("Bass/Bass Sub.wav"), new_tracks(0))
+        .unwrap();
+    let clip = *added.created.last().unwrap();
+    let hold = session.hold("clip:background-prepared");
+    session.dispatch(spectral_command(clip), None).unwrap();
+    hold.wait();
+    session
+        .dispatch(
+            Command::UpdateAudioClips {
+                updates: vec![AudioClipUpdate {
+                    id: ClipId(clip),
+                    patch: AudioClipPatch {
+                        gain: Some(0.25),
+                        ..Default::default()
+                    },
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    hold.release();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while session
+        .inner
+        .preparing_clips
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "clip preparation did not complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(matches!(
+        clip_of(&rig.project(), clip).content,
+        ClipContent::Audio {
+            gain: 0.25,
+            stretch: windfall_project::ClipStretch::Spectral { ratio: 1.5, .. },
+            ..
+        }
+    ));
 }

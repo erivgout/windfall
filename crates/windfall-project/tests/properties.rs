@@ -490,6 +490,8 @@ impl Action {
                                 fade_out: *fade_out,
                                 reverse: *reverse,
                                 pitch: *pitch * 30.0,
+
+                                stretch: Default::default(),
                             },
                             ContentSpec::Automation(automation) => ClipContent::Automation {
                                 automation: automation.among(&automations),
@@ -909,6 +911,7 @@ fn audio_clip_patch() -> impl Strategy<Value = AudioClipPatch> {
         .prop_map(
             |(gain, pan, fade_in, fade_out, reverse, pitch)| AudioClipPatch {
                 mixer_track: None,
+                stretch: None,
                 gain,
                 pan,
                 fade_in,
@@ -1202,6 +1205,8 @@ fn seed_project() -> Project {
                     fade_out: 480,
                     reverse: false,
                     pitch: -2.0,
+
+                    stretch: Default::default(),
                 },
             },
         ],

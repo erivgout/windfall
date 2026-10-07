@@ -946,6 +946,8 @@ fn a_file_from_before_audio_clips_and_automation_still_loads() {
                 fade_out: 0,
                 reverse: false,
                 pitch: 0.0,
+
+                stretch: Default::default(),
             },
         },
     ];

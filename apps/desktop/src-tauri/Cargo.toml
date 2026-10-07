@@ -21,6 +21,7 @@ windfall-project.workspace = true
 windfall-flp.workspace = true
 windfall-ipc.workspace = true
 windfall-engine.workspace = true
+windfall-stretch.workspace = true
 windfall-codec.workspace = true
 windfall-factory.workspace = true
 windfall-midi.workspace = true

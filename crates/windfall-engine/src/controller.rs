@@ -18,6 +18,11 @@ use crate::processor::Processor;
 use crate::shared::Shared;
 use crate::state::{Ledger, PlanState};
 
+/// An immutable project compiled on a worker, ready for a short installation.
+pub struct PreparedProject {
+    plan: Plan,
+}
+
 /// Sends requests to the audio thread and reads back what it publishes.
 ///
 /// Clones share one engine. A controller outlives device changes. When the
@@ -134,7 +139,19 @@ impl Controller {
     /// transport's pattern is not in the project, the transport moves to the
     /// project's first pattern.
     pub fn set_project(&self, project: &Project, pool: &SamplePool) {
-        self.set_plan(compile(project, pool));
+        self.set_prepared_project(project, Self::prepare_project(project, pool));
+    }
+
+    /// Compiles and renders spectral clips on the caller's worker/control thread.
+    pub fn prepare_project(project: &Project, pool: &SamplePool) -> PreparedProject {
+        PreparedProject {
+            plan: compile(project, pool),
+        }
+    }
+
+    /// Installs a precompiled snapshot. The caller must verify it still matches the project.
+    pub fn set_prepared_project(&self, project: &Project, prepared: PreparedProject) {
+        self.set_plan(prepared.plan);
         let mut state = self.lock();
         let pattern = state.transport.pattern;
         if project.pattern(pattern).is_none()

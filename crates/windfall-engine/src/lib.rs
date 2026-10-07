@@ -117,6 +117,7 @@
 //! the master. Channel solo and track solo do not affect each other.
 
 mod automation;
+mod clip_processing;
 mod clips;
 mod controller;
 mod device;
@@ -138,7 +139,7 @@ mod test_alloc;
 mod voice;
 
 pub use clips::MAX_AUDIO_CLIPS;
-pub use controller::{Controller, StreamStats};
+pub use controller::{Controller, PreparedProject, StreamStats};
 pub use device::Engine;
 pub use pool::SamplePool;
 pub use processor::Processor;

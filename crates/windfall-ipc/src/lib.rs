@@ -475,3 +475,11 @@ pub struct RecordingState {
 }
 mod flp;
 pub use flp::*;
+/// Relative tempo hypotheses, not calibrated probabilities. Half/double tempo can be ambiguous.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ClipTempoCandidate {
+    pub bpm: f64,
+    pub confidence: f64,
+}

@@ -93,41 +93,54 @@ impl Session {
 
     /// Undoes the last edit. `None` when there is nothing to undo.
     pub fn undo(&self) -> Option<ProjectPatch> {
-        let _recording = self.recording_idle().ok()?;
-        let mut state = self.state();
-        let touched = state.document.undo()?;
-        Some(self.publish(&mut state, &touched))
+        self.prepare_history(HistoryMove::Undo)
     }
 
     /// Applies the last undone edit again. `None` when there is none.
     pub fn redo(&self) -> Option<ProjectPatch> {
-        let _recording = self.recording_idle().ok()?;
-        let mut state = self.state();
-        let touched = state.document.redo()?;
-        Some(self.publish(&mut state, &touched))
+        self.prepare_history(HistoryMove::Redo)
     }
 
     /// Undoes or redoes until `cursor` history entries are applied.
     pub fn history_jump(&self, cursor: u32) -> ProjectPatch {
-        let guard = self.recording_idle();
-        let mut state = self.state();
-        if guard.is_err() {
-            return state.document.patch(&Touched::default());
-        }
-        let touched = state.document.jump(cursor);
-        self.publish(&mut state, &touched)
+        self.prepare_history(HistoryMove::Jump(cursor))
+            .unwrap_or_else(|| self.state().document.patch(&Touched::default()))
     }
 
     /// Builds the patch for a change that was just made, hands the changed
     /// project to the engine and sends the patch to every window.
     pub(super) fn publish(&self, state: &mut State, touched: &Touched) -> ProjectPatch {
+        self.publish_with_prepared(state, touched, None)
+    }
+
+    pub(super) fn publish_prepared(
+        &self,
+        state: &mut State,
+        touched: &Touched,
+        prepared: windfall_engine::PreparedProject,
+    ) -> ProjectPatch {
+        self.publish_with_prepared(state, touched, Some(prepared))
+    }
+
+    fn publish_with_prepared(
+        &self,
+        state: &mut State,
+        touched: &Touched,
+        prepared: Option<windfall_engine::PreparedProject>,
+    ) -> ProjectPatch {
         let patch = state.document.patch(touched);
         if touched.samples {
             self.sync_samples(state);
         }
         if !touched.is_empty() {
             state.edits += 1;
-            self.push_project(state);
+            if let Some(prepared) = prepared {
+                self.controller()
+                    .set_prepared_project(state.document.project(), prepared);
+                self.sync_transport();
+            } else {
+                self.push_project(state);
+            }
         }
         self.emit(Event::ProjectPatch(patch.clone()));
         patch
@@ -137,8 +150,72 @@ impl Session {
     /// transport off a pattern that no longer exists, and the UI is told of
     /// that before it hears of the edit that removed the pattern.
     pub(super) fn push_project(&self, state: &State) {
-        self.controller()
-            .set_project(state.document.project(), &state.pool);
-        self.sync_transport();
+        if let Some(pool) = state.pool.cached_clip_pool(state.document.project()) {
+            self.controller()
+                .set_project(state.document.project(), &pool);
+            self.sync_transport();
+        } else {
+            self.queue_clip_preparation();
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HistoryMove {
+    Undo,
+    Redo,
+    Jump(u32),
+}
+impl HistoryMove {
+    fn apply(self, document: &mut windfall_project::Document) -> Option<Touched> {
+        match self {
+            Self::Undo => document.undo(),
+            Self::Redo => document.redo(),
+            Self::Jump(cursor) => Some(document.jump(cursor)),
+        }
+    }
+}
+impl Session {
+    // History can refer to a variant evicted from the bounded cache. Compile
+    // its target snapshot before reacquiring the session lock as well.
+    fn prepare_history(&self, action: HistoryMove) -> Option<ProjectPatch> {
+        drop(self.recording_idle().ok()?);
+        loop {
+            let (mut document, mut pool, directory, generation, edits) = {
+                let state = self.state();
+                (
+                    state.document.clone(),
+                    state.pool.clone(),
+                    state.sample_dir.clone(),
+                    state.generation,
+                    state.edits,
+                )
+            };
+            action.apply(&mut document)?;
+            for asset in &document.project().samples {
+                if !pool.contains(asset.id)
+                    && let Ok(path) =
+                        super::samples::locate(asset, directory.as_deref(), &self.inner.factory_dir)
+                    && let Some(audio) = self.inner.cache.peek(&path)
+                {
+                    pool.insert(asset.id, audio);
+                }
+            }
+            let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool);
+            let _recording = self.recording_idle().ok()?;
+            let mut state = self.state();
+            if state.generation != generation || state.edits != edits {
+                continue;
+            }
+            // Existing sources must also still be the ones compiled.
+            if state.pool.iter().any(|(id, audio)| {
+                pool.get(id)
+                    .is_none_or(|old| old.samples().as_ptr() != audio.samples().as_ptr())
+            }) {
+                continue;
+            }
+            let touched = action.apply(&mut state.document)?;
+            return Some(self.publish_prepared(&mut state, &touched, prepared));
+        }
     }
 }

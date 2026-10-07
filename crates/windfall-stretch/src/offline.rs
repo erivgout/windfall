@@ -36,6 +36,17 @@ pub fn stretch(
     pitch_semitones: f64,
     quality: Quality,
 ) -> AudioBuffer {
+    stretch_with_formants(buffer, time_ratio, pitch_semitones, quality, false)
+}
+
+/// Offline rendering with optional approximate voiced-spectrum formant preservation.
+pub fn stretch_with_formants(
+    buffer: &AudioBuffer,
+    time_ratio: f64,
+    pitch_semitones: f64,
+    quality: Quality,
+    preserve_formants: bool,
+) -> AudioBuffer {
     let channels = usize::from(buffer.channels());
     let frames = buffer.frames();
     let wanted = stretched_frames(frames, time_ratio);
@@ -57,6 +68,7 @@ pub fn stretch(
         .collect();
     let mut stretcher = Stretcher::with_quality(channels, buffer.sample_rate(), quality);
     stretcher.set_pitch_semitones(pitch);
+    stretcher.set_formant_preservation(preserve_formants);
     let lead = stretcher.begin_exact(frames, wanted);
 
     let mut scratch = vec![vec![0.0_f32; CHUNK]; channels];

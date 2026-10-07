@@ -14,6 +14,7 @@ asio = ["cpal/asio"]
 
 [dependencies]
 windfall-core.workspace = true
+windfall-stretch.workspace = true
 windfall-dsp.workspace = true
 windfall-project.workspace = true
 windfall-ipc.workspace = true

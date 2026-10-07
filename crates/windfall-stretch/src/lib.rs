@@ -95,7 +95,7 @@ mod stft;
 mod stretcher;
 mod tempo;
 
-pub use offline::{stretch, stretched_frames};
+pub use offline::{stretch, stretch_with_formants, stretched_frames};
 pub use stretcher::{
     Latency, MAX_PITCH_SEMITONES, MAX_TIME_RATIO, MIN_TIME_RATIO, Quality, Stretcher,
 };

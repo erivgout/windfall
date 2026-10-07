@@ -733,3 +733,40 @@ fn an_automatic_tail_waits_for_what_a_clip_leaves_in_its_effects() {
     );
     assert!(wet.frames() > 96_000 + 20_000 && wet.frames() < 96_000 + 30_000);
 }
+
+#[test]
+fn spectral_offset_and_reverse_address_the_prepared_source_exactly() {
+    let mut rig = Rig::new();
+    let lane = rig.playlist_track();
+    let source = crate::support::sine(RATE, 440.0, 1.0);
+    let id = rig.audio_clip(lane, source, TrackId::MASTER, 0, 1920);
+    let settings = windfall_project::ClipStretch::Spectral {
+        ratio: 1.5,
+        quality: windfall_project::ClipStretchQuality::Standard,
+        formants: false,
+    };
+    let sample = {
+        let clip = rig.clip_mut(id);
+        clip.offset = 96;
+        let windfall_project::ClipContent::Audio {
+            sample,
+            stretch,
+            pitch,
+            reverse,
+            ..
+        } = &mut clip.content
+        else {
+            panic!("audio")
+        };
+        *stretch = settings;
+        *pitch = 7.0;
+        *reverse = true;
+        *sample
+    };
+    let prepared = rig.pool.clip_audio(sample, settings, 7.0).unwrap();
+    assert_eq!(prepared.frames(), 72000);
+    let out = left(&rig.play_song(RATE, 4800, 127));
+    assert_frames(&out, DECLICK..4800, |frame| {
+        prepared.samples()[prepared.frames() - 1 - 96 * TICK - frame]
+    });
+}

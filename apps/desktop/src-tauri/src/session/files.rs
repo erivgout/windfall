@@ -364,6 +364,8 @@ impl Session {
         sample_dir: Option<PathBuf>,
         decoded: Decoded,
     ) -> Result<DocumentSnapshot, Refusal> {
+        drop(self.recording_idle().map_err(|_| Refusal::Recording)?);
+        let prepared = windfall_engine::Controller::prepare_project(document.project(), &decoded.pool);
         let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
         let mut state = self.state();
         if state.replacements != ticket.request || state.generation != ticket.generation {
@@ -408,7 +410,7 @@ impl Session {
             midi_import: None,
             midi_ticket: state.midi_ticket,
         };
-        controller.set_project(state.document.project(), &state.pool);
+        controller.set_prepared_project(state.document.project(), prepared);
         controller.set_transport(transport);
         controller.seek(0.0);
 

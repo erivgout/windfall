@@ -340,6 +340,7 @@ impl Builder<'_> {
                                     fade_out: extra.map_or(0, |e| milliseconds(e.fade_out)),
                                     reverse: source.reverse,
                                     pitch: source.pitch,
+                                    stretch: Default::default(),
                                 });
                                 if source.stretched {
                                     self.report.say(ReportSection::Playlist, Outcome::Approximated, format!("Audio clip \"{}\" keeps its sample but time stretching is not reproduced.", source.name));
