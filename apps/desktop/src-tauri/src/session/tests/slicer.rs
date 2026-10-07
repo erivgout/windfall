@@ -123,6 +123,27 @@ fn start_take(rig: &Rig) {
 }
 
 #[test]
+fn slicer_refuses_tempo_automation_without_document_or_source_mutation() {
+    use windfall_project::AutomationTarget;
+    let rig = Rig::new();
+    let id = source_clip(&rig);
+    rig.session.automate(AutomationTarget::Tempo).unwrap();
+    let before = rig.session.document_snapshot();
+    let path = rig.folder.path().join("original.wav");
+    let bytes = std::fs::read(&path).unwrap();
+    for options in [grid(), SliceOptions::Transients { sensitivity: 0.5 }] {
+        assert!(
+            rig.session
+                .slice_analyze(id, options)
+                .unwrap_err()
+                .contains("tempo automation")
+        );
+    }
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert_eq!(std::fs::read(path).unwrap(), bytes);
+}
+
+#[test]
 fn slicer_splits_linked_source_once_and_undo_redo_save_reopen_preserve_it() {
     let rig = Rig::new();
     let id = source_clip(&rig);

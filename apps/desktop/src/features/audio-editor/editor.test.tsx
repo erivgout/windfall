@@ -24,12 +24,43 @@ beforeEach(async () => {
 afterEach(() => stop())
 
 async function open() {
-  render(<AudioEditorButton clip={42} />)
+  const view = render(<AudioEditorButton clip={42} />)
   fireEvent.click(screen.getByRole("button", { name: "Audio editor" }))
   await screen.findByRole("img", { name: /Clip waveform/ })
+  return view
 }
 
 describe("selected clip audio editor", () => {
+  it.each(["project replacement", "unmount"])(
+    "ignores an Apply reply after %s, even with reused revisions",
+    async (change) => {
+      vi.spyOn(backend, "audioEditorOpen").mockResolvedValue(preview)
+      const result = await backend.addAudioClipFromFile(
+        "/factory/Loops/Drum loop 128.wav",
+        { start: 0 }
+      )
+      await backend.projectNew()
+      let resolve!: (value: typeof result) => void
+      vi.spyOn(backend, "audioEditorApply").mockImplementation(
+        () =>
+          new Promise((done) => {
+            resolve = done
+          })
+      )
+      const view = await open()
+      fireEvent.click(screen.getByRole("button", { name: "Normalize" }))
+      if (change === "project replacement")
+        await act(() => backend.projectNew())
+      else view.unmount()
+      const before = useProjectStore.getState()
+      const selection = new Set(usePlaylistStore.getState().selection)
+      expect(before.revision).toBe(0)
+      expect(result.patch.revision).toBe(1)
+      await act(async () => resolve(result))
+      expect(useProjectStore.getState()).toBe(before)
+      expect(usePlaylistStore.getState().selection).toEqual(selection)
+    }
+  )
   it("applies a native result patch, closes the editor and selects the derived clip", async () => {
     vi.spyOn(backend, "audioEditorOpen").mockResolvedValue(preview)
     // The result fixture exercises patch/selection delivery; the real WAV and
@@ -149,6 +180,25 @@ describe("selected clip audio editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close editor" }))
     await act(async () => resolve(preview))
     await waitFor(() => expect(discard).toHaveBeenCalledWith(7))
+  })
+  it("discards a view opened against a replaced project at the same revision", async () => {
+    let resolve!: (value: AudioEditPreview) => void
+    vi.spyOn(backend, "audioEditorOpen").mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    const discard = vi.spyOn(backend, "audioEditorDiscard")
+    render(<AudioEditorButton clip={42} />)
+    fireEvent.click(screen.getByRole("button", { name: "Audio editor" }))
+    await act(() => backend.projectNew())
+    const before = useProjectStore.getState()
+    await act(async () => resolve(preview))
+    expect(discard).toHaveBeenCalledWith(preview.token)
+    expect(screen.queryByRole("img")).toBeNull()
+    expect(screen.getByRole("alert")).toHaveTextContent("The project changed")
+    expect(useProjectStore.getState()).toBe(before)
   })
   it("selects the same frame range when dragging backwards on the waveform", () => {
     const onSelection = vi.fn()

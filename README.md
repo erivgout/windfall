@@ -10,9 +10,13 @@ Windfall is not affiliated with Image-Line. It contains no FL Studio code, sampl
 
 Audio export supports WAV, FLAC, OGG and MP3, with mixer stems and cancellation. Desktop workflows include MIDI import/export, reviewed FL Studio project conversion with retained unsupported sound data, and independent playlist time-stretch and pitch controls.
 
+The Windows app supports live MIDI input with sustain, an explicit audition channel and optional live-note output. Note recording, controller mapping and sequenced hardware output remain unfinished. See `docs/MIDI-HARDWARE.md`.
+
+Selected audio clips can be trimmed, extracted, normalized, reversed, faded, silenced or cut in the native audio editor. Edits create a new WAV and one undo step. Reviewed grid/transient slicing creates clips linked to the original source; playable slice mapping remains unfinished. See `docs/AUDIO-EDITOR.md` and `docs/SLICER.md`.
+
 Channel samplers support forward and ping-pong loops with editable points, note release, undo and saved project settings. Playback and export share the same loop processing. Independent sampler time-stretch remains unfinished. See `docs/SAMPLER-LOOPS.md`.
 
-The Windows app hosts CLAP instruments and effects with a plugin manager, parameter automation, native editors and saved state. Its VST3 backend processes audio and supports Windows editors, while desktop VST3 addition remains gated on active state capture. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md`.
+The Windows app hosts CLAP instruments and effects with a plugin manager, parameter automation, native editors and saved state. Its VST3 backend processes audio and supports Windows editors. A bounded processor-return path now supports inactive state capture, while desktop VST3 additions remain disabled pending dirty-state scheduling, events during capture and fallible deactivation. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md` and `docs/plugins/vst3-desktop.md`.
 
 Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.
 

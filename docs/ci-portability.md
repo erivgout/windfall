@@ -50,3 +50,9 @@ Passed locally:
 macOS execution, hardware audio and installed third-party plugin compatibility are not verified by this change. No push, PR, tag, release or visibility change was made.
 
 Final inspection of the original base run at `2026-10-07 22:00:37 UTC` still showed Windows job `113028686025` in progress. The three failures described above were completed and inspectable. This branch has not been submitted to hosted Actions; validating the combined integration there remains the parent's publication step.
+
+## Integration follow-up: realtime-feed scheduling
+
+Hosted run `37694612849` at `c37ae0b9` passed Linux Rust, UI, WASM/parity freshness and bindings freshness on Windows/macOS/Linux. Its macOS Rust job `113043374087` passed Clippy but failed the realtime-feed test: it delivered 19 frames in a window whose wall-clock duration implied approximately 37. Parallel CI can suspend this non-audio thread; the production scheduler intentionally skips a large backlog instead of emitting a burst. A minimum percentage of nominal wall-clock frames is therefore not a portable correctness assertion.
+
+The deadline calculation is now tested with virtual timestamps for 600 frames of variable processing work, the nominal 60 Hz interval, short lateness and recovery after a long suspension. The live session test waits for three delivered frames with a bounded timeout and verifies that dropping the session ends the thread. The scheduling policy is preserved. Real app/device performance remains a measured acceptance gate, separate from these correctness tests. Hosted macOS execution of this follow-up remains pending publication.

@@ -23,6 +23,10 @@ import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { backend, errorMessage } from "@/lib/ipc"
 import { receivePatch, useProjectStore } from "@/lib/store/project"
+import {
+  getProjectGeneration,
+  useProjectGeneration,
+} from "@/lib/store/replaced"
 import { PPQ } from "@/lib/units"
 import { usePlaylistStore } from "@/features/playlist/store"
 import type { SliceOptions, SliceReview } from "./types"
@@ -66,10 +70,12 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
   const [sensitivity, setSensitivity] = useState("50")
   const [review, setReview] = useState<SliceReview | null>(null)
   const [reviewRevision, setReviewRevision] = useState(-1)
+  const [reviewGeneration, setReviewGeneration] = useState(-1)
   const [selected, setSelected] = useState<number[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const revision = useProjectStore((s) => s.revision)
+  const generation = useProjectGeneration()
   const alive = useRef(false)
   const retained = useRef<SliceReview | null>(null)
   useEffect(() => {
@@ -80,7 +86,9 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
         void backend.sliceDiscard(retained.current.token).catch(() => {})
     }
   }, [])
-  const stale = review !== null && reviewRevision !== revision
+  const stale =
+    review !== null &&
+    (reviewRevision !== revision || reviewGeneration !== generation)
   const invalidSensitivity =
     sensitivity.trim() === "" ||
     !Number.isFinite(Number(sensitivity)) ||
@@ -97,6 +105,7 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
   async function analyze() {
     reset()
     const atRevision = useProjectStore.getState().revision
+    const atGeneration = getProjectGeneration()
     const options: SliceOptions =
       mode === "grid"
         ? { mode, gridTicks: grid }
@@ -106,6 +115,7 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
       const result = await backend.sliceAnalyze(clip.id, options)
       if (
         !alive.current ||
+        atGeneration !== getProjectGeneration() ||
         atRevision !== useProjectStore.getState().revision
       ) {
         void backend.sliceDiscard(result.token).catch(() => {})
@@ -116,6 +126,7 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
       retained.current = result
       setReview(result)
       setReviewRevision(atRevision)
+      setReviewGeneration(atGeneration)
       setSelected(result.analysis.markers.map((m) => m.tick))
     } catch (failure) {
       if (alive.current) setError(errorMessage(failure))
@@ -124,15 +135,17 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
     }
   }
   async function apply() {
-    if (!review || stale) return
+    if (!review || stale || busy) return
+    const atGeneration = getProjectGeneration()
     setBusy(true)
     setError("")
     try {
       const result = await backend.sliceApply(review.token, selected)
+      if (!alive.current || atGeneration !== getProjectGeneration()) return
       receivePatch(result.patch)
       usePlaylistStore.getState().select(result.created)
       retained.current = null
-      if (alive.current) onApplied()
+      onApplied()
     } catch (failure) {
       if (alive.current) setError(errorMessage(failure))
     } finally {

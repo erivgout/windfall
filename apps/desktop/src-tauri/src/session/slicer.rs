@@ -1,7 +1,7 @@
 //! Off-lock analysis and compilation, followed by guarded publication.
 use windfall_core::AudioBuffer;
 use windfall_ipc::{SliceOptions, SliceReview};
-use windfall_project::{Clip, ClipId, DispatchResult, slicer};
+use windfall_project::{AutomationTarget, Clip, ClipId, DispatchResult, slicer};
 
 use super::{Session, State};
 
@@ -40,6 +40,13 @@ impl Session {
             let _recording = self.recording_idle()?;
             let mut state = self.state();
             let project = state.document.project();
+            if project
+                .automations
+                .iter()
+                .any(|lane| matches!(lane.target, AutomationTarget::Tempo))
+            {
+                return Err("Slicing tempo-automated projects is not supported. Remove tempo automation before slicing.".into());
+            }
             let original = project
                 .playlist
                 .clips

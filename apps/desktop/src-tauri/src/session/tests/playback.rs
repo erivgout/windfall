@@ -1,8 +1,7 @@
 //! The transport, the realtime feed, the audio device and previews.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use windfall_codec::{WavSampleFormat, write_wav};
 use windfall_core::AudioBuffer;
@@ -14,7 +13,7 @@ use windfall_project::{
 
 use super::{FakeDevice, Rig, SAMPLE_RATE, factory_file, rms, still_running};
 use crate::events::Event;
-use crate::session::{EMPTY_PLAYLIST, FRAME_INTERVAL, MUTED_PLAYLIST, SILENT_PLAYLIST};
+use crate::session::{EMPTY_PLAYLIST, MUTED_PLAYLIST, SILENT_PLAYLIST};
 use crate::settings::{SETTINGS_FILE, SettingsStore};
 use crate::sync::lock;
 
@@ -219,28 +218,18 @@ fn a_song_that_reaches_its_end_stops_and_the_ui_is_told() {
 }
 
 #[test]
-fn the_realtime_thread_ticks_sixty_times_a_second_and_ends_with_the_session() {
+fn the_realtime_thread_sends_frames_and_ends_with_the_session() {
     let rig = Rig::new();
-    let count = Arc::new(AtomicUsize::new(0));
-    let counter = count.clone();
-    rig.session.subscribe_realtime(
-        "main",
-        Box::new(move |_| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            true
-        }),
-    );
+    let (send, receive) = mpsc::channel();
+    rig.session
+        .subscribe_realtime("main", Box::new(move |_| send.send(()).is_ok()));
     let thread = rig.session.spawn_realtime().unwrap();
-    let started = Instant::now();
-    std::thread::sleep(Duration::from_millis(600));
-    let frames = count.load(Ordering::SeqCst) as f64;
-    let expected = started.elapsed().as_secs_f64() / FRAME_INTERVAL.as_secs_f64();
-    // A loaded test machine can hold a thread up, so the bounds are loose;
-    // the real rate is measured against the running app.
-    assert!(
-        frames > expected * 0.7 && frames < expected * 1.1 + 2.0,
-        "{frames} frames where about {expected:.0} were due"
-    );
+    // Hosted CI can suspend this thread while other tests run. Test delivery
+    // here; virtual-time tests in realtime.rs verify the 60 Hz schedule and
+    // recovery without assuming a wall-clock scheduling percentage.
+    for _ in 0..3 {
+        receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
 
     drop(rig);
     thread.join().unwrap();

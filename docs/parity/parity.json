@@ -205,10 +205,10 @@
       "summary": "Records and plays notes and controller data from MIDI keyboards and other hardware.",
       "windfall_name": "MIDI input",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Native MIDI input auditions one explicit channel with note-on/off, sustain, channel filtering and bounded queue cleanup. Note recording, controller mapping, timestamp/sample-clock alignment and physical hardware verification remain pending. See docs/MIDI-HARDWARE.md."
     },
     {
       "id": "core-midi-out",
@@ -217,10 +217,10 @@
       "summary": "A channel that sends notes and controller messages to external MIDI hardware or to other plugins.",
       "windfall_name": "MIDI output",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Optional single-port live-note forwarding balances retriggers/releases and clears held hardware notes on route/device changes and panic. Pattern/playlist output, controller messages, clock and a dedicated MIDI-out channel remain pending; no physical output verification is claimed. See docs/MIDI-HARDWARE.md."
     },
     {
       "id": "core-vst2-vst3-audio-unit-and-clap-support",
@@ -232,7 +232,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and state persistence are integrated. VST3 audio hosting and Windows editors exist in the backend; desktop addition awaits safe active state capture. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md."
+      "notes": "Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and saved state are integrated. VST3 processor-return/capture foundation is tested, while production desktop additions await remaining lifecycle/event safeguards. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md."
     },
     {
       "id": "core-fl-studio-remote",
@@ -1033,10 +1033,10 @@
       "summary": "Cuts clips along a drawn line.",
       "windfall_name": "Playlist slice tool",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "One selected audio clip can be split at reviewed grid/transient markers into source-linked clips in one undo step, retaining trim/reverse/tape pitch/routing. Drawn-line slicing across clip types remains pending. See docs/SLICER.md."
     },
     {
       "id": "win-playlist-select",
@@ -1216,7 +1216,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Gain, pan, pitch and reverse. No normalize or independent time-stretch yet."
+      "notes": "Per-instance gain, pan, tape/spectral pitch, reverse, fades and independent playlist stretch are implemented. Native audio-editor normalization creates a unique derived WAV with undo; a direct non-destructive normalize property remains pending. See docs/AUDIO-EDITOR.md and docs/ARCHITECTURE.md."
     },
     {
       "id": "win-playlist-automation-editing",
@@ -2017,10 +2017,10 @@
       "summary": "Detects beats in a loop and maps the slices to notes for independent triggering.",
       "windfall_name": null,
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "The plan's phase-3 slicer."
+      "notes": "Shared Rust grid/transient analysis and reviewed linked-source playlist slices provide the detector foundation. Independent note triggering, playable slice mapping and a slicer instrument remain pending. Fades, spectral stretch, swing and tempo-automated projects are explicitly refused. See docs/SLICER.md."
     },
     {
       "id": "inst-gms",
@@ -3193,10 +3193,10 @@
       "summary": "A wave editor and recorder that loads in an effect slot for trimming, cleaning and processing samples.",
       "windfall_name": null,
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "The plan's phase-3 audio editor. FL's version includes noise removal, time-stretch, EQ, convolution reverb and script tools."
+      "notes": "Native selected-clip waveform/range editor supports trim, extract, normalize, reverse, fades, silence and cut. Immutable derived WAVs, one-step undo, stale/source/recording guards and save/reopen are covered. Effect-slot recording/editor integration, cleanup DSP and advanced tools remain pending. Browser mode explicitly refuses native file edits. See docs/AUDIO-EDITOR.md."
     },
     {
       "id": "editor-newtime",
@@ -3556,7 +3556,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. Surge XT/Effects and OB-Xf produced verified audio, and Surge XT/OB-Xf editors were exercised. Desktop addition remains unavailable until safe active-instance state capture is integrated. Linux paths are untested; macOS loading and non-Windows embedded editors are unsupported. In-process crashes remain uncontained. See docs/plugins/vst3-hosting.md."
+      "notes": "VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. A bounded owner-thread processor-return path now exercises desktop capture/save/export with native fixtures. Production desktop additions remain disabled pending dirty-state scheduling, events during capture and fallible native deactivation. Native macOS/Linux hosting and audio crash containment remain pending. See docs/plugins/vst3-desktop.md and docs/plugins/vst3-hosting.md."
     },
     {
       "id": "fmt-host-clap",
@@ -3853,10 +3853,10 @@
       "summary": "Enables MIDI devices and assigns ports and controller profiles.",
       "windfall_name": "MIDI settings",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Persisted native input/output device and MIDI-channel settings, port refresh/reconnect, unavailable saved-device handling, runtime audition destination and Panic MIDI controls are implemented. Controller profiles, MIDI learn and physical hardware verification remain pending. Browser simulation reports native-only capability. See docs/MIDI-HARDWARE.md."
     },
     {
       "id": "wf-midi-recording",

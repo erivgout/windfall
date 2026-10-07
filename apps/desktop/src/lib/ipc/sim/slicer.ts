@@ -66,6 +66,10 @@ export function createSlicerMock(
       const original = document()
       const revision = original.snapshot(null).revision
       const project = original.project()
+      if (project.automations.some((lane) => lane.target.type === "tempo"))
+        throw new Error(
+          "Slicing tempo-automated projects is not supported. Remove tempo automation before slicing."
+        )
       const clip = project.playlist.clips.find((c) => c.id === id)
       if (!clip || clip.content.type !== "audio")
         throw new Error("Select one playlist audio clip to slice.")
