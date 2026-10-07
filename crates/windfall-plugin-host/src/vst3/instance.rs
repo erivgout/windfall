@@ -647,7 +647,7 @@ impl InstanceBackend for VstInstance {
         Ok(info)
     }
     fn close_editor(&mut self) {
-        drop(self.editor.take());
+        self.editor = None;
     }
     fn editor(&self) -> Option<EditorInfo> {
         self.editor.as_ref().map(super::editor::Editor::info)
