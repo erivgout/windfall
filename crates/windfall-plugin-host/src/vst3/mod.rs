@@ -1,4 +1,10 @@
-//! VST3 factory enumeration and initialized layout probing. No audio hosting.
+//! VST3 module loading, scanning and hosting through the pinned SDK bindings.
+mod buffers;
+mod editor;
+mod handlers;
+mod instance;
+mod processor;
+mod stream;
 use crate::descriptor::{
     AudioPort, MAX_PARAMETERS, MAX_PORT_CHANNELS, MAX_PORTS, PluginDescriptor, PluginFormat,
     PluginKind, PluginLayout,
@@ -12,10 +18,20 @@ use std::ptr;
 use vst3::Steinberg::Vst::*;
 use vst3::{Class, ComPtr, ComWrapper, Interface, Steinberg::*};
 
+#[derive(Clone)]
 pub(crate) struct Vst3Module {
+    inner: std::sync::Arc<ModuleData>,
+}
+pub(crate) struct ModuleData {
     factory: Option<ComPtr<IPluginFactory>>,
     library: Library,
     exit: Option<unsafe extern "system" fn() -> bool>,
+}
+impl std::ops::Deref for Vst3Module {
+    type Target = ModuleData;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 fn text(bytes: &[char8]) -> String {
     let bytes: Vec<u8> = bytes
@@ -61,8 +77,23 @@ impl Vst3Module {
             let path = _path;
             let binary = crate::paths::vst3_binary(path)
                 .ok_or_else(|| PluginError::Load("no VST3 binary for this architecture".into()))?;
+            let binary = binary
+                .canonicalize()
+                .map_err(|error| PluginError::Load(error.to_string()))?;
+            // Module entry/exit are per DLL, not per PluginHost::load. This
+            // cache is used only by main-thread loading; audio never visits
+            // it or takes its mutex. Weak refs do not extend DLL lifetime.
+            type Cache = std::collections::HashMap<std::path::PathBuf, std::sync::Weak<ModuleData>>;
+            static CACHE: std::sync::OnceLock<std::sync::Mutex<Cache>> = std::sync::OnceLock::new();
+            let mut cache = CACHE
+                .get_or_init(Default::default)
+                .lock()
+                .map_err(|_| PluginError::Load("VST3 module cache poisoned".into()))?;
+            if let Some(inner) = cache.get(&binary).and_then(std::sync::Weak::upgrade) {
+                return Ok(Self { inner });
+            }
             // SAFETY: loading runs plugin code. The scanner isolates crashes.
-            let library = unsafe { Library::new(binary) }
+            let library = unsafe { Library::new(&binary) }
                 .map_err(|error| PluginError::Load(error.to_string()))?;
             #[cfg(not(target_os = "linux"))]
             let mut exit = None;
@@ -107,19 +138,27 @@ impl Vst3Module {
             };
             // SAFETY: SDK export returns an owned reference, kept alive by
             // `library` until Drop releases the factory before unloading.
+            // Once module entry succeeds, every later failure must still
+            // run module exit before unloading the library.
+            let mut module = ModuleData {
+                factory: None,
+                library,
+                exit,
+            };
             let factory = unsafe {
-                let get = library
+                let get = module
+                    .library
                     .get::<unsafe extern "system" fn() -> *mut IPluginFactory>(
                         b"GetPluginFactory\0",
                     )
                     .map_err(|error| PluginError::Load(error.to_string()))?;
                 ComPtr::from_raw(get()).ok_or_else(|| PluginError::Load("null factory".into()))?
             };
-            Ok(Self {
-                factory: Some(factory),
-                library,
-                exit,
-            })
+            module.factory = Some(factory);
+            let inner = std::sync::Arc::new(module);
+            cache.retain(|_, module| module.strong_count() > 0);
+            cache.insert(binary, std::sync::Arc::downgrade(&inner));
+            Ok(Self { inner })
         }
     }
     pub fn descriptors(&self) -> Vec<PluginDescriptor> {
@@ -167,10 +206,8 @@ impl Vst3Module {
                 .collect()
         }
     }
-    pub fn create(&self, _id: &str) -> Result<Box<dyn InstanceBackend>, PluginError> {
-        Err(PluginError::Unsupported(
-            "VST3 audio hosting (not implemented)",
-        ))
+    pub fn create(&self, id: &str) -> Result<Box<dyn InstanceBackend>, PluginError> {
+        Ok(Box::new(instance::VstInstance::new(self.clone(), id)?))
     }
     fn object<T: Interface>(&self, cid: &TUID) -> Result<ComPtr<T>, PluginError> {
         let mut raw = ptr::null_mut();
@@ -282,6 +319,13 @@ impl Vst3Module {
     }
 }
 struct Initialized<T: Interface + vst3::com_scrape_types::Inherits<IPluginBase>>(ComPtr<T>);
+impl<T: Interface + vst3::com_scrape_types::Inherits<IPluginBase>> Initialized<T> {
+    fn into_inner(self) -> ComPtr<T> {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: move the reference once, suppressing only terminate.
+        unsafe { std::ptr::read(&this.0) }
+    }
+}
 struct Connection(Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>);
 impl Connection {
     fn new(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) -> Self {
@@ -317,7 +361,7 @@ impl<T: Interface + vst3::com_scrape_types::Inherits<IPluginBase>> Drop for Init
         }
     }
 }
-impl Drop for Vst3Module {
+impl Drop for ModuleData {
     fn drop(&mut self) {
         drop(self.factory.take());
         // SAFETY: references are gone, export still loaded in `library`.

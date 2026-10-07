@@ -18,9 +18,10 @@
 //!    processor in the operations the engine already uses for the built-in
 //!    effects and instruments.
 //!
-//! CLAP effects and instruments are hosted. VST3 files are scanned on
-//! Windows and Linux. VST3 audio hosting is not implemented; the reserved
-//! `vst3-hosting` feature does not enable it. `docs/plugins/host-evaluation.md`
+//! CLAP and VST3 effects and instruments are hosted. VST3 module loading
+//! supports Windows and Linux; Windows audio and native editors have been
+//! exercised here. VST3 state operations require returning the processor
+//! before saving or restoring. `docs/plugins/host-evaluation.md`
 //! says what each format can do today and why the libraries underneath
 //! were chosen.
 //!

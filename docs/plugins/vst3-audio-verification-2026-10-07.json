@@ -1,0 +1,57 @@
+{
+  "plugins": [
+    {
+      "frames": 65536,
+      "health": "PluginHealth { failed: false, overruns: 0, worst_overrun_micros: 0, scrubbed_samples: 0, dropped_events: 0 }",
+      "id": "ABCDEF019182FAEB566D624153675854",
+      "instrument": true,
+      "latency": 0,
+      "name": "Surge XT",
+      "nonzeroSamples": 130884,
+      "parameters": 2855,
+      "peak": 0.26794084906578064,
+      "readableParameters": 2855,
+      "rms": 0.08771022656834644,
+      "stateAfterBytes": 60317,
+      "stateBytes": 60317,
+      "tail": 96000
+    },
+    {
+      "frames": 65536,
+      "health": "PluginHealth { failed: false, overruns: 0, worst_overrun_micros: 0, scrubbed_samples: 0, dropped_events: 0 }",
+      "id": "ABCDEF019182FAEB566D624153465854",
+      "instrument": false,
+      "latency": 0,
+      "name": "Surge XT Effects",
+      "nonzeroSamples": 131070,
+      "parameters": 62,
+      "peak": 0.1064249724149704,
+      "readableParameters": 62,
+      "rms": 0.0606800767948759,
+      "stateAfterBytes": 1165,
+      "stateBytes": 1165,
+      "tail": 96000
+    },
+    {
+      "frames": 65536,
+      "health": "PluginHealth { failed: false, overruns: 0, worst_overrun_micros: 0, scrubbed_samples: 0, dropped_events: 0 }",
+      "id": "ABCDEF019182FAEB535354784F425846",
+      "instrument": true,
+      "latency": 0,
+      "name": "OB-Xf",
+      "nonzeroSamples": 99064,
+      "parameters": 2183,
+      "peak": 0.13569006323814392,
+      "readableParameters": 2183,
+      "rms": 0.053330537039072944,
+      "stateAfterBytes": 2389,
+      "stateBytes": 2389,
+      "tail": 0
+    }
+  ],
+  "audioDeviceOpened": false,
+  "date": "2026-10-07",
+  "sampleRate": 48000,
+  "maxBlock": 512,
+  "platform": "Windows x64 MSVC"
+}
