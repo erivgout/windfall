@@ -365,7 +365,8 @@ impl Session {
         decoded: Decoded,
     ) -> Result<DocumentSnapshot, Refusal> {
         drop(self.recording_idle().map_err(|_| Refusal::Recording)?);
-        let prepared = windfall_engine::Controller::prepare_project(document.project(), &decoded.pool);
+        let prepared =
+            windfall_engine::Controller::prepare_project(document.project(), &decoded.pool);
         let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
         let mut state = self.state();
         if state.replacements != ticket.request || state.generation != ticket.generation {

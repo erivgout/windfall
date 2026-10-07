@@ -4,6 +4,7 @@ use windfall_ipc::ClipTempoCandidate;
 use windfall_project::{Command, DispatchResult, SampleId};
 impl Session {
     pub fn prepare_clip_command(&self, command: Command) -> Result<DispatchResult, String> {
+        drop(self.recording_idle()?);
         let mut targets = Vec::new();
         clip_targets(&command, &mut targets)?;
         let (mut document, pool, generation, edits) = {
@@ -40,6 +41,7 @@ impl Session {
         let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool);
         #[cfg(test)]
         self.pause("clip:prepared");
+        let _recording = self.recording_idle()?;
         let mut state = self.state();
         if state.generation != generation || state.edits != edits {
             return Err(
