@@ -104,7 +104,7 @@ impl Session {
     /// Undoes or redoes until `cursor` history entries are applied.
     pub fn history_jump(&self, cursor: u32) -> ProjectPatch {
         self.prepare_history(HistoryMove::Jump(cursor))
-            .unwrap_or_else(|| self.state().document.patch(&Touched::default()))
+            .unwrap_or_else(|| self.state().document.unchanged_patch())
     }
 
     /// Builds the patch for a change that was just made, hands the changed

@@ -75,6 +75,7 @@ fn spectral_command(id: ClipId) -> Command {
 }
 fn assert_document_preserved(rig: &Rig, before: &windfall_project::DocumentSnapshot) {
     let after = rig.session.document_snapshot();
+    assert_eq!(after.revision, before.revision);
     assert_eq!(after.project, before.project);
     assert_eq!(after.history, before.history);
     assert_eq!(after.dirty, before.dirty);

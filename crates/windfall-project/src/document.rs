@@ -272,6 +272,15 @@ impl Document {
     /// `relink_sample` returns.
     pub fn patch(&mut self, touched: &Touched) -> ProjectPatch {
         self.revision += 1;
+        self.patch_contents(touched)
+    }
+
+    /// A read-only response for a refused operation, at the current revision.
+    pub fn unchanged_patch(&self) -> ProjectPatch {
+        self.patch_contents(&Touched::default())
+    }
+
+    fn patch_contents(&self, touched: &Touched) -> ProjectPatch {
         let project = &self.project;
         ProjectPatch {
             revision: self.revision,
