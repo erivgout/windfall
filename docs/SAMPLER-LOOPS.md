@@ -104,6 +104,12 @@ hardware listening, installed native shell, or non-Windows OS verification is
 claimed. Final combined bindings/WASM regeneration belongs to integration;
 branch-local generated artifacts are excluded from this feature commit.
 
+Integration with the CI portability changes passed the full Windows Rust
+workspace suite (1,597 tests, eight intentional ignores), strict workspace
+Clippy, and all 2,102 UI tests across 129 files. Lint, production build,
+parity checks and WASM freshness checks also passed. The parent regenerated
+140 binding files and the 1,582,632-byte browser document before these checks.
+
 ## Remaining sampler stretch gap
 
 Sampler pitch remains tape-style resampling: transposing a note changes its

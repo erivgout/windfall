@@ -10,6 +10,8 @@ Windfall is not affiliated with Image-Line. It contains no FL Studio code, sampl
 
 Audio export supports WAV, FLAC, OGG and MP3, with mixer stems and cancellation. Desktop workflows include MIDI import/export, reviewed FL Studio project conversion with retained unsupported sound data, and independent playlist time-stretch and pitch controls.
 
+Channel samplers support forward and ping-pong loops with editable points, note release, undo and saved project settings. Playback and export share the same loop processing. Independent sampler time-stretch remains unfinished. See `docs/SAMPLER-LOOPS.md`.
+
 The Windows app hosts CLAP instruments and effects with a plugin manager, parameter automation, native editors and saved state. Its VST3 backend processes audio and supports Windows editors, while desktop VST3 addition remains gated on active state capture. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md`.
 
 Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.

@@ -123,6 +123,7 @@ export type { SampleAsset } from "./SampleAsset";
 export type { SampleId } from "./SampleId";
 export type { SampleInfo } from "./SampleInfo";
 export type { SamplePath } from "./SamplePath";
+export type { SamplerLoopMode } from "./SamplerLoopMode";
 export type { SamplerPatch } from "./SamplerPatch";
 export type { SamplerSettings } from "./SamplerSettings";
 export type { Send } from "./Send";

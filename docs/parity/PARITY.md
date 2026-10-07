@@ -14,19 +14,19 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**60 of 342 rows accounted for (17.5%).** A row is accounted for when it is done or won't do.
+**61 of 342 rows accounted for (17.8%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 254 |
+| Todo | 253 |
 | In progress | 28 |
-| Done | 58 |
+| Done | 59 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 15 | 5 | 2 | 1 |
-| Main windows | 113 | 67 | 13 | 32 | 1 |
+| Main windows | 113 | 66 | 13 | 33 | 1 |
 | Instruments | 41 | 39 | 1 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -37,7 +37,7 @@ As of 2026-10-07. Sources:
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
+| 1. Make a beat | 39 | 9 | 7 | 21 | 2 |
 | 2. Write a song | 99 | 60 | 13 | 26 | 0 |
 | 3. Record and edit audio | 34 | 21 | 2 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
@@ -88,7 +88,7 @@ As of 2026-10-07. Sources:
 | Channel button menu (clone, replace, insert, delete, rename, color) | Channel menu | 1 | done |  |
 | Fill each N steps and Advanced Fill tool | Step fill tools | 1 | in-progress | Fill every 2, 4 or 8 steps and shift left or right. No advanced fill tool yet. |
 | Cut and Cut-by groups | Cut groups | 1 | done |  |
-| Channel sampler: loop points and ping-pong loop | Sample looping | 1 | todo |  |
+| Channel sampler: loop points and ping-pong loop | Sample looping | 1 | done | Persisted forward and ping-pong loops with inspector points relative to the trimmed sample, reverse-aware bounds, fractional boundary interpolation and note release. Undo/save/load, playback/export parity and zero callback allocations are tested. No hardware audio verification; details and limits are in docs/SAMPLER-LOOPS.md. |
 | Channel sampler: precomputed effects | Sample pre-processing | 1 | todo |  |
 | Mini piano roll preview | Note preview in rack | 2 | todo |  |
 | Send to Piano roll | Steps to notes | 2 | todo |  |
@@ -97,7 +97,7 @@ As of 2026-10-07. Sources:
 | Channel settings: echo delay | Note echo | 2 | todo |  |
 | Channel settings: polyphony and portamento | Channel polyphony and glide | 2 | todo |  |
 | Channel settings: gate, shift and swing mix | Channel note timing | 2 | todo |  |
-| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sound and scheduling limits are documented in crates/windfall-stretch/VALIDATION.md. |
+| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sampler loops still use tape-style pitch resampling. A bounded policy for prepared note-key variants and loop/release boundaries is needed; see docs/SAMPLER-LOOPS.md and crates/windfall-stretch/VALIDATION.md. |
 | Layer channel (Fruity Layer) | Layer channel | 5 | todo | Listed in the manual's plugin index, not on the compare page. The manual points to the modular rack as the more flexible alternative. |
 | Piano roll: Draw tool | Piano roll draw tool | 2 | done |  |
 | Piano roll: Paint tool and drum sequencer mode | Piano roll paint tool | 2 | in-progress | Paint tool is in. No drum sequencer mode yet. |
@@ -216,7 +216,7 @@ As of 2026-10-07. Sources:
 | BassDrum | TBD | 5 | todo |  |
 | BeepMap | TBD | 5 | todo |  |
 | BooBass | TBD | 5 | todo |  |
-| Channel Sampler | TBD | 1 | in-progress | The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups. No loop points, filter or time-stretch yet. |
+| Channel Sampler | TBD | 1 | in-progress | The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Filter and independent sampler time-stretch remain unfinished; see docs/SAMPLER-LOOPS.md. |
 | DirectWave Player | TBD | 5 | todo |  |
 | Drumpad | TBD | 5 | todo |  |
 | FLEX | TBD | 5 | todo | Its preset packs are Image-Line content; a Windfall equivalent needs its own. Candidate basis: Vital or Surge XT (GPL-3.0). |

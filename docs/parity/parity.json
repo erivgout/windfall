@@ -421,10 +421,10 @@
       "summary": "Loops a sample between its loop points, forwards or back and forth.",
       "windfall_name": "Sample looping",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Persisted forward and ping-pong loops with inspector points relative to the trimmed sample, reverse-aware bounds, fractional boundary interpolation and note release. Undo/save/load, playback/export parity and zero callback allocations are tested. No hardware audio verification; details and limits are in docs/SAMPLER-LOOPS.md."
     },
     {
       "id": "win-rack-sampler-precomputed",
@@ -532,7 +532,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sound and scheduling limits are documented in crates/windfall-stretch/VALIDATION.md."
+      "notes": "windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sampler loops still use tape-style pitch resampling. A bounded policy for prepared note-key variants and loop/release boundaries is needed; see docs/SAMPLER-LOOPS.md and crates/windfall-stretch/VALIDATION.md."
     },
     {
       "id": "win-rack-layer-channel",
@@ -1900,7 +1900,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups. No loop points, filter or time-stretch yet."
+      "notes": "The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Filter and independent sampler time-stretch remain unfinished; see docs/SAMPLER-LOOPS.md."
     },
     {
       "id": "inst-directwave-player",
