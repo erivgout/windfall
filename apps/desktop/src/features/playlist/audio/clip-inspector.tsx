@@ -45,6 +45,7 @@ import { AudioEditorButton } from "@/features/audio-editor"
 import { usePlaylistStore } from "../store"
 import { describeFade, speedOf, ticksPerSecond } from "./geometry"
 import { ClipProcessingControls } from "./processing-controls"
+import { SliceControls } from "@/features/slicer"
 import { patchSelectedAudioClips, routeSelectionToNewTrack } from "./ops"
 
 type AudioContent = Extract<ClipContent, { type: "audio" }>
@@ -312,6 +313,7 @@ function Settings({ clips }: { clips: AudioClip[] }) {
         </Labelled>
       )}
       <ClipProcessingControls clips={clips} />
+      <SliceControls clips={clips} />
       <ToggleLed
         size="sm"
         pressed={clips.every((clip) => clip.content.reverse)}

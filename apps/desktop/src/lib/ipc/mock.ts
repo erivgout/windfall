@@ -46,6 +46,7 @@ import { demoProject, starterProject } from "./sim/project"
 import { TransportSim } from "./sim/transport"
 import { createMidiMock, type MockMidiOptions } from "./sim/midi"
 import { createMidiHardwareMock } from "./sim/midi-hardware"
+import { createSlicerMock, type SlicerMockOptions } from "./sim/slicer"
 
 /** Stand-ins for the native file dialogs. Each resolves to null on cancel. */
 export type MockDialogs = {
@@ -57,15 +58,16 @@ export type MockDialogs = {
   audioFile(): Promise<string | null>
 }
 
-export type MockOptions = MockMidiOptions & {
-  /** Original FL bytes supplied by tests, or selected with the browser picker. */
-  flpFiles?: Record<string, Uint8Array>
-  /** Where "saved" projects live. Pass null to keep them in memory only. */
-  storage?: Pick<Storage, "getItem" | "setItem"> | null
-  dialogs?: MockDialogs
-  /** The project to start with. Defaults to the demo beat. */
-  project?: Project
-}
+export type MockOptions = MockMidiOptions &
+  SlicerMockOptions & {
+    /** Original FL bytes supplied by tests, or selected with the browser picker. */
+    flpFiles?: Record<string, Uint8Array>
+    /** Where "saved" projects live. Pass null to keep them in memory only. */
+    storage?: Pick<Storage, "getItem" | "setItem"> | null
+    dialogs?: MockDialogs
+    /** The project to start with. Defaults to the demo beat. */
+    project?: Project
+  }
 
 /** A backend that lives in the page, and what tidies it up. */
 export type MockBackend = Backend & {
@@ -574,6 +576,16 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   return {
     kind: "mock",
     ...createMidiHardwareMock(),
+    ...createSlicerMock(
+      options,
+      () => doc,
+      dispatchNow,
+      (id) => {
+        const asset = doc.project().samples.find((s) => s.id === id)
+        if (!asset) throw new Error("The clip's source no longer exists.")
+        return sampleInfoFor(roots, sampleFile(asset))
+      }
+    ),
     ...createMidiMock(options, () => doc, publish, dialogs.exportPath),
     pluginsState: async () => ({
       folders: [],

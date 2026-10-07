@@ -6,6 +6,8 @@ import { defineConfig } from "vite"
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // The slicer worker initializes its own WASM with top-level await.
+  worker: { format: "es" },
   resolve: {
     alias: {
       "@": resolve(import.meta.dirname, "./src"),

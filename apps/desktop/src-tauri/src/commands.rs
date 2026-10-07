@@ -22,6 +22,29 @@ use windfall_project::{
 use crate::session::{ClipPlace, Session};
 use windfall_ipc::{MidiExportOptions, MidiImportOptions, MidiImportPreview};
 
+#[tauri::command]
+async fn slice_analyze(
+    session: State<'_, Session>,
+    clip: windfall_project::ClipId,
+    options: windfall_ipc::SliceOptions,
+) -> Result<windfall_ipc::SliceReview, String> {
+    let session = session.inner().clone();
+    blocking(move || session.slice_analyze(clip, options)).await
+}
+#[tauri::command]
+async fn slice_apply(
+    session: State<'_, Session>,
+    token: u32,
+    markers: Vec<u32>,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.slice_apply(token, markers)).await
+}
+#[tauri::command]
+fn slice_discard(session: State<'_, Session>, token: u32) {
+    session.slice_discard(token);
+}
+
 /// Runs slow work off the async runtime's own threads.
 async fn blocking<T, F>(work: F) -> Result<T, String>
 where
@@ -527,6 +550,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         audio_editor_open,
         audio_editor_apply,
         audio_editor_discard,
+        slice_analyze,
+        slice_apply,
+        slice_discard,
         samples_reload,
         add_channel_from_file,
         set_channel_sample_from_file,

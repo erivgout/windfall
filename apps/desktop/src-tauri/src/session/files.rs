@@ -423,6 +423,8 @@ impl Session {
             replacements: state.replacements,
             midi_import: None,
             midi_ticket: state.midi_ticket,
+            slice_review: None,
+            slice_ticket: state.slice_ticket,
         };
         controller.set_prepared_project(state.document.project(), prepared);
         if let Some(staged) = staged {

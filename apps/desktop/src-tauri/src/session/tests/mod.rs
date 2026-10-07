@@ -22,6 +22,7 @@ mod plugin_update;
 #[cfg(windows)]
 mod plugins;
 mod recording;
+mod slicer;
 mod song;
 
 use std::collections::HashMap;
