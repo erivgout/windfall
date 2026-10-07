@@ -6,7 +6,7 @@ use crate::descriptor::{
 use crate::error::PluginError;
 use crate::instance::InstanceBackend;
 use libloading::Library;
-use std::ffi::{c_char, c_void};
+use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
 use vst3::Steinberg::Vst::*;
@@ -17,7 +17,7 @@ pub(crate) struct Vst3Module {
     library: Library,
     exit: Option<unsafe extern "system" fn() -> bool>,
 }
-fn text(bytes: &[c_char]) -> String {
+fn text(bytes: &[char8]) -> String {
     let bytes: Vec<u8> = bytes
         .iter()
         .take_while(|&&b| b != 0)
@@ -40,7 +40,7 @@ fn parse_id(id: &str) -> Option<TUID> {
     }
     let mut cid = [0; 16];
     for (i, byte) in cid.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&id[i * 2..i * 2 + 2], 16).ok()? as c_char;
+        *byte = u8::from_str_radix(&id[i * 2..i * 2 + 2], 16).ok()? as char8;
     }
     canonical_order(&mut cid);
     Some(cid)
@@ -53,17 +53,21 @@ fn canonical_order(cid: &mut TUID) {
     }
 }
 impl Vst3Module {
-    pub fn load(path: &Path) -> Result<Self, PluginError> {
+    pub fn load(_path: &Path) -> Result<Self, PluginError> {
         #[cfg(target_os = "macos")]
         return Err(PluginError::Unsupported("VST3 bundle entry on macOS"));
         #[cfg(not(target_os = "macos"))]
         {
+            let path = _path;
             let binary = crate::paths::vst3_binary(path)
                 .ok_or_else(|| PluginError::Load("no VST3 binary for this architecture".into()))?;
             // SAFETY: loading runs plugin code. The scanner isolates crashes.
             let library = unsafe { Library::new(binary) }
                 .map_err(|error| PluginError::Load(error.to_string()))?;
+            #[cfg(not(target_os = "linux"))]
             let mut exit = None;
+            #[cfg(target_os = "linux")]
+            let exit;
             #[cfg(windows)]
             // SAFETY: SDK module exports have these signatures.
             unsafe {
