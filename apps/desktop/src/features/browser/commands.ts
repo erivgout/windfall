@@ -13,6 +13,7 @@ import { attempt, reportError } from "@/lib/errors"
 import { openProjectPath } from "@/lib/flows/project"
 import { backend } from "@/lib/ipc"
 import { receivePatch, useProjectStore } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
 import { useUiStore } from "@/lib/store/ui"
 
 import {
@@ -35,7 +36,12 @@ import {
   type Selection,
 } from "./store"
 import { rowId, type EntryRow } from "./tree-model"
-import { refreshLibrary, useLibraryStore } from "./library-store"
+import {
+  invalidateLibrary,
+  refreshLibrary,
+  useLibraryStore,
+} from "./library-store"
+import { captureFile, fileRequestCurrent, resolveFile } from "./file-token"
 
 const get = useBrowserStore.getState
 const set = useBrowserStore.setState
@@ -88,30 +94,33 @@ function applyResult(result: DispatchResult) {
   receivePatch(result.patch)
 }
 
-async function libraryToken(path: string, browser?: LibraryFileToken) {
-  const selected = get().selected
-  return (
-    browser ??
-    (selected?.path === path ? selected.library : undefined) ??
-    backend.libraryFile(path)
-  )
-}
-
 /** Adds a new channel that plays the file, and selects it in the rack. */
 export async function addToRack(
   path: string,
   browser?: LibraryFileToken
 ): Promise<void> {
+  const generation = getProjectGeneration()
+  const file = captureFile(path, browser)
   const token = await attempt(
-    libraryToken(path, browser),
+    resolveFile(file),
     "Could not find the library file"
   )
-  if (!token) return
+  if (
+    !token ||
+    generation !== getProjectGeneration() ||
+    !fileRequestCurrent(file)
+  )
+    return
   const result = await attempt(
     backend.addChannelFromFile(path, undefined, token),
     "Could not add the sound"
   )
-  if (!result) return
+  if (
+    !result ||
+    generation !== getProjectGeneration() ||
+    !fileRequestCurrent(file)
+  )
+    return
   applyResult(result)
   const channels = useProjectStore.getState().project.channels
   const created = result.created.find((id) =>
@@ -131,13 +140,30 @@ export async function addToPlaylist(
   path: string,
   browser?: LibraryFileToken
 ): Promise<void> {
+  const generation = getProjectGeneration()
+  const file = captureFile(path, browser)
   const token = await attempt(
-    libraryToken(path, browser),
+    resolveFile(file),
     "Could not find the library file"
   )
-  if (!token) return
-  const clip = await addAudioFile(path, { start: songTick() }, token)
-  if (clip !== null) revealClip(clip)
+  if (
+    !token ||
+    generation !== getProjectGeneration() ||
+    !fileRequestCurrent(file)
+  )
+    return
+  const clip = await addAudioFile(
+    path,
+    { start: songTick() },
+    token,
+    () => generation === getProjectGeneration() && fileRequestCurrent(file)
+  )
+  if (
+    clip !== null &&
+    generation === getProjectGeneration() &&
+    fileRequestCurrent(file)
+  )
+    revealClip(clip)
 }
 
 /** Makes the channel selected in the rack play the file instead. */
@@ -145,18 +171,30 @@ export async function replaceChannelSample(
   path: string,
   browser?: LibraryFileToken
 ): Promise<void> {
+  const generation = getProjectGeneration()
+  const file = captureFile(path, browser)
   const channel = selectedChannel()
   if (!channel) return
   const token = await attempt(
-    libraryToken(path, browser),
+    resolveFile(file),
     "Could not find the library file"
   )
-  if (!token) return
+  if (
+    !token ||
+    generation !== getProjectGeneration() ||
+    !fileRequestCurrent(file)
+  )
+    return
   const result = await attempt(
     backend.setChannelSampleFromFile(channel.id, path, token),
     `Could not replace the sample of ${channel.name}`
   )
-  if (result) applyResult(result)
+  if (
+    result &&
+    generation === getProjectGeneration() &&
+    fileRequestCurrent(file)
+  )
+    applyResult(result)
 }
 
 /** What Enter and a double-click do. Folders open on a single click instead. */
@@ -204,6 +242,7 @@ export async function addFolder(): Promise<void> {
 
   let roots: BrowserRoot[]
   try {
+    invalidateLibrary()
     roots = await backend.browserAddRoot(path)
   } catch (error) {
     reportError(error, "Could not add the folder")
@@ -240,6 +279,7 @@ export async function addFolder(): Promise<void> {
 export async function removeRoot(root: BrowserRoot): Promise<void> {
   if (root.kind === "factory") return
   try {
+    invalidateLibrary()
     applyRoots(await backend.browserRemoveRoot(root.path))
     if (get().selected === null) {
       clearInfo()

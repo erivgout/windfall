@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use windfall_core::AudioBuffer;
+use windfall_core::{AudioBuffer, AudioIdentity};
 use windfall_ipc::SampleInfo;
 
 use crate::paths;
@@ -73,6 +73,9 @@ pub struct SampleCache {
 struct Inner {
     /// Least recently used first.
     decoded: Vec<(FileKey, AudioBuffer)>,
+    /// Provenance survives LRU eviction while a project/worker still holds audio.
+    /// Weak identities retain metadata only, and are pruned on the next decode.
+    sources: HashMap<AudioIdentity, FileKey>,
     infos: HashMap<FileKey, SampleInfo>,
     /// Keys of `infos`, oldest first.
     info_order: Vec<FileKey>,
@@ -88,6 +91,8 @@ impl Inner {
     }
 
     fn insert(&mut self, key: FileKey, buffer: AudioBuffer) {
+        self.sources.retain(|identity, _| identity.is_live());
+        self.sources.insert(buffer.identity(), key.clone());
         // An older version of the file is of no use once it has changed.
         self.decoded.retain(|(held, _)| held.path != key.path);
         self.decoded.push((key, buffer));
@@ -108,6 +113,23 @@ impl Inner {
 impl SampleCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Compares live decoded sources without filesystem work or audio copies.
+    /// A separate decode after cache eviction may still represent the same file
+    /// version. Unknown provenance is never assumed to be the current version.
+    pub fn same_file_version(&self, a: &AudioBuffer, b: &AudioBuffer) -> bool {
+        let a = a.identity();
+        let b = b.identity();
+        if a == b {
+            return true;
+        }
+        let inner = lock(&self.inner);
+        inner
+            .sources
+            .get(&a)
+            .zip(inner.sources.get(&b))
+            .is_some_and(|(a, b)| a == b)
     }
 
     /// Decodes the file at `path`, or returns the audio decoded earlier if
@@ -178,6 +200,39 @@ mod tests {
     fn write_tone(path: &Path, frames: usize, level: f32) {
         let buffer = AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]);
         write_wav(path, &buffer, WavSampleFormat::Float32).unwrap();
+    }
+
+    #[test]
+    fn live_source_versions_survive_eviction_but_do_not_retain_audio() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("tone.wav");
+        write_tone(&file, 100, 0.25);
+        let cache = SampleCache::new();
+        let first = cache.decode(&file).unwrap();
+        let identity = first.identity();
+        for i in 0..MAX_FILES {
+            let other = folder.path().join(format!("{i}.wav"));
+            write_tone(&other, 100, 0.25);
+            cache.decode(&other).unwrap();
+        }
+        assert!(cache.peek(&file).is_none());
+        let again = cache.decode(&file).unwrap();
+        assert_ne!(identity, again.identity());
+        assert!(cache.same_file_version(&first, &again));
+        write_tone(&file, 200, 0.75);
+        let changed = cache.decode(&file).unwrap();
+        assert!(!cache.same_file_version(&first, &changed));
+        assert!(!cache.same_file_version(
+            &AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 100]),
+            &changed
+        ));
+        drop(first);
+        assert!(!identity.is_live());
+        // Another new decode prunes expired source metadata.
+        let other = folder.path().join("last.wav");
+        write_tone(&other, 100, 0.25);
+        cache.decode(&other).unwrap();
+        assert!(!lock(&cache.inner).sources.contains_key(&identity));
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //! gain units. Nothing here allocates on a hot path or depends on the project
 //! model.
 
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Weak};
 
 /// Ticks per quarter note. It is a multiple of 96 (the FL Studio default) and
 /// 480 (the usual MIDI file resolution), so both import without rounding.
@@ -23,7 +24,34 @@ pub struct AudioBuffer {
     data: Arc<Vec<f32>>,
 }
 
+/// Stable identity of a decoded allocation, without retaining its audio.
+/// Clones of a buffer share it; even two empty buffers have distinct identities.
+#[derive(Debug, Clone)]
+pub struct AudioIdentity(Weak<Vec<f32>>);
+
+impl AudioIdentity {
+    pub fn is_live(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+}
+
+impl PartialEq for AudioIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for AudioIdentity {}
+impl Hash for AudioIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
+}
+
 impl AudioBuffer {
+    pub fn identity(&self) -> AudioIdentity {
+        AudioIdentity(Arc::downgrade(&self.data))
+    }
+
     /// Wraps interleaved samples. `data.len()` must be a multiple of
     /// `channels`, and `channels` must be at least 1.
     pub fn from_interleaved(sample_rate: u32, channels: u16, data: Vec<f32>) -> Self {
@@ -115,6 +143,20 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_identity_is_shared_by_clones_and_does_not_retain_audio() {
+        let first = AudioBuffer::from_interleaved(48_000, 1, Vec::new());
+        let clone = first.clone();
+        let other = AudioBuffer::from_interleaved(48_000, 1, Vec::new());
+        let identity = first.identity();
+        assert_eq!(identity, clone.identity());
+        assert_ne!(identity, other.identity());
+        drop(first);
+        assert!(identity.is_live());
+        drop(clone);
+        assert!(!identity.is_live());
+    }
 
     #[test]
     fn mono_frames_duplicate_to_stereo() {
