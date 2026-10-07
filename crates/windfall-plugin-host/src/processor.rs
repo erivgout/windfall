@@ -183,8 +183,19 @@ impl PluginProcessor {
         }
     }
 
-    pub(crate) fn into_backend(self) -> Box<dyn ProcessorBackend> {
-        self.backend
+    /// Owner-thread retirement preserves edits that have not reached a block.
+    /// Notes belong to the abandoned audio timeline and are deliberately omitted.
+    pub(crate) fn into_backend(mut self) -> (Box<dyn ProcessorBackend>, Vec<HostEvent>) {
+        for _ in 0..crate::instance::QUEUE_CAPACITY {
+            let Ok(event) = self.from_main.pop() else {
+                break;
+            };
+            self.pending.push(event);
+        }
+        self.pending.sort_by_key(HostEvent::time);
+        self.pending
+            .retain(|event| matches!(event, HostEvent::Param { .. }));
+        (self.backend, self.pending)
     }
 
     pub(crate) fn shared(&self) -> &Arc<ProcessorShared> {

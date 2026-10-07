@@ -263,12 +263,31 @@ impl Session {
     fn capture_plugins(
         &self,
         project: windfall_project::Project,
+        revision: Option<u64>,
+    ) -> Result<windfall_project::Project, String> {
+        let _recording = self.recording_idle()?;
+        self.capture_plugins_idle(project, revision)
+    }
+    /// The caller already owns recording exclusion (recording -> state order).
+    fn capture_plugins_idle(
+        &self,
+        project: windfall_project::Project,
+        revision: Option<u64>,
     ) -> Result<windfall_project::Project, String> {
         let manager = lock(&self.inner.plugins).clone();
         match manager {
-            Some(manager) => manager.runtime.capture(project),
+            Some(manager) => match revision {
+                Some(revision) => manager.runtime.capture_at(project, revision),
+                None => Ok(project),
+            },
             None => Ok(project),
         }
+    }
+    /// Read alongside the document snapshot, before releasing the state lock.
+    fn plugin_revision(&self) -> Option<u64> {
+        lock(&self.inner.plugins)
+            .as_ref()
+            .map(|manager| manager.runtime.document_revision())
     }
     /// Starts a session on the default project and hands it to the engine.
     ///

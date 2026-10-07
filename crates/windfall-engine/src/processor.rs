@@ -129,6 +129,7 @@ impl Processor {
     /// The audio does not depend on how the output is divided into calls,
     /// only on which frame each request arrives at.
     pub fn process(&mut self, out: &mut [f32]) {
+        self.plugin_control_boundary();
         self.voices.sweep(&self.plan, &mut self.garbage);
         self.clips.sweep(&self.plan, &mut self.garbage);
         self.handle_messages();
@@ -576,8 +577,22 @@ impl Processor {
         }
     }
 
+    fn plugin_control_boundary(&mut self) {
+        for chain in &mut self.state.chains {
+            for unit in chain.iter_mut().flatten() {
+                unit.plugin_control_boundary();
+            }
+        }
+        for seat in self.state.instruments.iter_mut().flatten() {
+            if let Some(unit) = &mut seat.unit {
+                unit.plugin_control_boundary();
+            }
+        }
+    }
+
     /// Processes up to [`MAX_BLOCK`] frames.
     fn process_block(&mut self, out: &mut [Frame]) {
+        self.plugin_control_boundary();
         let tick = self.sequencer.tick(&self.plan, self.frame);
         let warped = self
             .plan

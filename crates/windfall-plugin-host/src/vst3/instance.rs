@@ -535,6 +535,7 @@ impl InstanceBackend for VstInstance {
         let Ok(mut processor) = processor.into_any().downcast::<VstProcessor>() else {
             return;
         };
+        processor.retain_pending_edits();
         processor.stop();
         drop(processor);
         // SAFETY: audio ownership returned; component lifecycle on main thread.

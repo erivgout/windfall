@@ -314,12 +314,17 @@ impl PluginInstance {
         if !Arc::ptr_eq(&active.shared, processor.shared()) {
             return;
         }
-        self.backend.deactivate(Some(processor.into_backend()));
+        let (backend, pending) = processor.into_backend();
+        self.backend.deactivate(Some(backend));
         if let Some(mut active) = self.active.take() {
             while let Ok(event) = active.from_audio.pop() {
                 self.left_over.push(event.into());
             }
         }
+        // Inactive owner-thread flush, after the audio half has returned and
+        // native processing has stopped. No callback allocation is introduced.
+        self.backend
+            .flush_params(&pending, &mut |event| self.left_over.push(event.into()));
     }
 
     /// Samples by which the plugin's output lags its input. Plugins report

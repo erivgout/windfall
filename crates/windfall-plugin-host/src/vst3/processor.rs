@@ -109,6 +109,21 @@ pub(super) struct VstProcessor {
 // Changes shares arenas only between queues of this same exclusive owner.
 unsafe impl Send for VstProcessor {}
 impl VstProcessor {
+    /// The native owner calls this only after exclusive audio ownership returns.
+    /// Preserve editor points still queued for process as deferred state overrides.
+    pub(super) fn retain_pending_edits(&mut self) {
+        for _ in 0..crate::instance::QUEUE_CAPACITY {
+            let Ok((id, value)) = self.edits.pop() else {
+                break;
+            };
+            if let Some(v) = self.value(id)
+                && v.writable
+            {
+                v.set(value);
+                v.pending.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
     pub fn new(
         objects: Arc<Objects>,
         layout: &PluginLayout,

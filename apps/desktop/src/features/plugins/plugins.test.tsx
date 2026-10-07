@@ -171,6 +171,32 @@ it("adds an effect to the requested track and opens its actual inspector", async
   )
 })
 
+it("shows a scanned VST3 identity but refuses additions while state saving is gated", async () => {
+  const state = catalog()
+  state.entries = [
+    {
+      ...state.entries[0],
+      path: "/plugins/native.vst3",
+      format: "vst3",
+      usable: false,
+      error:
+        "VST3 loading is unavailable while safe desktop state saving is completed",
+    },
+  ]
+  vi.mocked(app.backend.pluginsState).mockResolvedValue(state)
+  act(() => openPluginManager())
+  render(<PluginManager />)
+  await screen.findByText("Native Synth · Fixture · VST3")
+  expect(screen.getByRole("button", { name: "Add instrument" })).toBeDisabled()
+  await userEvent.click(screen.getByRole("button", { name: "Add instrument" }))
+  expect(app.backend.pluginsAdd).not.toHaveBeenCalled()
+  expect(
+    screen.getByText(
+      /VST3 loading is unavailable while safe desktop state saving/
+    )
+  ).toBeVisible()
+})
+
 it("edits stable native IDs in their real range with undo and editor routing", async () => {
   await act(async () => {
     await dispatch({ type: "addPluginInstrument", plugin: binding() })

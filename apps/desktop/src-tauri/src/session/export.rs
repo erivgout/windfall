@@ -260,16 +260,17 @@ impl Session {
 
         // All three under one lock, so the pattern is one of this project's
         // and not of a project opened a moment later.
-        let (project, pool, pattern) = {
+        let (project, pool, pattern, plugin_revision) = {
             let state = self.state();
             (
                 state.document.project().clone(),
                 state.pool.clone(),
                 self.controller().transport().pattern,
+                self.plugin_revision(),
             )
         };
         // Native state capture runs on its owner after releasing the document lock.
-        let project = self.capture_plugins(project)?;
+        let project = self.capture_plugins_idle(project, plugin_revision)?;
         if options.mode == PlayMode::Song && project.playlist.clips.is_empty() {
             return Err("The playlist is empty, so there is no song to export.".to_owned());
         }

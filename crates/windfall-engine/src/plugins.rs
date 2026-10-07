@@ -16,6 +16,10 @@ pub struct PluginTransport {
 
 /// Prepared effects. Setup and destruction belong to the factory's owner thread.
 pub trait HostedEffect: Send {
+    /// Services an ownership exchange without processing sound. Called at
+    /// callback/block boundaries for stopped, bypassed and retiring slots too.
+    /// Must not allocate, lock, wait, deactivate or destroy native objects.
+    fn control_boundary(&mut self) {}
     fn transport(&mut self, _transport: PluginTransport) {}
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
     fn set_param(&mut self, id: u32, value: f32);
@@ -249,9 +253,11 @@ mod tests {
     #[derive(Debug, Default)]
     struct FixtureFactory {
         made: AtomicUsize,
+        boundaries: Arc<AtomicUsize>,
         latency: usize,
     }
     struct Fixture {
+        boundaries: Arc<AtomicUsize>,
         level: f32,
         held: bool,
         instrument: bool,
@@ -259,6 +265,9 @@ mod tests {
         cursor: usize,
     }
     impl HostedEffect for Fixture {
+        fn control_boundary(&mut self) {
+            self.boundaries.fetch_add(1, Ordering::Relaxed);
+        }
         fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
             for (left, right) in left.iter_mut().zip(right) {
                 if self.instrument {
@@ -312,6 +321,7 @@ mod tests {
         ) -> Result<Box<dyn HostedEffect>, String> {
             self.made.fetch_add(1, Ordering::Relaxed);
             Ok(Box::new(Fixture {
+                boundaries: self.boundaries.clone(),
                 level: 1.0,
                 held: false,
                 instrument: false,
@@ -327,6 +337,7 @@ mod tests {
         ) -> Result<Box<dyn HostedInstrument>, String> {
             self.made.fetch_add(1, Ordering::Relaxed);
             Ok(Box::new(Fixture {
+                boundaries: self.boundaries.clone(),
                 level: 1.0,
                 held: false,
                 instrument: true,
@@ -445,6 +456,89 @@ mod tests {
         };
         assert!((peak(&effected) / peak(&audio) - 0.5).abs() < 0.001);
     }
+    #[test]
+    fn stopped_and_empty_callbacks_service_plugin_control_without_allocating() {
+        let project = project();
+        let factory = Arc::new(FixtureFactory::default());
+        let mut pool = crate::SamplePool::new();
+        pool.set_plugin_factory(factory.clone());
+        let (mut processor, control) = crate::Processor::new(48_000);
+        control.set_project(&project, &pool);
+        processor.process(&mut [0.0; 128]);
+        let before = factory.boundaries.load(Ordering::Relaxed);
+        assert!(before > 0);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut [])),
+            0
+        );
+        assert_eq!(factory.boundaries.load(Ordering::Relaxed), before + 1);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut [0.0; 128])),
+            0
+        );
+        assert!(factory.boundaries.load(Ordering::Relaxed) > before + 1);
+    }
+
+    #[test]
+    fn bypassed_and_departing_effects_service_ownership_before_plan_replacement() {
+        let mut document = Document::new(Project::new("Bypassed ownership"));
+        document
+            .dispatch(
+                Command::AddPluginEffect {
+                    track: TrackId(0),
+                    plugin: binding(),
+                },
+                None,
+            )
+            .unwrap();
+        let effect = match document.project().plugins[0].target {
+            PluginTarget::Effect { effect } => effect,
+            _ => unreachable!(),
+        };
+        document
+            .dispatch(
+                Command::UpdateEffect {
+                    track: TrackId(0),
+                    effect,
+                    patch: EffectSlotPatch {
+                        enabled: Some(false),
+                        ..Default::default()
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        let factory = Arc::new(FixtureFactory::default());
+        let mut pool = crate::SamplePool::new();
+        pool.set_plugin_factory(factory.clone());
+        let (mut processor, control) = crate::Processor::new(48_000);
+        control.set_project(document.project(), &pool);
+        processor.process(&mut [0.0; 128]);
+        let before = factory.boundaries.load(Ordering::Relaxed);
+        assert!(
+            before > 0,
+            "a bypassed effect still services its ownership exchange"
+        );
+        document
+            .dispatch(
+                Command::RemoveEffect {
+                    track: TrackId(0),
+                    effect,
+                },
+                None,
+            )
+            .unwrap();
+        control.set_project(document.project(), &pool);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut [])),
+            0
+        );
+        assert!(
+            factory.boundaries.load(Ordering::Relaxed) > before,
+            "the old effect returns ownership before its plan can be retired"
+        );
+    }
+
     #[test]
     fn parameter_updates_reuse_instances_and_never_allocate_on_audio_thread() {
         let mut project = project();

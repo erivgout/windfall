@@ -203,7 +203,10 @@ impl PluginManager {
                 vendor: plugin.descriptor.vendor.clone(),
                 instrument: plugin.descriptor.kind == PluginKind::Instrument,
                 usable: plugin.is_usable() && plugin.descriptor.format == PluginFormat::Clap,
-                error: if plugin.descriptor.format == PluginFormat::Vst3 { Some("VST3 desktop integration is waiting for safe active-instance state capture".into()) } else { plugin.failure.as_ref().map(|failure| failure.message.clone()) },
+                error: plugin.failure.as_ref().map(|failure| failure.message.clone()).or_else(|| {
+                    (plugin.descriptor.format == PluginFormat::Vst3)
+                        .then(|| "VST3 loading is unavailable while safe desktop state saving is completed".into())
+                }),
             })
             .collect();
         state.blocked = catalog

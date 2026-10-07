@@ -207,7 +207,7 @@ impl Session {
         // never land on top of a newer one.
         let saving = lock(&self.inner.save);
         drop(self.recording_idle()?);
-        let (mut project, played, target, previous_dir, edits, generation) = {
+        let (mut project, played, target, previous_dir, edits, generation, plugin_revision) = {
             let state = self.state();
             let target = match chosen {
                 Some(target) => target,
@@ -220,11 +220,12 @@ impl Session {
                 state.sample_dir.clone(),
                 state.edits,
                 state.generation,
+                self.plugin_revision(),
             )
         };
         #[cfg(test)]
         self.pause("save:write");
-        project = self.capture_plugins(project)?;
+        project = self.capture_plugins(project, plugin_revision)?;
 
         // Where the file will look for its own samples when it is opened.
         let target_dir = file::sample_dir(&target);
@@ -301,20 +302,21 @@ impl Session {
     /// with the newer project in the file.
     pub fn write_backup(&self, timestamp: &str) -> Result<Option<PathBuf>, String> {
         let _saving = lock(&self.inner.save);
-        let (project, played, path) = {
+        let (project, played, path, plugin_revision) = {
             let state = self.state();
             match &state.path {
                 Some(path) if state.document.is_dirty() => (
                     state.document.project().clone(),
                     self.played(),
                     path.clone(),
+                    self.plugin_revision(),
                 ),
                 _ => return Ok(None),
             }
         };
         #[cfg(test)]
         self.pause("backup:write");
-        let project = self.capture_plugins(project)?;
+        let project = self.capture_plugins(project, plugin_revision)?;
         file::write_backup_with(
             &project,
             Some(&played),
