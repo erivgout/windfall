@@ -453,6 +453,11 @@ async fn plugin_editor(
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        midi_hardware_state,
+        midi_hardware_refresh,
+        midi_hardware_configure,
+        midi_hardware_target,
+        midi_hardware_panic,
         recording_inputs,
         recording_state,
         recording_start,
@@ -511,6 +516,39 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         plugins_add,
         plugin_editor,
     ]
+}
+
+#[tauri::command]
+fn midi_hardware_state(session: State<'_, Session>) -> windfall_ipc::MidiHardwareState {
+    session.midi_hardware_state()
+}
+#[tauri::command]
+async fn midi_hardware_refresh(
+    session: State<'_, Session>,
+) -> Result<windfall_ipc::MidiHardwareState, String> {
+    let session = session.inner().clone();
+    blocking(move || session.midi_hardware_refresh()).await
+}
+#[tauri::command]
+async fn midi_hardware_configure(
+    session: State<'_, Session>,
+    settings: windfall_ipc::MidiHardwareSettings,
+) -> Result<windfall_ipc::MidiHardwareState, String> {
+    let session = session.inner().clone();
+    blocking(move || session.midi_hardware_configure(settings)).await
+}
+#[tauri::command]
+fn midi_hardware_target(
+    session: State<'_, Session>,
+    channel: Option<ChannelId>,
+    generation: u64,
+    revision: u64,
+) -> Result<windfall_ipc::MidiHardwareState, String> {
+    session.midi_hardware_target(channel, generation, revision)
+}
+#[tauri::command]
+fn midi_hardware_panic(session: State<'_, Session>) {
+    session.midi_hardware_panic();
 }
 
 #[tauri::command]

@@ -380,6 +380,40 @@ mod tests {
         project
     }
     #[test]
+    fn hardware_hosted_fixture_notes_and_panic_do_not_allocate_or_replace_plugin_owners() {
+        let project = project();
+        let factory = Arc::new(FixtureFactory::default());
+        let mut pool = crate::SamplePool::new();
+        pool.set_plugin_factory(factory.clone());
+        let (mut processor, control) = crate::Processor::new(48_000);
+        control.set_project(&project, &pool);
+        let channel = project.channels[0].id;
+        let epoch = control.hardware_epoch();
+        assert!(control.hardware_note(epoch, channel, 60, 100));
+        let mut out = [0.0; 2048];
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert!(out.iter().any(|sample| *sample > 0.1));
+        assert!(control.hardware_note(epoch, channel, 60, 0));
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert!(out.iter().all(|sample| *sample == 0.0));
+        assert!(control.hardware_note(epoch, channel, 64, 100));
+        processor.process(&mut out);
+        control.panic_hardware();
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert!(out.iter().all(|sample| *sample == 0.0));
+        assert_eq!(factory.made.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn fixture_instrument_and_effect_render_and_missing_plugins_are_silent() {
         let mut project = project();
         let factory = Arc::new(FixtureFactory::default());

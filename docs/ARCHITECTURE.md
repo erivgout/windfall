@@ -457,3 +457,14 @@ Desktop CLAP bindings are persisted as plain project data; the engine receives p
 ## Audio input recording
 
 Native capture, its callback queue and owning worker live in windfall-engine's recording module. The shell's session/recording module owns the take and streams through the codec's WAV writer, then imports it through the ordinary audio-clip command pipeline. The recording_inputs, recording_state, recording_start, recording_stop and recording_cancel commands serve the transport recording dialog. See [RECORDING.md](RECORDING.md) for timing, rate, ownership and cleanup semantics.
+
+## MIDI hardware
+
+`windfall-engine::midi_hardware` owns native MIDI handles and output sends on one
+control worker. A preallocated callback queue and atomic panic epoch feed the
+existing audio processor's live-note path. The session guards runtime destinations
+with document generation/revision and serializes device changes under recording
+exclusion. The settings UI uses the `midi_hardware_*` IPC commands; Standard MIDI
+File import/export in `windfall-midi` remains separate. See
+[MIDI-HARDWARE.md](MIDI-HARDWARE.md) for supported events, ownership, tests and
+physical-hardware verification limits.

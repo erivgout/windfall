@@ -57,6 +57,8 @@ pub(crate) enum Origin {
     Sequenced,
     /// A note played by hand from the UI.
     Live,
+    /// Native MIDI input, invalidated independently of UI-held notes.
+    Hardware,
     /// The browser's sample preview.
     Preview,
 }
@@ -623,9 +625,15 @@ impl VoicePool {
     /// Ends a note played by hand. Samplers without an envelope play on to
     /// the end of the sample.
     pub fn release_live(&mut self, channel: ChannelId, key: u8) {
-        for voice in self.voices.iter_mut().filter(|voice| {
-            voice.active && voice.origin == Origin::Live && voice.channel == channel
-        }) {
+        self.release_origin(channel, key, Origin::Live);
+    }
+
+    pub fn release_origin(&mut self, channel: ChannelId, key: u8, origin: Origin) {
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.origin == origin && voice.channel == channel)
+        {
             if voice.key == key {
                 // Before anything the clock can read, so the note has ended
                 // by the next frame.

@@ -83,6 +83,9 @@ pub fn start(app: &AppHandle) -> Result<Session, Box<dyn Error>> {
         settings,
     });
     log::info!("factory content: {}", session.factory_dir().display());
+    if let Err(error) = session.start_midi_hardware() {
+        log::warn!("MIDI: {error}");
+    }
     match crate::plugins::PluginManager::new(&config_dir) {
         Ok(manager) => {
             session.install_plugins(manager.clone());

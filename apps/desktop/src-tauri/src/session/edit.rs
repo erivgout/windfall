@@ -171,6 +171,15 @@ impl Session {
         }
         if !touched.is_empty() {
             state.edits += 1;
+            if touched.channels {
+                self.controller().panic_hardware();
+                if state
+                    .midi_target
+                    .is_some_and(|id| state.document.project().channel(id).is_none())
+                {
+                    state.midi_target = None;
+                }
+            }
             if let Some(prepared) = prepared {
                 self.controller()
                     .set_prepared_project(state.document.project(), prepared);

@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use windfall_ipc::AudioSettings;
+use windfall_ipc::{AudioSettings, MidiHardwareSettings};
 use windfall_project::file::write_atomic;
 
 use crate::paths;
@@ -23,6 +23,7 @@ pub const MAX_RECENT_PROJECTS: usize = 10;
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub audio: AudioSettings,
+    pub midi_hardware: MidiHardwareSettings,
     /// Folders the user added to the browser, in the order they were added.
     pub browser_roots: Vec<String>,
     /// Project files, most recently used first.

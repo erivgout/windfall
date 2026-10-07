@@ -410,6 +410,7 @@ impl Session {
             decoded.pool.set_plugin_factory(runtime);
         }
         *state = State {
+            midi_target: None,
             document,
             path: save_to,
             sample_dir,

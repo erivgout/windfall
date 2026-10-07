@@ -66,6 +66,7 @@ mod files;
 mod flp;
 mod library;
 mod midi;
+mod midi_hardware;
 mod realtime;
 mod recording;
 mod samples;
@@ -147,6 +148,8 @@ impl WeakSession {
 }
 
 struct Inner {
+    midi_hardware: Mutex<Option<Arc<windfall_engine::midi_hardware::Runtime>>>,
+    midi_configuring: Mutex<()>,
     plugins: Mutex<Option<Arc<crate::plugins::PluginManager>>>,
     /// Held by a save or a backup from before it copies the project until
     /// its file is written. Taken before `state`, never under it.
@@ -184,6 +187,7 @@ struct Inner {
 
 /// The open project and the audio that goes with it.
 struct State {
+    midi_target: Option<windfall_project::ChannelId>,
     document: Document,
     /// The file that saving writes to: where the project was last saved or
     /// opened from. `None` for a project that was never saved and for one
@@ -285,10 +289,13 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                midi_hardware: Mutex::new(None),
+                midi_configuring: Mutex::new(()),
                 plugins: Mutex::new(None),
                 save: Mutex::new(()),
                 flp_import: Mutex::new(None),
                 state: Mutex::new(State {
+                    midi_target: None,
                     document: Document::new(project),
                     path: None,
                     sample_dir: None,
