@@ -459,7 +459,7 @@ To try it by hand, open `http://localhost:1433/bench.html?notes=50000&renderer=w
 
 ## What the piano roll builds on
 
-`apps/desktop/src/lib/canvas` has no dependencies and does not import React, the store or IPC. Import from `@/lib/canvas`. The React wrapper is `@/lib/canvas/TimeGridCanvas`.
+`apps/desktop/src/lib/canvas` has no dependencies and does not import React, the store or IPC. Import from `@/lib/canvas`. The React wrapper is `@/lib/canvas/react`.
 
 | Piece | What it is |
 |---|---|
@@ -477,5 +477,62 @@ Limits worth knowing before building on it:
 
 - One item batch per view. Ghost notes from other channels would need a second batch, which the view does not take yet.
 - Tick attributes are 32-bit integers and the scroll position is subtracted before any float math, so long projects stay pixel exact.
-- Notes that overlap on one row are painted in start order by the GPU renderers and in color order by Canvas 2D.
+- Notes that overlap on one row are painted in start order by every renderer. See the note of 2026-10-06 below.
 - Item colors are baked into the batch from the theme. Rebuild the batch in `onThemeChange`.
+
+## After the library fixes, 2026-10-06
+
+Later the same day the canvas core was changed in four ways that touch what is measured above. This note records the re-check. Everything above it is the original spike and was not re-measured.
+
+What changed:
+
+- **Canvas 2D paints the same picture as the GPU renderers.** It used to group its fills by color, so overlapping notes on a row came out in color order. It now paints only the part of each solid rect that no later rect of its row covers. Those parts never overlap, so they are still grouped by color. See-through rects and grid lines are painted in layers that keep index order. A see-through rect's border is now four sides, where it used to be a filled rect showing through the fill, and a selected rect's border takes the rect's alpha.
+- **One border rule for all three renderers.** The border color is `floor(channel * 0.62 + 0.49)` in the shaders and in Canvas 2D (`shadeChannel`). A plain round landed exactly on a half for channel values 25, 75, 125, 175 and 225, and the GPU and JavaScript fell to different sides.
+- **`setItems`, `setDragOffset` and `setDragResize` redraw the overlay too**, because overlay painters draw what belongs to the items. A drag frame now costs one overlay repaint more.
+- **A lost WebGL context is handled and tested.** The renderer rebuilds itself when the context is restored. If it is not restored within 2 seconds the view carries on in Canvas 2D on a new canvas under the old one, which keeps taking the pointer.
+
+### The renderers against each other
+
+Screenshots of four scenes (10,000 notes at the working zoom, with a selection, with 120 selected notes being dragged, and zoomed far out) in both themes, 1600×900, compared over the whole canvas except the readout. Edge 154.0.4258.53, headed, the same GPU as above.
+
+| Compared with WebGL2 | Before | After |
+|---|---|---|
+| WebGPU, device pixel ratio 1 | 0 pixels differ | 0 pixels differ |
+| Canvas 2D, device pixel ratio 1 | 2.24% to 3.22% of pixels differ, largest channel difference 138 | 0 pixels differ in all 8 screenshots |
+| Canvas 2D, device pixel ratio 2 (emulated) | not measured | 0 pixels differ in all 8 screenshots |
+
+Fixing the paint order alone left 0.11% to 0.38% of pixels one step apart, all of them note borders on the five channel values named above. The shared border rule removed those.
+
+The "2%" in the section "The three renderers draw the same picture" was the paint order and that border rounding, as it said. There was a third cause it did not see, because the bench has no see-through notes: the doubled border under a see-through fill.
+
+### Frame cost
+
+`overview` and `drag`, WebGL2 and Canvas 2D, 10,000 and 50,000 notes. Edge, 1920×1080, device pixel ratio 1, 60 Hz, 4 seconds per scenario, run with `run-canvas-bench.mjs`. The machine was shared with other work, so "before" is not the table above. It is commit `7645a60` served from a copy and measured in the same session, alternating with "after", two runs each. Draw CPU is the average per frame in milliseconds; both runs are given.
+
+| Notes | Renderer | Scenario | Draw CPU before | Draw CPU after | Missed frames after |
+|---|---|---|---|---|---|
+| 10,000 | webgl2 | overview | 0.11, 0.09 | 0.10, 0.10 | 0% |
+| 10,000 | webgl2 | drag | 0.05, 0.04 | 0.12, 0.11 | 0% |
+| 50,000 | webgl2 | overview | 0.09, 0.09 | 0.12, 0.10 | 0% |
+| 50,000 | webgl2 | drag | 0.04, 0.04 | 0.13, 0.11 | 0% |
+| 10,000 | canvas2d | overview | 1.21, 1.21 | 1.51, 1.46 | 0% |
+| 10,000 | canvas2d | drag | 0.30, 0.29 | 0.50, 0.44 | 0% |
+| 50,000 | canvas2d | overview | 7.87, 7.92 | 5.54, 5.51 | 0% |
+| 50,000 | canvas2d | drag | 1.18, 1.19 | 1.29, 1.26 | 0% |
+
+Every cell held 16.67 ms per frame with no missed frame, before and after. WebGL2 GPU time stayed where it was, 0.4 to 1.2 ms per frame at 60 Hz pacing.
+
+- `drag` costs about 0.07 ms more per frame in WebGL2 and 0.1 to 0.2 ms more in Canvas 2D. That is the overlay repaint, which the bench's label painter makes about as expensive as it is while scrolling.
+- Canvas 2D `overview` costs about 0.3 ms more at 10,000 notes, for working out which parts of the notes show. At 50,000 notes it costs 2.4 ms less, because what later notes cover is no longer painted.
+- A first version that painted overlapping notes whole, in layers that keep index order, was exact too, but took 13 ms for the 50,000-note `overview`, against 8 before. A third of the notes in that scene sat in chains of overlaps more than eight deep, and each of those set two fill styles. That is why solid rects are painted as visible parts.
+
+The Canvas 2D path for see-through rects still slows down when many of them pile up on a row more than eight deep, since those are painted one by one. Nothing in the app draws that today.
+
+### Context loss and context count
+
+Checked in Edge in the app's playlist with `WEBGL_lose_context`:
+
+- `loseContext()` then `restoreContext()`: the grid goes blank, then draws a picture identical to the one before, still in WebGL2.
+- `loseContext()` with no restore: after 2 seconds the view draws in Canvas 2D. The screenshot is identical to the WebGL2 one, and a click on the grid still places a clip.
+
+The app holds one live WebGL context at a time. The channel rack, piano roll and playlist are tabs of one panel and only the open one is mounted. The rack draws no WebGL, so with the rack open the count is 0. Switching between the piano roll and the playlist 24 times left 1 live context: each view gives its context back with `loseContext()` when it is destroyed. The bench page is a document of its own with 1 context. In development React's strict mode mounts each view twice, so twice as many contexts are created, and the extra one is given back at once. Chromium's limit of 16 is not in reach.

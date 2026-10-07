@@ -72,6 +72,18 @@ jobs:
           node-version: 24
       - run: node scripts/parity.mjs --check
 
+  sim:
+    name: Mock document is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The UI's mock backend runs the Rust document compiled to WebAssembly.
+      # The artifact is checked in; this fails when its sources have moved on.
+      - run: node scripts/check-sim.mjs
+
   bindings:
     name: TypeScript bindings are current
     runs-on: ubuntu-latest

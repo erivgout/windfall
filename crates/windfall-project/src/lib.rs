@@ -3,6 +3,7 @@
 //! One [`Document`] holds the single copy of a project that the UI and the
 //! audio engine both follow. Every edit is a [`Command`] dispatched to it.
 
+pub mod automation;
 mod check;
 pub mod command;
 pub mod document;
@@ -13,9 +14,10 @@ mod lower;
 pub mod model;
 pub mod patch;
 
+pub use automation::{AutomationRange, AutomationTaper, curve_shape, curve_value};
 pub use command::*;
 pub use document::{Applied, Document};
 pub use error::CommandError;
-pub use file::{LoadError, SaveError};
+pub use file::{LoadError, ProjectSession, SaveError};
 pub use model::*;
 pub use patch::*;

@@ -11,6 +11,7 @@
 
 mod decode;
 mod error;
+mod guard;
 mod peaks;
 mod wav;
 

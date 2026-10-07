@@ -34,6 +34,7 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 | `crates/windfall-dsp` | Effects and synth DSP |
 | `crates/windfall-ipc` | Types the engine, shell and interface exchange |
 | `crates/windfall-factory` | Generates the factory sounds |
+| `crates/windfall-sim` | The project document compiled to WebAssembly, which the simulated backend runs |
 | `content/factory` | Factory sounds, CC0 |
 | `apps/desktop` | The app: `src-tauri` is the shell, `src` is the interface |
 | `apps/desktop/src/components/audio` | Knob, fader, meter, step grid and other audio controls, MIT licensed and installable as a shadcn registry |
@@ -50,9 +51,12 @@ pnpm --dir apps/desktop typecheck
 pnpm --dir apps/desktop lint
 pnpm --dir apps/desktop test
 node scripts/parity.mjs --check
+node scripts/check-sim.mjs
 ```
 
 After changing a Rust type that the interface uses, run `scripts/gen-bindings.sh`.
+
+The simulated backend edits projects with the real Rust code, built to WebAssembly and checked in. After changing `windfall-project`, `windfall-core` or `windfall-sim`, run `scripts/build-sim.sh` and commit the two files it writes. It needs `rustup target add wasm32-unknown-unknown` once.
 
 ## License
 

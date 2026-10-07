@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use crate::model::{
-    Channel, ChannelId, Clip, Lane, MixerTrack, Note, Pattern, PatternId, PlaylistTrack, Project,
-    ProjectSettings, SampleAsset,
+    Automation, Channel, ChannelId, Clip, Lane, MixerTrack, Note, Pattern, PatternId,
+    PlaylistTrack, Project, ProjectSettings, SampleAsset, SampleId,
 };
 use crate::patch::Touched;
 
@@ -111,7 +111,9 @@ impl PatternInfo {
 pub(crate) enum Edit {
     Settings(Change<ProjectSettings>),
     Sample(ListEdit<SampleAsset>),
-    Channel(ListEdit<Channel>),
+    /// Boxed because a channel is large: an instrument's settings are part
+    /// of it.
+    Channel(Box<ListEdit<Channel>>),
     MoveChannel(Move),
     /// Replaces the channel that has the same id.
     SetChannel(Box<Change<Channel>>),
@@ -135,6 +137,7 @@ pub(crate) enum Edit {
     /// Replaces the mixer track that has the same id.
     SetMixerTrack(Box<Change<MixerTrack>>),
     PlaylistTrack(ListEdit<PlaylistTrack>),
+    MovePlaylistTrack(Move),
     /// Replaces the playlist track that has the same id.
     SetPlaylistTrack(Change<PlaylistTrack>),
     /// Like `Notes`, for the clips of the playlist.
@@ -142,6 +145,9 @@ pub(crate) enum Edit {
         remove: Vec<Clip>,
         insert: Vec<Clip>,
     },
+    Automation(ListEdit<Automation>),
+    /// Replaces the automation that has the same id.
+    SetAutomation(Box<Change<Automation>>),
 }
 
 impl Edit {
@@ -187,6 +193,7 @@ impl Edit {
                 }
             }
             Edit::PlaylistTrack(edit) => edit.apply(&mut project.playlist.tracks, direction),
+            Edit::MovePlaylistTrack(moved) => moved.apply(&mut project.playlist.tracks, direction),
             Edit::SetPlaylistTrack(change) => {
                 let result = change.result(direction);
                 let tracks = &mut project.playlist.tracks;
@@ -198,6 +205,14 @@ impl Edit {
                 let (remove, insert) = ordered(remove, insert, direction);
                 let clips = &mut project.playlist.clips;
                 splice(clips, remove, insert, |clip| clip.id, Clip::sort_key);
+            }
+            Edit::Automation(edit) => edit.apply(&mut project.automations, direction),
+            Edit::SetAutomation(change) => {
+                let result = change.result(direction);
+                let automations = &mut project.automations;
+                if let Some(automation) = automations.iter_mut().find(|a| a.id == result.id) {
+                    *automation = result.clone();
+                }
             }
         }
     }
@@ -227,10 +242,33 @@ impl Edit {
             Edit::PatternInfo { id, .. } => touch_pattern(*id),
             Edit::Notes { pattern, .. } => touch_pattern(*pattern),
             Edit::MixerTrack(_) | Edit::SetMixerTrack(_) => touched.mixer = true,
-            Edit::PlaylistTrack(_) | Edit::SetPlaylistTrack(_) | Edit::Clips { .. } => {
+            Edit::PlaylistTrack(_)
+            | Edit::MovePlaylistTrack(_)
+            | Edit::SetPlaylistTrack(_)
+            | Edit::Clips { .. } => {
                 touched.playlist = true;
             }
+            Edit::Automation(_) | Edit::SetAutomation(_) => touched.automations = true,
         }
+    }
+
+    /// The sample this edit puts into the pool or takes out of it. Undoing
+    /// or redoing the edit brings the sample back exactly as it is held
+    /// here.
+    pub(crate) fn sample(&self) -> Option<&SampleAsset> {
+        match self {
+            Edit::Sample(edit) => Some(edit.item()),
+            _ => None,
+        }
+    }
+
+    /// [`Edit::sample`], if it is the sample with this id, to change.
+    pub(crate) fn sample_mut(&mut self, id: SampleId) -> Option<&mut SampleAsset> {
+        let Edit::Sample(ListEdit::Insert { item, .. } | ListEdit::Remove { item, .. }) = self
+        else {
+            return None;
+        };
+        (item.id == id).then_some(item)
     }
 
     /// True when applying the edit would change nothing.
@@ -240,15 +278,19 @@ impl Edit {
             Edit::SetChannel(change) => change.old == change.new,
             Edit::SetMixerTrack(change) => change.old == change.new,
             Edit::SetPlaylistTrack(change) => change.old == change.new,
+            Edit::SetAutomation(change) => change.old == change.new,
             Edit::PatternInfo { change, .. } => change.old == change.new,
-            Edit::MoveChannel(moved) | Edit::MovePattern(moved) => moved.from == moved.to,
+            Edit::MoveChannel(moved)
+            | Edit::MovePattern(moved)
+            | Edit::MovePlaylistTrack(moved) => moved.from == moved.to,
             Edit::Notes { remove, insert, .. } => remove.is_empty() && insert.is_empty(),
             Edit::Clips { remove, insert } => remove.is_empty() && insert.is_empty(),
             Edit::Sample(_)
             | Edit::Channel(_)
             | Edit::Pattern(_)
             | Edit::MixerTrack(_)
-            | Edit::PlaylistTrack(_) => false,
+            | Edit::PlaylistTrack(_)
+            | Edit::Automation(_) => false,
         }
     }
 
@@ -272,6 +314,11 @@ impl Edit {
             {
                 first.new = second.new;
             }
+            (Edit::SetAutomation(first), Edit::SetAutomation(second))
+                if first.new.id == second.new.id =>
+            {
+                first.new = second.new;
+            }
             (
                 Edit::PatternInfo { id, change },
                 Edit::PatternInfo {
@@ -281,6 +328,7 @@ impl Edit {
             ) if *id == next_id => change.new = next_change.new,
             (Edit::MoveChannel(first), Edit::MoveChannel(second))
             | (Edit::MovePattern(first), Edit::MovePattern(second))
+            | (Edit::MovePlaylistTrack(first), Edit::MovePlaylistTrack(second))
                 if first.to == second.from =>
             {
                 first.to = second.to;

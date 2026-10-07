@@ -8,12 +8,12 @@ use symphonia::core::codecs::audio::well_known::{
 };
 use symphonia::core::codecs::audio::{AudioCodecId, AudioCodecParameters, AudioDecoderOptions};
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, FormatReader, Track, TrackType};
+use symphonia::core::formats::{FormatReader, Track, TrackType};
 use symphonia::core::io::{MediaSource, MediaSourceStream, ReadOnlySource};
-use symphonia::core::meta::MetadataOptions;
 use windfall_core::AudioBuffer;
 
 use crate::error::{CodecError, UNREADABLE_CODEC, from_symphonia};
+use crate::guard;
 
 /// Default for [`DecodeOptions::max_decoded_bytes`]: 1.5 GB of samples, which
 /// is a little over an hour of stereo at 48 kHz.
@@ -27,6 +27,12 @@ pub const DEFAULT_MAX_DECODED_BYTES: u64 = 1536 * 1024 * 1024;
 const MAX_BELIEVABLE_EXPANSION: u64 = 64;
 
 const BYTES_PER_SAMPLE: u64 = size_of::<f32>() as u64;
+
+/// Most samples set aside on a header's word, before any audio is decoded:
+/// 1 MiB of them. A header is believed up to [`MAX_BELIEVABLE_EXPANSION`]
+/// times the size of its file, which a file holding next to no audio can
+/// claim as well, so the room beyond this is taken as the audio arrives.
+const MAX_SAMPLES_UP_FRONT: usize = 1024 * 1024 / size_of::<f32>();
 
 /// Limits applied while decoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +81,9 @@ pub fn decode_file(path: impl AsRef<Path>) -> Result<AudioBuffer, CodecError> {
 /// Encoder delay and padding are trimmed when the file records them. If the
 /// file is damaged or cut short part-way through, the audio decoded before the
 /// damage is returned; an error is returned only when nothing could be decoded.
+///
+/// A file that states more than 64 channels or a sample rate above 768 kHz
+/// is refused with [`CodecError::UnsupportedFormat`], whatever else it holds.
 pub fn decode_file_with(
     path: impl AsRef<Path>,
     options: &DecodeOptions,
@@ -111,7 +120,8 @@ pub fn decode_bytes_with(
 }
 
 /// Reads a file's sample rate, channel count, length and format from its
-/// headers, without decoding the audio.
+/// headers, without decoding the audio. A file that [`decode_file_with`]
+/// refuses for its channel count or sample rate is refused here as well.
 pub fn probe_file(path: impl AsRef<Path>) -> Result<AudioInfo, CodecError> {
     let path = path.as_ref();
     try_both_ways(|seekable| {
@@ -192,14 +202,7 @@ fn open_format<'s>(
     if let Some(extension) = hint_ext {
         hint.with_extension(extension);
     }
-    symphonia::default::get_probe()
-        .probe(
-            &hint,
-            stream,
-            FormatOptions::default(),
-            MetadataOptions::default(),
-        )
-        .map_err(from_symphonia)
+    guard::open(stream, &hint).map_err(from_symphonia)
 }
 
 fn audio_track(format: &dyn FormatReader) -> Result<(&Track, &AudioCodecParameters), CodecError> {
@@ -221,10 +224,10 @@ fn probe<'s>(
 ) -> Result<AudioInfo, CodecError> {
     let format = open_format(source, hint_ext)?;
     let (track, params) = audio_track(format.as_ref())?;
+    check_stated_layout(params)?;
 
     let sample_rate = params
         .sample_rate
-        .filter(|&rate| rate > 0)
         .ok_or_else(|| CodecError::Corrupt("the sample rate is missing".to_owned()))?;
     let channels = params
         .channels
@@ -259,6 +262,22 @@ fn probe<'s>(
     })
 }
 
+/// Turns a track down for a sample rate or channel count that no real file
+/// has. It runs before a decoder is made, since the decoders size their
+/// buffers by what the track states. The guard refuses most such files at
+/// the header itself; this covers MP3, which it does not follow, and
+/// anything a reader takes from a header in a way the guard does not.
+fn check_stated_layout(params: &AudioCodecParameters) -> Result<(), CodecError> {
+    if params.sample_rate == Some(0) {
+        return Err(CodecError::Corrupt("the sample rate is zero".to_owned()));
+    }
+    let channels = params
+        .channels
+        .as_ref()
+        .map_or(0, |channels| channels.count());
+    guard::check_claim(channels, params.sample_rate.unwrap_or(0))
+}
+
 /// Bit depth of the float PCM codecs, which the container readers leave out.
 fn float_bits(codec: AudioCodecId) -> Option<u32> {
     match codec {
@@ -277,6 +296,9 @@ fn channel_count(channels: usize) -> Result<u16, CodecError> {
 /// allocation and without exceeding the caller's limit.
 struct Sink {
     samples: Vec<f32>,
+    /// The length the header promises, or zero if it promises none that is
+    /// believed.
+    promised: usize,
     limit_samples: usize,
     limit_bytes: u64,
 }
@@ -285,6 +307,7 @@ impl Sink {
     fn new(options: &DecodeOptions) -> Self {
         Self {
             samples: Vec::new(),
+            promised: 0,
             limit_samples: usize::try_from(options.max_decoded_bytes / BYTES_PER_SAMPLE)
                 .unwrap_or(usize::MAX),
             limit_bytes: options.max_decoded_bytes,
@@ -298,15 +321,17 @@ impl Sink {
     }
 
     /// Takes the length the header promises. A length over the limit is
-    /// rejected right away, before any time is spent decoding; otherwise the
-    /// memory for it is set aside in one piece.
+    /// rejected right away, before any time is spent decoding. Otherwise the
+    /// memory for it is set aside in one piece, up to
+    /// [`MAX_SAMPLES_UP_FRONT`]; a longer buffer grows as it fills.
     fn expect(&mut self, samples: u64) -> Result<(), CodecError> {
         let samples = usize::try_from(samples)
             .ok()
             .filter(|&samples| samples <= self.limit_samples)
             .ok_or_else(|| self.too_large())?;
+        self.promised = samples;
         self.samples
-            .try_reserve_exact(samples)
+            .try_reserve_exact(samples.min(MAX_SAMPLES_UP_FRONT))
             .map_err(|_| CodecError::OutOfMemory)
     }
 
@@ -319,9 +344,15 @@ impl Sink {
             .ok_or_else(|| self.too_large())?;
 
         if needed > self.samples.capacity() {
-            let target = needed
-                .max(self.samples.capacity().saturating_mul(2))
-                .min(self.limit_samples);
+            let doubled = needed.max(self.samples.capacity().saturating_mul(2));
+            // Doubling stops at the promised length while the audio is still
+            // within it, so a file that keeps its promise ends up in a buffer
+            // of exactly its size.
+            let target = if needed <= self.promised {
+                doubled.min(self.promised)
+            } else {
+                doubled.min(self.limit_samples)
+            };
             self.samples
                 .try_reserve_exact(target - start)
                 .map_err(|_| CodecError::OutOfMemory)?;
@@ -340,23 +371,25 @@ fn decode<'s>(
 ) -> Result<AudioBuffer, CodecError> {
     let mut format = open_format(source, hint_ext)?;
     let (track, params) = audio_track(format.as_ref())?;
+    check_stated_layout(params)?;
     let track_id = track.id;
-
-    let mut sink = Sink::new(options);
     let promised = track
         .num_frames
         .zip(params.channels.as_ref())
         .map(|(frames, channels)| frames.saturating_mul(channels.count() as u64));
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(params, &AudioDecoderOptions::default())
+        .map_err(from_symphonia)?;
+
+    // Nothing is set aside for a file that turns out to have no decoder.
+    let mut sink = Sink::new(options);
     if let Some(samples) = promised
         && samples.saturating_mul(BYTES_PER_SAMPLE)
             <= source_len.saturating_mul(MAX_BELIEVABLE_EXPANSION)
     {
         sink.expect(samples)?;
     }
-
-    let mut decoder = symphonia::default::get_codecs()
-        .make_audio_decoder(params, &AudioDecoderOptions::default())
-        .map_err(from_symphonia)?;
 
     // Sample rate and channel count of the audio decoded so far.
     let mut layout: Option<(u32, usize)> = None;
@@ -419,6 +452,8 @@ fn decode<'s>(
 
 #[cfg(test)]
 mod tests {
+    use symphonia::core::audio::Channels;
+
     use super::*;
 
     fn sink_limited_to(max_decoded_bytes: u64) -> Sink {
@@ -453,6 +488,65 @@ mod tests {
         ));
         sink.expect(10).unwrap();
         assert!(sink.samples.capacity() >= 10);
+    }
+
+    #[test]
+    fn a_track_stating_what_no_file_has_gets_no_decoder() {
+        let track = |channels: u16, sample_rate: u32| {
+            let mut params = AudioCodecParameters::new();
+            params
+                .with_channels(Channels::Discrete(channels))
+                .with_sample_rate(sample_rate);
+            params
+        };
+        assert!(check_stated_layout(&track(64, 768_000)).is_ok());
+        // Whether a track that leaves both out can be decoded is for the
+        // decoder to say.
+        assert!(check_stated_layout(&AudioCodecParameters::new()).is_ok());
+
+        let refusal = |channels, sample_rate| {
+            check_stated_layout(&track(channels, sample_rate))
+                .unwrap_err()
+                .to_string()
+        };
+        assert_eq!(
+            refusal(65, 44_100),
+            "this is not a supported audio file (it has 65 channels)"
+        );
+        assert_eq!(
+            refusal(2, 768_001),
+            "this is not a supported audio file (it has a sample rate of 768001 Hz)"
+        );
+        assert_eq!(
+            refusal(2, 0),
+            "the audio file is damaged (the sample rate is zero)"
+        );
+    }
+
+    #[test]
+    fn a_long_promise_is_set_aside_only_in_part() {
+        let mut sink = sink_limited_to(u64::MAX);
+        sink.expect(100 * MAX_SAMPLES_UP_FRONT as u64).unwrap();
+        assert_eq!(sink.samples.capacity(), MAX_SAMPLES_UP_FRONT);
+    }
+
+    #[test]
+    fn a_kept_promise_ends_in_a_buffer_of_its_size() {
+        let promised = 5 * MAX_SAMPLES_UP_FRONT + 123;
+        let mut sink = sink_limited_to(u64::MAX);
+        sink.expect(promised as u64).unwrap();
+        while sink.samples.len() < promised {
+            let block = 4_096.min(promised - sink.samples.len());
+            sink.grow(block).unwrap();
+            // Never more than twice what has arrived.
+            let held = sink.samples.len().max(MAX_SAMPLES_UP_FRONT);
+            assert!(sink.samples.capacity() <= 2 * held);
+        }
+        assert_eq!(sink.samples.capacity(), promised);
+
+        // Audio the header did not promise is taken as well.
+        assert_eq!(sink.grow(4_096).unwrap().len(), 4_096);
+        assert_eq!(sink.samples.len(), promised + 4_096);
     }
 
     #[test]

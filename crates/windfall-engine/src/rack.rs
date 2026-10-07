@@ -1,0 +1,631 @@
+//! What the engine hosts on the audio thread: effects, instruments and the
+//! delays that keep paths of different latency lined up.
+//!
+//! Each of these owns heap memory. The control side builds and prepares
+//! them, the audio thread only ever moves them from one
+//! [`PlanState`](crate::state::PlanState) to the next, and they travel back
+//! inside the state they were last in to be dropped off the audio thread.
+
+use windfall_dsp::{AnyEffect, AnyInstrument, EffectSlot, GainReductionMeter};
+use windfall_project::{EffectKind, EffectParams, InstrumentKind, InstrumentParams, TrackId};
+
+use crate::mixer::{Frame, MAX_BLOCK};
+use crate::plan::PlanEffect;
+use crate::sequencer::Clock;
+
+/// MIDI keys an instrument can be asked to play.
+const KEYS: usize = 128;
+
+/// How an effect is joining or leaving the chain it sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Splice {
+    /// Part of the chain.
+    Steady,
+    /// Coming in. For `wait` frames the effect runs unheard, and then it
+    /// fades in from the signal that enters it over `remaining` frames.
+    In { wait: u32, remaining: u32 },
+    /// Fading out to the signal that enters it, with this many frames to go.
+    Out(u32),
+    /// Faded out. The signal passes as if the effect were not there.
+    Gone,
+}
+
+impl Splice {
+    /// The share of the effect's output in the next frame of a splice that
+    /// takes `length` frames, and moves the splice on by that frame.
+    fn next(&mut self, length: f32) -> f32 {
+        match self {
+            Splice::Steady => 1.0,
+            Splice::Gone => 0.0,
+            Splice::In { wait, .. } if *wait > 0 => {
+                *wait -= 1;
+                0.0
+            }
+            Splice::In { remaining, .. } => {
+                let wet = 1.0 - *remaining as f32 / length;
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    *self = Splice::Steady;
+                }
+                wet
+            }
+            Splice::Out(remaining) => {
+                let wet = *remaining as f32 / length;
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    *self = Splice::Gone;
+                }
+                wet
+            }
+        }
+    }
+}
+
+/// One effect of a mixer track's chain.
+///
+/// The on/off switch and the mix belong to the dsp crate's slot, which
+/// crossfades them and delays the dry signal to match. The splice on top of
+/// that is the engine's own: an effect that joins a chain sound is passing
+/// through fades in from the signal as it enters, not delayed, and an effect
+/// that leaves fades out to it. One with latency first runs unheard for as
+/// long as its latency, so that by the time it fades in, what it puts out
+/// is the signal it was given and not the silence, or the other track's
+/// sound, that was in its delay. Without all that a new limiter would open
+/// with a hole as long as its look-ahead, and a removed reverb would cut
+/// its tail.
+pub(crate) struct EffectUnit {
+    slot: EffectSlot,
+    /// What the slot was last given.
+    params: EffectParams,
+    enabled: bool,
+    mix: f32,
+    splice: Splice,
+    /// Length of the splice under way, in frames.
+    splice_frames: u32,
+    /// The track whose chain the effect was last part of.
+    pub track: TrackId,
+    sample_rate: f32,
+}
+
+impl EffectUnit {
+    /// Builds and prepares an effect with its settings in force from its
+    /// first frame. Allocates, so it is for the control side. Also returns
+    /// the meter of a compressor or limiter.
+    pub fn build(
+        effect: &PlanEffect,
+        track: TrackId,
+        sample_rate: u32,
+        tempo_bpm: f64,
+    ) -> (Self, Option<GainReductionMeter>) {
+        let processor = AnyEffect::new(&effect.params);
+        let meter = processor.gain_reduction();
+        let mut slot = EffectSlot::new(processor);
+        slot.prepare(sample_rate as f32, MAX_BLOCK);
+        slot.set_tempo(tempo_bpm as f32);
+        slot.set_params(&effect.params);
+        slot.set_enabled(effect.enabled);
+        slot.set_mix(effect.mix);
+        let unit = Self {
+            slot,
+            params: effect.params,
+            enabled: effect.enabled,
+            mix: effect.mix,
+            splice: Splice::Steady,
+            splice_frames: 1,
+            track,
+            sample_rate: sample_rate as f32,
+        };
+        (unit, meter)
+    }
+
+    pub fn kind(&self) -> EffectKind {
+        self.params.kind()
+    }
+
+    /// Follows the plan: whatever differs from what the effect was last
+    /// given is handed to it, and it glides there.
+    pub fn apply(&mut self, effect: &PlanEffect) {
+        if effect.params != self.params && self.slot.set_params(&effect.params) {
+            self.params = effect.params;
+        }
+        if effect.enabled != self.enabled {
+            self.enabled = effect.enabled;
+            self.slot.set_enabled(effect.enabled);
+        }
+        if effect.mix != self.mix {
+            self.mix = effect.mix;
+            self.slot.set_mix(effect.mix);
+        }
+    }
+
+    pub fn set_tempo(&mut self, tempo_bpm: f64) {
+        self.slot.set_tempo(tempo_bpm as f32);
+    }
+
+    /// Moves one setting, as automation does: the effect glides to it the
+    /// way it does when the plan changes it. The settings the plan gave
+    /// stay what they are, so [`EffectUnit::apply`] takes this back.
+    ///
+    /// A setting that changes how late the effect puts its output out, the
+    /// limiter's look-ahead, is left alone: the delays that line the other
+    /// paths up with the effect are made for the plan's value.
+    pub fn automate(&mut self, param: usize, value: f32) {
+        let mut params = self.params;
+        if !params.set(param, value) || params == self.params {
+            return;
+        }
+        let rate = self.sample_rate;
+        if params.latency_samples(rate) != self.params.latency_samples(rate) {
+            return;
+        }
+        if self.slot.set_params(&params) {
+            self.params = params;
+        }
+    }
+
+    /// Moves the slot's mix, as automation does.
+    pub fn automate_mix(&mut self, mix: f32) {
+        let mix = mix.clamp(0.0, 1.0);
+        if mix != self.mix {
+            self.mix = mix;
+            self.slot.set_mix(mix);
+        }
+    }
+
+    /// Brings the effect in: unheard for as long as its latency, then
+    /// fading in over `frames` frames. Returns how long it stays unheard.
+    pub fn fade_in(&mut self, frames: u32) -> u32 {
+        let wait = u32::try_from(self.slot.latency_samples()).unwrap_or(u32::MAX);
+        self.splice_frames = frames.max(1);
+        self.splice = Splice::In {
+            wait,
+            remaining: self.splice_frames,
+        };
+        wait
+    }
+
+    /// Starts fading the effect out over `frames` frames.
+    pub fn fade_out(&mut self, frames: u32) {
+        self.splice_frames = frames.max(1);
+        self.splice = Splice::Out(self.splice_frames);
+    }
+
+    /// Takes the effect out of the signal at once.
+    pub fn drop_out(&mut self) {
+        self.splice = Splice::Gone;
+    }
+
+    /// Samples the effect can go on sounding for after its input stops.
+    pub fn tail_samples(&self) -> usize {
+        match self.splice {
+            Splice::Gone => 0,
+            Splice::Steady | Splice::In { .. } | Splice::Out(_) => self.slot.tail_samples(),
+        }
+    }
+
+    /// Samples for which the effect's output can fall silent and still
+    /// come back with nothing new going in.
+    pub fn gap_samples(&self) -> usize {
+        match self.splice {
+            Splice::Gone => 0,
+            Splice::Steady | Splice::In { .. } | Splice::Out(_) => self.slot.gap_samples(),
+        }
+    }
+
+    /// Processes one block in place. `dry_left` and `dry_right` are scratch
+    /// space at least as long as the block.
+    pub fn process(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        dry_left: &mut [f32],
+        dry_right: &mut [f32],
+    ) {
+        match self.splice {
+            Splice::Steady => return self.slot.process(left, right),
+            Splice::Gone => return,
+            Splice::In { .. } | Splice::Out(_) => {}
+        }
+        let frames = left.len();
+        let (dry_left, dry_right) = (&mut dry_left[..frames], &mut dry_right[..frames]);
+        dry_left.copy_from_slice(left);
+        dry_right.copy_from_slice(right);
+        self.slot.process(left, right);
+
+        let length = self.splice_frames as f32;
+        for index in 0..frames {
+            // Once the effect is all the way in, its output is left as it is.
+            if self.splice == Splice::Steady {
+                break;
+            }
+            let wet = self.splice.next(length);
+            left[index] = dry_left[index] + (left[index] - dry_left[index]) * wet;
+            right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
+        }
+    }
+}
+
+/// The instrument of one channel, with the notes it is holding.
+///
+/// An instrument takes notes with no position in time, so the unit is
+/// rendered up to the frame of every note-on and note-off, which puts each
+/// on its exact frame. A held note keeps the tick it ends on, not the
+/// frame, so a tempo change moves the end of a sounding note the way it
+/// does for a sampler voice.
+pub(crate) struct InstrumentUnit {
+    instrument: AnyInstrument,
+    params: InstrumentParams,
+    /// The clock tick on which the note on each key ends. NaN while the key
+    /// is not held. A key holds one note: a second note-on for it takes
+    /// over, and the key comes up when that second note ends.
+    ends: [f64; KEYS],
+    /// The note on the key was played by hand.
+    live: [bool; KEYS],
+    /// Keys held.
+    held: usize,
+    /// The output of the block being processed, a side each.
+    left: Box<[f32]>,
+    right: Box<[f32]>,
+    /// One past the last frame on which the output was not silent.
+    last_sound: u64,
+}
+
+impl InstrumentUnit {
+    /// Builds and prepares an instrument. Allocates, so it is for the
+    /// control side.
+    pub fn build(params: &InstrumentParams, sample_rate: u32, tempo_bpm: f64) -> Self {
+        let mut instrument = AnyInstrument::new(params);
+        instrument.prepare(sample_rate as f32, MAX_BLOCK);
+        instrument.set_tempo(tempo_bpm as f32);
+        instrument.set_params(params);
+        Self {
+            instrument,
+            params: *params,
+            ends: [f64::NAN; KEYS],
+            live: [false; KEYS],
+            held: 0,
+            left: vec![0.0; MAX_BLOCK].into_boxed_slice(),
+            right: vec![0.0; MAX_BLOCK].into_boxed_slice(),
+            last_sound: 0,
+        }
+    }
+
+    pub fn kind(&self) -> InstrumentKind {
+        self.params.kind()
+    }
+
+    pub fn apply(&mut self, params: &InstrumentParams) {
+        if *params != self.params && self.instrument.set_params(params) {
+            self.params = *params;
+        }
+    }
+
+    pub fn set_tempo(&mut self, tempo_bpm: f64) {
+        self.instrument.set_tempo(tempo_bpm as f32);
+    }
+
+    /// Moves one setting, as automation does. Sounding notes glide to it.
+    pub fn automate(&mut self, param: usize, value: f32) {
+        let mut params = self.params;
+        if params.set(param, value) && params != self.params && self.instrument.set_params(&params)
+        {
+            self.params = params;
+        }
+    }
+
+    /// Voices sounding right now, fading ones included.
+    pub fn voices(&self) -> u32 {
+        self.instrument.active_voices() as u32
+    }
+
+    /// True while the instrument is putting out sound, or did within the
+    /// last `window` frames before `now`.
+    pub fn sounding(&self, now: u64, window: u64) -> bool {
+        self.instrument.active_voices() > 0 || self.last_sound + window > now
+    }
+
+    /// True once nothing more can come out of the instrument until its
+    /// next note.
+    pub fn settled(&self, now: u64) -> bool {
+        let tail = self.instrument.tail_samples() as u64;
+        self.instrument.active_voices() == 0 && self.last_sound + tail <= now
+    }
+
+    /// Starts a note that ends on clock tick `end`, or never when that is
+    /// infinity. A note with no velocity is silent and starts nothing.
+    pub fn note_on(&mut self, key: u8, velocity: f32, end: f64, live: bool) {
+        if velocity <= 0.0 || end.is_nan() {
+            return;
+        }
+        let index = usize::from(key).min(KEYS - 1);
+        if self.ends[index].is_nan() {
+            self.held += 1;
+        }
+        self.ends[index] = end;
+        self.live[index] = live;
+        self.instrument.note_on(key, velocity);
+    }
+
+    /// Ends the note played by hand on `key`, on the next frame.
+    pub fn release_live(&mut self, key: u8) {
+        let index = usize::from(key).min(KEYS - 1);
+        if self.live[index] && !self.ends[index].is_nan() {
+            // Before anything the clock can read.
+            self.ends[index] = f64::NEG_INFINITY;
+        }
+    }
+
+    /// Stops every note with a short fade, as when the transport stops.
+    pub fn silence(&mut self) {
+        self.instrument.all_notes_off();
+        self.ends = [f64::NAN; KEYS];
+        self.held = 0;
+    }
+
+    /// Ends the notes that came from a pattern, as when playback jumps
+    /// away from under them. With no note held by hand they stop with a
+    /// short fade; otherwise each is let go, so the hand-held notes carry
+    /// on.
+    pub fn end_sequenced(&mut self) {
+        let any_live = (0..KEYS).any(|key| self.live[key] && !self.ends[key].is_nan());
+        if !any_live {
+            self.silence();
+            return;
+        }
+        for key in 0..KEYS {
+            if !self.live[key] && !self.ends[key].is_nan() {
+                self.ends[key] = f64::NAN;
+                self.held -= 1;
+                self.instrument.note_off(key as u8);
+            }
+        }
+    }
+
+    /// Moves the end of every held note by `ticks`, because a jump made the
+    /// clock read that much more.
+    pub fn shift_ends(&mut self, ticks: f64) {
+        if self.held > 0 {
+            for end in &mut self.ends {
+                *end += ticks;
+            }
+        }
+    }
+
+    /// Gives every held note the end `moved` makes of the one it has: the
+    /// tempo map changed, and each clock tick now means another place in
+    /// the song.
+    pub fn move_ends(&mut self, moved: impl Fn(f64) -> f64) {
+        if self.held > 0 {
+            for end in self.ends.iter_mut().filter(|end| !end.is_nan()) {
+                *end = moved(*end);
+            }
+        }
+    }
+
+    /// Renders frames `from..to` of the block that starts on frame `base`
+    /// into the unit's own buffer, letting go of each held note on the
+    /// frame `clock` puts its end on.
+    pub fn render(&mut self, clock: Clock, base: u64, from: usize, to: usize) {
+        let mut at = from;
+        while self.held > 0 {
+            // The note that ends first. Of notes that end on one frame the
+            // lowest key goes first, which keeps the order fixed.
+            let mut next: Option<(u64, usize)> = None;
+            for key in 0..KEYS {
+                if self.ends[key].is_nan() {
+                    continue;
+                }
+                let frame = clock.frame_of(self.ends[key]);
+                if frame < base + to as u64 && next.is_none_or(|(first, _)| frame < first) {
+                    next = Some((frame, key));
+                }
+            }
+            let Some((frame, key)) = next else {
+                break;
+            };
+            // An end that is already behind takes effect now.
+            let split = (frame.saturating_sub(base) as usize).clamp(at, to);
+            self.process(base, at, split);
+            at = split;
+            self.ends[key] = f64::NAN;
+            self.held -= 1;
+            self.instrument.note_off(key as u8);
+        }
+        self.process(base, at, to);
+    }
+
+    fn process(&mut self, base: u64, from: usize, to: usize) {
+        if from >= to {
+            return;
+        }
+        let (left, right) = (&mut self.left[from..to], &mut self.right[from..to]);
+        self.instrument.process(left, right);
+        let last = (0..to - from)
+            .rev()
+            .find(|&index| left[index] != 0.0 || right[index] != 0.0);
+        if let Some(last) = last {
+            self.last_sound = base + (from + last) as u64 + 1;
+        }
+    }
+
+    /// The first `frames` frames of the block just rendered.
+    pub fn output(&self, frames: usize) -> (&[f32], &[f32]) {
+        (&self.left[..frames], &self.right[..frames])
+    }
+}
+
+/// A stereo delay that lines one path up with a slower one.
+///
+/// The delay is a whole number of frames. A change of length crossfades
+/// from the old tap to the new one in a straight line, which is also how
+/// the limiter changes its own look-ahead, so a path that is compensated
+/// for a limiter stays lined up with it while its look-ahead moves. The
+/// crossfade can be told to wait first, which is how the delay stays in
+/// step with an effect that is coming into a chain: that effect runs
+/// unheard for as long as its latency before it fades in.
+pub(crate) struct Compensation {
+    ring: Box<[Frame]>,
+    mask: usize,
+    /// Where the next frame goes.
+    write: usize,
+    delay: usize,
+    /// The delay being faded out, and how many frames of that fade are left.
+    from: usize,
+    fade_left: u32,
+    fade_frames: u32,
+    /// Frames to go before that fade starts.
+    wait: u32,
+}
+
+impl Compensation {
+    /// Allocates a line that can delay by up to `max_delay` frames, set to
+    /// `delay`.
+    pub fn new(max_delay: usize, delay: usize) -> Self {
+        let length = (max_delay + 1).next_power_of_two();
+        Self {
+            ring: vec![[0.0; 2]; length].into_boxed_slice(),
+            mask: length - 1,
+            write: 0,
+            delay: delay.min(length - 1),
+            from: 0,
+            fade_left: 0,
+            fade_frames: 1,
+            wait: 0,
+        }
+    }
+
+    /// The longest delay the line can give.
+    pub fn capacity(&self) -> usize {
+        self.mask
+    }
+
+    /// Moves to a new delay: after `wait` more frames at the old one, a
+    /// crossfade of `fade_frames` frames.
+    pub fn retarget(&mut self, delay: usize, fade_frames: u32, wait: u32) {
+        let delay = delay.min(self.capacity());
+        if delay == self.delay {
+            return;
+        }
+        self.from = self.delay;
+        self.delay = delay;
+        self.fade_frames = fade_frames.max(1);
+        self.fade_left = self.fade_frames;
+        self.wait = wait;
+    }
+
+    /// Sets the delay at once.
+    pub fn snap(&mut self, delay: usize) {
+        self.delay = delay.min(self.capacity());
+        self.fade_left = 0;
+        self.wait = 0;
+    }
+
+    /// Carries on from another line: its recent past, as much as fits, and
+    /// the delay it was giving.
+    pub fn take_history(&mut self, other: &Compensation) {
+        let frames = self.ring.len().min(other.ring.len());
+        for back in 1..=frames {
+            let frame = other.ring[other.write.wrapping_sub(back) & other.mask];
+            self.ring[self.write.wrapping_sub(back) & self.mask] = frame;
+        }
+        self.delay = other.delay.min(self.capacity());
+        self.from = other.from.min(self.capacity());
+        self.fade_left = other.fade_left;
+        self.fade_frames = other.fade_frames;
+        self.wait = other.wait;
+    }
+
+    /// Delays a block in place.
+    pub fn process(&mut self, block: &mut [Frame]) {
+        for frame in block {
+            self.ring[self.write] = *frame;
+            let mut out = self.ring[self.write.wrapping_sub(self.delay) & self.mask];
+            if self.fade_left > 0 {
+                let before = self.ring[self.write.wrapping_sub(self.from) & self.mask];
+                if self.wait > 0 {
+                    self.wait -= 1;
+                    out = before;
+                } else {
+                    let old = self.fade_left as f32 / self.fade_frames as f32;
+                    out[0] += (before[0] - out[0]) * old;
+                    out[1] += (before[1] - out[1]) * old;
+                    self.fade_left -= 1;
+                }
+            }
+            self.write = (self.write + 1) & self.mask;
+            *frame = out;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ramp(frames: usize) -> Vec<Frame> {
+        (0..frames).map(|n| [n as f32, -(n as f32)]).collect()
+    }
+
+    #[test]
+    fn a_compensation_delays_by_whole_frames_and_passes_zero_delay_untouched() {
+        let mut none = Compensation::new(16, 0);
+        let mut block = ramp(40);
+        none.process(&mut block);
+        assert_eq!(block, ramp(40));
+
+        let mut line = Compensation::new(16, 5);
+        assert!(line.capacity() >= 16);
+        let mut block = ramp(40);
+        // In uneven pieces, which must not matter.
+        let (first, rest) = block.split_at_mut(7);
+        line.process(first);
+        line.process(rest);
+        for (index, frame) in block.iter().enumerate() {
+            let expected = index.checked_sub(5).map_or(0.0, |n| n as f32);
+            assert_eq!(*frame, [expected, -expected], "frame {index}");
+        }
+    }
+
+    #[test]
+    fn a_change_of_delay_crossfades_between_the_two_taps() {
+        let mut line = Compensation::new(64, 2);
+        let mut block = ramp(100);
+        line.process(&mut block);
+        line.retarget(10, 4, 0);
+        let mut block: Vec<Frame> = (100..110).map(|n| [n as f32, 0.0]).collect();
+        line.process(&mut block);
+        let left: Vec<f32> = block.iter().map(|frame| frame[0]).collect();
+        // Frame 100: all of the old tap, 98. Then a quarter more of the new
+        // tap, eight frames further back, on each frame.
+        assert_eq!(left[..5], [98.0, 97.0, 96.0, 95.0, 94.0]);
+        assert_eq!(left[5..], [95.0, 96.0, 97.0, 98.0, 99.0]);
+
+        // Told to wait, it stays on the old delay that much longer.
+        line.retarget(2, 2, 3);
+        let mut block: Vec<Frame> = (110..117).map(|n| [n as f32, 0.0]).collect();
+        line.process(&mut block);
+        let left: Vec<f32> = block.iter().map(|frame| frame[0]).collect();
+        assert_eq!(left, [100.0, 101.0, 102.0, 103.0, 108.0, 113.0, 114.0]);
+
+        // A longer delay than the line holds is held to what it holds.
+        line.retarget(1_000, 1, 0);
+        assert_eq!(line.delay, line.capacity());
+    }
+
+    #[test]
+    fn a_line_carries_on_from_the_one_it_replaces() {
+        let mut small = Compensation::new(7, 3);
+        let mut block = ramp(50);
+        small.process(&mut block);
+        let mut large = Compensation::new(100, 0);
+        large.take_history(&small);
+        large.retarget(6, 2, 0);
+        let mut block: Vec<Frame> = (50..54).map(|n| [n as f32, 0.0]).collect();
+        large.process(&mut block);
+        let left: Vec<f32> = block.iter().map(|frame| frame[0]).collect();
+        // The old delay of 3 on the first frame, half way on the second,
+        // and from then on the new delay of 6, reading what the small line
+        // was given.
+        assert_eq!(left, [47.0, 46.5, 46.0, 47.0]);
+    }
+}

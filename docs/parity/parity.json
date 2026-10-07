@@ -4,7 +4,7 @@
     "https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/",
     "https://forum.image-line.com/viewtopic.php?p=2065297"
   ],
-  "as_of": "2026-10-06",
+  "as_of": "2026-10-07",
   "rows": [
     {
       "id": "core-lifetime-free-updates",
@@ -145,10 +145,10 @@
       "summary": "A pitch-against-time grid for drawing and editing the notes of one instrument.",
       "windfall_name": "Piano roll",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Umbrella row; sub-features are tracked as win-piano-* rows."
+      "notes": "Umbrella row; sub-features are tracked as win-piano-* rows. Draw, paint, select and erase tools, clipboard, quantize, velocity and pan lane, ghost notes. The specialist tools are separate rows."
     },
     {
       "id": "core-mixer",
@@ -157,10 +157,10 @@
       "summary": "Routes every sound through tracks with level, pan, effects and sends.",
       "windfall_name": "Mixer",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Umbrella row; the basic mixer lands in phase 1 and routing, sends and effect slots in phase 2 (win-mixer-* rows)."
+      "notes": "Umbrella row; the basic mixer lands in phase 1 and routing, sends and effect slots in phase 2 (win-mixer-* rows). Tracks, routing, sends, effect slots, meters and delay compensation are in. Sidechain, track EQ and track presets are separate rows."
     },
     {
       "id": "core-full-song-arrangement",
@@ -169,10 +169,10 @@
       "summary": "The timeline where patterns, audio and automation are laid out into a complete song.",
       "windfall_name": "Playlist",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Umbrella row; sub-features are tracked as win-playlist-* rows."
+      "notes": "Umbrella row; sub-features are tracked as win-playlist-* rows. Pattern clips on the playlist and song mode are in. Audio clips and automation clips are not."
     },
     {
       "id": "core-automation-clips",
@@ -289,7 +289,7 @@
       "summary": "Lists the project's channels (samples, instruments, audio and automation) for the selected pattern.",
       "windfall_name": "Channel rack",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -301,7 +301,7 @@
       "summary": "A row of on/off steps per channel for programming drum patterns quickly.",
       "windfall_name": "Step sequencer",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -325,7 +325,7 @@
       "summary": "A mute/solo switch and pan and volume knobs on every channel, ahead of the mixer.",
       "windfall_name": "Channel controls",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -337,10 +337,10 @@
       "summary": "Sets which mixer track each channel feeds.",
       "windfall_name": "Channel-to-mixer routing",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Windfall plans automatic routing: each new channel gets its own mixer track."
+      "notes": "Windfall plans automatic routing: each new channel gets its own mixer track. New channels get their own mixer track; the routing badge on each row shows and changes it."
     },
     {
       "id": "win-rack-patterns",
@@ -349,7 +349,7 @@
       "summary": "Named, reusable blocks of step and note data that can be switched, cloned and split by channel.",
       "windfall_name": "Patterns",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -361,10 +361,10 @@
       "summary": "Delays off-beat steps by an adjustable amount for a shuffled feel.",
       "windfall_name": "Swing",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Global swing only; no per-channel swing mix yet."
     },
     {
       "id": "win-rack-channel-groups",
@@ -385,7 +385,7 @@
       "summary": "Per-channel commands to duplicate, swap, insert, remove, rename and color channels.",
       "windfall_name": "Channel menu",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -397,10 +397,10 @@
       "summary": "Fills a channel's steps at a regular spacing or from a chosen rhythm rule.",
       "windfall_name": "Step fill tools",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Fill every 2, 4 or 8 steps and shift left or right. No advanced fill tool yet."
     },
     {
       "id": "win-rack-cut-groups",
@@ -409,7 +409,7 @@
       "summary": "Lets one channel silence another, or itself, when a new note starts.",
       "windfall_name": "Cut groups",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -469,10 +469,10 @@
       "summary": "Envelopes and LFOs for volume, pan, pitch and two modulation targets, plus a filter, on sampler channels.",
       "windfall_name": "Channel envelopes and LFOs",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Volume envelope on the sampler only."
     },
     {
       "id": "win-rack-arpeggiator",
@@ -553,7 +553,7 @@
       "summary": "Adds single notes and drags them to position and length.",
       "windfall_name": "Piano roll draw tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -565,10 +565,10 @@
       "summary": "Adds a run of notes while dragging; a drum mode toggles steps on and off.",
       "windfall_name": "Piano roll paint tool",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Paint tool is in. No drum sequencer mode yet."
     },
     {
       "id": "win-piano-delete",
@@ -577,7 +577,7 @@
       "summary": "Removes notes by clicking or dragging over them.",
       "windfall_name": "Piano roll delete tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -613,7 +613,7 @@
       "summary": "Selects notes by rectangle for group edits.",
       "windfall_name": "Piano roll select tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -661,7 +661,7 @@
       "summary": "The on-screen keyboard at the left edge previews pitches when clicked and can carry custom key names.",
       "windfall_name": "Preview keyboard",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -673,10 +673,10 @@
       "summary": "A lower lane and dialog for editing per-note velocity, pan, pitch and modulation values.",
       "windfall_name": "Note property lane",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Velocity and pan lanes. Other note properties are not in the model yet."
     },
     {
       "id": "win-piano-slide-porta",
@@ -709,7 +709,7 @@
       "summary": "Shows notes from the other channels in the pattern as faint references that can be made editable.",
       "windfall_name": "Ghost notes",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -733,7 +733,7 @@
       "summary": "Sets the grid resolution that notes and edits align to.",
       "windfall_name": "Piano roll snap",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -769,10 +769,10 @@
       "summary": "Moves note starts and ends toward the grid or a groove template.",
       "windfall_name": "Quantize",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Quantize starts and ends to the snap. No quantizer dialog with strength or groove templates yet."
     },
     {
       "id": "win-piano-articulate",
@@ -961,7 +961,7 @@
       "summary": "Instances of a pattern placed on the timeline; editing the pattern updates every instance.",
       "windfall_name": "Pattern clips",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -973,7 +973,7 @@
       "summary": "Places one clip per click and moves or resizes clips.",
       "windfall_name": "Playlist draw tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -985,7 +985,7 @@
       "summary": "Repeats the selected clip along a track while dragging.",
       "windfall_name": "Playlist paint tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -997,7 +997,7 @@
       "summary": "Removes clips by clicking or dragging over them.",
       "windfall_name": "Playlist delete tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1009,7 +1009,7 @@
       "summary": "Silences individual clips without removing them.",
       "windfall_name": "Playlist mute tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1045,7 +1045,7 @@
       "summary": "Selects clips or a time range by dragging.",
       "windfall_name": "Playlist select tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1081,10 +1081,10 @@
       "summary": "Horizontal lanes that hold any clip type and can be named, colored, resized, muted and soloed.",
       "windfall_name": "Playlist tracks",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Name and mute. No color, solo or resize yet."
     },
     {
       "id": "win-playlist-track-groups",
@@ -1141,10 +1141,10 @@
       "summary": "A list of every pattern, audio clip and automation clip for choosing what to place next.",
       "windfall_name": "Clip picker",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Pattern picker only."
     },
     {
       "id": "win-playlist-clip-groups",
@@ -1177,7 +1177,7 @@
       "summary": "Sets the grid that clips move and resize to.",
       "windfall_name": "Playlist snap",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1297,7 +1297,7 @@
       "summary": "Insert tracks for incoming audio, a master track, and a utility track that follows the selection.",
       "windfall_name": "Mixer tracks",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "FL has 500 insert tracks, one master and one current track."
@@ -1309,7 +1309,7 @@
       "summary": "Level fader, pan knob and mute/solo switch on every track.",
       "windfall_name": "Track level controls",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1321,7 +1321,7 @@
       "summary": "A live peak level meter on every track.",
       "windfall_name": "Level meters",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "The phase-0 spike already shows live meters."
@@ -1333,7 +1333,7 @@
       "summary": "Each track holds up to ten effects in series, each with an on/off switch and a mix level.",
       "windfall_name": "Effect slots",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1345,7 +1345,7 @@
       "summary": "Any track can feed any other track, with a level knob per connection.",
       "windfall_name": "Routing and sends",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1393,10 +1393,10 @@
       "summary": "Delays tracks to line up with those whose plugins add latency, automatically or by a typed offset.",
       "windfall_name": "Plugin delay compensation",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Automatic compensation across the whole routing graph. No manual offset yet."
     },
     {
       "id": "win-mixer-docks-layouts",
@@ -1489,7 +1489,7 @@
       "summary": "A side panel listing user-chosen folders of samples, presets and projects.",
       "windfall_name": "Browser",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1501,7 +1501,7 @@
       "summary": "Plays a sample when it is clicked in the list.",
       "windfall_name": "Sample preview",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1513,7 +1513,7 @@
       "summary": "Shows the waveform of a sample in the browser, optionally inline in the list.",
       "windfall_name": "Waveform preview",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "Inline waveforms were added in FL Studio 2026."
@@ -1525,10 +1525,10 @@
       "summary": "Finds files by name across the browser folders, with wildcards and boolean terms.",
       "windfall_name": "Browser search",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Filters folders that have been opened. No recursive index yet."
     },
     {
       "id": "win-browser-drag-drop",
@@ -1537,7 +1537,7 @@
       "summary": "Drags samples, presets and plugins from the browser onto the rack, timeline or mixer.",
       "windfall_name": "Drag and drop",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": null
@@ -1835,9 +1835,9 @@
       "area": "instrument",
       "fl_feature": "3x OSC",
       "summary": "A simple three-oscillator subtractive synth.",
-      "windfall_name": null,
+      "windfall_name": "Subtractive synth",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "The plan's phase-2 subtractive synth."
@@ -1897,10 +1897,10 @@
       "summary": "The basic one-sample channel with pitch, envelope, loop and stretch settings.",
       "windfall_name": null,
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "The plan's phase-1 sampler."
+      "notes": "The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups. No loop points, filter or time-stretch yet."
     },
     {
       "id": "inst-directwave-player",
@@ -2447,9 +2447,9 @@
       "area": "effect",
       "fl_feature": "Fruity Compressor",
       "summary": "A basic single-band compressor.",
-      "windfall_name": null,
+      "windfall_name": "Compressor",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "Phase-2 core compressor per the plan."
@@ -2483,9 +2483,9 @@
       "area": "effect",
       "fl_feature": "Fruity Delay 3",
       "summary": "A tempo-synced echo with filtering, modulation and analog-style degradation.",
-      "windfall_name": null,
+      "windfall_name": "Delay",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "Phase-2 core delay per the plan."
@@ -2579,9 +2579,9 @@
       "area": "effect",
       "fl_feature": "Fruity Limiter",
       "summary": "Controls peaks on one band by limiting or compression, with a gate and a scrolling level display.",
-      "windfall_name": null,
+      "windfall_name": "Limiter",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "Phase-2 core limiter per the plan."
@@ -2675,9 +2675,9 @@
       "area": "effect",
       "fl_feature": "Fruity Parametric EQ2",
       "summary": "A seven-band parametric equalizer with a live spectrum display.",
-      "windfall_name": null,
+      "windfall_name": "Parametric EQ",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "Phase-2 core EQ per the plan."
@@ -2699,9 +2699,9 @@
       "area": "effect",
       "fl_feature": "Fruity Reeverb 2",
       "summary": "An algorithmic reverb that simulates rooms and halls.",
-      "windfall_name": null,
+      "windfall_name": "Reverb",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
       "notes": "Phase-2 core reverb per the plan."
@@ -3217,10 +3217,10 @@
       "summary": "Saves the whole project, without its samples, to one native file and reopens it.",
       "windfall_name": "Windfall project format",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "Windfall uses its own open format: readable JSON plus audio in a folder or zip, with a version number."
+      "notes": "Windfall uses its own open format: readable JSON plus audio in a folder or zip, with a version number. Windfall saves its own readable JSON format, .windfall. Reading .flp files is a separate row."
     },
     {
       "id": "fmt-project-zip",
@@ -3253,7 +3253,7 @@
       "summary": "Writes backup copies of the project automatically.",
       "windfall_name": "Autosave and backups",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
       "notes": "The plan builds autosave and timestamped backups into the project format."
@@ -3325,7 +3325,7 @@
       "summary": "Loads uncompressed WAV audio into samplers and audio clips.",
       "windfall_name": "WAV import",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
       "notes": null
@@ -3421,7 +3421,7 @@
       "summary": "Renders the song or pattern offline to WAV at 16-bit, 24-bit or 32-bit float.",
       "windfall_name": "WAV export",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
       "notes": null
@@ -3649,10 +3649,10 @@
       "summary": "Chooses the sound card driver and device and sets sample rate and buffer size.",
       "windfall_name": "Audio settings",
       "phase": 0,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "The plan uses cpal: WASAPI and ASIO on Windows, CoreAudio on macOS, ALSA, JACK and PipeWire on Linux."
+      "notes": "The plan uses cpal: WASAPI and ASIO on Windows, CoreAudio on macOS, ALSA, JACK and PipeWire on Linux. Device, sample rate and buffer through WASAPI, CoreAudio, ALSA and JACK. ASIO is behind a build feature that is off."
     },
     {
       "id": "wf-transport",
@@ -3661,10 +3661,10 @@
       "summary": "Starts and stops playback and recording and switches between playing one pattern and the whole song.",
       "windfall_name": "Transport",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Play, stop, pattern and song mode, song position. No recording yet."
     },
     {
       "id": "wf-tempo",
@@ -3673,10 +3673,10 @@
       "summary": "Sets the project tempo by typing, dragging or tapping.",
       "windfall_name": "Tempo",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Tempo field. No tap tempo yet."
     },
     {
       "id": "wf-metronome",
@@ -3709,10 +3709,10 @@
       "summary": "Switches and edits the color scheme of the whole interface.",
       "windfall_name": "Light and dark themes",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Light and dark themes."
     },
     {
       "id": "wf-ui-scaling",
@@ -3733,7 +3733,7 @@
       "summary": "Shows a short description of whatever is under the pointer.",
       "windfall_name": "Hints",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
       "notes": null
@@ -3745,10 +3745,10 @@
       "summary": "Toolbar displays for master output level, CPU load and memory use.",
       "windfall_name": "Status meters",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Master meter and engine load. No memory readout."
     },
     {
       "id": "wf-undo-history",
@@ -3757,7 +3757,7 @@
       "summary": "Steps back and forward through edits, with the stored actions listed in the project browser.",
       "windfall_name": "Undo history",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
       "notes": "The plan calls for linear undo with a visible history list."
@@ -3805,10 +3805,10 @@
       "summary": "A fixed set of key and mouse shortcuts for each editor.",
       "windfall_name": "Shortcuts with optional FL keymap",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Shortcuts are scoped to the focused panel. An optional preset follows FL Studio's keys."
     },
     {
       "id": "wf-macros",
@@ -3841,10 +3841,10 @@
       "summary": "Per-project choices for meter, timing resolution and how panning affects level.",
       "windfall_name": "Project settings",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Tempo, time signature and swing."
     },
     {
       "id": "wf-midi-settings",

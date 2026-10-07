@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates the TypeScript bindings for the project model and IPC types.
+# Regenerates the TypeScript bindings for the project model and IPC types,
+# and the parameter tables of the built-in effects and instruments.
 # Run from anywhere: scripts/gen-bindings.sh
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,4 +19,9 @@ cargo test --workspace --quiet export_bindings >/dev/null
     echo "export type { $name } from \"./$name\";"
   done
 } >"$out/index.ts"
+# Parameter tables and default settings of every effect and instrument, plus
+# reference curves the UI's display code is tested against.
+cargo run --quiet -p windfall-dsp --example descriptors >"$out/descriptors.json"
+cargo run --quiet -p windfall-project --example automation_fixtures >"$out/automation-fixtures.json"
+
 echo "wrote $(ls "$out" | wc -l) files to apps/desktop/src/bindings"

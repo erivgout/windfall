@@ -1,7 +1,12 @@
 //! The audio device: a cpal output stream fed by a [`Processor`].
+//!
+//! A thread the engine owns opens the stream, watches it and reopens it.
+//! [`Supervisor`] is that thread's whole job with the device and the clock
+//! handed in from outside, so it can be tested without either.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -11,6 +16,7 @@ use cpal::{
     BufferSize, ErrorKind, FromSample, I24, SampleFormat, SizedSample, StreamConfig,
     SupportedBufferSize, SupportedStreamConfig, U24,
 };
+use rtrb::{Consumer, Producer, PushError, RingBuffer};
 use windfall_ipc::{AudioDevice, AudioHost, AudioSettings, EngineStatus};
 
 use crate::controller::Controller;
@@ -22,9 +28,26 @@ use crate::shared::Shared;
 /// failed. Not every driver honors it.
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Shortest time between two automatic reopens after a device error, so a
-/// device that keeps failing cannot spin the device thread.
+/// How long a stream must have been open before it is reopened after a
+/// device error. A device that fails the moment it opens is tried again no
+/// sooner than this, so it cannot spin the device thread.
 const RECOVERY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Wait after the first failed try at reopening a lost device. Every
+/// further failure doubles the wait, up to [`MAX_RETRY_DELAY`].
+const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Longest wait between two tries at reopening a lost device. A device that
+/// comes back is therefore picked up within this time.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
+
+/// How often the device thread looks at a running stream for an error. The
+/// stream's own thread may not wake it: all that thread is allowed to do is
+/// leave the error where this one finds it.
+const FAULT_POLL: Duration = Duration::from_millis(100);
+
+/// Errors a stream can have waiting for the device thread to collect.
+const FAULT_CAPACITY: usize = 64;
 
 /// Device buffers per stretch of time that [`Coverage`] judges as a whole.
 const COVERAGE_WINDOW: u32 = 32;
@@ -41,6 +64,13 @@ const STANDARD_RATES: [u32; 13] = [
 /// The stream lives on a thread the engine owns, because on some platforms a
 /// stream must stay on the thread that opened it. The engine itself can be
 /// shared freely between threads. Dropping it closes the stream.
+///
+/// When the device goes away while the stream runs, as when an interface is
+/// unplugged, playback stops and the engine keeps trying to open the same
+/// settings again, first at once and then after waits that grow from one
+/// second to eight. Until that works, or [`Engine::reconfigure`] is called,
+/// [`Engine::status`] has `running` false and an `error` that ends in
+/// "reconnecting".
 pub struct Engine {
     controller: Controller,
     status: Arc<Mutex<EngineStatus>>,
@@ -52,9 +82,6 @@ enum Request {
     /// Close the stream and open one with these settings. The sender is
     /// signalled when the attempt is over.
     Open(AudioSettings, Sender<()>),
-    /// The stream reported that its device is gone or changed. Try the last
-    /// settings again.
-    Recover,
     Close,
 }
 
@@ -77,8 +104,7 @@ impl Engine {
             .spawn({
                 let controller = controller.clone();
                 let status = status.clone();
-                let requests = requests.clone();
-                move || device_thread(inbox, requests, controller, status)
+                move || device_thread(inbox, controller, status)
             })
             .ok();
         let engine = Engine {
@@ -92,8 +118,14 @@ impl Engine {
     }
 
     /// Closes the stream and opens one with new settings. Returns once the
-    /// attempt is over; [`Engine::status`] tells how it went. The project,
-    /// transport settings and playhead carry over, and playback stops.
+    /// attempt is over; [`Engine::status`] tells how it went.
+    ///
+    /// The project, transport settings and playhead carry over. If the
+    /// transport was playing and the new stream opened, playback carries on
+    /// from the playhead, with the notes that were sounding cut off. If no
+    /// stream could be opened, playback stops and the playhead returns to
+    /// where it started. A failed attempt is not repeated: the engine only
+    /// retries by itself for a device that was running and went away.
     pub fn reconfigure(&self, settings: &AudioSettings) {
         let (done, wait) = mpsc::channel();
         let sent = lock(&self.requests)
@@ -114,6 +146,7 @@ impl Engine {
             status.buffer_frames = delivered;
             status.latency_ms = latency_ms(delivered, status.sample_rate);
         }
+        status.latency_frames = self.controller.latency_frames();
         status
     }
 
@@ -162,55 +195,393 @@ fn stopped(settings: &AudioSettings, error: impl Into<String>) -> EngineStatus {
         sample_rate: settings.sample_rate.unwrap_or(0),
         buffer_frames: settings.buffer_frames.unwrap_or(0),
         latency_ms: 0.0,
+        latency_frames: 0,
         error: Some(error.into()),
     }
+}
+
+/// What the status says went wrong while the engine is trying to get a
+/// lost device back.
+fn reconnecting(reason: &str) -> String {
+    format!("{reason}; reconnecting")
 }
 
 /// Owns the stream. Everything that opens, closes or drops one happens here.
 fn device_thread(
     inbox: Receiver<Request>,
-    requests: Sender<Request>,
     controller: Controller,
     status: Arc<Mutex<EngineStatus>>,
 ) {
-    let mut stream: Option<cpal::Stream> = None;
-    let mut settings = AudioSettings::default();
-    let mut opened_at = Instant::now();
-    for request in inbox {
-        let done = match request {
-            Request::Open(new_settings, done) => {
-                settings = new_settings;
-                Some(done)
-            }
-            Request::Recover if opened_at.elapsed() >= RECOVERY_INTERVAL => None,
-            Request::Recover => continue,
-            Request::Close => break,
+    let backend = Cpal {
+        controller: controller.clone(),
+    };
+    let mut supervisor = Supervisor::new(backend, controller, status, Instant::now);
+    loop {
+        let request = match supervisor.patience() {
+            Some(wait) => match inbox.recv_timeout(wait) {
+                Ok(request) => Some(request),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+            None => match inbox.recv() {
+                Ok(request) => Some(request),
+                Err(_) => break,
+            },
         };
-        // The old stream goes first: its device may be the one wanted next.
-        drop(stream.take());
-        controller.detach();
-        opened_at = Instant::now();
+        match request {
+            Some(Request::Open(settings, done)) => {
+                supervisor.configure(settings);
+                let _ = done.send(());
+            }
+            Some(Request::Close) => break,
+            None => {}
+        }
+        supervisor.poll();
+    }
+}
 
-        let mut report = stopped(&settings, "");
-        let attempt = catch_unwind(AssertUnwindSafe(|| {
-            open(&settings, &controller, &status, &requests, &mut report)
-        }));
-        let failure = match attempt {
-            Ok(Ok(opened)) => {
-                stream = Some(opened);
-                None
+/// Opens streams for a [`Supervisor`]. [`Cpal`] is the real one.
+trait Backend {
+    type Stream: Running;
+
+    /// Opens and starts a stream. `report` collects the host and device
+    /// names found along the way, so a failure can still say how far it
+    /// got, and on success describes the stream that is running.
+    fn open(
+        &mut self,
+        settings: &AudioSettings,
+        report: &mut EngineStatus,
+    ) -> Result<Self::Stream, String>;
+}
+
+/// A stream that was opened. Dropping it closes it.
+trait Running {
+    /// The error that ended the stream, once it has one.
+    fn fault(&mut self) -> Option<Fault>;
+}
+
+/// Why a stream stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Fault {
+    reason: String,
+    /// Opening the device again can be expected to work, now or later.
+    recoverable: bool,
+}
+
+/// When to try reopening a stream that was lost. It keeps time and nothing
+/// else: it is told what happened and when, and says when a try is due.
+#[derive(Debug)]
+struct Recovery {
+    /// When the stream that is running, or was last running, opened.
+    opened_at: Option<Instant>,
+    retry_at: Option<Instant>,
+    /// How long to wait if the next try fails.
+    delay: Duration,
+}
+
+impl Recovery {
+    fn new() -> Self {
+        Self {
+            opened_at: None,
+            retry_at: None,
+            delay: FIRST_RETRY_DELAY,
+        }
+    }
+
+    /// A stream opened at `now`.
+    fn opened(&mut self, now: Instant) {
+        self.opened_at = Some(now);
+        self.retry_at = None;
+    }
+
+    /// The running stream lost its device at `now`. The first try is due at
+    /// once, unless the stream had only just opened: then it waits out the
+    /// rest of [`RECOVERY_INTERVAL`] instead of being forgotten.
+    fn lost(&mut self, now: Instant) {
+        let earliest = self
+            .opened_at
+            .map_or(now, |opened| opened + RECOVERY_INTERVAL);
+        self.retry_at = Some(now.max(earliest));
+        self.delay = FIRST_RETRY_DELAY;
+    }
+
+    /// A try that ended at `now` failed. The next one waits twice as long
+    /// as this one did, up to [`MAX_RETRY_DELAY`].
+    fn failed(&mut self, now: Instant) {
+        self.retry_at = Some(now + self.delay);
+        self.delay = (self.delay * 2).min(MAX_RETRY_DELAY);
+    }
+
+    /// The user chose settings, so nothing is retried on their behalf.
+    fn cancel(&mut self) {
+        self.retry_at = None;
+    }
+
+    /// True once, when a try is due at `now`.
+    fn due(&mut self, now: Instant) -> bool {
+        let due = self.retry_at.is_some_and(|at| at <= now);
+        if due {
+            self.retry_at = None;
+        }
+        due
+    }
+
+    /// Time from `now` until the next try, if one is pending.
+    fn wait(&self, now: Instant) -> Option<Duration> {
+        self.retry_at.map(|at| at.saturating_duration_since(now))
+    }
+}
+
+/// Looks after the stream: opens it when asked, notices when it fails,
+/// tells the controller and the status, and reopens a device that was lost.
+///
+/// `now` is its only clock, and [`Supervisor::patience`] says how long it
+/// can be left alone.
+struct Supervisor<B: Backend, C: Fn() -> Instant> {
+    backend: B,
+    controller: Controller,
+    status: Arc<Mutex<EngineStatus>>,
+    now: C,
+    /// What the user last asked for, and what a reopen asks for again.
+    settings: AudioSettings,
+    stream: Option<B::Stream>,
+    recovery: Recovery,
+}
+
+impl<B: Backend, C: Fn() -> Instant> Supervisor<B, C> {
+    fn new(backend: B, controller: Controller, status: Arc<Mutex<EngineStatus>>, now: C) -> Self {
+        Self {
+            backend,
+            controller,
+            status,
+            now,
+            settings: AudioSettings::default(),
+            stream: None,
+            recovery: Recovery::new(),
+        }
+    }
+
+    /// Closes the stream and opens one with the settings the user asked
+    /// for. Playback that was running carries on in the new stream.
+    fn configure(&mut self, settings: AudioSettings) {
+        self.settings = settings;
+        self.recovery.cancel();
+        // The old stream goes first: its device may be the one wanted next.
+        self.stream = None;
+        self.controller.suspend();
+        if let Err(failure) = self.open() {
+            *lock(&self.status) = failure;
+        }
+    }
+
+    /// Checks on the stream and makes any try at reopening that is due.
+    fn poll(&mut self) {
+        if let Some(fault) = self.stream.as_mut().and_then(Running::fault) {
+            self.stream = None;
+            self.controller.detach();
+            let mut status = lock(&self.status);
+            status.running = false;
+            status.error = Some(if fault.recoverable {
+                self.recovery.lost((self.now)());
+                reconnecting(&fault.reason)
+            } else {
+                fault.reason
+            });
+        }
+        if self.recovery.due((self.now)())
+            && let Err(mut failure) = self.open()
+        {
+            // Timed from the end of the try: a driver can take seconds to
+            // say no, and the wait is for the device, not for the driver.
+            self.recovery.failed((self.now)());
+            failure.error = failure.error.as_deref().map(reconnecting);
+            *lock(&self.status) = failure;
+        }
+    }
+
+    /// How long until [`Supervisor::poll`] has to be called again. `None`
+    /// when nothing will happen until the user asks.
+    fn patience(&self) -> Option<Duration> {
+        let watch = self.stream.as_ref().map(|_| FAULT_POLL);
+        match (self.recovery.wait((self.now)()), watch) {
+            (Some(retry), Some(watch)) => Some(retry.min(watch)),
+            (retry, watch) => retry.or(watch),
+        }
+    }
+
+    /// Opens a stream with the current settings. When that fails the
+    /// controller is told there is no stream, and the status to show is
+    /// returned.
+    fn open(&mut self) -> Result<(), EngineStatus> {
+        let mut report = stopped(&self.settings, "");
+        match self.backend.open(&self.settings, &mut report) {
+            Ok(stream) => {
+                self.stream = Some(stream);
+                self.recovery.opened((self.now)());
+                *lock(&self.status) = report;
+                Ok(())
             }
-            Ok(Err(reason)) => Some(reason),
-            Err(_) => Some("the audio driver crashed while opening the device".to_owned()),
-        };
-        if let Some(reason) = failure {
-            controller.detach();
-            report.error = Some(reason);
-            *lock(&status) = report;
+            Err(reason) => {
+                self.controller.detach();
+                report.running = false;
+                report.error = Some(reason);
+                Err(report)
+            }
         }
-        if let Some(done) = done {
-            let _ = done.send(());
+    }
+}
+
+/// The real devices of this machine.
+struct Cpal {
+    controller: Controller,
+}
+
+impl Backend for Cpal {
+    type Stream = CpalStream;
+
+    fn open(
+        &mut self,
+        settings: &AudioSettings,
+        report: &mut EngineStatus,
+    ) -> Result<CpalStream, String> {
+        catch_unwind(AssertUnwindSafe(|| {
+            open(settings, &self.controller, report)
+        }))
+        .unwrap_or_else(|_| Err("the audio driver crashed while opening the device".to_owned()))
+    }
+}
+
+/// An open cpal stream and the errors it has reported.
+struct CpalStream {
+    /// Declared first so it is dropped first: once it is gone, nothing
+    /// reports into `faults` any more.
+    _stream: cpal::Stream,
+    faults: FaultInbox,
+}
+
+impl Running for CpalStream {
+    fn fault(&mut self) -> Option<Fault> {
+        self.faults.take()
+    }
+}
+
+/// True for errors after which the same settings may well open again:
+/// the device was unplugged or taken, the audio service restarted, or the
+/// system changed the format under the stream.
+fn recoverable(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::DeviceNotAvailable
+            | ErrorKind::StreamInvalidated
+            | ErrorKind::DeviceBusy
+            | ErrorKind::HostUnavailable
+            | ErrorKind::BackendError
+    )
+}
+
+/// True for errors a stream reports and then carries on from.
+fn passing(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::Xrun | ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied
+    )
+}
+
+/// No error ended the stream.
+const ENDED_NOT: u8 = 0;
+/// An error ended the stream, and reopening may work.
+const ENDED_RECOVERABLE: u8 = 1;
+/// An error ended the stream for good.
+const ENDED_FOR_GOOD: u8 = 2;
+
+/// Makes the two ends of the path a stream's errors take from the audio
+/// thread to the device thread.
+fn fault_channel(shared: Arc<Shared>) -> (FaultReporter, FaultInbox) {
+    let (errors_in, errors_out) = RingBuffer::new(FAULT_CAPACITY);
+    let ended = Arc::new(AtomicU8::new(ENDED_NOT));
+    (
+        FaultReporter {
+            shared,
+            errors: errors_in,
+            ended: ended.clone(),
+        },
+        FaultInbox {
+            errors: errors_out,
+            ended,
+        },
+    )
+}
+
+/// The stream's error callback. cpal calls it on the audio thread, so it
+/// may not lock, allocate or free: it counts an xrun, notes whether the
+/// error ended the stream, and moves the error itself, which can own a
+/// message on the heap, to the device thread to be read and dropped there.
+struct FaultReporter {
+    shared: Arc<Shared>,
+    errors: Producer<cpal::Error>,
+    /// One of the `ENDED_` values, written when an error that ended the
+    /// stream found the queue full, so that a burst of xruns cannot hide it.
+    ended: Arc<AtomicU8>,
+}
+
+impl FaultReporter {
+    fn report(&mut self, error: cpal::Error) {
+        let kind = error.kind();
+        if kind == ErrorKind::Xrun {
+            self.shared.record_xrun();
         }
+        if let Err(PushError::Full(error)) = self.errors.push(error) {
+            // Nobody has collected for a while. An error that ended the
+            // stream still has to get through, so that much of it is noted
+            // where there is always room. The first one counts.
+            if !passing(kind) {
+                let ended = if recoverable(kind) {
+                    ENDED_RECOVERABLE
+                } else {
+                    ENDED_FOR_GOOD
+                };
+                let _ = self.ended.compare_exchange(
+                    ENDED_NOT,
+                    ended,
+                    Ordering::Release,
+                    Ordering::Relaxed,
+                );
+            }
+            // Dropping the error here could free its message on the audio
+            // thread, and leaking it is the one way left not to.
+            std::mem::forget(error);
+        }
+    }
+}
+
+/// The device thread's end of a stream's errors.
+struct FaultInbox {
+    errors: Consumer<cpal::Error>,
+    ended: Arc<AtomicU8>,
+}
+
+impl FaultInbox {
+    /// Drops the errors collected so far and returns the one that ended the
+    /// stream, if any did.
+    fn take(&mut self) -> Option<Fault> {
+        let mut fault = None;
+        while let Ok(error) = self.errors.pop() {
+            if fault.is_none() && !passing(error.kind()) {
+                fault = Some(Fault {
+                    reason: error.to_string(),
+                    recoverable: recoverable(error.kind()),
+                });
+            }
+        }
+        fault.or_else(|| {
+            // The error itself had no room in the queue, so its text is
+            // lost.
+            let ended = self.ended.load(Ordering::Acquire);
+            (ended != ENDED_NOT).then(|| Fault {
+                reason: "the audio stream stopped".to_owned(),
+                recoverable: ended == ENDED_RECOVERABLE,
+            })
+        })
     }
 }
 
@@ -219,10 +590,8 @@ fn device_thread(
 fn open(
     settings: &AudioSettings,
     controller: &Controller,
-    status: &Arc<Mutex<EngineStatus>>,
-    requests: &Sender<Request>,
     report: &mut EngineStatus,
-) -> Result<cpal::Stream, String> {
+) -> Result<CpalStream, String> {
     let host = find_host(settings.host.as_deref())?;
     report.host = host.id().name().to_owned();
     let device = find_device(&host, settings.device.as_deref())?;
@@ -249,30 +618,27 @@ fn open(
 
     let mut last_error = String::new();
     for (config, buffer) in attempts {
-        let stream = match build(&device, config, buffer, controller, status, requests) {
-            Ok(stream) => stream,
+        let (stream, faults) = match build(&device, config, buffer, controller) {
+            Ok(built) => built,
             Err(error) => {
                 last_error = error;
                 continue;
             }
         };
         let buffer_frames = stream.buffer_size().ok().or(buffer).unwrap_or(0);
-        // The status is written before the stream starts, so an error the
-        // stream reports right away is not overwritten.
-        *lock(status) = EngineStatus {
-            running: true,
-            host: report.host.clone(),
-            device: report.device.clone(),
-            sample_rate: config.sample_rate(),
-            buffer_frames,
-            latency_ms: latency_ms(buffer_frames, config.sample_rate()),
-            error: None,
-        };
+        report.running = true;
+        report.sample_rate = config.sample_rate();
+        report.buffer_frames = buffer_frames;
+        report.latency_ms = latency_ms(buffer_frames, config.sample_rate());
+        report.error = None;
         controller.shared().begin_stream();
         stream
             .play()
             .map_err(|error| format!("could not start the stream on \"{name}\": {error}"))?;
-        return Ok(stream);
+        return Ok(CpalStream {
+            _stream: stream,
+            faults,
+        });
     }
     Err(format!("could not open \"{name}\": {last_error}"))
 }
@@ -344,9 +710,7 @@ fn build(
     config: SupportedStreamConfig,
     buffer: Option<u32>,
     controller: &Controller,
-    status: &Arc<Mutex<EngineStatus>>,
-    requests: &Sender<Request>,
-) -> Result<cpal::Stream, String> {
+) -> Result<(cpal::Stream, FaultInbox), String> {
     let format = config.sample_format();
     if !writable(format) {
         return Err(format!("the sample format {format} is not supported"));
@@ -363,37 +727,16 @@ fn build(
         scratch: vec![[0.0; 2]; MAX_BLOCK].into_boxed_slice(),
         coverage: Coverage::new(config.sample_rate()),
     };
-
-    let shared = controller.shared().clone();
-    let status = status.clone();
-    let controller = controller.clone();
-    let requests = requests.clone();
-    let on_error = move |error: cpal::Error| match error.kind() {
-        ErrorKind::Xrun => shared.record_xrun(),
-        // The stream carries on after these.
-        ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied => {}
-        kind => {
-            controller.detach();
-            let mut status = lock(&status);
-            status.running = false;
-            status.error = Some(error.to_string());
-            drop(status);
-            if matches!(
-                kind,
-                ErrorKind::DeviceNotAvailable | ErrorKind::StreamInvalidated
-            ) {
-                let _ = requests.send(Request::Recover);
-            }
-        }
-    };
+    let (mut reporter, faults) = fault_channel(controller.shared().clone());
     device
         .build_output_stream_raw(
             stream_config,
             format,
             move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| feeder.fill(data),
-            on_error,
+            move |error: cpal::Error| reporter.report(error),
             Some(OPEN_TIMEOUT),
         )
+        .map(|stream| (stream, faults))
         .map_err(|error| error.to_string())
 }
 
@@ -597,7 +940,418 @@ fn describe(device: &cpal::Device, is_default: bool) -> AudioDevice {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    use windfall_project::Project;
+
     use super::*;
+    use crate::pool::SamplePool;
+    use crate::test_alloc::allocator_calls;
+
+    /// What a scripted backend is to do, and what was asked of it.
+    #[derive(Default)]
+    struct Script {
+        /// How each coming attempt to open ends, in order. Once these run
+        /// out, opening works.
+        outcomes: VecDeque<Result<(), String>>,
+        /// Number of attempts to open so far.
+        attempts: usize,
+        /// The error the open stream reports next.
+        fault: Option<Fault>,
+        /// How long every attempt to open takes.
+        open_takes: Duration,
+    }
+
+    /// A clock that only moves when it is told to.
+    type TestClock = Rc<Cell<Instant>>;
+
+    struct Scripted {
+        script: Rc<RefCell<Script>>,
+        controller: Controller,
+        clock: TestClock,
+    }
+
+    struct ScriptedStream {
+        script: Rc<RefCell<Script>>,
+        processor: Processor,
+    }
+
+    impl Backend for Scripted {
+        type Stream = ScriptedStream;
+
+        fn open(
+            &mut self,
+            _: &AudioSettings,
+            report: &mut EngineStatus,
+        ) -> Result<ScriptedStream, String> {
+            let mut script = self.script.borrow_mut();
+            script.attempts += 1;
+            self.clock.set(self.clock.get() + script.open_takes);
+            report.host = "Scripted".to_owned();
+            // As with a real device, the processor exists before it is known
+            // whether the stream will start.
+            let processor = self.controller.attach(48_000);
+            script.outcomes.pop_front().unwrap_or(Ok(()))?;
+            report.running = true;
+            report.sample_rate = 48_000;
+            report.error = None;
+            Ok(ScriptedStream {
+                script: self.script.clone(),
+                processor,
+            })
+        }
+    }
+
+    impl Running for ScriptedStream {
+        fn fault(&mut self) -> Option<Fault> {
+            self.script.borrow_mut().fault.take()
+        }
+    }
+
+    /// A supervisor over a scripted backend and a clock that starts at
+    /// 0 ms. Every call says what time it is made at.
+    struct Bench {
+        supervisor: Supervisor<Scripted, Box<dyn Fn() -> Instant>>,
+        script: Rc<RefCell<Script>>,
+        controller: Controller,
+        status: Arc<Mutex<EngineStatus>>,
+        clock: TestClock,
+        epoch: Instant,
+    }
+
+    impl Bench {
+        fn new() -> Self {
+            let script = Rc::new(RefCell::new(Script::default()));
+            let controller = Controller::new();
+            let status = Arc::new(Mutex::new(stopped(&AudioSettings::default(), "starting")));
+            let epoch = Instant::now();
+            let clock = Rc::new(Cell::new(epoch));
+            let backend = Scripted {
+                script: script.clone(),
+                controller: controller.clone(),
+                clock: clock.clone(),
+            };
+            let now: Box<dyn Fn() -> Instant> = Box::new({
+                let clock = clock.clone();
+                move || clock.get()
+            });
+            Self {
+                supervisor: Supervisor::new(backend, controller.clone(), status.clone(), now),
+                script,
+                controller,
+                status,
+                clock,
+                epoch,
+            }
+        }
+
+        /// A bench whose stream opened at 0 ms.
+        fn running() -> Self {
+            let mut bench = Self::new();
+            bench.configure(0);
+            assert!(bench.status().running);
+            bench
+        }
+
+        /// Moves the clock on to `ms`. It never goes back.
+        fn wait_until(&self, ms: u64) {
+            let time = self.epoch + Duration::from_millis(ms);
+            self.clock.set(self.clock.get().max(time));
+        }
+
+        /// Milliseconds on the clock.
+        fn time(&self) -> u64 {
+            self.clock.get().duration_since(self.epoch).as_millis() as u64
+        }
+
+        fn configure(&mut self, ms: u64) {
+            self.wait_until(ms);
+            self.supervisor.configure(AudioSettings::default());
+        }
+
+        fn poll(&mut self, ms: u64) {
+            self.wait_until(ms);
+            self.supervisor.poll();
+        }
+
+        /// Milliseconds the supervisor can be left alone from `ms` on.
+        fn patience(&self, ms: u64) -> Option<u64> {
+            self.wait_until(ms);
+            self.supervisor
+                .patience()
+                .map(|wait| wait.as_millis() as u64)
+        }
+
+        fn status(&self) -> EngineStatus {
+            lock(&self.status).clone()
+        }
+
+        fn attempts(&self) -> usize {
+            self.script.borrow().attempts
+        }
+
+        fn fail_next(&self, attempts: usize, reason: &str) {
+            let mut script = self.script.borrow_mut();
+            script
+                .outcomes
+                .extend((0..attempts).map(|_| Err(reason.to_owned())));
+        }
+
+        fn end_stream(&self, reason: &str, recoverable: bool) {
+            self.script.borrow_mut().fault = Some(Fault {
+                reason: reason.to_owned(),
+                recoverable,
+            });
+        }
+
+        /// Runs the open stream's processor for one buffer.
+        fn process(&mut self) {
+            let stream = self.supervisor.stream.as_mut().expect("a stream is open");
+            stream.processor.process(&mut [0.0; 128]);
+        }
+
+        /// Lets the supervisor run from `from_ms` the way the device thread
+        /// does, sleeping exactly as long as it asks to, until `until_ms`.
+        /// Returns the times at which it tried to open a stream.
+        fn run(&mut self, from_ms: u64, until_ms: u64) -> Vec<u64> {
+            let mut tries = Vec::new();
+            let mut wake = from_ms;
+            while wake <= until_ms {
+                self.wait_until(wake);
+                let (started, before) = (self.time(), self.attempts());
+                self.supervisor.poll();
+                if self.attempts() > before {
+                    tries.push(started);
+                }
+                match self.supervisor.patience() {
+                    Some(wait) => wake = self.time() + (wait.as_millis() as u64).max(1),
+                    None => break,
+                }
+            }
+            tries
+        }
+    }
+
+    #[test]
+    fn a_device_lost_just_after_opening_is_reopened_when_the_interval_is_over() {
+        let mut bench = Bench::running();
+        assert_eq!(bench.patience(0), Some(100));
+
+        bench.end_stream("the device was unplugged", true);
+        bench.poll(100);
+        let status = bench.status();
+        assert!(!status.running);
+        assert_eq!(
+            status.error.as_deref(),
+            Some("the device was unplugged; reconnecting")
+        );
+        // The request to reopen is kept, not thrown away for coming early.
+        assert_eq!(bench.attempts(), 1);
+        assert_eq!(bench.patience(100), Some(900));
+        bench.poll(999);
+        assert_eq!(bench.attempts(), 1);
+
+        bench.poll(1_000);
+        assert_eq!(bench.attempts(), 2);
+        let status = bench.status();
+        assert!(status.running);
+        assert_eq!(status.error, None);
+        assert_eq!(bench.patience(1_000), Some(100));
+    }
+
+    #[test]
+    fn a_device_that_stays_away_is_tried_again_at_growing_intervals_until_it_is_back() {
+        let mut bench = Bench::running();
+        bench.fail_next(6, "could not open \"Interface\"");
+        bench.end_stream("the device was unplugged", true);
+
+        // The stream had run for five seconds, so the first try comes at
+        // once. Then the waits double from one second to eight and stay
+        // there.
+        let tries = bench.run(5_000, 35_900);
+        assert_eq!(tries, [5_000, 6_000, 8_000, 12_000, 20_000, 28_000]);
+        let status = bench.status();
+        assert!(!status.running);
+        assert_eq!(
+            status.error.as_deref(),
+            Some("could not open \"Interface\"; reconnecting")
+        );
+        assert_eq!(bench.patience(35_900), Some(100));
+
+        assert_eq!(bench.run(36_000, 60_000), [36_000]);
+        let status = bench.status();
+        assert!(status.running);
+        assert_eq!(status.error, None);
+    }
+
+    #[test]
+    fn a_driver_that_is_slow_to_say_no_does_not_shorten_the_wait() {
+        let mut bench = Bench::running();
+        bench.script.borrow_mut().open_takes = Duration::from_secs(5);
+        bench.fail_next(3, "timed out");
+        bench.end_stream("unplugged", true);
+        // Every try takes five seconds to fail, and the wait of one, two
+        // and four seconds starts when it has.
+        assert_eq!(bench.run(10_000, 60_000), [10_000, 16_000, 23_000, 32_000]);
+        assert!(bench.status().running);
+    }
+
+    #[test]
+    fn a_device_lost_again_starts_over_with_short_waits() {
+        let mut bench = Bench::running();
+        bench.fail_next(3, "gone");
+        bench.end_stream("unplugged", true);
+        assert_eq!(bench.run(5_000, 20_000), [5_000, 6_000, 8_000, 12_000]);
+        assert!(bench.status().running);
+
+        bench.fail_next(2, "gone");
+        bench.end_stream("unplugged", true);
+        assert_eq!(bench.run(30_000, 40_000), [30_000, 31_000, 33_000]);
+        assert!(bench.status().running);
+    }
+
+    #[test]
+    fn choosing_settings_calls_off_the_reconnecting() {
+        let mut bench = Bench::running();
+        bench.fail_next(3, "gone");
+        bench.end_stream("unplugged", true);
+        assert_eq!(bench.run(5_000, 7_000), [5_000, 6_000]);
+        assert!(bench.patience(7_000).is_some());
+
+        // The user picks something that cannot be opened either. That is
+        // their answer, and nothing is tried behind their back.
+        bench.configure(7_500);
+        assert_eq!(bench.attempts(), 4);
+        let status = bench.status();
+        assert!(!status.running);
+        assert_eq!(status.error.as_deref(), Some("gone"));
+        assert_eq!(bench.patience(7_500), None);
+        assert!(bench.run(7_500, 60_000).is_empty());
+
+        bench.configure(61_000);
+        assert!(bench.status().running);
+    }
+
+    #[test]
+    fn an_error_that_reopening_cannot_fix_is_not_retried() {
+        let mut bench = Bench::running();
+        bench.end_stream("the format is not supported", false);
+        assert!(bench.run(5_000, 60_000).is_empty());
+        let status = bench.status();
+        assert!(!status.running);
+        assert_eq!(status.error.as_deref(), Some("the format is not supported"));
+        assert_eq!(bench.patience(60_000), None);
+    }
+
+    #[test]
+    fn playback_carries_on_through_new_settings_and_stops_when_the_device_is_lost() {
+        let mut bench = Bench::running();
+        bench
+            .controller
+            .set_project(&Project::new("t"), &SamplePool::new());
+        bench.controller.play();
+        bench.process();
+        assert!(bench.controller.frame().playing);
+
+        bench.configure(2_000);
+        assert!(bench.controller.transport().playing);
+        bench.process();
+        assert!(bench.controller.frame().playing);
+
+        // Settings that cannot be opened end playback, and say so.
+        bench.fail_next(1, "no such device");
+        bench.configure(3_000);
+        assert!(!bench.controller.transport().playing);
+        bench.configure(4_000);
+        bench.process();
+        assert!(!bench.controller.frame().playing);
+
+        // So does losing the device, even though it is back at once.
+        bench.controller.play();
+        bench.process();
+        assert!(bench.controller.transport().playing);
+        bench.end_stream("unplugged", true);
+        bench.poll(9_000);
+        assert!(bench.status().running);
+        assert!(!bench.controller.transport().playing);
+        bench.process();
+        assert!(!bench.controller.frame().playing);
+    }
+
+    /// A stream error that owns its message, as cpal's do.
+    fn error(kind: ErrorKind, message: &str) -> cpal::Error {
+        cpal::Error::with_message(kind, message.to_owned())
+    }
+
+    #[test]
+    fn reporting_a_stream_error_never_touches_the_allocator() {
+        let shared = Arc::new(Shared::new());
+        let (mut reporter, mut inbox) = fault_channel(shared.clone());
+        // More errors than the queue holds, so the ones with no room are
+        // covered too.
+        let mut errors: Vec<cpal::Error> = (0..FAULT_CAPACITY)
+            .map(|_| error(ErrorKind::Xrun, "the buffer underran"))
+            .collect();
+        errors.insert(3, error(ErrorKind::DeviceNotAvailable, "unplugged"));
+        errors.push(error(ErrorKind::StreamInvalidated, "format changed"));
+        errors.push(error(ErrorKind::Xrun, "the buffer underran"));
+
+        let calls = allocator_calls(|| {
+            for error in errors.drain(..) {
+                reporter.report(error);
+            }
+        });
+        assert_eq!(calls, 0, "the error callback used the allocator");
+        assert_eq!(shared.xruns(), FAULT_CAPACITY as u32 + 1);
+
+        // The device thread reads the error that ended the stream, text and
+        // all, and is the one to free what was queued.
+        assert_eq!(
+            inbox.take(),
+            Some(Fault {
+                reason: "unplugged".to_owned(),
+                recoverable: true,
+            })
+        );
+    }
+
+    #[test]
+    fn an_error_that_ends_the_stream_gets_through_a_full_queue() {
+        let (mut reporter, mut inbox) = fault_channel(Arc::new(Shared::new()));
+        for _ in 0..FAULT_CAPACITY {
+            reporter.report(cpal::Error::new(ErrorKind::Xrun));
+        }
+        reporter.report(error(ErrorKind::DeviceNotAvailable, "unplugged"));
+        let fault = inbox.take().expect("the stream ended");
+        assert!(fault.recoverable);
+        assert!(!fault.reason.is_empty());
+    }
+
+    #[test]
+    fn errors_a_stream_carries_on_from_do_not_end_it() {
+        let shared = Arc::new(Shared::new());
+        let (mut reporter, mut inbox) = fault_channel(shared.clone());
+        for kind in [
+            ErrorKind::Xrun,
+            ErrorKind::DeviceChanged,
+            ErrorKind::RealtimeDenied,
+        ] {
+            reporter.report(cpal::Error::new(kind));
+        }
+        assert_eq!(inbox.take(), None);
+        assert_eq!(shared.xruns(), 1);
+
+        reporter.report(error(ErrorKind::UnsupportedConfig, "no such format"));
+        assert_eq!(
+            inbox.take(),
+            Some(Fault {
+                reason: "no such format".to_owned(),
+                recoverable: false,
+            })
+        );
+    }
 
     /// Feeds `Coverage` buffers of 480 frames at 48 kHz, nominally one every
     /// 10 ms, each `delay_ms(index)` later than that, and counts the windows

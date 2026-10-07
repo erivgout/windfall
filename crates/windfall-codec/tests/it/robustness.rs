@@ -1,5 +1,7 @@
-//! Feeds the decoder empty, foreign, cut-off and damaged input. Every call
-//! must come back with a buffer or an error; a panic fails the test.
+//! Feeds the decoder empty, foreign, cut-off and damaged input, and headers
+//! that claim more than any real file holds. Every call must come back with
+//! a buffer or an error; a panic fails the test. A claim must not cost
+//! memory either.
 
 use std::fs;
 
@@ -10,6 +12,12 @@ use windfall_codec::{
 use windfall_core::AudioBuffer;
 
 use crate::common::*;
+use crate::heap::peak_heap;
+
+/// Most heap the decoder may hold while it turns a file down for what its
+/// header claims: room for the buffers the file is read through, and for
+/// nothing sized by the claim.
+const REFUSAL_CEILING: usize = 1024 * 1024;
 
 /// Every fixture's name, bytes and full decode.
 fn fixtures() -> Vec<(String, Vec<u8>, AudioBuffer)> {
@@ -108,25 +116,14 @@ fn error_messages_read_as_sentences() {
         "this is not a supported audio file (the format was not recognized)"
     );
 
-    // A WAV holding IMA ADPCM, which is not among the codecs built in.
-    let mut adpcm = 0x0011_u16.to_le_bytes().to_vec();
-    adpcm.extend(1_u16.to_le_bytes());
-    adpcm.extend(22_050_u32.to_le_bytes());
-    adpcm.extend(11_100_u32.to_le_bytes());
-    // 256-byte blocks of 4-bit samples, 505 samples to a block.
-    adpcm.extend(256_u16.to_le_bytes());
-    adpcm.extend(4_u16.to_le_bytes());
-    adpcm.extend(2_u16.to_le_bytes());
-    adpcm.extend(505_u16.to_le_bytes());
-    let bytes = riff_wave(&[chunk(b"fmt ", &adpcm), chunk(b"data", &[0; 512])]);
-    let other_codec = "this is not a supported audio file (it uses a codec Windfall cannot read)";
+    let bytes = riff_wave(&[adpcm_fmt_chunk(), chunk(b"data", &[0; 512])]);
     assert_eq!(
         decode_bytes(&bytes, None).unwrap_err().to_string(),
-        other_codec
+        OTHER_CODEC
     );
     assert_eq!(
         probe_bytes(&bytes, None).unwrap_err().to_string(),
-        other_codec
+        OTHER_CODEC
     );
 
     let cut_short = decode_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ", None).unwrap_err();
@@ -267,14 +264,34 @@ fn claim_length(header: &mut [u8], length: u32) {
     header[4..8].copy_from_slice(&length.to_le_bytes());
 }
 
-/// A 16-bit PCM `fmt ` chunk.
+/// A 16-bit PCM `fmt ` chunk. The byte rate and the frame size wrap around
+/// where the channel count or sample rate is too large for their fields.
 fn fmt_chunk(channels: u16, sample_rate: u32) -> Vec<u8> {
+    let frame = channels.wrapping_mul(2);
     let mut body = 1_u16.to_le_bytes().to_vec();
     body.extend(channels.to_le_bytes());
     body.extend(sample_rate.to_le_bytes());
-    body.extend((sample_rate * u32::from(channels) * 2).to_le_bytes());
-    body.extend((channels * 2).to_le_bytes());
+    body.extend(sample_rate.wrapping_mul(u32::from(frame)).to_le_bytes());
+    body.extend(frame.to_le_bytes());
     body.extend(16_u16.to_le_bytes());
+    chunk(b"fmt ", &body)
+}
+
+const OTHER_CODEC: &str =
+    "this is not a supported audio file (it uses a codec Windfall cannot read)";
+
+/// The `fmt ` chunk of a WAV holding IMA ADPCM, which is not among the
+/// codecs built in.
+fn adpcm_fmt_chunk() -> Vec<u8> {
+    let mut body = 0x0011_u16.to_le_bytes().to_vec();
+    body.extend(1_u16.to_le_bytes());
+    body.extend(22_050_u32.to_le_bytes());
+    body.extend(11_100_u32.to_le_bytes());
+    // 256-byte blocks of 4-bit samples, 505 samples to a block.
+    body.extend(256_u16.to_le_bytes());
+    body.extend(4_u16.to_le_bytes());
+    body.extend(2_u16.to_le_bytes());
+    body.extend(505_u16.to_le_bytes());
     chunk(b"fmt ", &body)
 }
 
@@ -369,4 +386,255 @@ fn headers_with_impossible_values_are_errors() {
     for (what, bytes) in cases {
         assert!(decode_any(&bytes, None).is_err(), "{what} decoded");
     }
+}
+
+fn unsupported(reason: &str) -> String {
+    format!("this is not a supported audio file ({reason})")
+}
+
+/// Checks that `bytes` are turned down with `message`, when probed and when
+/// decoded with next to no memory allowed, and that neither holds more than
+/// `REFUSAL_CEILING` of heap on the way.
+fn assert_refused_cheaply(bytes: &[u8], message: &str) {
+    let tiny = DecodeOptions {
+        max_decoded_bytes: 4,
+    };
+    // The first run fills the tables that are built once per process.
+    let _ = decode_bytes_with(bytes, None, &tiny);
+
+    let (decoded, decoding) = peak_heap(|| decode_bytes_with(bytes, None, &tiny));
+    assert_eq!(decoded.unwrap_err().to_string(), message);
+    assert!(
+        decoding <= REFUSAL_CEILING,
+        "decoding held {decoding} bytes"
+    );
+
+    let (probed, probing) = peak_heap(|| probe_bytes(bytes, None));
+    assert_eq!(probed.unwrap_err().to_string(), message);
+    assert!(probing <= REFUSAL_CEILING, "probing held {probing} bytes");
+}
+
+/// One AIFF chunk, padded to an even length as the format requires.
+fn aiff_chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut bytes = id.to_vec();
+    bytes.extend((body.len() as u32).to_be_bytes());
+    bytes.extend(body);
+    if body.len() % 2 == 1 {
+        bytes.push(0);
+    }
+    bytes
+}
+
+/// A whole number of hertz as the 80-bit float an AIFF states its rate in.
+fn extended(sample_rate: u32) -> [u8; 10] {
+    let mut bytes = [0; 10];
+    if sample_rate > 0 {
+        let zeros = sample_rate.leading_zeros();
+        bytes[..2].copy_from_slice(&(16_383 + 31 - zeros as u16).to_be_bytes());
+        bytes[2..6].copy_from_slice(&(sample_rate << zeros).to_be_bytes());
+    }
+    bytes
+}
+
+/// An AIFF, or AIFF-C if `form` says so, with `sound` as its audio in
+/// samples of `bits` bits.
+fn aiff(form: &[u8; 4], channels: u16, bits: u16, sample_rate: [u8; 10], sound: &[u8]) -> Vec<u8> {
+    let frames = sound.len() / usize::from(bits / 8) / usize::from(channels);
+    let mut common = channels.to_be_bytes().to_vec();
+    common.extend((frames as u32).to_be_bytes());
+    common.extend(bits.to_be_bytes());
+    common.extend(sample_rate);
+    if form == b"AIFC" {
+        // Not compressed, under a name of no letters.
+        common.extend(b"NONE\0\0");
+    }
+    // No offset and no block size, then the samples.
+    let mut sound_data = vec![0; 8];
+    sound_data.extend(sound);
+
+    let body = [
+        aiff_chunk(b"COMM", &common),
+        aiff_chunk(b"SSND", &sound_data),
+    ]
+    .concat();
+    let mut bytes = b"FORM".to_vec();
+    bytes.extend((body.len() as u32 + 4).to_be_bytes());
+    bytes.extend(form);
+    bytes.extend(body);
+    bytes
+}
+
+/// A FLAC fixture with another sample rate written into its stream info.
+fn flac_claiming(sample_rate: u32) -> Vec<u8> {
+    let mut bytes = fs::read(fixture("flac_s16_44k_stereo.flac")).unwrap();
+    assert_eq!(&bytes[..5], b"fLaC\0", "the stream info comes first");
+    // The rate is 20 bits long and starts 18 bytes in. The four bits behind
+    // it belong to the channel count and the sample size.
+    bytes[18] = (sample_rate >> 12) as u8;
+    bytes[19] = (sample_rate >> 4) as u8;
+    bytes[20] = (sample_rate << 4) as u8 | (bytes[20] & 0x0F);
+    bytes
+}
+
+/// A Vorbis fixture with another channel count and sample rate written into
+/// its identification header.
+fn vorbis_claiming(channels: u8, sample_rate: u32) -> Vec<u8> {
+    let mut bytes = fs::read(fixture("vorbis_44k_stereo.ogg")).unwrap();
+    // The header has the first page to itself: 28 bytes of page header, then
+    // the packet's name, its version and the two values.
+    assert_eq!(&bytes[28..35], b"\x01vorbis");
+    bytes[39] = channels;
+    bytes[40..44].copy_from_slice(&sample_rate.to_le_bytes());
+    bytes[22..26].fill(0);
+    let checksum = ogg_checksum(&bytes[..58]);
+    bytes[22..26].copy_from_slice(&checksum.to_le_bytes());
+    bytes
+}
+
+#[test]
+fn a_tiny_aiff_claiming_thousands_of_channels_is_turned_down_cheaply() {
+    // A decoder made for this header would set aside 1152 frames of 16,000
+    // channels at four bytes a sample, 74 MB, for a file of 118 bytes.
+    let bytes = aiff(b"AIFF", 16_000, 32, extended(44_100), &[0; 64]);
+    assert_eq!(bytes.len(), 118);
+    assert_refused_cheaply(&bytes, &unsupported("it has 16000 channels"));
+
+    let compressed = aiff(b"AIFC", u16::MAX, 16, extended(44_100), &[0; 64]);
+    assert_refused_cheaply(&compressed, &unsupported("it has 65535 channels"));
+}
+
+#[test]
+fn a_wav_claiming_thousands_of_channels_is_turned_down_cheaply() {
+    let audio = chunk(b"data", &ramp(64));
+    let plain = fmt_chunk(60_000, 44_100);
+    let bytes = riff_wave(&[plain.clone(), audio.clone()]);
+    assert_refused_cheaply(&bytes, &unsupported("it has 60000 channels"));
+
+    // The extensible form of the chunk, which adds a channel mask that the
+    // reader fits to the channel count.
+    let mut extensible = plain[8..].to_vec();
+    extensible[..2].copy_from_slice(&0xFFFE_u16.to_le_bytes());
+    extensible.extend(22_u16.to_le_bytes());
+    extensible.extend(16_u16.to_le_bytes());
+    extensible.extend(0_u32.to_le_bytes());
+    // The ID of PCM.
+    extensible.extend([
+        1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71,
+    ]);
+    let bytes = riff_wave(&[chunk(b"fmt ", &extensible), audio]);
+    assert_refused_cheaply(&bytes, &unsupported("it has 60000 channels"));
+}
+
+#[test]
+fn a_vorbis_stream_claiming_every_channel_it_can_is_turned_down_cheaply() {
+    // FLAC and MP3 have no way to state more than eight and two channels.
+    assert_refused_cheaply(
+        &vorbis_claiming(255, 44_100),
+        &unsupported("it has 255 channels"),
+    );
+    assert_refused_cheaply(
+        &vorbis_claiming(65, 44_100),
+        &unsupported("it has 65 channels"),
+    );
+}
+
+#[test]
+fn sample_rates_no_file_has_are_refused() {
+    let too_fast = |rate: u32| unsupported(&format!("it has a sample rate of {rate} Hz"));
+    let audio = chunk(b"data", &ramp(64));
+    let wav = |rate| riff_wave(&[fmt_chunk(2, rate), audio.clone()]);
+
+    assert_refused_cheaply(&wav(768_001), &too_fast(768_001));
+    assert_refused_cheaply(&wav(u32::MAX), &too_fast(u32::MAX));
+    assert_refused_cheaply(
+        &wav(0),
+        "the audio file is damaged (the sample rate is zero)",
+    );
+
+    let sound = [0; 64];
+    let megahertz = aiff(b"AIFF", 2, 16, extended(1_000_000), &sound);
+    assert_refused_cheaply(&megahertz, &too_fast(1_000_000));
+    // Two to the power of 40, which the reader takes for the highest rate
+    // it can count to.
+    let beyond_counting = [0x40, 0x27, 0x80, 0, 0, 0, 0, 0, 0, 0];
+    let compressed = aiff(b"AIFC", 2, 16, beyond_counting, &sound);
+    assert_refused_cheaply(&compressed, &too_fast(u32::MAX));
+
+    // The 20 bits a FLAC states its rate in reach a little over 1 MHz.
+    assert_refused_cheaply(&flac_claiming(0xF_FFFF), &too_fast(0xF_FFFF));
+    assert_refused_cheaply(&flac_claiming(768_001), &too_fast(768_001));
+    assert_refused_cheaply(&vorbis_claiming(2, u32::MAX), &too_fast(u32::MAX));
+    assert_refused_cheaply(&vorbis_claiming(2, 768_001), &too_fast(768_001));
+
+    // The highest rate allowed is still read.
+    let fastest = wav(768_000);
+    assert_eq!(probe_bytes(&fastest, None).unwrap().sample_rate, 768_000);
+    let buffer = decode_any(&fastest, None).unwrap();
+    assert_eq!(buffer.sample_rate(), 768_000);
+    assert_eq!(buffer.samples(), ramp_decoded(64));
+}
+
+#[test]
+fn files_of_many_channels_still_decode() {
+    let surround = riff_wave(&[fmt_chunk(8, 48_000), chunk(b"data", &ramp(320))]);
+    assert_eq!(probe_bytes(&surround, None).unwrap().channels, 8);
+    let buffer = decode_any(&surround, None).unwrap();
+    assert_eq!(buffer.channels(), 8);
+    assert_eq!(buffer.frames(), 40);
+    assert_eq!(buffer.samples(), ramp_decoded(320));
+
+    // As many channels as are allowed. AIFF stores the high byte first.
+    let sound: Vec<u8> = (0..320_i16)
+        .flat_map(|value| (value * 100).to_be_bytes())
+        .collect();
+    let widest = aiff(b"AIFF", 64, 16, extended(48_000), &sound);
+    assert_eq!(probe_bytes(&widest, None).unwrap().channels, 64);
+    let buffer = decode_any(&widest, None).unwrap();
+    assert_eq!(buffer.channels(), 64);
+    assert_eq!(buffer.frames(), 5);
+    assert_eq!(buffer.samples(), ramp_decoded(320));
+
+    let one_more = aiff(b"AIFF", 65, 16, extended(48_000), &sound);
+    assert_refused_cheaply(&one_more, &unsupported("it has 65 channels"));
+}
+
+#[test]
+fn room_for_a_believable_length_is_only_taken_as_the_audio_arrives() {
+    // 100,000 samples behind a header written for three million. A file of
+    // this size could hold that much if it were compressed, so the length is
+    // believed, and comes to 12 MB decoded.
+    let sawtooth = |index: usize| (index % 300) as i16 * 100;
+    let audio: Vec<u8> = (0..100_000)
+        .flat_map(|index| sawtooth(index).to_le_bytes())
+        .collect();
+    let mut data = chunk(b"data", &audio);
+    claim_length(&mut data, 6_000_000);
+    let mut bytes = riff_wave(&[fmt_chunk(1, 44_100), data]);
+    claim_length(&mut bytes, 6_000_000 + 36);
+    assert_eq!(probe_bytes(&bytes, None).unwrap().frames, Some(3_000_000));
+
+    let _ = decode_bytes(&bytes, None);
+    let (decoded, peak) = peak_heap(|| decode_bytes(&bytes, None));
+    let expected: Vec<f32> = (0..100_000)
+        .map(|index| f32::from(sawtooth(index)) / 32_768.0)
+        .collect();
+    assert!(decoded.unwrap().samples() == expected, "the audio changed");
+    // No more than 1 MiB is set aside on the header's word, and the audio
+    // that is there fits into that.
+    assert!(peak < 1536 * 1024, "held {peak} bytes");
+}
+
+#[test]
+fn nothing_is_set_aside_for_a_file_without_a_decoder() {
+    // 100 kB of ADPCM blocks behind a header written for eight times that:
+    // a believable 6 MB once decoded, if there were a decoder for it.
+    let mut data = chunk(b"data", &vec![0; 100_000]);
+    claim_length(&mut data, 800_000);
+    let mut bytes = riff_wave(&[adpcm_fmt_chunk(), data]);
+    claim_length(&mut bytes, 800_000 + 40);
+
+    let _ = decode_bytes(&bytes, None);
+    let (decoded, peak) = peak_heap(|| decode_bytes(&bytes, None));
+    assert_eq!(decoded.unwrap_err().to_string(), OTHER_CODEC);
+    assert!(peak <= REFUSAL_CEILING, "held {peak} bytes");
 }

@@ -1,7 +1,11 @@
 //! Tests of the engine through its public API. None of them needs an audio
 //! device: they drive a `Processor` directly or use the offline renderer.
 
+mod audio_clips;
+mod automation;
 mod device;
+mod effects;
+mod instruments;
 mod mixer;
 mod realtime;
 mod rendering;

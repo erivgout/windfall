@@ -12,6 +12,7 @@ authors = ["The Windfall contributors"]
 
 [workspace.dependencies]
 windfall-core = { path = "crates/windfall-core" }
+windfall-dsp = { path = "crates/windfall-dsp" }
 windfall-project = { path = "crates/windfall-project" }
 windfall-ipc = { path = "crates/windfall-ipc" }
 windfall-codec = { path = "crates/windfall-codec" }

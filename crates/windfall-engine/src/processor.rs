@@ -5,19 +5,20 @@ use std::sync::Arc;
 use rtrb::{Consumer, Producer};
 use windfall_core::AudioBuffer;
 
+use crate::automation::{self, GRID, Look};
+use crate::clips::ClipPlayer;
 use crate::controller::Controller;
 use crate::message::{GARBAGE_HEADROOM, Garbage, Message, retire};
 use crate::mixer::{Frame, MAX_BLOCK, Mixer};
-use crate::plan::{Plan, PlanState};
+use crate::plan::Plan;
 use crate::ramp::Ramp;
-use crate::sequencer::{Sequencer, Triggers};
+use crate::sequencer::{Cursor, Fire, Sequencer, Triggers};
 use crate::shared::Shared;
-use crate::voice::{Note, Origin, VoicePool};
+use crate::state::{Fades, PlanState};
+use crate::voice::{Note, Origin, Stretch, VoicePool};
 
-/// Time a gain or pan change takes to arrive.
-const RAMP_SECONDS: f64 = 0.005;
-
-/// Turns the current plan into audio: sequencer, sampler voices and mixer.
+/// Turns the current plan into audio: sequencer, sampler voices,
+/// instruments, effects and mixer.
 ///
 /// The device callback, the offline renderer and the tests all drive the
 /// same `process`, so an export is the same audio as playback.
@@ -35,13 +36,28 @@ pub struct Processor {
     state: Box<PlanState>,
     sequencer: Sequencer,
     voices: VoicePool,
+    /// The audio clips of the playlist that are sounding.
+    clips: ClipPlayer,
     mixer: Mixer,
     triggers: Triggers,
     /// Gain applied after the master track and its meter.
     output_gain: Ramp,
-    ramp_frames: u64,
+    fades: Fades,
     /// Sequence number of the last play or stop request handled.
     transport_sequence: u32,
+    /// Automated values were published the last time there were any to
+    /// publish, so their going away has to be published once as well.
+    reported: bool,
+    /// Playback has begun or been moved since the automation was last
+    /// looked at.
+    landed: bool,
+    /// The place in the song at which a song that has stopped keeps its
+    /// automation, for as long as it is ringing out. See
+    /// [`Processor::automate`].
+    hold: Option<f64>,
+    /// The offline renderer is what plays: nobody will use the transport
+    /// again, so a hold lasts for good.
+    hold_for_good: bool,
     messages: Consumer<Message>,
     garbage: Producer<Garbage>,
     shared: Arc<Shared>,
@@ -57,26 +73,37 @@ impl Processor {
         (processor, controller)
     }
 
+    /// A processor that starts out on `plan`, with `state` built for it at
+    /// this sample rate, and with the output at `output_gain`. All of it is
+    /// simply there from the first frame: nothing has sounded yet, so there
+    /// is nothing to glide or fade in from.
     pub(crate) fn with_queues(
         sample_rate: u32,
+        plan: Arc<Plan>,
+        state: Box<PlanState>,
+        output_gain: f32,
         messages: Consumer<Message>,
         garbage: Producer<Garbage>,
         shared: Arc<Shared>,
     ) -> Self {
         let sample_rate = sample_rate.max(1);
-        let plan = Arc::new(Plan::empty());
         Self {
             sample_rate,
             frame: 0,
-            state: Box::new(PlanState::new(&plan)),
+            state,
             sequencer: Sequencer::new(sample_rate, &plan),
             plan,
             voices: VoicePool::new(sample_rate),
+            clips: ClipPlayer::new(sample_rate),
             mixer: Mixer::new(),
             triggers: Triggers::new(),
-            output_gain: Ramp::at_rest(1.0),
-            ramp_frames: ((RAMP_SECONDS * f64::from(sample_rate)).round() as u64).max(1),
+            output_gain: Ramp::at_rest(output_gain),
+            fades: Fades::at(sample_rate),
             transport_sequence: 0,
+            reported: false,
+            landed: false,
+            hold: None,
+            hold_for_good: false,
             messages,
             garbage,
             shared,
@@ -94,48 +121,199 @@ impl Processor {
     /// only on which frame each request arrives at.
     pub fn process(&mut self, out: &mut [f32]) {
         self.voices.sweep(&self.plan, &mut self.garbage);
+        self.clips.sweep(&self.plan, &mut self.garbage);
         self.handle_messages();
         let (frames, stray) = out.as_chunks_mut::<2>();
         stray.fill(0.0);
-        for block in frames.chunks_mut(MAX_BLOCK) {
+        let mut rest = frames;
+        while !rest.is_empty() {
+            let (block, later) = rest.split_at_mut(self.next_block(rest.len()));
             self.process_block(block);
+            rest = later;
         }
+        self.publish_automation();
         self.shared
             .publish_transport(self.transport_sequence, self.sequencer.playing());
+        // The playhead is where the sound now leaving the engine was in the
+        // song, which is behind what is being worked out by the latency of
+        // the instruments and effects.
         self.shared.publish_position(
-            self.sequencer.tick(&self.plan, self.frame),
-            self.voices.active(),
+            self.sequencer
+                .tick_heard(&self.plan, self.frame, self.state.latency),
+            self.sequencer.start(),
+            self.voices.active() + self.state.instrument_voices(),
         );
+        let missing = self.clips.missing(self.sequencer.clock(), self.frame);
+        self.shared
+            .publish_clips(self.clips.playing() as u32, missing as u32);
+    }
+
+    /// Audio clips that were to start and did not, because as many as can
+    /// play at once were playing already. The offline renderer reports it.
+    pub(crate) fn clips_left_out(&self) -> u32 {
+        self.clips.refused()
+    }
+
+    /// True when nothing is sounding and nothing can sound again until a
+    /// note starts: every voice and audio clip has ended, every instrument
+    /// has finished, and every effect and delay has had silence coming in
+    /// for as long as it can hold on to sound. The offline renderer asks
+    /// this to know when a tail is over.
+    pub(crate) fn settled(&self) -> bool {
+        self.voices.active() == 0
+            && self.clips.active() == 0
+            && self.state.settled(&self.plan, self.frame)
     }
 
     fn handle_messages(&mut self) {
         // Handling a message can retire values, and those must have
         // somewhere to go.
+        let mut handled = false;
         while self.garbage.slots() >= GARBAGE_HEADROOM {
             let Ok(message) = self.messages.pop() else {
                 break;
             };
             self.handle(message);
+            handled = true;
         }
+        // The transport may have started, stopped or moved, and a new plan
+        // may have other curves: the automation is looked at right away,
+        // not at the next step of its grid.
+        if handled {
+            self.automate();
+        }
+    }
+
+    /// How many frames to process next, out of `left` to do. While
+    /// automation is at work this is up to the next step of its grid, and
+    /// the automation is looked at when a step has come. The grid is
+    /// counted in frames of the engine's clock, so where it falls does not
+    /// depend on how the output is divided into calls.
+    fn next_block(&mut self, left: usize) -> usize {
+        let most = left.min(MAX_BLOCK);
+        let at_work = self.state.engaged > 0 || self.state.returning > 0;
+        let automating = !self.plan.lanes.is_empty() && (self.sequencer.in_song() || at_work);
+        if !automating {
+            return most;
+        }
+        let into = self.frame % GRID;
+        if into == 0 {
+            self.automate();
+        }
+        most.min((GRID - into) as usize)
+    }
+
+    /// Looks at the automation: sets every automated target on its way to
+    /// the value it is to have at the next step of the grid, and tells the
+    /// effects and instruments the tempo the song has there.
+    ///
+    /// While the song plays, that is the value of the place in the song.
+    /// A song that has stopped, by itself at its end or because it was
+    /// told to, leaves its targets where they were for as long as anything
+    /// is still sounding: a tail must not be heard through a fader that has
+    /// gone back to its stored value. The hold ends when everything has
+    /// rung out, or sooner when the transport is used or something is
+    /// played by hand, and the targets then return to their stored values.
+    fn automate(&mut self) {
+        if self.plan.lanes.is_empty() {
+            self.hold = None;
+            return;
+        }
+        let now = self.frame;
+        let playing = self.sequencer.playing();
+        if self.hold.is_some() && (playing || (!self.hold_for_good && self.settled())) {
+            self.hold = None;
+        }
+        let landed = std::mem::take(&mut self.landed);
+        let until = (now / GRID + 1) * GRID;
+        let ahead = self.sequencer.song_tick_at(&self.plan, until);
+        let look = Look {
+            now,
+            until,
+            tick: ahead.or(self.hold),
+            landed: self
+                .sequencer
+                .song_tick_at(&self.plan, now)
+                .filter(|_| landed),
+            // With the song playing on, what starts next must find the
+            // target where it belongs. With the transport stopped there is
+            // only what still rings to hear the change.
+            back: if playing {
+                self.fades.ramp
+            } else {
+                self.fades.restore
+            },
+        };
+        let tick = look.tick;
+        automation::step(&self.plan, &mut self.state, look);
+        if self.state.engaged == 0 {
+            self.hold = None;
+        }
+        let tempo = match (tick, &self.plan.tempo_map) {
+            (Some(tick), Some(map)) => map.tempo_at(tick),
+            _ => self.plan.tempo_bpm,
+        };
+        self.state.tell_tempo(tempo);
+    }
+
+    /// Publishes the value of every automation that has its target in
+    /// hand, for the UI to show the control moving.
+    fn publish_automation(&mut self) {
+        if self.state.engaged == 0 && !self.reported {
+            return;
+        }
+        let lanes = self.state.lanes.iter().filter(|lane| lane.engaged);
+        self.shared
+            .publish_automated(lanes.map(|lane| (lane.automation, lane.value)));
+        self.reported = self.state.engaged > 0;
     }
 
     fn handle(&mut self, message: Message) {
         let now = self.frame;
+        // Where the song is, in case this is what stops it.
+        let song_at = self.sequencer.song_tick_at(&self.plan, now);
+        // Using the transport, or playing something by hand, ends the wait
+        // for a stopped song to ring out: what comes next is to be heard
+        // at the stored values.
+        let lets_go = match &message {
+            Message::Play { .. }
+            | Message::Stop { .. }
+            | Message::Seek(_)
+            | Message::NoteOn { .. }
+            | Message::Preview(_) => true,
+            Message::SetTransport { mode, .. } => *mode != self.sequencer.mode(),
+            Message::SetPlan { .. }
+            | Message::NoteOff { .. }
+            | Message::StopPreview
+            | Message::SetOutputGain(_) => false,
+        };
+        if lets_go {
+            self.hold = None;
+        }
         match message {
             Message::SetPlan { plan, state } => self.adopt(plan, state),
-            Message::Play { sequence, passes } => {
+            Message::Play {
+                sequence,
+                passes,
+                from,
+            } => {
                 self.transport_sequence = sequence;
-                self.sequencer.play(&self.plan, now, passes);
+                self.hold_for_good = passes.is_some();
+                self.sequencer.play(&self.plan, now, passes, from);
             }
             Message::Stop { sequence } => {
                 self.transport_sequence = sequence;
                 self.sequencer.stop();
+                self.clips.release_all();
                 self.voices.fade_origin(Origin::Sequenced);
                 self.voices.fade_origin(Origin::Live);
+                for unit in self.state.instrument_units() {
+                    unit.silence();
+                }
             }
             Message::Seek(tick) => {
                 if self.sequencer.seek(tick, &self.plan, now) {
-                    self.voices.fade_origin(Origin::Sequenced);
+                    self.end_sequenced();
                 }
             }
             Message::SetTransport {
@@ -147,7 +325,7 @@ impl Processor {
                     .sequencer
                     .set_transport(mode, pattern, loop_song, &self.plan, now)
                 {
-                    self.voices.fade_origin(Origin::Sequenced);
+                    self.end_sequenced();
                 }
             }
             Message::NoteOn {
@@ -155,36 +333,137 @@ impl Processor {
                 key,
                 velocity,
             } => {
-                if let Some(channel) = self.plan.channel_ids.get(channel.0) {
+                if let Some(channel) = self.plan.channel(channel) {
                     let note = Note {
                         channel,
                         key,
                         velocity,
                         pan: 0.0,
-                        release_at: u64::MAX,
+                        end: f64::INFINITY,
                         origin: Origin::Live,
                     };
-                    self.voices.start(&self.plan, &mut self.garbage, note, now);
+                    self.start(note, now);
                 }
             }
-            Message::NoteOff { channel, key } => self.voices.release_live(channel, key),
+            Message::NoteOff { channel, key } => {
+                self.voices.release_live(channel, key);
+                let index = self.plan.channel(channel);
+                if let Some(unit) = index.and_then(|index| self.state.instrument(index)) {
+                    unit.release_live(key);
+                }
+            }
             Message::Preview(sample) => self.preview(sample),
             Message::StopPreview => self.voices.fade_origin(Origin::Preview),
-            Message::SetOutputGain(gain) => self.output_gain.retarget(gain, now, self.ramp_frames),
+            Message::SetOutputGain(gain) => self.set_output_gain(gain),
+        }
+        // Whatever moved the playhead moved the clock under the notes that
+        // are still sounding.
+        let shift = self.sequencer.take_clock_shift();
+        if shift != 0.0 {
+            self.voices.shift_ends(shift);
+            for unit in self.state.instrument_units() {
+                unit.shift_ends(shift);
+            }
+        }
+        if self.sequencer.take_jump() {
+            self.landed = true;
+            self.clips.release_all();
+            self.chase_clips();
+        }
+        if let Some(tick) = song_at {
+            self.hold_if_stopped(tick);
         }
     }
 
-    /// Switches to a new plan between two blocks. Gains glide to their new
-    /// values and sounding voices carry on.
+    /// Keeps the automation at `tick` of the song, where the song was a
+    /// moment ago, if the transport has stopped since and a target is in
+    /// automation's hands. [`Processor::automate`] ends the hold.
+    fn hold_if_stopped(&mut self, tick: f64) {
+        if !self.sequencer.playing() && self.state.engaged > 0 {
+            self.hold = Some(tick);
+        }
+    }
+
+    /// Starts the audio clips the playhead is inside of and that are not
+    /// sounding, part way through: playback has begun or been moved there,
+    /// or a new plan has put a clip there.
+    fn chase_clips(&mut self) {
+        if !self.sequencer.in_song() {
+            return;
+        }
+        let now = self.frame;
+        self.clips.chase(
+            &self.plan,
+            &mut self.garbage,
+            self.sequencer.clock(),
+            self.sequencer.pass_start(),
+            self.sequencer.tick(&self.plan, now),
+            now,
+        );
+    }
+
+    /// Starts a note on frame `now`: on its channel's instrument if it has
+    /// one, and as a sampler voice otherwise. An instrument places its own
+    /// voices, so the note's pan is not used there.
+    fn start(&mut self, note: Note, now: u64) {
+        match self.state.instrument(note.channel) {
+            Some(unit) => {
+                let live = note.origin == Origin::Live;
+                unit.note_on(note.key, note.velocity, note.end, live);
+            }
+            None => self.voices.start(&self.plan, &mut self.garbage, note, now),
+        }
+    }
+
+    /// Ends what the sequencer started, because playback jumped away from
+    /// under it. Notes played by hand carry on.
+    fn end_sequenced(&mut self) {
+        self.voices.fade_origin(Origin::Sequenced);
+        for unit in self.state.instrument_units() {
+            unit.end_sequenced();
+        }
+    }
+
+    /// Switches to a new plan between two blocks. Sounding voices carry on,
+    /// effects and instruments move across with all they remember, and
+    /// whatever sound is passing through changes gently. Voices already
+    /// fading out step aside first where they can, so they hold no gain
+    /// back from changing at once.
     fn adopt(&mut self, plan: Arc<Plan>, mut state: Box<PlanState>) {
         let now = self.frame;
-        state.inherit(&plan, &self.plan, &self.state, now, self.ramp_frames);
-        self.voices.rebind(&plan, &self.state, now);
-        self.sequencer.set_plan(&plan, now);
+        self.voices.rebind(&plan, &self.plan, &self.state, now);
+        self.clips.rebind(&plan, now, self.fades.ramp);
+        let sounding = self.voices.destinations();
+        state.take_over(
+            &plan,
+            &self.plan,
+            &mut self.state,
+            sounding.chain(self.clips.destinations()),
+            now,
+            self.fades,
+        );
+        if self.sequencer.set_plan(&plan, &self.plan, now) {
+            // The tempo map changed under the song: every clock tick now
+            // means another place in it, the ends of sounding notes too.
+            let origin = self.sequencer.pass_start();
+            let moved = |end: f64| Sequencer::moved(&plan, &self.plan, origin, end);
+            self.voices.move_ends(moved);
+            for unit in state.instrument_units() {
+                unit.move_ends(moved);
+            }
+        }
         let old_plan = std::mem::replace(&mut self.plan, plan);
         let old_state = std::mem::replace(&mut self.state, state);
         retire(&mut self.garbage, Garbage::Plan(old_plan));
         retire(&mut self.garbage, Garbage::State(old_state));
+        // A song that got shorter can have moved the playhead back into
+        // it. Either way a clip may now lie under the playhead that was
+        // not there, or not like this, a moment ago.
+        if self.sequencer.take_jump() {
+            self.landed = true;
+            self.clips.release_all();
+        }
+        self.chase_clips();
     }
 
     fn preview(&mut self, sample: AudioBuffer) {
@@ -196,53 +475,110 @@ impl Processor {
         }
     }
 
+    /// Glides the output to a new gain, or sets it outright while nothing
+    /// is sounding and a glide would only reach into whatever starts next.
+    fn set_output_gain(&mut self, gain: f32) {
+        if self.settled() {
+            self.output_gain = Ramp::at_rest(gain);
+        } else {
+            self.output_gain.retarget(gain, self.frame, self.fades.ramp);
+        }
+    }
+
     /// Processes up to [`MAX_BLOCK`] frames.
     fn process_block(&mut self, out: &mut [Frame]) {
         let frames = out.len();
         let base = self.frame;
+        let end = base + frames as u64;
         self.mixer.clear(self.plan.tracks.len(), frames);
 
-        self.triggers.clear();
-        self.sequencer
-            .collect(&self.plan, base, base + frames as u64, &mut self.triggers);
-
-        // Voices are rendered up to each note's frame before the note
-        // starts, so everything a note-on does, cutting other voices
-        // included, happens on its exact frame.
+        // Voices and instruments are rendered up to each note's frame
+        // before the note starts, so everything a note-on does, cutting
+        // other voices included, happens on its exact frame. The notes
+        // arrive in rounds
+        // of as many as the trigger buffer holds, in playing order, so a
+        // block with more notes than that plays every one of them just the
+        // same.
         let mut rendered = 0;
-        for index in 0..self.triggers.len() {
-            let trigger = self.triggers.get(index);
-            let offset = (trigger.frame - base) as usize;
-            self.render_voices(base, rendered, offset);
-            rendered = offset;
-            let note = Note {
-                channel: trigger.channel,
-                key: trigger.key,
-                velocity: trigger.velocity,
-                pan: trigger.pan,
-                release_at: trigger.release_at,
-                origin: Origin::Sequenced,
+        let mut cursor = Cursor::at(base);
+        let in_song = self.sequencer.in_song();
+        loop {
+            let next = self
+                .sequencer
+                .collect(&self.plan, cursor, end, &mut self.triggers);
+            for index in 0..self.triggers.len() {
+                let trigger = self.triggers.get(index);
+                let offset = (trigger.frame - base) as usize;
+                self.render_voices(base, rendered, offset);
+                rendered = offset;
+                match trigger.what {
+                    Fire::Note {
+                        channel,
+                        key,
+                        velocity,
+                        pan,
+                        end,
+                    } => {
+                        let note = Note {
+                            channel,
+                            key,
+                            velocity,
+                            pan,
+                            end,
+                            origin: Origin::Sequenced,
+                        };
+                        self.start(note, trigger.frame);
+                    }
+                    Fire::Clip { clip, origin } => {
+                        let garbage = &mut self.garbage;
+                        self.clips
+                            .start(&self.plan, garbage, clip, origin, 0.0, trigger.frame);
+                    }
+                }
+            }
+            let Some(next) = next else {
+                break;
             };
-            self.voices
-                .start(&self.plan, &mut self.garbage, note, trigger.frame);
+            self.sequencer.advance(&self.plan, cursor.frame, next.frame);
+            cursor = next;
+        }
+        self.sequencer.advance(&self.plan, cursor.frame, end);
+        if in_song {
+            // A song that ran out in this block left off at its end.
+            self.hold_if_stopped(f64::from(self.plan.song_end));
         }
         self.render_voices(base, rendered, frames);
 
         self.mixer
-            .mix(&self.plan, &self.state, &self.shared, base, out);
+            .mix(&self.plan, &mut self.state, &self.shared, base, out);
         self.finish_output(base, out);
-        self.frame += frames as u64;
+        self.frame = end;
     }
 
     fn render_voices(&mut self, base: u64, from: usize, to: usize) {
         if from < to {
+            let clock = self.sequencer.clock();
             self.voices.render(
                 &self.plan,
                 &self.state,
+                clock,
                 &mut self.garbage,
                 &mut self.mixer,
-                base,
-                from..to,
+                Stretch {
+                    base,
+                    frames: from..to,
+                },
+            );
+            self.state.render_instruments(clock, base, from..to);
+            self.clips.render(
+                &self.plan,
+                clock,
+                &mut self.garbage,
+                &mut self.mixer,
+                Stretch {
+                    base,
+                    frames: from..to,
+                },
             );
         }
     }

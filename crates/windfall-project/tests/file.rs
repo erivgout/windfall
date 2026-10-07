@@ -4,8 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use windfall_project::file::{
-    BACKUP_FOLDER, DEFAULT_BACKUP_COUNT, FILE_EXTENSION, from_json, load, resolve_sample_path,
-    sample_path_for, save, to_json, write_backup,
+    BACKUP_FOLDER, DEFAULT_BACKUP_COUNT, FILE_EXTENSION, backup_origin, from_json, load,
+    load_with_session, resolve_sample_path, sample_dir, sample_path_for, save, save_with,
+    session_from_json, to_json, to_json_with, write_backup, write_backup_with,
 };
 use windfall_project::*;
 
@@ -20,6 +21,7 @@ fn demo_project() -> Project {
     let channel = run(Command::AddChannel {
         name: None,
         sample: Some(SampleId(sample.created[0])),
+        instrument: None,
         index: None,
         mixer_track: None,
     });
@@ -28,12 +30,17 @@ fn demo_project() -> Project {
         channel: ChannelId(channel.created[0]),
         step: 4,
     });
-    let track = run(Command::AddPlaylistTrack { name: None });
+    let track = run(Command::AddPlaylistTrack {
+        name: None,
+        index: None,
+    });
     run(Command::AddClips {
         clips: vec![ClipInit {
             track: PlaylistTrackId(track.created[0]),
             start: 0,
             length: None,
+            offset: None,
+            muted: None,
             content: ClipContent::Pattern {
                 pattern: PatternId(1),
             },
@@ -123,7 +130,8 @@ const DEMO_JSON: &str = r#"{
         "muted": false,
         "solo": false,
         "output": null,
-        "sends": []
+        "sends": [],
+        "effects": []
       },
       {
         "id": 4,
@@ -134,7 +142,8 @@ const DEMO_JSON: &str = r#"{
         "muted": false,
         "solo": false,
         "output": 0,
-        "sends": []
+        "sends": [],
+        "effects": []
       }
     ]
   },
@@ -160,7 +169,8 @@ const DEMO_JSON: &str = r#"{
         }
       }
     ]
-  }
+  },
+  "automations": []
 }
 "#;
 
@@ -175,16 +185,39 @@ fn the_documented_json_loads_back() {
 }
 
 #[test]
+fn a_file_from_before_mixer_tracks_had_effects_still_loads() {
+    // Nor did it have automations.
+    let before = DEMO_JSON
+        .replace(
+            ",
+        \"effects\": []",
+            "",
+        )
+        .replace(
+            ",
+  \"automations\": []",
+            "",
+        );
+    assert!(!before.contains("effects") && !before.contains("automations"));
+    let project = from_json(&before).unwrap();
+    assert_eq!(project, demo_project());
+    assert!(project.mixer.tracks.iter().all(|t| t.effects.is_empty()));
+    // Saved again, it is in the format of today.
+    assert_eq!(to_json(&project).unwrap(), DEMO_JSON);
+}
+
+#[test]
 fn commands_use_camel_case_json_too() {
     let command = Command::AddChannel {
         name: None,
         sample: None,
+        instrument: None,
         index: Some(2),
         mixer_track: Some(TrackId(4)),
     };
     assert_eq!(
         serde_json::to_string(&command).unwrap(),
-        r#"{"type":"addChannel","name":null,"sample":null,"index":2,"mixerTrack":4}"#
+        r#"{"type":"addChannel","name":null,"sample":null,"instrument":null,"index":2,"mixerTrack":4}"#
     );
     let parsed: Command =
         serde_json::from_str(r#"{"type":"toggleStep","pattern":1,"channel":3,"step":4}"#).unwrap();
@@ -202,6 +235,7 @@ fn commands_use_camel_case_json_too() {
         Command::AddChannel {
             name: None,
             sample: None,
+            instrument: None,
             index: None,
             mixer_track: None,
         }
@@ -255,6 +289,87 @@ fn save_reports_where_it_failed() {
     assert!(matches!(error, SaveError::Io { .. }));
     assert!(error.to_string().contains("Taken.windfall"));
     assert_eq!(file_names(folder.path()), ["Taken.windfall"]);
+}
+
+#[test]
+fn a_project_that_breaks_a_rule_is_not_saved() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("Song.windfall");
+    save(&demo_project(), &path).unwrap();
+
+    let mut broken = demo_project();
+    broken.settings.tempo_bpm = 9000.0;
+    let error = save(&broken, &path).unwrap_err();
+    assert!(matches!(error, SaveError::Invalid(_)), "{error}");
+    assert!(error.to_string().contains("tempo 9000"), "{error}");
+    // The good file is still there, and nothing was left beside it.
+    assert_eq!(load(&path).unwrap(), demo_project());
+    assert_eq!(file_names(folder.path()), ["Song.windfall"]);
+
+    let mut dangling = demo_project();
+    dangling.samples.clear();
+    let fresh = folder.path().join("Fresh.windfall");
+    assert!(matches!(
+        save(&dangling, &fresh),
+        Err(SaveError::Invalid(_))
+    ));
+    assert!(!fresh.exists());
+
+    // A backup is a save, and is refused the same way.
+    let error = write_backup(&broken, &path, "2026-10-06 18-13-05", 5).unwrap_err();
+    assert!(matches!(error, SaveError::Invalid(_)), "{error}");
+    assert_eq!(file_names(folder.path()), ["Song.windfall"]);
+}
+
+#[test]
+fn a_temporary_file_left_by_a_crash_does_not_block_saving() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("Song.windfall");
+    // The one name every save used to write through, with something in the
+    // way that cannot be overwritten.
+    let leftover = folder.path().join(".Song.windfall.tmp");
+    fs::create_dir(&leftover).unwrap();
+
+    save(&demo_project(), &path).unwrap();
+    assert_eq!(load(&path).unwrap(), demo_project());
+    assert_eq!(
+        file_names(folder.path()),
+        [".Song.windfall.tmp", "Song.windfall"]
+    );
+}
+
+#[test]
+fn saves_racing_to_one_file_leave_one_whole_project() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("Song.windfall");
+    // Projects of very different sizes, so that one written over another
+    // would not parse.
+    let projects: Vec<Project> = (0..8)
+        .map(|writer| {
+            let mut project = demo_project();
+            project.settings.name = format!("Writer {writer} ").repeat(1 + writer * 200);
+            project
+        })
+        .collect();
+
+    let saved = std::thread::scope(|scope| {
+        let writers: Vec<_> = projects
+            .iter()
+            .map(|project| {
+                let path = &path;
+                scope.spawn(move || (0..20).filter(|_| save(project, path).is_ok()).count())
+            })
+            .collect();
+        writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .sum::<usize>()
+    });
+    // Windows can refuse a rename onto a file that another rename is
+    // replacing right then. Such a save fails cleanly; none may half work.
+    assert!(saved > 0);
+    let published = load(&path).unwrap();
+    assert!(projects.contains(&published));
 }
 
 #[test]
@@ -351,6 +466,89 @@ fn load_ignores_fields_it_does_not_know() {
     assert_eq!(from_json(&extended).unwrap(), demo_project());
 }
 
+#[test]
+fn a_file_keeps_how_the_project_was_played_beside_the_project() {
+    let project = demo_project();
+    let played = ProjectSession {
+        mode: PlayMode::Song,
+        loop_song: true,
+        pattern: Some(project.patterns[0].id),
+    };
+
+    // The text is the project's own, to the letter, with one key after it.
+    let plain = to_json(&project).unwrap();
+    assert_eq!(to_json_with(&project, None).unwrap(), plain);
+    let text = to_json_with(&project, Some(&played)).unwrap();
+    let pattern = project.patterns[0].id.0;
+    let block = format!(
+        ",\n  \"session\": {{\n    \"mode\": \"song\",\n    \"loopSong\": true,\n    \"pattern\": {pattern}\n  }}\n}}\n"
+    );
+    assert_eq!(text, format!("{}{block}", plain.trim_end_matches("\n}\n")));
+
+    // It is not part of the project: the same project comes back, with it
+    // or without it, and the session comes back beside it.
+    assert_eq!(from_json(&text).unwrap(), project);
+    assert_eq!(session_from_json(&text), Some(played));
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("Song.windfall");
+    save_with(&project, Some(&played), &path).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(load(&path).unwrap(), project);
+    assert_eq!(
+        load_with_session(&path).unwrap(),
+        (project.clone(), Some(played))
+    );
+    // A backup holds what the save holds.
+    let backup = write_backup_with(&project, Some(&played), &path, "2026-10-06 18-13-05", 5);
+    assert_eq!(fs::read_to_string(backup.unwrap()).unwrap(), text);
+
+    // Saved without one, the file is what it always was and has none.
+    save(&project, &path).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), plain);
+    assert_eq!(load_with_session(&path).unwrap(), (project.clone(), None));
+    assert_eq!(session_from_json(DEMO_JSON), None);
+}
+
+#[test]
+fn a_session_that_cannot_be_read_does_not_stop_the_project_loading() {
+    let with = |session: &str| {
+        let text = DEMO_JSON.replace(
+            r#""nextId": 8,"#,
+            &format!(r#""nextId": 8, "session": {session},"#),
+        );
+        assert_eq!(from_json(&text).unwrap(), demo_project(), "{session}");
+        session_from_json(&text)
+    };
+    // What a later version might write, and what a slip of the hand might.
+    for broken in [
+        r#"{ "mode": "sideways" }"#,
+        r#"{ "loopSong": true }"#,
+        r#"{ "mode": "song", "loopSong": "yes" }"#,
+        "7",
+        "[]",
+    ] {
+        assert_eq!(with(broken), None, "{broken}");
+    }
+    assert_eq!(with("null"), None);
+    // The mode alone is enough, and keys it does not know are passed over.
+    assert_eq!(
+        with(r#"{ "mode": "song", "zoom": 2 }"#),
+        Some(ProjectSession {
+            mode: PlayMode::Song,
+            loop_song: false,
+            pattern: None,
+        })
+    );
+    assert_eq!(
+        with(r#"{ "mode": "pattern", "loopSong": true, "pattern": 99 }"#),
+        Some(ProjectSession {
+            mode: PlayMode::Pattern,
+            loop_song: true,
+            pattern: Some(PatternId(99)),
+        })
+    );
+}
+
 fn backup(folder: &Path, name: &str, timestamp: &str, keep: usize) -> PathBuf {
     let project_path = folder.join(format!("{name}.{FILE_EXTENSION}"));
     write_backup(&demo_project(), project_path, timestamp, keep).unwrap()
@@ -439,6 +637,77 @@ fn a_backup_timestamp_must_fit_in_a_file_name() {
         assert!(matches!(error, SaveError::BadName(_)), "{timestamp:?}");
     }
     assert!(file_names(folder.path()).is_empty());
+}
+
+#[test]
+fn a_backup_is_byte_for_byte_what_a_save_writes() {
+    let folder = tempfile::tempdir().unwrap();
+    let project_path = folder.path().join("Song.windfall");
+    let mut project = demo_project();
+    project.samples[0].path = SamplePath::Project("sounds/kick.wav".to_owned());
+    save(&project, &project_path).unwrap();
+    let backup = write_backup(&project, &project_path, "2026-10-06 18-13-05", 5).unwrap();
+    assert_eq!(fs::read(&backup).unwrap(), fs::read(&project_path).unwrap());
+
+    // Its project samples are found from where the backup is.
+    assert_eq!(backup_origin(&backup), Some(project_path.clone()));
+    let samples = sample_dir(&backup).unwrap();
+    assert_eq!(samples, folder.path());
+    let loaded = load(&backup).unwrap();
+    assert_eq!(
+        resolve_sample_path(
+            &loaded.samples[0].path,
+            Some(&samples),
+            Path::new("factory")
+        ),
+        Some(folder.path().join("sounds").join("kick.wav"))
+    );
+}
+
+#[test]
+fn a_backup_is_known_by_its_folder_and_its_name() {
+    let project = Path::new("music").join("My Song");
+    let backups = project.join(BACKUP_FOLDER);
+    let origin = |path: PathBuf| backup_origin(&path);
+
+    assert_eq!(
+        origin(backups.join("My Song 2026-10-06 18-13-05.windfall")),
+        Some(project.join("My Song.windfall"))
+    );
+    // The name of the project may itself look like part of a timestamp.
+    assert_eq!(
+        origin(backups.join("Take 2026-10-06 2026-10-06 18-13-05.WINDFALL")),
+        Some(project.join("Take 2026-10-06.windfall"))
+    );
+
+    // A project file, wherever it is, is not a backup.
+    for path in [
+        project.join("My Song.windfall"),
+        project.join("My Song 2026-10-06 18-13-05.windfall"),
+        backups.join("My Song.windfall"),
+        backups.join("My Song 2026-10-06 18-13.windfall"),
+        backups.join("My Song 2026-10-06T18-13-05.windfall"),
+        backups.join("My Song 2026-10-06 18-13-0\u{665}.windfall"),
+        backups.join("2026-10-06 18-13-05.windfall"),
+        backups.join(" 2026-10-06 18-13-05.windfall"),
+        backups.join("My Song 2026-10-06 18-13-05.wav"),
+        backups
+            .join("deeper")
+            .join("My Song 2026-10-06 18-13-05.windfall"),
+        PathBuf::from("My Song 2026-10-06 18-13-05.windfall"),
+    ] {
+        assert_eq!(backup_origin(&path), None, "{}", path.display());
+        assert_eq!(
+            sample_dir(&path).as_deref(),
+            path.parent(),
+            "{}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        sample_dir(&backups.join("My Song 2026-10-06 18-13-05.windfall")),
+        Some(project)
+    );
 }
 
 #[test]
@@ -564,4 +833,124 @@ fn folder_names_match_without_regard_to_case_on_windows() {
         Path::new(r"C:\Factory"),
     );
     assert_eq!(stored, SamplePath::Project("Samples/Kick.wav".to_owned()));
+}
+
+/// A project file as Windfall wrote it before there were audio clips,
+/// automation, or effects on mixer tracks: no `automations`, no `effects`,
+/// and clips that can only play patterns.
+const OLDER_FILE: &str = r#"{
+  "formatVersion": 1,
+  "nextId": 9,
+  "settings": {
+    "name": "Older",
+    "tempoBpm": 97.5,
+    "timeSignature": { "numerator": 3, "denominator": 4 },
+    "swing": 0.25
+  },
+  "samples": [
+    { "id": 2, "name": "kick", "path": { "kind": "factory", "path": "Drums/Kicks/Kick Punch.wav" } }
+  ],
+  "channels": [
+    {
+      "id": 3, "name": "Kick", "color": 15026253, "volume": 0.8, "pan": 0.0,
+      "muted": false, "solo": false, "mixerTrack": 4,
+      "source": {
+        "type": "sampler", "sample": 2, "rootKey": 60, "tune": 0.0, "gain": 1.0,
+        "start": 0.0, "end": 1.0, "reverse": false, "envelope": null,
+        "cutSelf": false, "cutGroup": 0
+      }
+    }
+  ],
+  "patterns": [
+    {
+      "id": 1, "name": "Pattern 1", "color": 15026253, "lengthSteps": 16,
+      "lanes": [
+        { "channel": 3, "notes": [
+          { "id": 5, "start": 0, "length": 240, "key": 60, "velocity": 0.8, "pan": 0.0 }
+        ] }
+      ]
+    }
+  ],
+  "mixer": {
+    "tracks": [
+      { "id": 0, "name": "Master", "color": 9145752, "volume": 1.0, "pan": 0.0,
+        "muted": false, "solo": false, "output": null, "sends": [] },
+      { "id": 4, "name": "Kick", "color": 15026253, "volume": 1.0, "pan": 0.0,
+        "muted": false, "solo": false, "output": 0, "sends": [] }
+    ]
+  },
+  "playlist": {
+    "tracks": [ { "id": 6, "name": "Track 1", "muted": false } ],
+    "clips": [
+      { "id": 7, "track": 6, "start": 0, "length": 3840, "offset": 0, "muted": false,
+        "content": { "type": "pattern", "pattern": 1 } },
+      { "id": 8, "track": 6, "start": 3840, "length": 1920, "offset": 480, "muted": true,
+        "content": { "type": "pattern", "pattern": 1 } }
+    ]
+  }
+}"#;
+
+#[test]
+fn a_file_from_before_audio_clips_and_automation_still_loads() {
+    let project = from_json(OLDER_FILE).unwrap();
+    assert_eq!(project.settings.name, "Older");
+    assert_eq!(project.settings.tempo_bpm, 97.5);
+    assert!(project.automations.is_empty());
+    assert!(project.mixer.tracks.iter().all(|t| t.effects.is_empty()));
+    let clips = &project.playlist.clips;
+    assert_eq!(clips.len(), 2);
+    assert_eq!(
+        clips[1].content,
+        ClipContent::Pattern {
+            pattern: PatternId(1)
+        }
+    );
+    assert_eq!((clips[1].offset, clips[1].muted), (480, true));
+
+    // It can be edited with everything there is now, and what is written
+    // back loads again as the same project.
+    let mut doc = Document::new(project);
+    let added = doc
+        .dispatch(
+            Command::AddAutomation {
+                name: None,
+                target: AutomationTarget::TrackVolume { track: TrackId(4) },
+                points: None,
+            },
+            None,
+        )
+        .unwrap();
+    let clips = vec![
+        ClipInit {
+            track: PlaylistTrackId(6),
+            start: 0,
+            length: None,
+            offset: None,
+            muted: None,
+            content: ClipContent::Automation {
+                automation: AutomationId(added.created[0]),
+            },
+        },
+        ClipInit {
+            track: PlaylistTrackId(6),
+            start: 960,
+            length: Some(1_000),
+            offset: None,
+            muted: None,
+            content: ClipContent::Audio {
+                sample: SampleId(2),
+                mixer_track: TrackId(4),
+                gain: 1.0,
+                pan: 0.0,
+                fade_in: 0,
+                fade_out: 0,
+                reverse: false,
+                pitch: 0.0,
+            },
+        },
+    ];
+    doc.dispatch(Command::AddClips { clips }, None).unwrap();
+    let json = to_json(doc.project()).unwrap();
+    assert!(json.contains("\"automations\""));
+    assert_eq!(&from_json(&json).unwrap(), doc.project());
 }

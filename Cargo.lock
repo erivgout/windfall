@@ -4753,12 +4753,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "windfall-dsp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ts-rs",
+ "windfall-core",
+]
+
+[[package]]
 name = "windfall-engine"
 version = "0.1.0"
 dependencies = [
  "cpal",
  "rtrb",
  "windfall-core",
+ "windfall-dsp",
  "windfall-ipc",
  "windfall-project",
 ]
@@ -4791,6 +4802,16 @@ dependencies = [
  "thiserror 2.0.21",
  "ts-rs",
  "windfall-core",
+ "windfall-dsp",
+]
+
+[[package]]
+name = "windfall-sim"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windfall-project",
 ]
 
 [[package]]

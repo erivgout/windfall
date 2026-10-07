@@ -1,12 +1,12 @@
 //! Sampler voices: pitch, resampling, envelopes, cuts, stealing, live notes
 //! and previews.
 
-use windfall_core::{AudioBuffer, TICKS_PER_STEP};
-use windfall_engine::Processor;
-use windfall_project::{ChannelId, Envelope};
+use windfall_core::{AudioBuffer, TICKS_PER_STEP, db_to_gain};
+use windfall_engine::{PREVIEW_GAIN_DB, Processor};
+use windfall_project::{ChannelId, Envelope, MAX_ENVELOPE_MS, MAX_PATTERN_STEPS};
 
 use crate::support::{
-    Rig, frequency, impulse, largest_step, left, level, peak, run, sine, sounding_frames,
+    Rig, fall, frequency, impulse, largest_step, left, level, peak, run, sine, sounding_frames,
 };
 
 const RATE: u32 = 48_000;
@@ -121,11 +121,20 @@ fn with_an_envelope_the_note_length_gates_the_sample() {
     rig.note(channel, 0, TICKS_PER_STEP);
     let audio = left(&rig.play(RATE, 12_000, 256));
 
-    assert!(audio[..6_000].iter().all(|sample| *sample == 0.5));
-    assert!((audio[6_240] - 0.25).abs() < 1e-3);
-    assert!(audio[6_490..].iter().all(|sample| *sample == 0.0));
-    // The release is a straight line down.
-    assert!(largest_step(&audio[1..]) <= 0.5 / 480.0 * 1.01);
+    // The frame the note ends on still plays at the full level.
+    assert!(audio[..=6_000].iter().all(|sample| *sample == 0.5));
+    // The release is an exponential curve: a tenth of the way through it
+    // the level has halved, and half way through it is 30 dB down.
+    assert!((audio[6_048] - 0.5 * fall(48, 480)).abs() < 1e-6);
+    assert!((audio[6_048] - 0.25).abs() < 1e-3);
+    assert!((audio[6_240] - 0.5 * fall(240, 480)).abs() < 1e-6);
+    assert!(audio[6_240] < 0.5 * 0.032);
+    // It reaches silence exactly when its time is up, and not before.
+    assert!(audio[6_479] > 0.0);
+    assert!(audio[6_480..].iter().all(|sample| *sample == 0.0));
+    // It is steepest at the start and never steps further than it does
+    // there.
+    assert!(largest_step(&audio[1..]) <= 0.5 * (1.0 - fall(1, 480)) * 1.01);
 }
 
 #[test]
@@ -136,10 +145,15 @@ fn a_release_of_zero_still_closes_without_a_click() {
     rig.note(channel, 0, TICKS_PER_STEP);
     let audio = left(&rig.play(RATE, 7_000, 256));
     assert_eq!(audio[5_999], 0.5);
-    // The shortest release is a millisecond, 48 frames.
-    assert!((audio[6_024] - 0.25).abs() < 1e-3);
-    assert!(audio[6_050..].iter().all(|sample| *sample == 0.0));
-    assert!(largest_step(&audio[1..]) <= 0.5 / 48.0 * 1.01);
+    // The shortest release is a millisecond, 48 frames, along the same
+    // curve as any other.
+    assert!((audio[6_024] - 0.5 * fall(24, 48)).abs() < 1e-6);
+    assert!(audio[6_047] > 0.0);
+    assert!(audio[6_048..].iter().all(|sample| *sample == 0.0));
+    // No frame drops by more than the curve's first step, which is under a
+    // seventh of the level. Cutting the note off would drop all of it.
+    assert!(largest_step(&audio[1..]) <= 0.5 * (1.0 - fall(1, 48)) * 1.01);
+    assert!(largest_step(&audio[1..]) < 0.5 / 7.0);
 }
 
 #[test]
@@ -155,11 +169,47 @@ fn the_envelope_shapes_attack_decay_and_sustain() {
     });
     rig.note(channel, 0, 960);
     let audio = left(&rig.play(RATE, 12_000, 256));
+    // The attack is a straight line that arrives on its last frame.
     assert_eq!(audio[0], 0.0);
-    assert!((audio[240] - 0.5).abs() < 1e-3);
-    assert!((audio[480] - 1.0).abs() < 1e-3);
-    assert!((audio[720] - 0.75).abs() < 1e-3);
-    assert!(audio[1_000..10_000].iter().all(|sample| *sample == 0.5));
+    assert!((audio[240] - 0.5).abs() < 1e-6);
+    assert!((audio[479] - 479.0 / 480.0).abs() < 1e-6);
+    assert_eq!(audio[480], 1.0);
+    // The decay is an exponential curve down to the sustain level: half of
+    // the way there after a tenth of its time.
+    assert!((audio[480 + 48] - (0.5 + 0.5 * fall(48, 480))).abs() < 1e-6);
+    assert!((audio[480 + 48] - 0.75).abs() < 1e-3);
+    assert!((audio[720] - (0.5 + 0.5 * fall(240, 480))).abs() < 1e-6);
+    assert!(audio[959] > 0.5);
+    assert!(audio[960..10_000].iter().all(|sample| *sample == 0.5));
+    assert!(largest_step(&audio[480..]) <= 0.5 * (1.0 - fall(1, 480)) * 1.01);
+}
+
+#[test]
+fn the_longest_decay_still_arrives_at_the_sustain_level_on_time() {
+    // A minute of decay from 1 to 0.95 at 48 kHz moves the level by
+    // 0.000000017 a frame, less than a 32-bit float near 1 can tell apart.
+    let mut rig = Rig::new();
+    let channel = rig.channel(level(RATE, 1.0, 61.0));
+    rig.sampler_mut(channel).envelope = Some(Envelope {
+        attack_ms: 0.0,
+        decay_ms: MAX_ENVELOPE_MS,
+        sustain: 0.95,
+        release_ms: 10.0,
+    });
+    // At 120 bpm the longest pattern lasts over two minutes.
+    let pattern = rig.first_pattern();
+    rig.pattern_mut(pattern).length_steps = MAX_PATTERN_STEPS;
+    rig.note(channel, 0, 240_000);
+
+    let decay = 60 * RATE as usize;
+    let audio = left(&rig.play(RATE, decay + 1_000, 4_096));
+    assert_eq!(audio[0], 1.0);
+    assert!((audio[decay / 10] - (0.95 + 0.05 * fall(1, 10))).abs() < 1e-6);
+    assert!((audio[decay / 10] - 0.975).abs() < 1e-4);
+    assert!((audio[decay / 2] - (0.95 + 0.05 * fall(1, 2))).abs() < 1e-6);
+    assert!(audio[..decay].is_sorted_by(|a, b| a >= b));
+    assert!(audio[decay - RATE as usize] > 0.95);
+    assert!(audio[decay..].iter().all(|sample| *sample == 0.95));
 }
 
 #[test]
@@ -236,6 +286,37 @@ fn channels_in_one_cut_group_stop_each_other() {
     assert!((grouped[54_000] - 0.625).abs() < 1e-6);
     // The cut is a fade, on top of the step the new note makes by starting.
     assert!(largest_step(&grouped[24_001..47_000]) <= 0.5 / FADE_FRAMES as f32 * 1.01);
+}
+
+#[test]
+fn a_note_with_no_velocity_takes_no_voice_but_still_cuts() {
+    let mut rig = Rig::new();
+    let channel = rig.channel(level(RATE, 0.5, 1.0));
+    rig.sampler_mut(channel).cut_self = true;
+    rig.steps(channel, &[0]);
+    for _ in 0..300 {
+        rig.note(channel, 4 * TICKS_PER_STEP, TICKS_PER_STEP)
+            .velocity = 0.0;
+    }
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    let mut audio = run(&mut processor, 24_000, 256);
+    assert_eq!(controller.frame().voices, 1);
+
+    // The silent notes arrive on frame 24000. They cut the note before
+    // them, as any note on this channel does, and add nothing of their own.
+    audio.extend(run(&mut processor, 64, 64));
+    assert_eq!(controller.frame().voices, 1);
+    audio.extend(run(&mut processor, 1_000, 256));
+    assert_eq!(controller.frame().voices, 0);
+    let audio = left(&audio);
+    assert_eq!(audio[23_999], 0.5);
+    assert!((audio[24_000 + FADE_FRAMES / 2] - 0.25).abs() < 1e-3);
+    assert!(
+        audio[24_000 + FADE_FRAMES..]
+            .iter()
+            .all(|sample| *sample == 0.0)
+    );
 }
 
 #[test]
@@ -425,14 +506,16 @@ fn a_preview_plays_into_the_master_whatever_the_transport_does() {
     controller.preview(sine(44_100, 441.0, 1.0));
     let mut audio = run(&mut processor, 9_600, 256);
     assert!((frequency(&left(&audio), RATE) - 441.0).abs() < 0.3);
+    // The sine peaks at 0.5, and a preview plays 6 dB down.
+    let heard = 0.5 * db_to_gain(PREVIEW_GAIN_DB);
     let frame = controller.frame();
     assert_eq!(frame.voices, 1);
-    assert!((frame.meters[0] - 0.5).abs() < 0.005 && (frame.meters[1] - 0.5).abs() < 0.005);
+    assert!((frame.meters[0] - heard).abs() < 0.005 && (frame.meters[1] - heard).abs() < 0.005);
 
     // Stopping the transport leaves it alone.
     controller.stop();
     audio = run(&mut processor, 4_800, 256);
-    assert!((peak(&audio) - 0.5).abs() < 0.005);
+    assert!((peak(&audio) - heard).abs() < 0.005);
 
     // Stopping the preview fades it out.
     controller.stop_preview();
@@ -443,9 +526,28 @@ fn a_preview_plays_into_the_master_whatever_the_transport_does() {
             .iter()
             .all(|sample| *sample == 0.0)
     );
-    // The sine moves at most 0.029 a frame, and the fade adds a little.
-    assert!(largest_step(&tail) <= 0.5 * 441.0 * std::f32::consts::TAU / 48_000.0 + 0.003);
+    // The sine moves at most 0.015 a frame, and the fade adds a little.
+    assert!(largest_step(&tail) <= heard * 441.0 * std::f32::consts::TAU / 48_000.0 + 0.0015);
     assert_eq!(controller.frame().voices, 0);
+}
+
+#[test]
+fn a_preview_plays_six_decibels_down_so_it_does_not_clip_a_full_mix() {
+    assert_eq!(PREVIEW_GAIN_DB, -6.0);
+    let gain = db_to_gain(PREVIEW_GAIN_DB);
+    assert!((gain - 0.501).abs() < 0.001);
+
+    // A project playing at full scale, and a full-scale file previewed
+    // over it.
+    let mut rig = Rig::new();
+    let channel = rig.channel(level(RATE, 1.0, 1.0));
+    rig.steps(channel, &[0]);
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    controller.preview(level(RATE, 1.0, 1.0));
+    let audio = run(&mut processor, 1_000, 128);
+    assert!(audio.iter().all(|sample| *sample == 1.0 + gain));
+    assert_eq!(controller.frame().meters, vec![1.0 + gain, 1.0 + gain]);
 }
 
 #[test]
@@ -455,8 +557,13 @@ fn a_new_preview_replaces_the_one_playing() {
     run(&mut processor, 1_000, 100);
     controller.preview(level(RATE, 0.25, 1.0));
     let audio = left(&run(&mut processor, 1_000, 100));
-    assert_eq!(audio[0], 0.75);
-    assert!((audio[FADE_FRAMES / 2] - 0.5).abs() < 1e-6);
-    assert!(audio[FADE_FRAMES..].iter().all(|sample| *sample == 0.25));
+    let gain = db_to_gain(PREVIEW_GAIN_DB);
+    assert!((audio[0] - 0.75 * gain).abs() < 1e-6);
+    assert!((audio[FADE_FRAMES / 2] - 0.5 * gain).abs() < 1e-6);
+    assert!(
+        audio[FADE_FRAMES..]
+            .iter()
+            .all(|sample| *sample == 0.25 * gain)
+    );
     assert_eq!(controller.frame().voices, 1);
 }

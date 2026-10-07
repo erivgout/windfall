@@ -1,6 +1,10 @@
 //! What each command does: its success path, each way it fails, and what it
 //! cascades to. Every successful command is also undone and redone.
 
+use windfall_dsp::{
+    CompressorParams, DelayParams, DetectorMode, LimiterParams, ParamSet, ReverbParams,
+    SynthParams, VoiceMode,
+};
 use windfall_project::*;
 
 const PATTERN: PatternId = PatternId(1);
@@ -84,6 +88,7 @@ fn add_channel(doc: &mut Document, name: &str) -> (ChannelId, TrackId) {
         Command::AddChannel {
             name: Some(name.to_owned()),
             sample: None,
+            instrument: None,
             index: None,
             mixer_track: None,
         },
@@ -106,8 +111,44 @@ fn add_mixer_track(doc: &mut Document) -> TrackId {
     TrackId(run(doc, Command::AddMixerTrack { name: None }).created[0])
 }
 
+fn add_effect(doc: &mut Document, track: TrackId, kind: EffectKind) -> EffectId {
+    let applied = run(
+        doc,
+        Command::AddEffect {
+            track,
+            kind,
+            index: None,
+        },
+    );
+    EffectId(applied.created[0])
+}
+
+/// Adds a channel that plays the synth, on a mixer track of its own.
+fn add_instrument(doc: &mut Document) -> (ChannelId, TrackId) {
+    let applied = run(
+        doc,
+        Command::AddChannel {
+            name: None,
+            sample: None,
+            instrument: Some(InstrumentKind::SubtractiveSynth),
+            index: None,
+            mixer_track: None,
+        },
+    );
+    (ChannelId(applied.created[0]), TrackId(applied.created[1]))
+}
+
 fn add_playlist_track(doc: &mut Document) -> PlaylistTrackId {
-    PlaylistTrackId(run(doc, Command::AddPlaylistTrack { name: None }).created[0])
+    PlaylistTrackId(
+        run(
+            doc,
+            Command::AddPlaylistTrack {
+                name: None,
+                index: None,
+            },
+        )
+        .created[0],
+    )
 }
 
 fn add_pattern(doc: &mut Document) -> PatternId {
@@ -144,6 +185,8 @@ fn add_clip(doc: &mut Document, track: PlaylistTrackId, pattern: PatternId, star
                 track,
                 start,
                 length: None,
+                offset: None,
+                muted: None,
                 content: ClipContent::Pattern { pattern },
             }],
         },
@@ -161,7 +204,9 @@ fn lane_notes(doc: &Document, pattern: PatternId, channel: ChannelId) -> Vec<Not
 
 fn sampler(doc: &Document, channel: ChannelId) -> SamplerSettings {
     let channel = doc.project().channel(channel).expect("the channel exists");
-    let ChannelSource::Sampler(sampler) = &channel.source;
+    let ChannelSource::Sampler(sampler) = &channel.source else {
+        panic!("the channel is not a sampler");
+    };
     sampler.clone()
 }
 
@@ -412,6 +457,7 @@ fn remove_sample_fails_while_a_channel_uses_it() {
         Command::AddChannel {
             name: None,
             sample: Some(sample),
+            instrument: None,
             index: None,
             mixer_track: None,
         },
@@ -450,6 +496,7 @@ fn add_channel_makes_a_mixer_track_and_routes_to_it() {
         Command::AddChannel {
             name: None,
             sample: None,
+            instrument: None,
             index: None,
             mixer_track: None,
         },
@@ -499,6 +546,7 @@ fn add_channel_takes_its_name_from_the_sample_unless_given_one() {
     let add = |name: Option<&str>| Command::AddChannel {
         name: name.map(str::to_owned),
         sample: Some(sample),
+        instrument: None,
         index: None,
         mixer_track: None,
     };
@@ -520,6 +568,7 @@ fn add_channel_on_a_given_track_makes_no_track() {
         Command::AddChannel {
             name: None,
             sample: None,
+            instrument: None,
             index: None,
             mixer_track: Some(insert),
         },
@@ -538,6 +587,7 @@ fn add_channel_rejects_unknown_references() {
         Command::AddChannel {
             name: None,
             sample: Some(SampleId(50)),
+            instrument: None,
             index: None,
             mixer_track: None,
         },
@@ -549,6 +599,7 @@ fn add_channel_rejects_unknown_references() {
         Command::AddChannel {
             name: None,
             sample: None,
+            instrument: None,
             index: None,
             mixer_track: Some(TrackId(51)),
         },
@@ -564,6 +615,7 @@ fn add_channel_places_the_channel_at_the_index() {
     let at = |index| Command::AddChannel {
         name: None,
         sample: None,
+        instrument: None,
         index: Some(index),
         mixer_track: Some(TrackId::MASTER),
     };
@@ -583,6 +635,7 @@ fn new_channels_cycle_through_the_palette() {
             Command::AddChannel {
                 name: None,
                 sample: None,
+                instrument: None,
                 index: None,
                 mixer_track: Some(TrackId::MASTER),
             },
@@ -605,6 +658,7 @@ fn add_channel_plays_into_the_master_when_the_mixer_is_full() {
         Command::AddChannel {
             name: None,
             sample: None,
+            instrument: None,
             index: None,
             mixer_track: None,
         },
@@ -809,6 +863,190 @@ fn update_channel_changes_each_field() {
     assert_eq!(channel.pan, -0.5);
     assert!(channel.muted && channel.solo);
     assert_eq!(channel.mixer_track, insert);
+}
+
+fn rename_channel(id: ChannelId, name: &str) -> Command {
+    update_channel(
+        id,
+        ChannelPatch {
+            name: Some(name.to_owned()),
+            ..ChannelPatch::default()
+        },
+    )
+}
+
+fn track_name(doc: &Document, id: TrackId) -> String {
+    doc.project().mixer.track(id).unwrap().name.clone()
+}
+
+#[test]
+fn renaming_a_channel_renames_the_mixer_track_made_for_it() {
+    let mut doc = document();
+    let (lead, lead_track) = add_instrument(&mut doc);
+    assert_eq!(track_name(&doc, lead_track), "Subtractive synth");
+
+    // One command, one undo step, both names. `run` undoes and redoes it.
+    let steps = doc.history().entries.len();
+    let applied = run(&mut doc, rename_channel(lead, "Lead"));
+    assert_eq!(applied.label, "Rename channel");
+    assert_eq!(
+        applied.touched,
+        touched(|t| {
+            t.channels = true;
+            t.mixer = true;
+        })
+    );
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    assert_eq!(doc.project().channel(lead).unwrap().name, "Lead");
+    assert_eq!(track_name(&doc, lead_track), "Lead");
+    doc.undo().unwrap();
+    assert_eq!(
+        doc.project().channel(lead).unwrap().name,
+        "Subtractive synth"
+    );
+    assert_eq!(track_name(&doc, lead_track), "Subtractive synth");
+    doc.redo().unwrap();
+
+    // The track follows again and again, and what is named after it next
+    // has the new name.
+    run(&mut doc, rename_channel(lead, "Pluck"));
+    assert_eq!(track_name(&doc, lead_track), "Pluck");
+    let volume = Command::AddAutomation {
+        name: None,
+        target: AutomationTarget::TrackVolume { track: lead_track },
+        points: None,
+    };
+    let id = AutomationId(run(&mut doc, volume).created[0]);
+    assert_eq!(automation(&doc, id).name, "Pluck track volume");
+
+    // A change that is not to the name leaves the track alone.
+    let applied = run(
+        &mut doc,
+        update_channel(
+            lead,
+            ChannelPatch {
+                volume: Some(0.5),
+                ..ChannelPatch::default()
+            },
+        ),
+    );
+    assert_eq!(applied.touched, touched(|t| t.channels = true));
+}
+
+#[test]
+fn renaming_a_channel_leaves_a_track_that_is_not_its_own_alone() {
+    // The user gave the track a name of its own.
+    let mut doc = document();
+    let (kick, kick_track) = add_channel(&mut doc, "Kick");
+    let renamed = Command::UpdateMixerTrack {
+        id: kick_track,
+        patch: MixerTrackPatch {
+            name: Some("Drums".to_owned()),
+            ..MixerTrackPatch::default()
+        },
+    };
+    run(&mut doc, renamed);
+    let applied = run(&mut doc, rename_channel(kick, "Boom"));
+    assert_eq!(applied.touched, touched(|t| t.channels = true));
+    assert_eq!(track_name(&doc, kick_track), "Drums");
+    // Named back after the channel by hand, it follows once more.
+    let back = Command::UpdateMixerTrack {
+        id: kick_track,
+        patch: MixerTrackPatch {
+            name: Some("Boom".to_owned()),
+            ..MixerTrackPatch::default()
+        },
+    };
+    run(&mut doc, back);
+    run(&mut doc, rename_channel(kick, "Kick"));
+    assert_eq!(track_name(&doc, kick_track), "Kick");
+
+    // A second channel plays into the track.
+    let (snare, snare_track) = add_channel(&mut doc, "Snare");
+    let route = |channel: ChannelId, track: TrackId| {
+        update_channel(
+            channel,
+            ChannelPatch {
+                mixer_track: Some(track),
+                ..ChannelPatch::default()
+            },
+        )
+    };
+    run(&mut doc, route(snare, kick_track));
+    run(&mut doc, rename_channel(kick, "Kick 1"));
+    assert_eq!(track_name(&doc, kick_track), "Kick");
+    // The track the second channel left has its name still, and the
+    // channel is not on it: it stays as it is.
+    run(&mut doc, rename_channel(snare, "Snare 1"));
+    assert_eq!(track_name(&doc, snare_track), "Snare");
+    run(&mut doc, route(snare, snare_track));
+    run(&mut doc, rename_channel(kick, "Kick"));
+
+    // Another track plays into it, through its output or through a send.
+    let bus = add_mixer_track(&mut doc);
+    run(&mut doc, send(bus, kick_track, Some(0.5)));
+    run(&mut doc, rename_channel(kick, "Kick 2"));
+    assert_eq!(track_name(&doc, kick_track), "Kick");
+    run(&mut doc, send(bus, kick_track, None));
+    run(&mut doc, rename_channel(kick, "Kick"));
+    run(&mut doc, output(bus, Some(kick_track)));
+    run(&mut doc, rename_channel(kick, "Kick 3"));
+    assert_eq!(track_name(&doc, kick_track), "Kick");
+    run(&mut doc, output(bus, Some(TrackId::MASTER)));
+    run(&mut doc, rename_channel(kick, "Kick"));
+
+    // An audio clip plays into it.
+    let sample = add_sample(&mut doc, "loop");
+    let lane = add_playlist_track(&mut doc);
+    let clip = ClipInit {
+        track: lane,
+        start: 0,
+        length: Some(960),
+        offset: None,
+        muted: None,
+        content: ClipContent::Audio {
+            sample,
+            mixer_track: kick_track,
+            gain: 1.0,
+            pan: 0.0,
+            fade_in: 0,
+            fade_out: 0,
+            reverse: false,
+            pitch: 0.0,
+        },
+    };
+    let clip = ClipId(run(&mut doc, Command::AddClips { clips: vec![clip] }).created[0]);
+    run(&mut doc, rename_channel(kick, "Kick 4"));
+    assert_eq!(track_name(&doc, kick_track), "Kick");
+    run(&mut doc, Command::RemoveClips { clips: vec![clip] });
+    run(&mut doc, rename_channel(kick, "Kick"));
+
+    // With all of that gone the track is the channel's own again.
+    run(&mut doc, rename_channel(kick, "Kick 5"));
+    assert_eq!(track_name(&doc, kick_track), "Kick 5");
+
+    // The master is nobody's own, whatever a channel on it is called, and
+    // a rename that also moves the channel away leaves the old track.
+    let on_master = Command::AddChannel {
+        name: Some("Master".to_owned()),
+        sample: None,
+        instrument: None,
+        index: None,
+        mixer_track: Some(TrackId::MASTER),
+    };
+    let direct = ChannelId(run(&mut doc, on_master).created[0]);
+    run(&mut doc, rename_channel(direct, "Direct"));
+    assert_eq!(track_name(&doc, TrackId::MASTER), "Master");
+    let moved = update_channel(
+        kick,
+        ChannelPatch {
+            name: Some("Kick 6".to_owned()),
+            mixer_track: Some(bus),
+            ..ChannelPatch::default()
+        },
+    );
+    run(&mut doc, moved);
+    assert_eq!(track_name(&doc, kick_track), "Kick 5");
 }
 
 #[test]
@@ -1495,11 +1733,105 @@ fn toggle_step_rejects_unknown_ids_and_impossible_steps() {
         step: 0,
     };
     assert_eq!(fail(&mut doc, unknown_pattern), not_found("pattern", 90));
-    assert_invalid(fail(&mut doc, toggle(kick, u32::MAX)), "past the last tick");
     assert_invalid(
-        fail(&mut doc, toggle(kick, u32::MAX / TICKS_PER_STEP)),
-        "past the last tick",
+        fail(&mut doc, toggle(kick, u32::MAX)),
+        "step 4294967296 is past the end of the longest pattern, which has 1024 steps",
     );
+    assert_invalid(
+        fail(&mut doc, toggle(kick, MAX_PATTERN_STEPS)),
+        "step 1025 is past the end of the longest pattern",
+    );
+    // The last step of the longest pattern is the last that can be lit.
+    let applied = run(&mut doc, toggle(kick, MAX_PATTERN_STEPS - 1));
+    let notes = lane_notes(&doc, PATTERN, kick);
+    assert_eq!(notes[0].id, NoteId(applied.created[0]));
+    assert_eq!(notes[0].start, MAX_PATTERN_TICKS - TICKS_PER_STEP);
+}
+
+#[test]
+fn a_note_cannot_be_put_past_the_end_of_the_longest_pattern() {
+    let mut doc = document();
+    let (kick, _) = add_channel(&mut doc, "Kick");
+    let at = |start: u32| NoteInit {
+        start,
+        ..note(0, 60)
+    };
+    let add = |notes: Vec<NoteInit>| Command::AddNotes {
+        pattern: PATTERN,
+        channel: kick,
+        notes,
+    };
+
+    // The last tick of the longest pattern is fine, and a note may ring on
+    // past the end. One tick further it could never play.
+    let ids = add_notes(&mut doc, kick, vec![at(0), at(MAX_PATTERN_TICKS - 1)]);
+    assert_invalid(
+        fail(&mut doc, add(vec![at(0), at(MAX_PATTERN_TICKS)])),
+        "the note would start at step 1025, past the end of the longest pattern, which has 1024 steps",
+    );
+    assert_invalid(
+        fail(&mut doc, add(vec![at(20_000_000)])),
+        "past the end of the longest pattern",
+    );
+
+    // Moving is held to the same end, in one update or as one of several.
+    let to = |start: u32| NotePatch {
+        start: Some(start),
+        ..NotePatch::default()
+    };
+    assert_invalid(
+        fail(
+            &mut doc,
+            update_notes(kick, vec![(ids[0], to(MAX_PATTERN_TICKS))]),
+        ),
+        "past the end of the longest pattern",
+    );
+    let both = update_notes(kick, vec![(ids[1], to(480)), (ids[0], to(u32::MAX))]);
+    assert_invalid(fail(&mut doc, both), "past the end of the longest pattern");
+    run(
+        &mut doc,
+        update_notes(kick, vec![(ids[0], to(MAX_PATTERN_TICKS - 1))]),
+    );
+}
+
+#[test]
+fn a_note_an_older_file_has_past_the_longest_pattern_can_be_changed_but_not_moved_further() {
+    // Earlier versions let a paste put notes out here, and such a file
+    // still loads.
+    let mut doc = document();
+    let (kick, _) = add_channel(&mut doc, "Kick");
+    let ids = add_notes(&mut doc, kick, vec![note(0, 60), note(240, 60)]);
+    let mut project = doc.project().clone();
+    project.patterns[0].lanes[0].notes[1].start = MAX_PATTERN_TICKS + 4_800;
+    project.check().expect("the file still loads");
+    let mut doc = Document::new(project);
+    let far = ids[1];
+
+    let patch = |change: fn(&mut NotePatch)| {
+        let mut patch = NotePatch::default();
+        change(&mut patch);
+        update_notes(kick, vec![(far, patch)])
+    };
+    run(&mut doc, patch(|p| p.velocity = Some(0.25)));
+    run(&mut doc, patch(|p| p.length = Some(100)));
+    run(&mut doc, patch(|p| p.key = Some(72)));
+    assert_invalid(
+        fail(
+            &mut doc,
+            patch(|p| p.start = Some(MAX_PATTERN_TICKS + 4_801)),
+        ),
+        "past the end of the longest pattern",
+    );
+    // It can be brought back inside, copied along with its channel, and
+    // deleted.
+    run(&mut doc, Command::DuplicateChannel { id: kick });
+    run(&mut doc, patch(|p| p.start = Some(960)));
+    let remove = Command::RemoveNotes {
+        pattern: PATTERN,
+        channel: kick,
+        notes: vec![far],
+    };
+    run(&mut doc, remove);
 }
 
 #[test]
@@ -1573,6 +1905,16 @@ fn add_notes_validates_every_note_before_adding_any() {
     assert_invalid(fail(&mut doc, add(with(|n| n.key = 128))), "key 128");
     assert_invalid(
         fail(&mut doc, add(with(|n| n.start = u32::MAX))),
+        "past the end of the longest pattern",
+    );
+    assert_invalid(
+        fail(
+            &mut doc,
+            add(with(|n| {
+                n.start = 1;
+                n.length = u32::MAX;
+            })),
+        ),
         "past the last tick",
     );
     assert_invalid(
@@ -1805,6 +2147,59 @@ fn update_notes_labels_say_what_changed() {
 }
 
 #[test]
+fn a_note_dragged_by_its_start_is_resized_not_moved() {
+    let mut doc = document();
+    let (kick, _) = add_channel(&mut doc, "Kick");
+    let ids = add_notes(&mut doc, kick, vec![note(480, 60), note(960, 64)]);
+    let ends = |doc: &Document| -> Vec<u32> {
+        let notes = lane_notes(doc, PATTERN, kick);
+        notes.iter().map(|note| note.start + note.length).collect()
+    };
+    let before = ends(&doc);
+    let front = |start: u32, length: u32| NotePatch {
+        start: Some(start),
+        length: Some(length),
+        ..NotePatch::default()
+    };
+
+    // The start moves and the end stays where it was: 240 ticks at 480
+    // become 360 ticks at 360.
+    let applied = run(
+        &mut doc,
+        update_notes(kick, vec![(ids[0], front(360, 360))]),
+    );
+    assert_eq!(applied.label, "Resize note");
+    assert_eq!(ends(&doc), before);
+    let both = vec![(ids[0], front(420, 300)), (ids[1], front(900, 300))];
+    let applied = run(&mut doc, update_notes(kick, both));
+    assert_eq!(applied.label, "Resize notes");
+    assert_eq!(ends(&doc), before);
+
+    // With an end that moves too, or a key, it is a move.
+    let applied = run(&mut doc, update_notes(kick, vec![(ids[0], front(0, 240))]));
+    assert_eq!(applied.label, "Move note");
+    let keyed = NotePatch {
+        key: Some(61),
+        ..front(120, 120)
+    };
+    let applied = run(&mut doc, update_notes(kick, vec![(ids[0], keyed)]));
+    assert_eq!(applied.label, "Move note");
+    // One note resized from its front and another moved is a move.
+    let mixed = vec![
+        (ids[0], front(60, 180)),
+        (
+            ids[1],
+            NotePatch {
+                start: Some(1_920),
+                ..NotePatch::default()
+            },
+        ),
+    ];
+    let applied = run(&mut doc, update_notes(kick, mixed));
+    assert_eq!(applied.label, "Move notes");
+}
+
+#[test]
 fn update_notes_validates_before_changing_anything() {
     let mut doc = document();
     let (kick, _) = add_channel(&mut doc, "Kick");
@@ -1829,7 +2224,15 @@ fn update_notes_validates_before_changing_anything() {
         start: Some(u32::MAX),
         ..NotePatch::default()
     };
-    assert_invalid(fail(&mut doc, with(far)), "past the last tick");
+    assert_invalid(
+        fail(&mut doc, with(far)),
+        "past the end of the longest pattern",
+    );
+    let long = NotePatch {
+        length: Some(u32::MAX),
+        ..NotePatch::default()
+    };
+    assert_invalid(fail(&mut doc, with(long)), "past the last tick");
 
     let missing = update_notes(kick, vec![(ids[0], good), (NoteId(4000), good)]);
     assert_eq!(fail(&mut doc, missing), not_found("note", 4000));
@@ -2180,7 +2583,13 @@ fn set_send_adds_changes_and_removes_a_send() {
 #[test]
 fn playlist_tracks_are_added_renamed_and_muted() {
     let mut doc = document();
-    let applied = run(&mut doc, Command::AddPlaylistTrack { name: None });
+    let applied = run(
+        &mut doc,
+        Command::AddPlaylistTrack {
+            name: None,
+            index: None,
+        },
+    );
     assert_eq!(applied.label, "Add playlist track");
     assert_eq!(applied.touched, touched(|t| t.playlist = true));
     let id = PlaylistTrackId(applied.created[0]);
@@ -2237,6 +2646,67 @@ fn playlist_tracks_are_added_renamed_and_muted() {
 }
 
 #[test]
+fn playlist_tracks_are_added_at_an_index_and_moved() {
+    let mut doc = document();
+    let order = |doc: &Document| -> Vec<PlaylistTrackId> {
+        doc.project().playlist.tracks.iter().map(|t| t.id).collect()
+    };
+    let add_at = |doc: &mut Document, index: u32| {
+        let applied = run(
+            doc,
+            Command::AddPlaylistTrack {
+                name: None,
+                index: Some(index),
+            },
+        );
+        PlaylistTrackId(applied.created[0])
+    };
+    let a = add_playlist_track(&mut doc);
+    let b = add_playlist_track(&mut doc);
+    // Above the first, between the two, and past the end, which is the end.
+    let top = add_at(&mut doc, 0);
+    assert_eq!(order(&doc), [top, a, b]);
+    let middle = add_at(&mut doc, 2);
+    assert_eq!(order(&doc), [top, a, middle, b]);
+    let last = add_at(&mut doc, 99);
+    assert_eq!(order(&doc), [top, a, middle, b, last]);
+    // A track keeps the name its number in line gave it.
+    assert_eq!(doc.project().playlist.tracks[0].name, "Track 3");
+
+    // A track moves with its clips, which name it by id.
+    let clip = add_clip(&mut doc, b, PATTERN, 0);
+    let moved = |id, index| Command::MovePlaylistTrack { id, index };
+    let applied = run(&mut doc, moved(b, 0));
+    assert_eq!(applied.label, "Move playlist track");
+    assert_eq!(applied.touched, touched(|t| t.playlist = true));
+    assert!(applied.created.is_empty());
+    assert_eq!(order(&doc), [b, top, a, middle, last]);
+    assert_eq!(doc.project().playlist.clips[0].id, clip);
+    assert_eq!(doc.project().playlist.clips[0].track, b);
+    run(&mut doc, moved(b, 99));
+    assert_eq!(order(&doc), [top, a, middle, last, b]);
+    // Moving a track to where it is changes nothing.
+    let history = doc.history();
+    let applied = run(&mut doc, moved(b, 4));
+    assert!(applied.touched.is_empty());
+    assert_eq!(doc.history(), history);
+    assert_eq!(
+        fail(&mut doc, moved(PlaylistTrackId(55), 0)),
+        not_found("playlist track", 55)
+    );
+
+    // A drag across several places is one undo step.
+    let steps = doc.history().entries.len();
+    for index in [3, 2, 1] {
+        doc.dispatch(moved(b, index), Some(4)).unwrap();
+    }
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    assert_eq!(order(&doc), [top, b, a, middle, last]);
+    doc.undo().unwrap();
+    assert_eq!(order(&doc), [top, a, middle, last, b]);
+}
+
+#[test]
 fn remove_playlist_track_takes_its_clips() {
     let mut doc = document();
     let first = add_playlist_track(&mut doc);
@@ -2262,6 +2732,8 @@ fn clip(track: PlaylistTrackId, start: u32, length: Option<u32>) -> ClipInit {
         track,
         start,
         length,
+        offset: None,
+        muted: None,
         content: ClipContent::Pattern { pattern: PATTERN },
     }
 }
@@ -2298,6 +2770,472 @@ fn add_clips_creates_ids_in_order_and_keeps_clips_sorted() {
 }
 
 #[test]
+fn a_clip_can_be_added_with_an_offset_and_muted() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let init = ClipInit {
+        offset: Some(480),
+        muted: Some(true),
+        ..clip(lane, 960, Some(1_000))
+    };
+    let applied = run(&mut doc, Command::AddClips { clips: vec![init] });
+    let added = &doc.project().playlist.clips[0];
+    assert_eq!(added.id, ClipId(applied.created[0]));
+    assert_eq!((added.start, added.length, added.offset), (960, 1_000, 480));
+    assert!(added.muted);
+
+    // Both are optional on the wire, as they were not there before.
+    let json = r#"{ "type": "addClips", "clips": [
+        { "track": 2, "start": 0, "content": { "type": "pattern", "pattern": 1 } } ] }"#;
+    let command: Command = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        command,
+        Command::AddClips {
+            clips: vec![clip(lane, 0, None)]
+        }
+    );
+    let deep = ClipInit {
+        offset: Some(MAX_SONG_TICKS + 1),
+        ..clip(lane, 0, None)
+    };
+    assert_invalid(
+        fail(&mut doc, Command::AddClips { clips: vec![deep] }),
+        "further into what it plays than the longest song lasts",
+    );
+}
+
+/// An audio clip of `sample` on `track`, at unity and with no fades.
+fn audio(sample: SampleId, mixer_track: TrackId) -> ClipContent {
+    ClipContent::Audio {
+        sample,
+        mixer_track,
+        gain: 1.0,
+        pan: 0.0,
+        fade_in: 0,
+        fade_out: 0,
+        reverse: false,
+        pitch: 0.0,
+    }
+}
+
+fn audio_clip(track: PlaylistTrackId, start: u32, length: u32, content: ClipContent) -> ClipInit {
+    ClipInit {
+        track,
+        start,
+        length: Some(length),
+        offset: None,
+        muted: None,
+        content,
+    }
+}
+
+fn add_audio_clip(doc: &mut Document, lane: PlaylistTrackId, content: ClipContent) -> ClipId {
+    let clips = vec![audio_clip(lane, 0, 3_840, content)];
+    ClipId(run(doc, Command::AddClips { clips }).created[0])
+}
+
+fn clip_of(doc: &Document, id: ClipId) -> Clip {
+    let clips = &doc.project().playlist.clips;
+    let clip = clips.iter().find(|clip| clip.id == id);
+    clip.expect("the clip exists").clone()
+}
+
+#[test]
+fn an_audio_clip_is_added_with_its_values_brought_into_range() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let vocal = add_sample(&mut doc, "vocal");
+    let bus = add_mixer_track(&mut doc);
+    let content = ClipContent::Audio {
+        sample: vocal,
+        mixer_track: bus,
+        gain: 0.5,
+        pan: -0.25,
+        fade_in: 240,
+        fade_out: 480,
+        reverse: true,
+        pitch: -3.5,
+    };
+    let init = ClipInit {
+        offset: Some(120),
+        ..audio_clip(lane, 960, 7_680, content.clone())
+    };
+    let applied = run(&mut doc, Command::AddClips { clips: vec![init] });
+    assert_eq!(applied.label, "Add clip");
+    assert_eq!(applied.touched, touched(|t| t.playlist = true));
+    let id = ClipId(applied.created[0]);
+    assert_eq!(
+        clip_of(&doc, id),
+        Clip {
+            id,
+            track: lane,
+            start: 960,
+            length: 7_680,
+            offset: 120,
+            muted: false,
+            content,
+        }
+    );
+
+    // What a control sends past the end of its travel is brought back.
+    let wild = ClipContent::Audio {
+        sample: vocal,
+        mixer_track: TrackId::MASTER,
+        gain: 9.0,
+        pan: -4.0,
+        fade_in: u32::MAX,
+        fade_out: MAX_SONG_TICKS + 1,
+        reverse: false,
+        pitch: 100.0,
+    };
+    let tamed = add_audio_clip(&mut doc, lane, wild);
+    assert_eq!(
+        clip_of(&doc, tamed).content,
+        ClipContent::Audio {
+            sample: vocal,
+            mixer_track: TrackId::MASTER,
+            gain: MAX_GAIN,
+            pan: -1.0,
+            fade_in: MAX_SONG_TICKS,
+            fade_out: MAX_SONG_TICKS,
+            reverse: false,
+            pitch: MAX_TUNE_SEMITONES,
+        }
+    );
+
+    // It is stored the way every clip is: tagged with its type.
+    let json = serde_json::to_value(clip_of(&doc, id)).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "id": id.0, "track": lane.0, "start": 960, "length": 7680, "offset": 120,
+            "muted": false,
+            "content": {
+                "type": "audio", "sample": vocal.0, "mixerTrack": bus.0, "gain": 0.5,
+                "pan": -0.25, "fadeIn": 240, "fadeOut": 480, "reverse": true, "pitch": -3.5
+            }
+        })
+    );
+}
+
+#[test]
+fn an_audio_clip_needs_a_length_a_sample_and_a_mixer_track() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let vocal = add_sample(&mut doc, "vocal");
+    let add = |content: ClipContent, length: Option<u32>| Command::AddClips {
+        clips: vec![
+            clip(lane, 0, None),
+            ClipInit {
+                length,
+                ..audio_clip(lane, 0, 1, content)
+            },
+        ],
+    };
+    let good = audio(vocal, TrackId::MASTER);
+    assert_invalid(
+        fail(&mut doc, add(good.clone(), None)),
+        "an audio clip has to be given a length",
+    );
+    assert_invalid(
+        fail(&mut doc, add(good.clone(), Some(0))),
+        "at least one tick long",
+    );
+    assert_eq!(
+        fail(
+            &mut doc,
+            add(audio(SampleId(77), TrackId::MASTER), Some(960))
+        ),
+        not_found("sample", 77)
+    );
+    assert_eq!(
+        fail(&mut doc, add(audio(vocal, TrackId(88)), Some(960))),
+        not_found("mixer track", 88)
+    );
+    let with = |change: fn(&mut f32, &mut f32, &mut f32)| {
+        let mut content = audio(vocal, TrackId::MASTER);
+        if let ClipContent::Audio {
+            gain, pan, pitch, ..
+        } = &mut content
+        {
+            change(gain, pan, pitch);
+        }
+        add(content, Some(960))
+    };
+    assert_invalid(
+        fail(&mut doc, with(|gain, _, _| *gain = f32::NAN)),
+        "the clip gain is not a number",
+    );
+    assert_invalid(
+        fail(&mut doc, with(|_, pan, _| *pan = f32::NAN)),
+        "the pan is not a number",
+    );
+    assert_invalid(
+        fail(&mut doc, with(|_, _, pitch| *pitch = f32::NAN)),
+        "the pitch is not a number",
+    );
+    run(&mut doc, add(good, Some(960)));
+}
+
+#[test]
+fn update_audio_clips_changes_what_is_particular_to_audio() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let vocal = add_sample(&mut doc, "vocal");
+    let bus = add_mixer_track(&mut doc);
+    let a = add_audio_clip(&mut doc, lane, audio(vocal, TrackId::MASTER));
+    let b = add_audio_clip(&mut doc, lane, audio(vocal, TrackId::MASTER));
+    let pattern_clip = add_clip(&mut doc, lane, PATTERN, 0);
+    let update = |updates: Vec<(ClipId, AudioClipPatch)>| Command::UpdateAudioClips {
+        updates: updates
+            .into_iter()
+            .map(|(id, patch)| AudioClipUpdate { id, patch })
+            .collect(),
+    };
+    let patch = |change: fn(&mut AudioClipPatch)| {
+        let mut patch = AudioClipPatch::default();
+        change(&mut patch);
+        patch
+    };
+
+    type Change = fn(&mut AudioClipPatch);
+    let cases: [(Change, &str); 7] = [
+        (|p| p.gain = Some(0.5), "Change clip gain"),
+        (|p| p.pan = Some(0.5), "Change clip pan"),
+        (|p| p.fade_in = Some(240), "Change clip fade"),
+        (|p| p.fade_out = Some(480), "Change clip fade"),
+        (|p| p.reverse = Some(true), "Reverse clip"),
+        (|p| p.pitch = Some(7.0), "Change clip pitch"),
+        (|p| p.mixer_track = Some(TrackId(4)), "Route clip"),
+    ];
+    assert_eq!(bus, TrackId(4));
+    for (change, expected) in cases {
+        let applied = run(&mut doc, update(vec![(a, patch(change))]));
+        assert_eq!(applied.label, expected);
+        assert_eq!(applied.touched, touched(|t| t.playlist = true));
+        assert!(applied.created.is_empty());
+    }
+    assert_eq!(
+        clip_of(&doc, a).content,
+        ClipContent::Audio {
+            sample: vocal,
+            mixer_track: bus,
+            gain: 0.5,
+            pan: 0.5,
+            fade_in: 240,
+            fade_out: 480,
+            reverse: true,
+            pitch: 7.0,
+        }
+    );
+    // The other clip, and where the clip sits, are as they were.
+    assert_eq!(clip_of(&doc, b).content, audio(vocal, TrackId::MASTER));
+    assert_eq!(clip_of(&doc, a).length, 3_840);
+
+    // Several at once, one of them twice, with values out of range.
+    let both = update(vec![
+        (a, patch(|p| p.gain = Some(7.0))),
+        (b, patch(|p| p.pitch = Some(-90.0))),
+        (a, patch(|p| p.pan = Some(-7.0))),
+    ]);
+    let applied = run(&mut doc, both);
+    assert_eq!(applied.label, "Change audio clips");
+    let ClipContent::Audio { gain, pan, .. } = clip_of(&doc, a).content else {
+        panic!("not an audio clip");
+    };
+    assert_eq!((gain, pan), (MAX_GAIN, -1.0));
+    let ClipContent::Audio { pitch, .. } = clip_of(&doc, b).content else {
+        panic!("not an audio clip");
+    };
+    assert_eq!(pitch, -MAX_TUNE_SEMITONES);
+
+    // A patch that sets what is there changes nothing.
+    let history = doc.history();
+    let applied = run(&mut doc, update(vec![(a, patch(|p| p.gain = Some(2.0)))]));
+    assert!(applied.touched.is_empty());
+    assert_eq!(doc.history(), history);
+
+    let good = patch(|p| p.gain = Some(0.1));
+    assert_invalid(
+        fail(&mut doc, update(vec![(a, good), (pattern_clip, good)])),
+        &format!("clip {} is not an audio clip", pattern_clip.0),
+    );
+    assert_eq!(
+        fail(&mut doc, update(vec![(a, good), (ClipId(900), good)])),
+        not_found("clip", 900)
+    );
+    assert_eq!(
+        fail(
+            &mut doc,
+            update(vec![(a, patch(|p| p.mixer_track = Some(TrackId(88))))])
+        ),
+        not_found("mixer track", 88)
+    );
+    assert_invalid(
+        fail(
+            &mut doc,
+            update(vec![(a, good), (b, patch(|p| p.gain = Some(f32::NAN)))]),
+        ),
+        "the clip gain is not a number",
+    );
+
+    // A fader drag on a clip is one undo step.
+    let before = doc.project().clone();
+    let steps = doc.history().entries.len();
+    for value in [0.2, 0.4, 0.6] {
+        let drag = AudioClipPatch {
+            gain: Some(value),
+            ..AudioClipPatch::default()
+        };
+        doc.dispatch(update(vec![(a, drag)]), Some(5)).unwrap();
+    }
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    doc.undo().unwrap();
+    assert_eq!(doc.project(), &before);
+}
+
+#[test]
+fn a_sample_an_audio_clip_plays_cannot_be_removed() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    run(
+        &mut doc,
+        Command::UpdatePlaylistTrack {
+            id: lane,
+            patch: PlaylistTrackPatch {
+                name: Some("Vocals".to_owned()),
+                muted: None,
+            },
+        },
+    );
+    let vocal = add_sample(&mut doc, "vocal");
+    let clip = add_audio_clip(&mut doc, lane, audio(vocal, TrackId::MASTER));
+    assert_invalid(
+        fail(&mut doc, Command::RemoveSample { id: vocal }),
+        "the sample is still used by an audio clip on the playlist track \"Vocals\"",
+    );
+    // A muted clip still uses it.
+    let mute = ClipPatch {
+        muted: Some(true),
+        ..ClipPatch::default()
+    };
+    run(&mut doc, update_clips(vec![(clip, mute)]));
+    assert_invalid(
+        fail(&mut doc, Command::RemoveSample { id: vocal }),
+        "still used by an audio clip",
+    );
+    run(&mut doc, Command::RemoveClips { clips: vec![clip] });
+    run(&mut doc, Command::RemoveSample { id: vocal });
+}
+
+#[test]
+fn removing_a_mixer_track_sends_its_audio_clips_to_the_master() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let vocal = add_sample(&mut doc, "vocal");
+    let bus = add_mixer_track(&mut doc);
+    let other = add_mixer_track(&mut doc);
+    let on_bus = add_audio_clip(&mut doc, lane, audio(vocal, bus));
+    let on_other = add_audio_clip(&mut doc, lane, audio(vocal, other));
+    let pattern_clip = add_clip(&mut doc, lane, PATTERN, 0);
+    let before = doc.project().clone();
+
+    let applied = run(&mut doc, Command::RemoveMixerTrack { id: bus });
+    assert_eq!(
+        applied.touched,
+        touched(|t| {
+            t.mixer = true;
+            t.playlist = true;
+        })
+    );
+    assert_eq!(clip_of(&doc, on_bus).content, audio(vocal, TrackId::MASTER));
+    assert_eq!(clip_of(&doc, on_other).content, audio(vocal, other));
+    assert_eq!(
+        clip_of(&doc, pattern_clip),
+        before
+            .playlist
+            .clips
+            .iter()
+            .find(|c| c.id == pattern_clip)
+            .unwrap()
+            .clone()
+    );
+    // One undo puts the track back, and the clip back on it.
+    doc.undo().unwrap();
+    assert!(same_content(doc.project(), &before));
+
+    // A track no clip plays into leaves the playlist alone.
+    let spare = add_mixer_track(&mut doc);
+    let applied = run(&mut doc, Command::RemoveMixerTrack { id: spare });
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+}
+
+#[test]
+fn check_names_each_broken_rule_of_an_audio_clip() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let vocal = add_sample(&mut doc, "vocal");
+    add_audio_clip(&mut doc, lane, audio(vocal, TrackId::MASTER));
+    let valid = doc.project().clone();
+    valid.check().unwrap();
+
+    type Fields<'a> = (
+        &'a mut SampleId,
+        &'a mut TrackId,
+        &'a mut f32,
+        &'a mut f32,
+        &'a mut f32,
+        &'a mut u32,
+        &'a mut u32,
+    );
+    /// The sample, mixer track, gain, pan, pitch and fades of the clip.
+    fn fields(project: &mut Project) -> Fields<'_> {
+        let ClipContent::Audio {
+            sample,
+            mixer_track,
+            gain,
+            pan,
+            fade_in,
+            fade_out,
+            pitch,
+            ..
+        } = &mut project.playlist.clips[0].content
+        else {
+            panic!("not an audio clip");
+        };
+        (sample, mixer_track, gain, pan, pitch, fade_in, fade_out)
+    }
+    let cases: [(&str, Damage); 9] = [
+        ("plays sample 999", |p| *fields(p).0 = SampleId(999)),
+        ("plays into mixer track 999", |p| {
+            *fields(p).1 = TrackId(999)
+        }),
+        ("has gain 2.5", |p| *fields(p).2 = 2.5),
+        ("has gain NaN", |p| *fields(p).2 = f32::NAN),
+        ("has pan -1.5", |p| *fields(p).3 = -1.5),
+        ("is pitched by 49 semitones", |p| *fields(p).4 = 49.0),
+        ("is pitched by NaN semitones", |p| *fields(p).4 = f32::NAN),
+        ("a fade longer than the longest song", |p| {
+            *fields(p).5 = MAX_SONG_TICKS + 1;
+        }),
+        ("a fade longer than the longest song", |p| {
+            *fields(p).6 = u32::MAX;
+        }),
+    ];
+    for (index, (words, damage)) in cases.into_iter().enumerate() {
+        let mut project = valid.clone();
+        damage(&mut project);
+        match project.check() {
+            Ok(()) => panic!("case {index} (\"{words}\") passed the check"),
+            Err(problem) => assert!(
+                problem.contains(words),
+                "case {index}: \"{problem}\" lacks \"{words}\""
+            ),
+        }
+    }
+}
+
+#[test]
 fn add_clips_validates_every_clip_before_adding_any() {
     let mut doc = document();
     let lane = add_playlist_track(&mut doc);
@@ -2310,7 +3248,26 @@ fn add_clips_validates_every_clip_before_adding_any() {
     );
     assert_invalid(
         fail(&mut doc, add(clip(lane, u32::MAX, None))),
-        "past the last tick",
+        "the clip would end past the end of the longest song, which has 1000000 beats",
+    );
+    // A clip may end on the last tick of the longest song and no later.
+    assert_invalid(
+        fail(&mut doc, add(clip(lane, MAX_SONG_TICKS - 99, Some(100)))),
+        "past the end of the longest song",
+    );
+    assert_invalid(
+        fail(&mut doc, add(clip(lane, 0, Some(MAX_SONG_TICKS + 1)))),
+        "past the end of the longest song",
+    );
+    assert_invalid(
+        fail(&mut doc, add(clip(lane, u32::MAX, Some(u32::MAX)))),
+        "past the end of the longest song",
+    );
+    run(
+        &mut doc,
+        Command::AddClips {
+            clips: vec![clip(lane, MAX_SONG_TICKS - 100, Some(100))],
+        },
     );
     assert_eq!(
         fail(&mut doc, add(clip(PlaylistTrackId(55), 0, None))),
@@ -2441,7 +3398,32 @@ fn update_clips_validates_before_changing_anything() {
         start: Some(u32::MAX),
         ..ClipPatch::default()
     };
-    assert_invalid(fail(&mut doc, with(far)), "past the last tick");
+    assert_invalid(
+        fail(&mut doc, with(far)),
+        "past the end of the longest song",
+    );
+    let long = ClipPatch {
+        length: Some(MAX_SONG_TICKS - 3_839),
+        ..ClipPatch::default()
+    };
+    assert_invalid(
+        fail(&mut doc, with(long)),
+        "past the end of the longest song",
+    );
+    let deep = ClipPatch {
+        offset: Some(MAX_SONG_TICKS + 1),
+        ..ClipPatch::default()
+    };
+    assert_invalid(
+        fail(&mut doc, with(deep)),
+        "further into what it plays than the longest song lasts",
+    );
+    let fits = ClipPatch {
+        length: Some(MAX_SONG_TICKS - 3_840),
+        offset: Some(MAX_SONG_TICKS),
+        ..ClipPatch::default()
+    };
+    run(&mut doc, update_clips(vec![(b, fits)]));
     let lost = ClipPatch {
         track: Some(PlaylistTrackId(55)),
         ..ClipPatch::default()
@@ -2483,7 +3465,10 @@ fn a_batch_is_one_undo_step() {
                     },
                     Command::AddPattern { name: None },
                     tempo(99.0),
-                    Command::AddPlaylistTrack { name: None },
+                    Command::AddPlaylistTrack {
+                        name: None,
+                        index: None,
+                    },
                 ],
             },
             None,
@@ -3018,6 +4003,7 @@ fn full_project() -> Project {
         Command::AddChannel {
             name: None,
             sample: Some(sample),
+            instrument: None,
             index: None,
             mixer_track: None,
         },
@@ -3038,6 +4024,11 @@ fn full_project() -> Project {
     let lane = add_playlist_track(&mut doc);
     add_clip(&mut doc, lane, PATTERN, 0);
     add_clip(&mut doc, lane, PATTERN, 3840);
+    let (_, kick_track) = (kick, TrackId(applied.created[1]));
+    add_effect(&mut doc, kick_track, EffectKind::Reverb);
+    add_effect(&mut doc, kick_track, EffectKind::Limiter);
+    add_effect(&mut doc, TrackId::MASTER, EffectKind::Compressor);
+    add_instrument(&mut doc);
     doc.project().clone()
 }
 
@@ -3052,8 +4043,23 @@ type Damage = fn(&mut Project);
 #[test]
 fn check_names_each_broken_rule() {
     fn sampler(project: &mut Project) -> &mut SamplerSettings {
-        let ChannelSource::Sampler(sampler) = &mut project.channels[0].source;
+        let ChannelSource::Sampler(sampler) = &mut project.channels[0].source else {
+            panic!("the first channel is not a sampler");
+        };
         sampler
+    }
+    fn synth(project: &mut Project) -> &mut SynthParams {
+        let ChannelSource::Instrument { params } = &mut project.channels[2].source else {
+            panic!("the third channel is not an instrument");
+        };
+        let InstrumentParams::SubtractiveSynth(synth) = params;
+        synth
+    }
+    fn reverb(project: &mut Project) -> &mut ReverbParams {
+        let EffectParams::Reverb(reverb) = &mut project.mixer.tracks[1].effects[0].params else {
+            panic!("the first effect is not a reverb");
+        };
+        reverb
     }
     fn first_note(project: &mut Project) -> &mut Note {
         &mut project.patterns[0].lanes[0].notes[0]
@@ -3146,6 +4152,42 @@ fn check_names_each_broken_rule() {
                 ..Envelope::default()
             });
         }),
+        ("instrument setting outside its range", |p| {
+            synth(p).gain = 9.0
+        }),
+        ("instrument setting outside its range", |p| {
+            synth(p).glide_ms = f32::NAN;
+        }),
+        ("more than one effect", |p| {
+            let copy = p.mixer.tracks[1].effects[0].clone();
+            p.mixer.tracks[0].effects.push(copy);
+        }),
+        ("effect 999 is not below the next id", |p| {
+            p.mixer.tracks[1].effects[0].id = EffectId(999);
+        }),
+        ("effects, more than the limit", |p| {
+            let mut next = p.next_id;
+            let copy = p.mixer.tracks[1].effects[0].clone();
+            let effects = &mut p.mixer.tracks[1].effects;
+            while effects.len() <= MAX_EFFECT_SLOTS {
+                effects.push(EffectSlot {
+                    id: EffectId(next),
+                    ..copy.clone()
+                });
+                next += 1;
+            }
+            p.next_id = next;
+        }),
+        ("has mix 1.5", |p| p.mixer.tracks[1].effects[0].mix = 1.5),
+        ("has mix NaN", |p| {
+            p.mixer.tracks[1].effects[0].mix = f32::NAN
+        }),
+        ("effect 14 has a setting outside its range", |p| {
+            reverb(p).decay_s = 1.0e6;
+        }),
+        ("has a setting outside its range", |p| {
+            reverb(p).mix = f32::NAN;
+        }),
         ("no patterns", |p| {
             p.playlist.clips.clear();
             p.patterns.clear();
@@ -3196,8 +4238,18 @@ fn check_names_each_broken_rule() {
             p.playlist.clips[0].track = PlaylistTrackId(999);
         }),
         ("has no length", |p| p.playlist.clips[0].length = 0),
-        ("ends past the last tick", |p| {
+        ("ends past the end of the longest song", |p| {
             p.playlist.clips[1].length = u32::MAX;
+        }),
+        (
+            "ends past the end of the longest song, tick 960000000",
+            |p| {
+                let clip = &mut p.playlist.clips[1];
+                clip.length = MAX_SONG_TICKS - clip.start + 1;
+            },
+        ),
+        ("an offset past the end of the longest song", |p| {
+            p.playlist.clips[0].offset = MAX_SONG_TICKS + 1;
         }),
         ("plays pattern 999", |p| {
             p.playlist.clips[0].content = ClipContent::Pattern {
@@ -3207,6 +4259,2639 @@ fn check_names_each_broken_rule() {
     ];
     for (index, (words, damage)) in cases.into_iter().enumerate() {
         let mut project = full_project();
+        damage(&mut project);
+        match project.check() {
+            Ok(()) => panic!("case {index} (\"{words}\") passed the check"),
+            Err(problem) => assert!(
+                problem.contains(words),
+                "case {index}: \"{problem}\" lacks \"{words}\""
+            ),
+        }
+    }
+}
+
+// Effects
+
+fn effect_ids(doc: &Document, track_id: TrackId) -> Vec<EffectId> {
+    track(doc, track_id).effects.iter().map(|e| e.id).collect()
+}
+
+fn slot(doc: &Document, track_id: TrackId, effect: EffectId) -> EffectSlot {
+    let track = track(doc, track_id);
+    track.effect(effect).expect("the effect exists").clone()
+}
+
+fn set_param(track: TrackId, effect: EffectId, param: usize, value: f32) -> Command {
+    Command::SetEffectParam {
+        track,
+        effect,
+        param: param as u32,
+        value,
+    }
+}
+
+fn param_index<P: ParamSet>(id: &str) -> usize {
+    P::index_of(id).expect("the setting exists")
+}
+
+#[test]
+fn add_effect_puts_a_default_effect_on_the_track() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let applied = run(
+        &mut doc,
+        Command::AddEffect {
+            track: track_id,
+            kind: EffectKind::Reverb,
+            index: None,
+        },
+    );
+    assert_eq!(applied.label, "Add effect");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    let reverb = EffectId(applied.created[0]);
+    assert_eq!(applied.created.len(), 1);
+    assert_eq!(
+        slot(&doc, track_id, reverb),
+        EffectSlot {
+            id: reverb,
+            enabled: true,
+            mix: 1.0,
+            params: EffectParams::Reverb(ReverbParams::default()),
+        }
+    );
+
+    // The end by default and for an index past it, anywhere else by index.
+    let limiter = add_effect(&mut doc, track_id, EffectKind::Limiter);
+    let at = |index| Command::AddEffect {
+        track: track_id,
+        kind: EffectKind::Eq,
+        index: Some(index),
+    };
+    let first = EffectId(run(&mut doc, at(0)).created[0]);
+    let middle = EffectId(run(&mut doc, at(2)).created[0]);
+    let last = EffectId(run(&mut doc, at(99)).created[0]);
+    assert_eq!(
+        effect_ids(&doc, track_id),
+        [first, reverb, middle, limiter, last]
+    );
+    for kind in EffectKind::ALL {
+        let id = add_effect(&mut doc, TrackId::MASTER, kind);
+        assert_eq!(slot(&doc, TrackId::MASTER, id).kind(), kind);
+        assert_eq!(
+            slot(&doc, TrackId::MASTER, id).params,
+            kind.default_params()
+        );
+    }
+
+    let unknown = Command::AddEffect {
+        track: TrackId(999),
+        kind: EffectKind::Eq,
+        index: None,
+    };
+    assert_eq!(fail(&mut doc, unknown), not_found("mixer track", 999));
+}
+
+#[test]
+fn a_track_holds_a_limited_number_of_effects() {
+    let mut doc = document();
+    let full = add_mixer_track(&mut doc);
+    let other = add_mixer_track(&mut doc);
+    let outsider = add_effect(&mut doc, other, EffectKind::Delay);
+    let mut ids = Vec::new();
+    for _ in 0..MAX_EFFECT_SLOTS {
+        ids.push(add_effect(&mut doc, full, EffectKind::Eq));
+    }
+    assert_eq!(MAX_EFFECT_SLOTS, 10);
+
+    let add = Command::AddEffect {
+        track: full,
+        kind: EffectKind::Eq,
+        index: Some(0),
+    };
+    assert_invalid(fail(&mut doc, add), "is full: it holds 10 effects");
+    let duplicate = Command::DuplicateEffect {
+        track: full,
+        effect: ids[0],
+    };
+    assert_invalid(fail(&mut doc, duplicate), "is full");
+    let move_in = Command::MoveEffect {
+        track: other,
+        effect: outsider,
+        to_track: Some(full),
+        index: 0,
+    };
+    assert_invalid(fail(&mut doc, move_in), "is full");
+
+    // A full track can still be reordered, and has room again once an
+    // effect leaves.
+    run(
+        &mut doc,
+        Command::MoveEffect {
+            track: full,
+            effect: ids[0],
+            to_track: None,
+            index: 9,
+        },
+    );
+    run(
+        &mut doc,
+        Command::RemoveEffect {
+            track: full,
+            effect: ids[3],
+        },
+    );
+    add_effect(&mut doc, full, EffectKind::Reverb);
+}
+
+#[test]
+fn remove_effect_takes_one_effect_out_of_the_chain() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let other = add_mixer_track(&mut doc);
+    let eq = add_effect(&mut doc, track_id, EffectKind::Eq);
+    let reverb = add_effect(&mut doc, track_id, EffectKind::Reverb);
+    let elsewhere = add_effect(&mut doc, other, EffectKind::Delay);
+
+    let remove = |track, effect| Command::RemoveEffect { track, effect };
+    assert_eq!(
+        fail(&mut doc, remove(track_id, EffectId(999))),
+        not_found("effect", 999)
+    );
+    assert_eq!(
+        fail(&mut doc, remove(TrackId(999), eq)),
+        not_found("mixer track", 999)
+    );
+    // An effect is addressed through the track it is on.
+    assert_eq!(
+        fail(&mut doc, remove(track_id, elsewhere)),
+        not_found("effect", elsewhere.0)
+    );
+
+    let applied = run(&mut doc, remove(track_id, eq));
+    assert_eq!(applied.label, "Delete effect");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert_eq!(effect_ids(&doc, track_id), [reverb]);
+    assert_eq!(effect_ids(&doc, other), [elsewhere]);
+    // Its id is never handed out again.
+    let next = add_effect(&mut doc, track_id, EffectKind::Eq);
+    assert!(next.0 > elsewhere.0);
+}
+
+#[test]
+fn move_effect_reorders_a_chain() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let a = add_effect(&mut doc, track_id, EffectKind::Eq);
+    let b = add_effect(&mut doc, track_id, EffectKind::Compressor);
+    let c = add_effect(&mut doc, track_id, EffectKind::Limiter);
+    let to = |effect, index| Command::MoveEffect {
+        track: track_id,
+        effect,
+        to_track: None,
+        index,
+    };
+
+    let applied = run(&mut doc, to(a, 2));
+    assert_eq!(applied.label, "Move effect");
+    assert_eq!(effect_ids(&doc, track_id), [b, c, a]);
+    run(&mut doc, to(a, 0));
+    assert_eq!(effect_ids(&doc, track_id), [a, b, c]);
+    // Past the end means the end, and naming the track itself is the same
+    // as naming none.
+    run(&mut doc, to(b, 99));
+    assert_eq!(effect_ids(&doc, track_id), [a, c, b]);
+    run(
+        &mut doc,
+        Command::MoveEffect {
+            track: track_id,
+            effect: b,
+            to_track: Some(track_id),
+            index: 1,
+        },
+    );
+    assert_eq!(effect_ids(&doc, track_id), [a, b, c]);
+
+    // Moving an effect to where it is changes nothing.
+    let history = doc.history();
+    assert!(run(&mut doc, to(b, 1)).touched.is_empty());
+    assert_eq!(doc.history(), history);
+    assert_eq!(
+        fail(&mut doc, to(EffectId(999), 0)),
+        not_found("effect", 999)
+    );
+}
+
+#[test]
+fn move_effect_takes_an_effect_to_another_track() {
+    let mut doc = document();
+    let from = add_mixer_track(&mut doc);
+    let to = add_mixer_track(&mut doc);
+    let eq = add_effect(&mut doc, from, EffectKind::Eq);
+    let reverb = add_effect(&mut doc, from, EffectKind::Reverb);
+    let x = add_effect(&mut doc, to, EffectKind::Delay);
+    let y = add_effect(&mut doc, to, EffectKind::Limiter);
+    let decay = param_index::<ReverbParams>("decayS");
+    run(&mut doc, set_param(from, reverb, decay, 7.5));
+    run(
+        &mut doc,
+        Command::UpdateEffect {
+            track: from,
+            effect: reverb,
+            patch: EffectSlotPatch {
+                enabled: Some(false),
+                mix: Some(0.25),
+            },
+        },
+    );
+    let moved = slot(&doc, from, reverb);
+
+    let applied = run(
+        &mut doc,
+        Command::MoveEffect {
+            track: from,
+            effect: reverb,
+            to_track: Some(to),
+            index: 1,
+        },
+    );
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert!(applied.created.is_empty());
+    assert_eq!(effect_ids(&doc, from), [eq]);
+    assert_eq!(effect_ids(&doc, to), [x, reverb, y]);
+    // Same id, same switch, same mix, same settings.
+    assert_eq!(slot(&doc, to, reverb), moved);
+
+    run(
+        &mut doc,
+        Command::MoveEffect {
+            track: to,
+            effect: reverb,
+            to_track: Some(TrackId::MASTER),
+            index: 99,
+        },
+    );
+    assert_eq!(effect_ids(&doc, TrackId::MASTER), [reverb]);
+
+    let unknown = Command::MoveEffect {
+        track: from,
+        effect: eq,
+        to_track: Some(TrackId(999)),
+        index: 0,
+    };
+    assert_eq!(fail(&mut doc, unknown), not_found("mixer track", 999));
+    // The effect is no longer where the command says.
+    let stale = Command::MoveEffect {
+        track: from,
+        effect: reverb,
+        to_track: Some(to),
+        index: 0,
+    };
+    assert_eq!(fail(&mut doc, stale), not_found("effect", reverb.0));
+}
+
+#[test]
+fn update_effect_switches_and_mixes() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let effect = add_effect(&mut doc, track_id, EffectKind::Delay);
+    let update = |patch| Command::UpdateEffect {
+        track: track_id,
+        effect,
+        patch,
+    };
+    let enabled = |enabled| EffectSlotPatch {
+        enabled: Some(enabled),
+        mix: None,
+    };
+    let mix = |mix| EffectSlotPatch {
+        enabled: None,
+        mix: Some(mix),
+    };
+
+    let applied = run(&mut doc, update(enabled(false)));
+    assert_eq!(applied.label, "Switch effect off");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert!(!slot(&doc, track_id, effect).enabled);
+    assert_eq!(
+        run(&mut doc, update(enabled(true))).label,
+        "Switch effect on"
+    );
+    assert!(slot(&doc, track_id, effect).enabled);
+
+    assert_eq!(run(&mut doc, update(mix(0.4))).label, "Change effect mix");
+    assert_eq!(slot(&doc, track_id, effect).mix, 0.4);
+    run(&mut doc, update(mix(7.0)));
+    assert_eq!(slot(&doc, track_id, effect).mix, 1.0);
+    run(&mut doc, update(mix(f32::NEG_INFINITY)));
+    assert_eq!(slot(&doc, track_id, effect).mix, 0.0);
+    assert_invalid(
+        fail(&mut doc, update(mix(f32::NAN))),
+        "the mix is not a number",
+    );
+
+    let both = EffectSlotPatch {
+        enabled: Some(false),
+        mix: Some(0.5),
+    };
+    assert_eq!(run(&mut doc, update(both)).label, "Change effect");
+    let changed = slot(&doc, track_id, effect);
+    assert_eq!((changed.enabled, changed.mix), (false, 0.5));
+    // The settings were left alone throughout.
+    assert_eq!(changed.params, EffectKind::Delay.default_params());
+
+    let history = doc.history();
+    assert!(run(&mut doc, update(both)).touched.is_empty());
+    let nothing = update(EffectSlotPatch::default());
+    assert!(run(&mut doc, nothing).touched.is_empty());
+    assert_eq!(doc.history(), history);
+    let unknown = Command::UpdateEffect {
+        track: track_id,
+        effect: EffectId(999),
+        patch: both,
+    };
+    assert_eq!(fail(&mut doc, unknown), not_found("effect", 999));
+}
+
+#[test]
+fn set_effect_param_sets_one_setting_within_its_range() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let effect = add_effect(&mut doc, track_id, EffectKind::Compressor);
+    let compressor = |doc: &Document| match slot(doc, track_id, effect).params {
+        EffectParams::Compressor(params) => params,
+        other => panic!("{other:?} is not a compressor"),
+    };
+    let index = param_index::<CompressorParams>;
+    let (threshold, ratio) = (index("thresholdDb"), index("ratio"));
+    let (auto_makeup, detector) = (index("autoMakeup"), index("detector"));
+
+    let applied = run(&mut doc, set_param(track_id, effect, threshold, -30.0));
+    assert_eq!(applied.label, "Change Threshold");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert_eq!(
+        compressor(&doc),
+        CompressorParams {
+            threshold_db: -30.0,
+            ..CompressorParams::default()
+        }
+    );
+
+    // A value outside the range is brought into it, and infinity is the
+    // end of the range.
+    run(&mut doc, set_param(track_id, effect, threshold, 12.0));
+    assert_eq!(compressor(&doc).threshold_db, 0.0);
+    run(&mut doc, set_param(track_id, effect, threshold, -500.0));
+    assert_eq!(compressor(&doc).threshold_db, -60.0);
+    run(&mut doc, set_param(track_id, effect, ratio, f32::INFINITY));
+    assert_eq!(compressor(&doc).ratio, 100.0);
+    run(
+        &mut doc,
+        set_param(track_id, effect, ratio, f32::NEG_INFINITY),
+    );
+    assert_eq!(compressor(&doc).ratio, 1.0);
+
+    // A toggle is 0 or 1 and a choice is the index of the choice.
+    run(&mut doc, set_param(track_id, effect, auto_makeup, 1.0));
+    assert!(compressor(&doc).auto_makeup);
+    run(&mut doc, set_param(track_id, effect, auto_makeup, 0.0));
+    assert!(!compressor(&doc).auto_makeup);
+    run(&mut doc, set_param(track_id, effect, detector, 1.0));
+    assert_eq!(compressor(&doc).detector, DetectorMode::Rms);
+    run(&mut doc, set_param(track_id, effect, detector, 0.0));
+    assert_eq!(compressor(&doc).detector, DetectorMode::Peak);
+
+    let before = compressor(&doc);
+    assert_invalid(
+        fail(&mut doc, set_param(track_id, effect, threshold, f32::NAN)),
+        "the value is not a number",
+    );
+    let count = EffectKind::Compressor.descriptors().len();
+    assert_invalid(
+        fail(&mut doc, set_param(track_id, effect, count, 1.0)),
+        &format!("the Compressor has no setting number {count}"),
+    );
+    assert_eq!(
+        fail(&mut doc, set_param(track_id, EffectId(999), 0, 1.0)),
+        not_found("effect", 999)
+    );
+    assert_eq!(
+        fail(&mut doc, set_param(TrackId(999), effect, 0, 1.0)),
+        not_found("mixer track", 999)
+    );
+    assert_eq!(compressor(&doc), before);
+
+    // Setting a value it already has is no edit.
+    let history = doc.history();
+    let same = set_param(track_id, effect, ratio, before.ratio);
+    assert!(run(&mut doc, same).touched.is_empty());
+    assert_eq!(doc.history(), history);
+}
+
+#[test]
+fn every_setting_of_every_effect_can_be_set_by_its_index() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    for kind in EffectKind::ALL {
+        let effect = add_effect(&mut doc, track_id, kind);
+        for (index, info) in kind.descriptors().iter().enumerate() {
+            for value in [info.min, info.max, info.default] {
+                run(&mut doc, set_param(track_id, effect, index, value));
+                let params = slot(&doc, track_id, effect).params;
+                assert_eq!(params.get(index), Some(value), "{kind:?} {}", info.id);
+            }
+            run(
+                &mut doc,
+                set_param(track_id, effect, index, info.max + 1.0e6),
+            );
+            let params = slot(&doc, track_id, effect).params;
+            assert_eq!(params.get(index), Some(info.max), "{kind:?} {}", info.id);
+        }
+    }
+}
+
+#[test]
+fn set_effect_params_replaces_every_setting() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let effect = add_effect(&mut doc, track_id, EffectKind::Limiter);
+    let set = |params| Command::SetEffectParams {
+        track: track_id,
+        effect,
+        params,
+    };
+    let preset = LimiterParams {
+        ceiling_db: -1.0,
+        input_gain_db: 6.0,
+        release_ms: 50.0,
+        lookahead_ms: 2.0,
+    };
+
+    let applied = run(&mut doc, set(EffectParams::Limiter(preset)));
+    assert_eq!(applied.label, "Change effect settings");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert_eq!(
+        slot(&doc, track_id, effect).params,
+        EffectParams::Limiter(preset)
+    );
+
+    // Values outside their ranges are brought into them, as when they are
+    // set one by one.
+    let wild = LimiterParams {
+        ceiling_db: 3.0,
+        input_gain_db: -100.0,
+        release_ms: f32::INFINITY,
+        lookahead_ms: -0.0,
+    };
+    run(&mut doc, set(EffectParams::Limiter(wild)));
+    assert_eq!(
+        slot(&doc, track_id, effect).params,
+        EffectParams::Limiter(LimiterParams {
+            ceiling_db: 0.0,
+            input_gain_db: -12.0,
+            release_ms: 1000.0,
+            lookahead_ms: 0.1,
+        })
+    );
+
+    let before = slot(&doc, track_id, effect);
+    let broken = LimiterParams {
+        release_ms: f32::NAN,
+        ..preset
+    };
+    assert_invalid(
+        fail(&mut doc, set(EffectParams::Limiter(broken))),
+        "the value is not a number",
+    );
+    assert_invalid(
+        fail(&mut doc, set(EffectKind::Reverb.default_params())),
+        "these are the settings of a Reverb, and this is a Limiter",
+    );
+    assert_eq!(slot(&doc, track_id, effect), before);
+    let unknown = Command::SetEffectParams {
+        track: track_id,
+        effect: EffectId(999),
+        params: EffectParams::Limiter(preset),
+    };
+    assert_eq!(fail(&mut doc, unknown), not_found("effect", 999));
+}
+
+#[test]
+fn duplicate_effect_copies_an_effect_right_after_it() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let eq = add_effect(&mut doc, track_id, EffectKind::Eq);
+    let delay = add_effect(&mut doc, track_id, EffectKind::Delay);
+    let feedback = param_index::<DelayParams>("feedback");
+    run(&mut doc, set_param(track_id, delay, feedback, 0.25));
+    run(
+        &mut doc,
+        Command::UpdateEffect {
+            track: track_id,
+            effect: delay,
+            patch: EffectSlotPatch {
+                enabled: Some(false),
+                mix: Some(0.5),
+            },
+        },
+    );
+
+    let applied = run(
+        &mut doc,
+        Command::DuplicateEffect {
+            track: track_id,
+            effect: delay,
+        },
+    );
+    assert_eq!(applied.label, "Duplicate effect");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    let copy = EffectId(applied.created[0]);
+    assert_eq!(effect_ids(&doc, track_id), [eq, delay, copy]);
+    assert_eq!(
+        slot(&doc, track_id, copy),
+        EffectSlot {
+            id: copy,
+            ..slot(&doc, track_id, delay)
+        }
+    );
+    let first = Command::DuplicateEffect {
+        track: track_id,
+        effect: eq,
+    };
+    let second = EffectId(run(&mut doc, first).created[0]);
+    assert_eq!(effect_ids(&doc, track_id), [eq, second, delay, copy]);
+
+    let unknown = Command::DuplicateEffect {
+        track: track_id,
+        effect: EffectId(999),
+    };
+    assert_eq!(fail(&mut doc, unknown), not_found("effect", 999));
+}
+
+#[test]
+fn a_setting_is_named_in_the_history() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let (channel, _) = add_instrument(&mut doc);
+    // Every setting of every effect and of the synth has a label made of
+    // its own name.
+    for kind in EffectKind::ALL {
+        let effect = add_effect(&mut doc, track_id, kind);
+        for (param, info) in kind.descriptors().iter().enumerate() {
+            let other = if info.default == info.max {
+                info.min
+            } else {
+                info.max
+            };
+            let applied = run(&mut doc, set_param(track_id, effect, param, other));
+            assert_eq!(applied.label, format!("Change {}", info.name));
+            assert_eq!(label(&doc), applied.label);
+        }
+    }
+    let synth = InstrumentKind::SubtractiveSynth.descriptors();
+    for (param, info) in synth.iter().enumerate() {
+        let other = if info.default == info.max {
+            info.min
+        } else {
+            info.max
+        };
+        let applied = run(&mut doc, set_synth(channel, param, other));
+        assert_eq!(applied.label, format!("Change {}", info.name));
+    }
+    let named = |id: &str| format!("Change {}", synth[param_index::<SynthParams>(id)].name);
+    assert_eq!(named("filter.cutoffHz"), "Change Cutoff");
+    assert_eq!(named("oscillators.1.level"), "Change Osc 2 level");
+}
+
+#[test]
+fn replace_effect_puts_a_new_effect_in_the_same_place() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let eq = add_effect(&mut doc, track_id, EffectKind::Eq);
+    let delay = add_effect(&mut doc, track_id, EffectKind::Delay);
+    let limiter = add_effect(&mut doc, track_id, EffectKind::Limiter);
+    let feedback = param_index::<DelayParams>("feedback");
+    run(&mut doc, set_param(track_id, delay, feedback, 0.25));
+    run(
+        &mut doc,
+        Command::UpdateEffect {
+            track: track_id,
+            effect: delay,
+            patch: EffectSlotPatch {
+                enabled: Some(false),
+                mix: Some(0.5),
+            },
+        },
+    );
+    let steps = doc.history().entries.len();
+
+    let replace = |effect: EffectId, kind: EffectKind| Command::ReplaceEffect {
+        track: track_id,
+        effect,
+        kind,
+    };
+    let applied = run(&mut doc, replace(delay, EffectKind::Reverb));
+    assert_eq!(applied.label, "Replace effect");
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    let reverb = EffectId(applied.created[0]);
+    assert_ne!(reverb, delay);
+    assert_eq!(effect_ids(&doc, track_id), [eq, reverb, limiter]);
+    assert_eq!(
+        slot(&doc, track_id, reverb),
+        EffectSlot {
+            id: reverb,
+            enabled: true,
+            mix: 1.0,
+            params: EffectKind::Reverb.default_params(),
+        }
+    );
+
+    // One undo brings the old effect back as it was, in its place.
+    doc.undo().unwrap();
+    assert_eq!(effect_ids(&doc, track_id), [eq, delay, limiter]);
+    let old = slot(&doc, track_id, delay);
+    assert!(!old.enabled);
+    assert_eq!(old.mix, 0.5);
+    doc.redo().unwrap();
+
+    // The same kind again is a fresh effect with an id of its own.
+    let decay = param_index::<ReverbParams>("decayS");
+    run(&mut doc, set_param(track_id, reverb, decay, 9.0));
+    let applied = run(&mut doc, replace(reverb, EffectKind::Reverb));
+    let fresh = EffectId(applied.created[0]);
+    assert_ne!(fresh, reverb);
+    assert_eq!(
+        slot(&doc, track_id, fresh).params,
+        EffectKind::Reverb.default_params()
+    );
+
+    // A full chain has room for it: nothing is added.
+    for _ in 3..MAX_EFFECT_SLOTS {
+        add_effect(&mut doc, track_id, EffectKind::Eq);
+    }
+    let applied = run(&mut doc, replace(eq, EffectKind::Compressor));
+    let first = effect_ids(&doc, track_id)[0];
+    assert_eq!(first, EffectId(applied.created[0]));
+    assert_eq!(effect_ids(&doc, track_id).len(), MAX_EFFECT_SLOTS);
+
+    assert_eq!(
+        fail(&mut doc, replace(EffectId(999), EffectKind::Eq)),
+        not_found("effect", 999)
+    );
+    // The effect is looked for on the track that is named.
+    let elsewhere = Command::ReplaceEffect {
+        track: TrackId::MASTER,
+        effect: fresh,
+        kind: EffectKind::Eq,
+    };
+    assert_eq!(fail(&mut doc, elsewhere), not_found("effect", fresh.0));
+    let nowhere = Command::ReplaceEffect {
+        track: TrackId(999),
+        effect: fresh,
+        kind: EffectKind::Eq,
+    };
+    assert_eq!(fail(&mut doc, nowhere), not_found("mixer track", 999));
+}
+
+#[test]
+fn remove_mixer_track_takes_its_effects_and_undo_brings_them_back() {
+    let mut doc = document();
+    let (_, track_id) = add_channel(&mut doc, "Pad");
+    let reverb = add_effect(&mut doc, track_id, EffectKind::Reverb);
+    let limiter = add_effect(&mut doc, track_id, EffectKind::Limiter);
+    run(&mut doc, set_param(track_id, reverb, 0, 0.9));
+    let master = add_effect(&mut doc, TrackId::MASTER, EffectKind::Eq);
+    let before = track(&doc, track_id);
+
+    // `run` undoes and redoes, and checks both.
+    run(&mut doc, Command::RemoveMixerTrack { id: track_id });
+    assert!(doc.project().mixer.track(track_id).is_none());
+    assert_eq!(effect_ids(&doc, TrackId::MASTER), [master]);
+    let gone = Command::RemoveEffect {
+        track: track_id,
+        effect: reverb,
+    };
+    assert_eq!(fail(&mut doc, gone), not_found("mixer track", track_id.0));
+
+    doc.undo().unwrap();
+    assert_eq!(track(&doc, track_id), before);
+    assert_eq!(effect_ids(&doc, track_id), [reverb, limiter]);
+}
+
+#[test]
+fn a_knob_drag_on_an_effect_is_one_undo_step() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    let effect = add_effect(&mut doc, track_id, EffectKind::Reverb);
+    let decay = param_index::<ReverbParams>("decayS");
+    let size = param_index::<ReverbParams>("size");
+    let start = doc.project().clone();
+    let steps = doc.history().entries.len();
+
+    for value in [2.0, 2.5, 3.0, 4.25] {
+        let applied = doc
+            .dispatch(set_param(track_id, effect, decay, value), Some(7))
+            .unwrap();
+        assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    }
+    // Another setting of the same effect under the same gesture, and the
+    // slot's own mix.
+    doc.dispatch(set_param(track_id, effect, size, 0.9), Some(7))
+        .unwrap();
+    let mix = Command::UpdateEffect {
+        track: track_id,
+        effect,
+        patch: EffectSlotPatch {
+            enabled: None,
+            mix: Some(0.5),
+        },
+    };
+    doc.dispatch(mix, Some(7)).unwrap();
+    // The step is named after the setting the drag began on.
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    assert_eq!(label(&doc), "Change Decay");
+    let EffectParams::Reverb(reverb) = slot(&doc, track_id, effect).params else {
+        panic!("not a reverb");
+    };
+    assert_eq!((reverb.decay_s, reverb.size), (4.25, 0.9));
+
+    doc.undo().unwrap();
+    assert_eq!(doc.project(), &start);
+    doc.redo().unwrap();
+    assert_eq!(slot(&doc, track_id, effect).mix, 0.5);
+
+    // A drag that ends where it began leaves no step.
+    let steps = doc.history().entries.len();
+    for value in [9.0, 12.0, reverb.decay_s] {
+        doc.dispatch(set_param(track_id, effect, decay, value), Some(8))
+            .unwrap();
+    }
+    assert_eq!(doc.history().entries.len(), steps);
+
+    // Without a gesture every change is a step of its own.
+    for value in [2.0, 3.0] {
+        doc.dispatch(set_param(track_id, effect, decay, value), None)
+            .unwrap();
+    }
+    assert_eq!(doc.history().entries.len(), steps + 2);
+}
+
+// Instruments
+
+fn synth(doc: &Document, channel: ChannelId) -> SynthParams {
+    let channel = doc.project().channel(channel).expect("the channel exists");
+    let ChannelSource::Instrument { params } = &channel.source else {
+        panic!("the channel is not an instrument");
+    };
+    let InstrumentParams::SubtractiveSynth(synth) = params;
+    *synth
+}
+
+fn set_synth(channel: ChannelId, param: usize, value: f32) -> Command {
+    Command::SetInstrumentParam {
+        channel,
+        param: param as u32,
+        value,
+    }
+}
+
+#[test]
+fn add_channel_can_make_an_instrument_channel() {
+    let mut doc = document();
+    let applied = run(
+        &mut doc,
+        Command::AddChannel {
+            name: None,
+            sample: None,
+            instrument: Some(InstrumentKind::SubtractiveSynth),
+            index: None,
+            mixer_track: None,
+        },
+    );
+    assert_eq!(applied.label, "Add channel");
+    assert_eq!(
+        applied.touched,
+        touched(|t| {
+            t.channels = true;
+            t.mixer = true;
+        })
+    );
+    let (id, track_id) = (ChannelId(applied.created[0]), TrackId(applied.created[1]));
+    let channel = doc.project().channel(id).unwrap().clone();
+    // Named after the instrument, routed to a track of its own like any
+    // other new channel, and at the instrument's default settings.
+    assert_eq!(channel.name, "Subtractive synth");
+    assert_eq!(channel.mixer_track, track_id);
+    assert_eq!(track(&doc, track_id).name, "Subtractive synth");
+    assert_eq!(track(&doc, track_id).output, Some(TrackId::MASTER));
+    assert_eq!(channel.volume, DEFAULT_CHANNEL_VOLUME);
+    assert_eq!(synth(&doc, id), SynthParams::default());
+    assert_eq!(channel.source.sample(), None);
+
+    let named = run(
+        &mut doc,
+        Command::AddChannel {
+            name: Some("Lead".to_owned()),
+            sample: None,
+            instrument: Some(InstrumentKind::SubtractiveSynth),
+            index: Some(0),
+            mixer_track: Some(track_id),
+        },
+    );
+    assert_eq!(named.created.len(), 1);
+    assert_eq!(doc.project().channels[0].name, "Lead");
+    assert_eq!(doc.project().channels[0].mixer_track, track_id);
+
+    // A channel is a sampler or an instrument, never both.
+    let sample = add_sample(&mut doc, "kick");
+    let both = Command::AddChannel {
+        name: None,
+        sample: Some(sample),
+        instrument: Some(InstrumentKind::SubtractiveSynth),
+        index: None,
+        mixer_track: None,
+    };
+    assert_invalid(fail(&mut doc, both), "a sample or an instrument, not both");
+}
+
+#[test]
+fn an_instrument_channel_takes_notes_like_any_other() {
+    let mut doc = document();
+    let (channel, _) = add_instrument(&mut doc);
+    run(
+        &mut doc,
+        Command::ToggleStep {
+            pattern: PATTERN,
+            channel,
+            step: 2,
+        },
+    );
+    add_notes(&mut doc, channel, vec![note(960, 72)]);
+    assert_eq!(lane_notes(&doc, PATTERN, channel).len(), 2);
+    // Its notes go with it, as a sampler's do.
+    run(&mut doc, Command::RemoveChannel { id: channel });
+    assert!(doc.project().patterns[0].lanes.is_empty());
+}
+
+#[test]
+fn duplicate_channel_copies_an_instruments_settings() {
+    let mut doc = document();
+    let (channel, track_id) = add_instrument(&mut doc);
+    let gain = param_index::<SynthParams>("gain");
+    let mode = param_index::<SynthParams>("voiceMode");
+    run(&mut doc, set_synth(channel, gain, 0.6));
+    run(&mut doc, set_synth(channel, mode, 1.0));
+    add_notes(&mut doc, channel, vec![note(0, 60), note(240, 64)]);
+
+    let applied = run(&mut doc, Command::DuplicateChannel { id: channel });
+    let copy = ChannelId(applied.created[0]);
+    assert_eq!(synth(&doc, copy), synth(&doc, channel));
+    assert_eq!(synth(&doc, copy).gain, 0.6);
+    assert_eq!(synth(&doc, copy).voice_mode, VoiceMode::Mono);
+    let copied = doc.project().channel(copy).unwrap();
+    assert_eq!(copied.name, "Subtractive synth #2");
+    assert_eq!(copied.mixer_track, track_id);
+    assert_eq!(lane_notes(&doc, PATTERN, copy).len(), 2);
+
+    // The two are separate from here on.
+    run(&mut doc, set_synth(copy, gain, 0.1));
+    assert_eq!(synth(&doc, channel).gain, 0.6);
+}
+
+#[test]
+fn set_instrument_param_sets_one_setting_within_its_range() {
+    let mut doc = document();
+    let (channel, _) = add_instrument(&mut doc);
+    let index = param_index::<SynthParams>;
+
+    let applied = run(&mut doc, set_synth(channel, index("glideMs"), 120.0));
+    assert_eq!(applied.label, "Change Glide");
+    assert_eq!(applied.touched, touched(|t| t.channels = true));
+    assert_eq!(
+        synth(&doc, channel),
+        SynthParams {
+            glide_ms: 120.0,
+            ..SynthParams::default()
+        }
+    );
+    run(&mut doc, set_synth(channel, index("glideMs"), 1.0e9));
+    assert_eq!(synth(&doc, channel).glide_ms, 2000.0);
+    run(&mut doc, set_synth(channel, index("polyphony"), 3.4));
+    assert_eq!(synth(&doc, channel).polyphony, 3);
+    run(
+        &mut doc,
+        set_synth(channel, index("oscillators.1.level"), 0.5),
+    );
+    assert_eq!(synth(&doc, channel).oscillators[1].level, 0.5);
+    run(&mut doc, set_synth(channel, index("filter.mode"), 1.0));
+    assert_ne!(
+        synth(&doc, channel).filter.mode,
+        SynthParams::default().filter.mode
+    );
+
+    let before = synth(&doc, channel);
+    assert_invalid(
+        fail(&mut doc, set_synth(channel, index("gain"), f32::NAN)),
+        "the value is not a number",
+    );
+    let count = InstrumentKind::SubtractiveSynth.descriptors().len();
+    assert_invalid(
+        fail(&mut doc, set_synth(channel, count, 0.0)),
+        &format!("the Subtractive synth has no setting number {count}"),
+    );
+    assert_eq!(
+        fail(&mut doc, set_synth(ChannelId(999), 0, 0.0)),
+        not_found("channel", 999)
+    );
+    assert_eq!(synth(&doc, channel), before);
+}
+
+#[test]
+fn every_setting_of_the_synth_can_be_set_by_its_index() {
+    let mut doc = document();
+    let (channel, _) = add_instrument(&mut doc);
+    let kind = InstrumentKind::SubtractiveSynth;
+    for (index, info) in kind.descriptors().iter().enumerate() {
+        for value in [info.min, info.max, info.default] {
+            run(&mut doc, set_synth(channel, index, value));
+            let params = InstrumentParams::SubtractiveSynth(synth(&doc, channel));
+            assert_eq!(params.get(index), Some(value), "{}", info.id);
+        }
+    }
+    assert_eq!(synth(&doc, channel), SynthParams::default());
+}
+
+#[test]
+fn set_instrument_params_replaces_every_setting() {
+    let mut doc = document();
+    let (channel, _) = add_instrument(&mut doc);
+    let set = |params| Command::SetInstrumentParams {
+        channel,
+        params: InstrumentParams::SubtractiveSynth(params),
+    };
+    let mut preset = SynthParams {
+        unison_voices: 5,
+        glide_ms: 40.0,
+        gain: 0.5,
+        ..SynthParams::default()
+    };
+    preset.oscillators[2].level = 0.8;
+
+    let applied = run(&mut doc, set(preset));
+    assert_eq!(applied.label, "Change instrument settings");
+    assert_eq!(applied.touched, touched(|t| t.channels = true));
+    assert_eq!(synth(&doc, channel), preset);
+
+    let wild = SynthParams {
+        unison_voices: 200,
+        gain: 50.0,
+        pan: -3.0,
+        ..preset
+    };
+    run(&mut doc, set(wild));
+    assert_eq!(
+        synth(&doc, channel),
+        SynthParams {
+            unison_voices: 7,
+            gain: 2.0,
+            pan: -1.0,
+            ..preset
+        }
+    );
+
+    let before = synth(&doc, channel);
+    let broken = SynthParams {
+        unison_spread: f32::NAN,
+        ..preset
+    };
+    assert_invalid(fail(&mut doc, set(broken)), "the value is not a number");
+    assert_eq!(synth(&doc, channel), before);
+}
+
+#[test]
+fn sampler_and_instrument_commands_do_not_cross() {
+    let mut doc = document();
+    let sample = add_sample(&mut doc, "kick");
+    let (drum, _) = add_channel(&mut doc, "Drum");
+    let (lead, _) = add_instrument(&mut doc);
+    let rename = ChannelPatch {
+        name: Some("Lead".to_owned()),
+        ..ChannelPatch::default()
+    };
+    run(&mut doc, update_channel(lead, rename));
+
+    let on_instrument = [
+        Command::SetChannelSample {
+            id: lead,
+            sample: Some(sample),
+        },
+        Command::SetChannelSample {
+            id: lead,
+            sample: None,
+        },
+        Command::UpdateSampler {
+            id: lead,
+            patch: SamplerPatch {
+                gain: Some(0.5),
+                ..SamplerPatch::default()
+            },
+        },
+        Command::UpdateSampler {
+            id: lead,
+            patch: SamplerPatch::default(),
+        },
+        Command::SetSamplerEnvelope {
+            id: lead,
+            envelope: Some(Envelope::default()),
+        },
+        Command::SetSamplerEnvelope {
+            id: lead,
+            envelope: None,
+        },
+    ];
+    let message = "the channel \"Lead\" plays an instrument, so it has no sampler settings";
+    for command in on_instrument {
+        assert_eq!(
+            fail(&mut doc, command),
+            CommandError::Invalid(message.to_owned())
+        );
+    }
+
+    let on_sampler = [
+        set_synth(drum, 0, 0.5),
+        Command::SetInstrumentParams {
+            channel: drum,
+            params: InstrumentKind::SubtractiveSynth.default_params(),
+        },
+    ];
+    let message = "the channel \"Drum\" is a sampler, so it has no instrument settings";
+    for command in on_sampler {
+        assert_eq!(
+            fail(&mut doc, command),
+            CommandError::Invalid(message.to_owned())
+        );
+    }
+
+    // The commands every channel shares work on both.
+    for id in [drum, lead] {
+        let patch = ChannelPatch {
+            volume: Some(0.5),
+            pan: Some(-0.25),
+            muted: Some(true),
+            ..ChannelPatch::default()
+        };
+        run(&mut doc, update_channel(id, patch));
+    }
+    // An instrument channel uses no sample, so it holds none back.
+    run(&mut doc, Command::RemoveSample { id: sample });
+}
+
+#[test]
+fn a_knob_drag_on_an_instrument_is_one_undo_step() {
+    let mut doc = document();
+    let (channel, _) = add_instrument(&mut doc);
+    let cutoff = param_index::<SynthParams>("filter.cutoffHz");
+    let start = doc.project().clone();
+    let steps = doc.history().entries.len();
+
+    for value in [8_000.0, 4_000.0, 2_000.0, 500.0] {
+        let applied = doc
+            .dispatch(set_synth(channel, cutoff, value), Some(3))
+            .unwrap();
+        assert_eq!(applied.touched, touched(|t| t.channels = true));
+    }
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    assert_eq!(label(&doc), "Change Cutoff");
+    assert_eq!(synth(&doc, channel).filter.cutoff_hz, 500.0);
+    doc.undo().unwrap();
+    assert_eq!(doc.project(), &start);
+    doc.redo().unwrap();
+    assert_eq!(synth(&doc, channel).filter.cutoff_hz, 500.0);
+
+    // The fader of the same channel moved under the same gesture joins it,
+    // and a gesture that ends where it began leaves no step.
+    let steps = doc.history().entries.len();
+    doc.dispatch(set_synth(channel, cutoff, 900.0), Some(4))
+        .unwrap();
+    doc.dispatch(volume(channel, 0.3), Some(4)).unwrap();
+    doc.dispatch(set_synth(channel, cutoff, 500.0), Some(4))
+        .unwrap();
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    doc.dispatch(volume(channel, DEFAULT_CHANNEL_VOLUME), Some(4))
+        .unwrap();
+    assert_eq!(doc.history().entries.len(), steps);
+}
+
+// JSON of the new parts of the model
+
+#[test]
+fn a_track_with_effects_has_this_json() {
+    let mut doc = document();
+    let track_id = add_mixer_track(&mut doc);
+    add_effect(&mut doc, track_id, EffectKind::Compressor);
+    let limiter = add_effect(&mut doc, track_id, EffectKind::Limiter);
+    run(
+        &mut doc,
+        Command::UpdateEffect {
+            track: track_id,
+            effect: limiter,
+            patch: EffectSlotPatch {
+                enabled: Some(false),
+                mix: Some(0.5),
+            },
+        },
+    );
+    let json = serde_json::to_string_pretty(&track(&doc, track_id)).unwrap();
+    assert_eq!(
+        json,
+        r#"{
+  "id": 2,
+  "name": "Insert 1",
+  "color": 15026253,
+  "volume": 1.0,
+  "pan": 0.0,
+  "muted": false,
+  "solo": false,
+  "output": 0,
+  "sends": [],
+  "effects": [
+    {
+      "id": 3,
+      "enabled": true,
+      "mix": 1.0,
+      "params": {
+        "type": "compressor",
+        "thresholdDb": -18.0,
+        "ratio": 4.0,
+        "attackMs": 10.0,
+        "releaseMs": 120.0,
+        "kneeDb": 6.0,
+        "makeupDb": 0.0,
+        "autoMakeup": false,
+        "detector": "peak",
+        "mix": 1.0
+      }
+    },
+    {
+      "id": 4,
+      "enabled": false,
+      "mix": 0.5,
+      "params": {
+        "type": "limiter",
+        "ceilingDb": -0.3,
+        "inputGainDb": 0.0,
+        "releaseMs": 100.0,
+        "lookaheadMs": 5.0
+      }
+    }
+  ]
+}"#
+    );
+    let back: MixerTrack = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, track(&doc, track_id));
+    // Every kind of effect is told apart by the `type` of its settings.
+    for kind in EffectKind::ALL {
+        let value = serde_json::to_value(kind.default_params()).unwrap();
+        let tag = serde_json::to_value(kind).unwrap();
+        assert_eq!(value["type"], tag, "{kind:?}");
+    }
+}
+
+#[test]
+fn an_instrument_channel_has_this_json() {
+    let mut doc = document();
+    let (channel, _) = add_instrument(&mut doc);
+    let json = serde_json::to_string_pretty(doc.project().channel(channel).unwrap()).unwrap();
+    assert_eq!(
+        json,
+        r#"{
+  "id": 2,
+  "name": "Subtractive synth",
+  "color": 15026253,
+  "volume": 0.8,
+  "pan": 0.0,
+  "muted": false,
+  "solo": false,
+  "mixerTrack": 3,
+  "source": {
+    "type": "instrument",
+    "params": {
+      "type": "subtractiveSynth",
+      "oscillators": [
+        {
+          "waveform": "saw",
+          "level": 1.0,
+          "coarse": 0,
+          "fineCents": 0.0,
+          "pulseWidth": 0.5,
+          "pan": 0.0
+        },
+        {
+          "waveform": "saw",
+          "level": 0.0,
+          "coarse": 0,
+          "fineCents": 0.0,
+          "pulseWidth": 0.5,
+          "pan": 0.0
+        },
+        {
+          "waveform": "saw",
+          "level": 0.0,
+          "coarse": 0,
+          "fineCents": 0.0,
+          "pulseWidth": 0.5,
+          "pan": 0.0
+        }
+      ],
+      "unisonVoices": 1,
+      "unisonDetuneCents": 20.0,
+      "unisonSpread": 0.7,
+      "filter": {
+        "mode": "lowPass",
+        "slope": "db12",
+        "cutoffHz": 20000.0,
+        "resonance": 0.1,
+        "keyTracking": 0.0,
+        "envelopeOctaves": 0.0,
+        "velocity": 0.0,
+        "drive": 0.0
+      },
+      "ampEnvelope": {
+        "attackMs": 2.0,
+        "decayMs": 200.0,
+        "sustain": 0.8,
+        "releaseMs": 150.0
+      },
+      "filterEnvelope": {
+        "attackMs": 2.0,
+        "decayMs": 300.0,
+        "sustain": 0.3,
+        "releaseMs": 200.0
+      },
+      "lfos": [
+        {
+          "shape": "sine",
+          "rateHz": 5.0,
+          "pitchSemitones": 0.0,
+          "cutoffOctaves": 0.0,
+          "amp": 0.0,
+          "pulseWidth": 0.0
+        },
+        {
+          "shape": "sine",
+          "rateHz": 5.0,
+          "pitchSemitones": 0.0,
+          "cutoffOctaves": 0.0,
+          "amp": 0.0,
+          "pulseWidth": 0.0
+        }
+      ],
+      "voiceMode": "poly",
+      "glideMs": 0.0,
+      "polyphony": 16,
+      "ampVelocity": 0.7,
+      "gain": 0.25,
+      "pan": 0.0
+    }
+  }
+}"#
+    );
+    let back: Channel = serde_json::from_str(&json).unwrap();
+    assert_eq!(&back, doc.project().channel(channel).unwrap());
+}
+
+#[test]
+fn the_effect_and_instrument_commands_have_this_json() {
+    let (track, effect) = (TrackId(3), EffectId(4));
+    let cases = [
+        (
+            Command::AddEffect {
+                track,
+                kind: EffectKind::Reverb,
+                index: None,
+            },
+            r#"{"type":"addEffect","track":3,"kind":"reverb","index":null}"#,
+        ),
+        (
+            Command::RemoveEffect { track, effect },
+            r#"{"type":"removeEffect","track":3,"effect":4}"#,
+        ),
+        (
+            Command::MoveEffect {
+                track,
+                effect,
+                to_track: Some(TrackId(0)),
+                index: 2,
+            },
+            r#"{"type":"moveEffect","track":3,"effect":4,"toTrack":0,"index":2}"#,
+        ),
+        (
+            Command::UpdateEffect {
+                track,
+                effect,
+                patch: EffectSlotPatch {
+                    enabled: Some(false),
+                    mix: None,
+                },
+            },
+            r#"{"type":"updateEffect","track":3,"effect":4,"patch":{"enabled":false,"mix":null}}"#,
+        ),
+        (
+            Command::SetEffectParam {
+                track,
+                effect,
+                param: 1,
+                value: 2.5,
+            },
+            r#"{"type":"setEffectParam","track":3,"effect":4,"param":1,"value":2.5}"#,
+        ),
+        (
+            Command::SetEffectParams {
+                track,
+                effect,
+                params: EffectKind::Limiter.default_params(),
+            },
+            r#"{"type":"setEffectParams","track":3,"effect":4,"params":{"type":"limiter","ceilingDb":-0.3,"inputGainDb":0.0,"releaseMs":100.0,"lookaheadMs":5.0}}"#,
+        ),
+        (
+            Command::DuplicateEffect { track, effect },
+            r#"{"type":"duplicateEffect","track":3,"effect":4}"#,
+        ),
+        (
+            Command::SetInstrumentParam {
+                channel: ChannelId(2),
+                param: 0,
+                value: 1.0,
+            },
+            r#"{"type":"setInstrumentParam","channel":2,"param":0,"value":1.0}"#,
+        ),
+        (
+            Command::AddChannel {
+                name: None,
+                sample: None,
+                instrument: Some(InstrumentKind::SubtractiveSynth),
+                index: None,
+                mixer_track: None,
+            },
+            r#"{"type":"addChannel","name":null,"sample":null,"instrument":"subtractiveSynth","index":null,"mixerTrack":null}"#,
+        ),
+    ];
+    for (command, json) in cases {
+        assert_eq!(serde_json::to_string(&command).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Command>(json).unwrap(), command);
+    }
+    let params = Command::SetInstrumentParams {
+        channel: ChannelId(2),
+        params: InstrumentKind::SubtractiveSynth.default_params(),
+    };
+    let json = serde_json::to_string(&params).unwrap();
+    assert!(
+        json.starts_with(
+            r#"{"type":"setInstrumentParams","channel":2,"params":{"type":"subtractiveSynth","#
+        ),
+        "{json}"
+    );
+    assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), params);
+
+    // Fields a caller may leave out.
+    let short: Command =
+        serde_json::from_str(r#"{"type":"moveEffect","track":3,"effect":4,"index":0}"#).unwrap();
+    assert_eq!(
+        short,
+        Command::MoveEffect {
+            track,
+            effect,
+            to_track: None,
+            index: 0,
+        }
+    );
+    let short: Command =
+        serde_json::from_str(r#"{"type":"updateEffect","track":3,"effect":4,"patch":{"mix":0.5}}"#)
+            .unwrap();
+    assert_eq!(
+        short,
+        Command::UpdateEffect {
+            track,
+            effect,
+            patch: EffectSlotPatch {
+                enabled: None,
+                mix: Some(0.5),
+            },
+        }
+    );
+    let short: Command =
+        serde_json::from_str(r#"{"type":"addEffect","track":3,"kind":"eq"}"#).unwrap();
+    assert_eq!(
+        short,
+        Command::AddEffect {
+            track,
+            kind: EffectKind::Eq,
+            index: None,
+        }
+    );
+}
+
+// Document::relink_sample
+
+fn project_path(name: &str) -> SamplePath {
+    SamplePath::Project(name.to_owned())
+}
+
+fn add_project_sample(doc: &mut Document, name: &str) -> SampleId {
+    let applied = run(
+        doc,
+        Command::AddSample {
+            name: name.to_owned(),
+            path: project_path(&format!("{name}.wav")),
+        },
+    );
+    SampleId(applied.created[0])
+}
+
+fn path_of(doc: &Document, sample: SampleId) -> SamplePath {
+    let sample = doc.project().sample(sample).expect("the sample exists");
+    sample.path.clone()
+}
+
+#[test]
+fn relink_sample_changes_the_path_without_a_history_step() {
+    let mut doc = document();
+    let kick = add_project_sample(&mut doc, "kick");
+    let snare = add_project_sample(&mut doc, "snare");
+    doc.mark_saved();
+    let history = doc.history();
+
+    let relinked = doc
+        .relink_sample(kick, project_path("kick (2).wav"))
+        .unwrap();
+    assert_eq!(relinked, touched(|t| t.samples = true));
+    assert_eq!(path_of(&doc, kick), project_path("kick (2).wav"));
+    assert_eq!(path_of(&doc, snare), project_path("snare.wav"));
+    assert_eq!(doc.history(), history);
+    assert!(!doc.is_dirty());
+    doc.project().check().unwrap();
+
+    // The patch for it carries the samples, and nothing else of the project.
+    let patch = doc.patch(&relinked);
+    assert_eq!(patch.samples.as_deref(), Some(&doc.project().samples[..]));
+    assert!(patch.channels.is_none() && patch.mixer.is_none() && patch.settings.is_none());
+    assert!(!patch.dirty);
+
+    // The same path again is no change at all.
+    let again = doc
+        .relink_sample(kick, project_path("kick (2).wav"))
+        .unwrap();
+    assert!(again.is_empty());
+
+    // A document with unsaved changes stays that way too.
+    add_project_sample(&mut doc, "hat");
+    assert!(doc.is_dirty());
+    doc.relink_sample(snare, project_path("drums/snare.wav"))
+        .unwrap();
+    assert!(doc.is_dirty());
+    assert_eq!(doc.history().entries.len(), history.entries.len() + 1);
+}
+
+#[test]
+fn undo_and_redo_bring_a_relinked_sample_back_under_its_new_path() {
+    let mut doc = document();
+    let kick = add_project_sample(&mut doc, "kick");
+    let (channel, _) = add_channel(&mut doc, "Kick");
+    run(
+        &mut doc,
+        Command::SetChannelSample {
+            id: channel,
+            sample: Some(kick),
+        },
+    );
+    run(
+        &mut doc,
+        Command::SetChannelSample {
+            id: channel,
+            sample: None,
+        },
+    );
+    // The history now adds the sample, uses it, lets go of it and removes
+    // it, and the last two of those steps are undone.
+    run(&mut doc, Command::RemoveSample { id: kick });
+    doc.undo().unwrap();
+    doc.undo().unwrap();
+    let cursor = doc.history().cursor;
+    let entries = doc.history().entries.len();
+
+    let new_path = project_path("moved/kick.wav");
+    doc.relink_sample(kick, new_path.clone()).unwrap();
+    assert_eq!(doc.history().cursor, cursor);
+    assert_eq!(doc.history().entries.len(), entries);
+
+    // Forward, through the step that removes the sample, and back again.
+    while doc.redo().is_some() {
+        doc.project().check().unwrap();
+    }
+    assert!(doc.project().sample(kick).is_none());
+    doc.undo().unwrap();
+    assert_eq!(path_of(&doc, kick), new_path);
+    // All the way back to before the sample was added, and forward again.
+    while doc.undo().is_some() {
+        doc.project().check().unwrap();
+    }
+    assert!(doc.project().samples.is_empty());
+    doc.redo().unwrap();
+    assert_eq!(path_of(&doc, kick), new_path);
+    doc.jump(u32::MAX);
+    doc.jump(cursor);
+    assert_eq!(path_of(&doc, kick), new_path);
+    doc.project().check().unwrap();
+}
+
+#[test]
+fn a_sample_that_only_the_history_holds_can_be_relinked() {
+    let mut doc = document();
+    let kick = add_project_sample(&mut doc, "kick");
+    doc.undo().unwrap();
+    assert!(doc.project().samples.is_empty());
+
+    let relinked = doc
+        .relink_sample(kick, project_path("new/kick.wav"))
+        .unwrap();
+    assert!(relinked.is_empty(), "nothing in the project changed");
+    doc.redo().unwrap();
+    assert_eq!(path_of(&doc, kick), project_path("new/kick.wav"));
+}
+
+#[test]
+fn relink_sample_refuses_what_would_break_the_project() {
+    let mut doc = document();
+    let kick = add_project_sample(&mut doc, "kick");
+    let snare = add_project_sample(&mut doc, "snare");
+    let old = add_project_sample(&mut doc, "old");
+    run(&mut doc, Command::RemoveSample { id: old });
+    let before = doc.project().clone();
+    let history = doc.history();
+
+    let mut refused = |id, path: SamplePath| {
+        let error = doc.relink_sample(id, path).unwrap_err();
+        assert_eq!(doc.project(), &before);
+        assert_eq!(doc.history(), history);
+        error
+    };
+    assert_eq!(
+        refused(SampleId(999), project_path("x.wav")),
+        not_found("sample", 999)
+    );
+    assert_invalid(
+        refused(kick, project_path("../kick.wav")),
+        "the sample path is not valid: a relative path must stay inside its folder",
+    );
+    assert_invalid(refused(kick, project_path("")), "the path is empty");
+    // No two samples share a path, now or at any point of the history.
+    assert_invalid(
+        refused(kick, project_path("snare.wav")),
+        "another sample of the project already has that path",
+    );
+    assert_invalid(
+        refused(snare, project_path("old.wav")),
+        "another sample of the project already has that path",
+    );
+
+    // Undoing the removal still gives a valid project.
+    doc.undo().unwrap();
+    doc.project().check().unwrap();
+}
+
+// Automation
+
+fn add_automation(doc: &mut Document, target: AutomationTarget) -> AutomationId {
+    let command = Command::AddAutomation {
+        name: None,
+        target,
+        points: None,
+    };
+    AutomationId(run(doc, command).created[0])
+}
+
+fn automation(doc: &Document, id: AutomationId) -> Automation {
+    let found = doc.project().automation(id);
+    found.expect("the automation exists").clone()
+}
+
+fn point(tick: u32, value: f32) -> AutomationPoint {
+    AutomationPoint {
+        tick,
+        value,
+        curve: 0.0,
+        hold: false,
+    }
+}
+
+fn automation_clip(track: PlaylistTrackId, start: u32, id: AutomationId) -> ClipInit {
+    ClipInit {
+        track,
+        start,
+        length: None,
+        offset: None,
+        muted: None,
+        content: ClipContent::Automation { automation: id },
+    }
+}
+
+fn automation_ids(doc: &Document) -> Vec<AutomationId> {
+    doc.project().automations.iter().map(|a| a.id).collect()
+}
+
+/// A project with one of everything an automation can move, and the
+/// targets that name them.
+fn automatable() -> (Document, Vec<AutomationTarget>) {
+    let mut doc = document();
+    let (kick, kick_track) = add_channel(&mut doc, "Kick");
+    let (lead, _) = add_instrument(&mut doc);
+    let bus = add_mixer_track(&mut doc);
+    run(&mut doc, send(kick_track, bus, Some(0.5)));
+    let reverb = add_effect(&mut doc, bus, EffectKind::Reverb);
+    let decay = param_index::<ReverbParams>("decayS") as u32;
+    let cutoff = param_index::<SynthParams>("filter.cutoffHz") as u32;
+    let targets = vec![
+        AutomationTarget::ChannelVolume { channel: kick },
+        AutomationTarget::ChannelPan { channel: kick },
+        AutomationTarget::TrackVolume { track: kick_track },
+        AutomationTarget::TrackPan {
+            track: TrackId::MASTER,
+        },
+        AutomationTarget::SendGain {
+            track: kick_track,
+            target: bus,
+        },
+        AutomationTarget::EffectParam {
+            track: bus,
+            effect: reverb,
+            param: decay,
+        },
+        AutomationTarget::EffectMix {
+            track: bus,
+            effect: reverb,
+        },
+        AutomationTarget::InstrumentParam {
+            channel: lead,
+            param: cutoff,
+        },
+        AutomationTarget::Tempo,
+    ];
+    (doc, targets)
+}
+
+#[test]
+fn default_automation_names_are_numbered_and_tell_their_targets_apart() {
+    let mut doc = document();
+    let add = |doc: &mut Document, target: AutomationTarget| {
+        let command = Command::AddAutomation {
+            name: None,
+            target,
+            points: None,
+        };
+        let id = AutomationId(run(doc, command).created[0]);
+        automation(doc, id).name
+    };
+
+    // A second and a third automation of one target are numbered.
+    let (kick, kick_track) = add_channel(&mut doc, "Kick");
+    let pan = AutomationTarget::ChannelPan { channel: kick };
+    assert_eq!(add(&mut doc, pan), "Kick pan");
+    assert_eq!(add(&mut doc, pan), "Kick pan 2");
+    assert_eq!(add(&mut doc, pan), "Kick pan 3");
+    // A number that is free again is used again.
+    let second = doc.project().automations[1].id;
+    run(&mut doc, Command::RemoveAutomation { id: second });
+    assert_eq!(add(&mut doc, pan), "Kick pan 2");
+    assert_eq!(add(&mut doc, AutomationTarget::Tempo), "Tempo");
+    assert_eq!(add(&mut doc, AutomationTarget::Tempo), "Tempo 2");
+
+    // The channel and the mixer track of the same name.
+    let volume = AutomationTarget::ChannelVolume { channel: kick };
+    let fader = AutomationTarget::TrackVolume { track: kick_track };
+    assert_eq!(add(&mut doc, volume), "Kick volume");
+    assert_eq!(add(&mut doc, fader), "Kick track volume");
+    let track_pan = AutomationTarget::TrackPan { track: kick_track };
+    assert_eq!(add(&mut doc, track_pan), "Kick track pan");
+
+    // Two reverbs on one track, and a third on another track.
+    let decay = param_index::<ReverbParams>("decayS") as u32;
+    let first = add_effect(&mut doc, kick_track, EffectKind::Reverb);
+    add_effect(&mut doc, kick_track, EffectKind::Delay);
+    let second = add_effect(&mut doc, kick_track, EffectKind::Reverb);
+    let other = add_effect(&mut doc, TrackId::MASTER, EffectKind::Reverb);
+    let setting = |track: TrackId, effect: EffectId| AutomationTarget::EffectParam {
+        track,
+        effect,
+        param: decay,
+    };
+    let mix = |track: TrackId, effect: EffectId| AutomationTarget::EffectMix { track, effect };
+    assert_eq!(
+        add(&mut doc, setting(kick_track, first)),
+        "Kick Reverb Decay"
+    );
+    assert_eq!(
+        add(&mut doc, setting(kick_track, second)),
+        "Kick Reverb 2 Decay"
+    );
+    assert_eq!(
+        add(&mut doc, setting(TrackId::MASTER, other)),
+        "Master Reverb Decay"
+    );
+    assert_eq!(add(&mut doc, mix(kick_track, first)), "Kick Reverb mix");
+    assert_eq!(add(&mut doc, mix(kick_track, second)), "Kick Reverb 2 mix");
+    assert_eq!(
+        add(&mut doc, mix(TrackId::MASTER, other)),
+        "Master Reverb mix"
+    );
+
+    // Two channels that the user gave one name still get two names.
+    let (twin, _) = add_channel(&mut doc, "Kick");
+    let twin_volume = AutomationTarget::ChannelVolume { channel: twin };
+    assert_eq!(add(&mut doc, twin_volume), "Kick volume 2");
+
+    // No two automations ended up with one name, and a name that is given
+    // is taken as it is.
+    let names: Vec<&str> = doc
+        .project()
+        .automations
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    let mut unique = names.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+    let given = Command::AddAutomation {
+        name: Some("Kick pan".to_owned()),
+        target: pan,
+        points: None,
+    };
+    let id = AutomationId(run(&mut doc, given).created[0]);
+    assert_eq!(automation(&doc, id).name, "Kick pan");
+    // The numbering does not mind capitals.
+    let renamed = Command::UpdateAutomation {
+        id,
+        patch: AutomationPatch {
+            name: Some("TEMPO 3".to_owned()),
+            ..AutomationPatch::default()
+        },
+    };
+    run(&mut doc, renamed);
+    assert_eq!(add(&mut doc, AutomationTarget::Tempo), "Tempo 4");
+}
+
+#[test]
+fn an_automation_starts_as_one_point_on_the_value_its_target_has() {
+    let (mut doc, targets) = automatable();
+    let kick = doc.project().channels[0].id;
+    run(
+        &mut doc,
+        Command::UpdateChannel {
+            id: kick,
+            patch: ChannelPatch {
+                pan: Some(0.5),
+                ..ChannelPatch::default()
+            },
+        },
+    );
+    // Each says what kind of thing it moves: the channel Kick and the
+    // mixer track Kick that was made for it do not share a name.
+    let names = [
+        "Kick volume",
+        "Kick pan",
+        "Kick track volume",
+        "Master track pan",
+        "Kick to Insert 3 send",
+        "Insert 3 Reverb Decay",
+        "Insert 3 Reverb mix",
+        "Subtractive synth Cutoff",
+        "Tempo",
+    ];
+    // What each target has now, as a share of its range: a channel volume
+    // of 0.8 and a fader at 1 on the square taper, a send of 0.5, a decay
+    // of 1.8 s between 0.1 and 20 on a logarithmic scale, and 120 bpm.
+    let values = [
+        (0.4_f32).sqrt(),
+        0.75,
+        (0.5_f32).sqrt(),
+        0.5,
+        0.5,
+        ((1.8_f32 / 0.1).ln() / (200.0_f32).ln()),
+        1.0,
+        0.0,
+        0.214_843_75,
+    ];
+    for (index, target) in targets.iter().enumerate() {
+        let applied = run(
+            &mut doc,
+            Command::AddAutomation {
+                name: None,
+                target: *target,
+                points: None,
+            },
+        );
+        assert_eq!(applied.label, "Add automation");
+        assert_eq!(applied.touched, touched(|t| t.automations = true));
+        let id = AutomationId(applied.created[0]);
+        let added = automation(&doc, id);
+        assert_eq!(added.name, names[index]);
+        assert_eq!(added.color, palette_color(index));
+        assert_eq!(added.target, *target);
+        let [only] = added.points[..] else {
+            panic!("expected one point, got {:?}", added.points);
+        };
+        assert_eq!((only.tick, only.curve, only.hold), (0, 0.0, false));
+        if index == 7 {
+            // The cutoff, wherever the synth's default puts it.
+            let range = doc.project().automation_range(target).unwrap();
+            let stored = doc.project().automation_stored_value(target).unwrap();
+            assert!((range.value(only.value) - stored).abs() < stored * 1e-4);
+        } else {
+            assert!(
+                (only.value - values[index]).abs() < 1e-6,
+                "{}: {}",
+                names[index],
+                only.value
+            );
+        }
+        assert_eq!(doc.project().automations.last().unwrap().id, id);
+    }
+    assert_eq!(doc.project().automations.len(), targets.len());
+
+    // A name of its own, and the way it is stored.
+    let named = Command::AddAutomation {
+        name: Some("Riser".to_owned()),
+        target: targets[0],
+        points: Some(vec![point(0, 0.25), point(960, 1.0)]),
+    };
+    let id = AutomationId(run(&mut doc, named).created[0]);
+    let json = serde_json::to_value(automation(&doc, id)).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "id": id.0, "name": "Riser", "color": palette_color(9),
+            "target": { "type": "channelVolume", "channel": kick.0 },
+            "points": [
+                { "tick": 0, "value": 0.25, "curve": 0.0, "hold": false },
+                { "tick": 960, "value": 1.0, "curve": 0.0, "hold": false }
+            ]
+        })
+    );
+    let tempo = serde_json::to_value(AutomationTarget::Tempo).unwrap();
+    assert_eq!(tempo, serde_json::json!({ "type": "tempo" }));
+    // A point may leave its curve and hold out.
+    let short: AutomationPoint = serde_json::from_str(r#"{ "tick": 5, "value": 0.5 }"#).unwrap();
+    assert_eq!(short, point(5, 0.5));
+}
+
+#[test]
+fn an_automation_needs_something_to_move() {
+    let (mut doc, targets) = automatable();
+    let before = doc.project().clone();
+    let kick = before.channels[0].id;
+    let lead = before.channels[1].id;
+    let (kick_track, bus) = (before.mixer.tracks[1].id, before.mixer.tracks[3].id);
+    let reverb = before.mixer.tracks[3].effects[0].id;
+    let add = |target| Command::AddAutomation {
+        name: None,
+        target,
+        points: None,
+    };
+    let missing = [
+        (
+            AutomationTarget::ChannelVolume {
+                channel: ChannelId(900),
+            },
+            not_found("channel", 900),
+        ),
+        (
+            AutomationTarget::ChannelPan {
+                channel: ChannelId(900),
+            },
+            not_found("channel", 900),
+        ),
+        (
+            AutomationTarget::TrackVolume {
+                track: TrackId(900),
+            },
+            not_found("mixer track", 900),
+        ),
+        (
+            AutomationTarget::TrackPan {
+                track: TrackId(900),
+            },
+            not_found("mixer track", 900),
+        ),
+        (
+            AutomationTarget::SendGain {
+                track: TrackId(900),
+                target: bus,
+            },
+            not_found("mixer track", 900),
+        ),
+        (
+            AutomationTarget::SendGain {
+                track: kick_track,
+                target: TrackId(901),
+            },
+            not_found("mixer track", 901),
+        ),
+        (
+            AutomationTarget::EffectMix {
+                track: bus,
+                effect: EffectId(900),
+            },
+            not_found("effect", 900),
+        ),
+        // The effect is on another track than the one named.
+        (
+            AutomationTarget::EffectMix {
+                track: kick_track,
+                effect: reverb,
+            },
+            not_found("effect", reverb.0),
+        ),
+        (
+            AutomationTarget::EffectParam {
+                track: TrackId(900),
+                effect: reverb,
+                param: 0,
+            },
+            not_found("mixer track", 900),
+        ),
+        (
+            AutomationTarget::InstrumentParam {
+                channel: ChannelId(900),
+                param: 0,
+            },
+            not_found("channel", 900),
+        ),
+    ];
+    for (target, error) in missing {
+        assert_eq!(fail(&mut doc, add(target)), error, "{target:?}");
+    }
+    let invalid = [
+        (
+            AutomationTarget::SendGain {
+                track: bus,
+                target: kick_track,
+            },
+            "the mixer track \"Insert 3\" has no send to \"Kick\"",
+        ),
+        (
+            AutomationTarget::EffectParam {
+                track: bus,
+                effect: reverb,
+                param: 400,
+            },
+            "the Reverb has no setting number 400",
+        ),
+        (
+            AutomationTarget::InstrumentParam {
+                channel: lead,
+                param: 400,
+            },
+            "the Subtractive synth has no setting number 400",
+        ),
+        (
+            AutomationTarget::InstrumentParam {
+                channel: kick,
+                param: 0,
+            },
+            "is a sampler, so it has no instrument settings",
+        ),
+    ];
+    for (target, words) in invalid {
+        assert_invalid(fail(&mut doc, add(target)), words);
+    }
+    assert_eq!(doc.project(), &before);
+    // Every one of the real targets has a range and a value.
+    for target in &targets {
+        assert!(before.automation_range(target).is_some(), "{target:?}");
+        assert!(before.automation_stored_value(target).is_some());
+    }
+}
+
+#[test]
+fn a_curve_is_checked_and_its_values_brought_into_range() {
+    let mut doc = document();
+    let id = add_automation(&mut doc, AutomationTarget::Tempo);
+    let set = |points| Command::SetAutomationPoints { id, points };
+    let wild = vec![
+        AutomationPoint {
+            tick: 0,
+            value: -3.0,
+            curve: 9.0,
+            hold: true,
+        },
+        AutomationPoint {
+            tick: 0,
+            value: 7.0,
+            curve: -9.0,
+            hold: false,
+        },
+        point(MAX_SONG_TICKS, 0.5),
+    ];
+    let applied = run(&mut doc, set(wild));
+    assert_eq!(applied.label, "Change automation curve");
+    assert_eq!(applied.touched, touched(|t| t.automations = true));
+    assert!(applied.created.is_empty());
+    assert_eq!(
+        automation(&doc, id).points,
+        [
+            AutomationPoint {
+                tick: 0,
+                value: 0.0,
+                curve: 1.0,
+                hold: true,
+            },
+            AutomationPoint {
+                tick: 0,
+                value: 1.0,
+                curve: -1.0,
+                hold: false,
+            },
+            point(MAX_SONG_TICKS, 0.5),
+        ]
+    );
+
+    assert_invalid(
+        fail(&mut doc, set(Vec::new())),
+        "an automation needs at least one point",
+    );
+    assert_invalid(
+        fail(&mut doc, set(vec![point(960, 0.5), point(959, 0.5)])),
+        "the points of an automation must be in order of time",
+    );
+    assert_invalid(
+        fail(
+            &mut doc,
+            set(vec![point(0, 0.5), point(MAX_SONG_TICKS + 1, 0.5)]),
+        ),
+        "a point of the automation is past the end of the longest song, which has 1000000 beats",
+    );
+    assert_invalid(
+        fail(&mut doc, set(vec![point(0, f32::NAN)])),
+        "the value of a point is not a number",
+    );
+    let bent = AutomationPoint {
+        curve: f32::NAN,
+        ..point(0, 0.5)
+    };
+    assert_invalid(
+        fail(&mut doc, set(vec![bent])),
+        "the curve of a point is not a number",
+    );
+    let many = |count: usize| (0..count as u32).map(|tick| point(tick, 0.5)).collect();
+    assert_invalid(
+        fail(&mut doc, set(many(MAX_AUTOMATION_POINTS + 1))),
+        "an automation can have 4096 points at most, not 4097",
+    );
+    run(&mut doc, set(many(MAX_AUTOMATION_POINTS)));
+    assert_eq!(
+        fail(
+            &mut doc,
+            Command::SetAutomationPoints {
+                id: AutomationId(900),
+                points: vec![point(0, 0.5)]
+            }
+        ),
+        not_found("automation", 900)
+    );
+    // The same checks stand at the door of a new automation.
+    let add = Command::AddAutomation {
+        name: None,
+        target: AutomationTarget::Tempo,
+        points: Some(Vec::new()),
+    };
+    assert_invalid(fail(&mut doc, add), "at least one point");
+
+    // Dragging a point is one undo step, however many moves it takes.
+    let before = doc.project().clone();
+    let steps = doc.history().entries.len();
+    for value in [0.1, 0.2, 0.3] {
+        let drag = set(vec![point(0, value), point(960, 1.0)]);
+        doc.dispatch(drag, Some(11)).unwrap();
+    }
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    assert_eq!(automation(&doc, id).points[0].value, 0.3);
+    doc.undo().unwrap();
+    assert_eq!(doc.project(), &before);
+    // A curve set to what it is changes nothing.
+    let history = doc.history();
+    let same = automation(&doc, id).points;
+    let applied = run(&mut doc, set(same));
+    assert!(applied.touched.is_empty());
+    assert_eq!(doc.history(), history);
+}
+
+#[test]
+fn an_automation_is_renamed_recolored_and_duplicated() {
+    let (mut doc, targets) = automatable();
+    let first = add_automation(&mut doc, targets[0]);
+    let second = add_automation(&mut doc, AutomationTarget::Tempo);
+    let update = |id, patch| Command::UpdateAutomation { id, patch };
+    let applied = run(
+        &mut doc,
+        update(
+            first,
+            AutomationPatch {
+                name: Some("Fade".to_owned()),
+                color: None,
+            },
+        ),
+    );
+    assert_eq!(applied.label, "Rename automation");
+    assert_eq!(applied.touched, touched(|t| t.automations = true));
+    let applied = run(
+        &mut doc,
+        update(
+            first,
+            AutomationPatch {
+                name: None,
+                color: Some(0x112233),
+            },
+        ),
+    );
+    assert_eq!(applied.label, "Change automation color");
+    let changed = automation(&doc, first);
+    assert_eq!((changed.name.as_str(), changed.color), ("Fade", 0x112233));
+    let bad = AutomationPatch {
+        name: None,
+        color: Some(0x1_000_000),
+    };
+    assert_invalid(fail(&mut doc, update(first, bad)), "not a 0xRRGGBB color");
+    assert_eq!(
+        fail(
+            &mut doc,
+            update(AutomationId(900), AutomationPatch::default())
+        ),
+        not_found("automation", 900)
+    );
+
+    // A copy has the target and the curve, a name of its own and no clips.
+    let lane = add_playlist_track(&mut doc);
+    run(
+        &mut doc,
+        Command::SetAutomationPoints {
+            id: first,
+            points: vec![point(0, 0.0), point(480, 1.0)],
+        },
+    );
+    run(
+        &mut doc,
+        Command::AddClips {
+            clips: vec![automation_clip(lane, 0, first)],
+        },
+    );
+    let applied = run(&mut doc, Command::DuplicateAutomation { id: first });
+    assert_eq!(applied.label, "Duplicate automation");
+    assert_eq!(applied.touched, touched(|t| t.automations = true));
+    let copy = AutomationId(applied.created[0]);
+    assert_eq!(automation_ids(&doc), [first, copy, second]);
+    assert_eq!(
+        automation(&doc, copy),
+        Automation {
+            id: copy,
+            name: "Fade #2".to_owned(),
+            ..automation(&doc, first)
+        }
+    );
+    assert_eq!(doc.project().playlist.clips.len(), 1);
+    assert_eq!(
+        fail(
+            &mut doc,
+            Command::DuplicateAutomation {
+                id: AutomationId(900)
+            }
+        ),
+        not_found("automation", 900)
+    );
+}
+
+#[test]
+fn an_automation_clip_is_a_window_onto_its_curve() {
+    let mut doc = document();
+    let lane = add_playlist_track(&mut doc);
+    let id = add_automation(&mut doc, AutomationTarget::Tempo);
+    let add = |init: ClipInit| Command::AddClips { clips: vec![init] };
+
+    // One point: the clip is a bar long, so there is something to hold.
+    let applied = run(&mut doc, add(automation_clip(lane, 0, id)));
+    assert_eq!(applied.label, "Add clip");
+    assert_eq!(applied.touched, touched(|t| t.playlist = true));
+    let short = ClipId(applied.created[0]);
+    assert_eq!(clip_of(&doc, short).length, 3_840);
+    assert_eq!(
+        clip_of(&doc, short).content,
+        ClipContent::Automation { automation: id }
+    );
+
+    // A longer curve: the clip shows all of it.
+    run(
+        &mut doc,
+        Command::SetAutomationPoints {
+            id,
+            points: vec![point(0, 0.2), point(9_600, 0.4)],
+        },
+    );
+    let whole = ClipId(run(&mut doc, add(automation_clip(lane, 3_840, id))).created[0]);
+    assert_eq!(clip_of(&doc, whole).length, 9_600);
+    // In 3/4 a bar is three beats.
+    run(
+        &mut doc,
+        Command::UpdateSettings {
+            patch: SettingsPatch {
+                time_signature: Some(TimeSignature {
+                    numerator: 3,
+                    denominator: 4,
+                }),
+                ..SettingsPatch::default()
+            },
+        },
+    );
+    let other = add_automation(&mut doc, AutomationTarget::Tempo);
+    let waltz = ClipId(run(&mut doc, add(automation_clip(lane, 0, other))).created[0]);
+    assert_eq!(clip_of(&doc, waltz).length, 2_880);
+
+    // A window of its own, onto the same curve, as many times as wanted.
+    let window = ClipInit {
+        length: Some(960),
+        offset: Some(4_800),
+        ..automation_clip(lane, 20_000, id)
+    };
+    let part = ClipId(run(&mut doc, add(window)).created[0]);
+    let placed = clip_of(&doc, part);
+    assert_eq!((placed.length, placed.offset), (960, 4_800));
+    let json = serde_json::to_value(&placed.content).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({ "type": "automation", "automation": id.0 })
+    );
+    assert_eq!(
+        fail(&mut doc, add(automation_clip(lane, 0, AutomationId(900)))),
+        not_found("automation", 900)
+    );
+    // It is moved and trimmed like any clip, and is not an audio clip.
+    let trim = ClipPatch {
+        length: Some(100),
+        offset: Some(50),
+        ..ClipPatch::default()
+    };
+    run(&mut doc, update_clips(vec![(part, trim)]));
+    let audio_patch = AudioClipUpdate {
+        id: part,
+        patch: AudioClipPatch::default(),
+    };
+    let update = Command::UpdateAudioClips {
+        updates: vec![audio_patch],
+    };
+    assert_invalid(fail(&mut doc, update), "is not an audio clip");
+
+    // Deleting the automation takes every clip of it, and nothing else.
+    let before = doc.project().clone();
+    let applied = run(&mut doc, Command::RemoveAutomation { id });
+    assert_eq!(applied.label, "Delete automation");
+    assert_eq!(
+        applied.touched,
+        touched(|t| {
+            t.automations = true;
+            t.playlist = true;
+        })
+    );
+    assert_eq!(automation_ids(&doc), [other]);
+    let left: Vec<ClipId> = doc.project().playlist.clips.iter().map(|c| c.id).collect();
+    assert_eq!(left, [waltz]);
+    doc.undo().unwrap();
+    assert!(same_content(doc.project(), &before));
+    assert_eq!(
+        fail(
+            &mut doc,
+            Command::RemoveAutomation {
+                id: AutomationId(900)
+            }
+        ),
+        not_found("automation", 900)
+    );
+    // An automation no clip shows leaves the playlist alone.
+    let spare = add_automation(&mut doc, AutomationTarget::Tempo);
+    let applied = run(&mut doc, Command::RemoveAutomation { id: spare });
+    assert_eq!(applied.touched, touched(|t| t.automations = true));
+}
+
+#[test]
+fn what_an_automation_moves_takes_the_automation_with_it() {
+    let (mut doc, targets) = automatable();
+    let lane = add_playlist_track(&mut doc);
+    let ids: Vec<AutomationId> = targets
+        .iter()
+        .map(|target| add_automation(&mut doc, *target))
+        .collect();
+    let clips: Vec<ClipId> = ids
+        .iter()
+        .map(|id| {
+            let add = Command::AddClips {
+                clips: vec![automation_clip(lane, 0, *id)],
+            };
+            ClipId(run(&mut doc, add).created[0])
+        })
+        .collect();
+    let pattern_clip = add_clip(&mut doc, lane, PATTERN, 0);
+    let start = doc.project().clone();
+    let kick = start.channels[0].id;
+    let lead = start.channels[1].id;
+    let (kick_track, bus) = (start.mixer.tracks[1].id, start.mixer.tracks[3].id);
+    let reverb = start.mixer.tracks[3].effects[0].id;
+
+    // What is left after a command, as indices into `targets`.
+    let left = |doc: &Document| -> Vec<usize> {
+        let automations = doc.project().automations.iter();
+        automations
+            .map(|a| ids.iter().position(|id| *id == a.id).unwrap())
+            .collect()
+    };
+    let clips_left = |doc: &Document| -> Vec<usize> {
+        let playlist = doc.project().playlist.clips.iter();
+        playlist
+            .filter_map(|clip| clips.iter().position(|id| *id == clip.id))
+            .collect()
+    };
+    let cases: [(Command, &[usize], &str); 6] = [
+        // The channel: its volume and pan.
+        (
+            Command::RemoveChannel { id: kick },
+            &[0, 1],
+            "Delete channel",
+        ),
+        // The instrument channel: its cutoff.
+        (Command::RemoveChannel { id: lead }, &[7], "Delete channel"),
+        // The track the kick plays into: its fader, and the send from it.
+        (
+            Command::RemoveMixerTrack { id: kick_track },
+            &[2, 4],
+            "Delete mixer track",
+        ),
+        // The bus: the send to it, and its effect's setting and mix.
+        (
+            Command::RemoveMixerTrack { id: bus },
+            &[4, 5, 6],
+            "Delete mixer track",
+        ),
+        (
+            Command::RemoveEffect {
+                track: bus,
+                effect: reverb,
+            },
+            &[5, 6],
+            "Delete effect",
+        ),
+        (send(kick_track, bus, None), &[4], "Remove send"),
+    ];
+    for (command, gone, label) in cases {
+        let applied = run(&mut doc, command.clone());
+        assert_eq!(applied.label, label);
+        assert!(applied.touched.automations && applied.touched.playlist);
+        let expected: Vec<usize> = (0..targets.len()).filter(|i| !gone.contains(i)).collect();
+        assert_eq!(left(&doc), expected, "{command:?}");
+        assert_eq!(clips_left(&doc), expected, "{command:?}");
+        // The clip of the pattern, and the project, are otherwise whole.
+        assert!(
+            doc.project()
+                .playlist
+                .clips
+                .iter()
+                .any(|c| c.id == pattern_clip)
+        );
+        doc.project().check().unwrap();
+        // One undo brings back the automations, their clips and the rest.
+        doc.undo().unwrap();
+        assert!(same_content(doc.project(), &start), "{command:?}");
+    }
+
+    // An effect that is replaced is another effect.
+    let replace = Command::ReplaceEffect {
+        track: bus,
+        effect: reverb,
+        kind: EffectKind::Reverb,
+    };
+    run(&mut doc, replace);
+    assert_eq!(left(&doc), [0, 1, 2, 3, 4, 7, 8]);
+    doc.undo().unwrap();
+
+    // Changing a send's level, muting, renaming and moving things inside
+    // the project leave every automation alone.
+    let harmless = [
+        send(kick_track, bus, Some(1.5)),
+        Command::MoveChannel { id: kick, index: 1 },
+        Command::UpdateMixerTrack {
+            id: bus,
+            patch: MixerTrackPatch {
+                muted: Some(true),
+                ..MixerTrackPatch::default()
+            },
+        },
+        Command::SetEffectParam {
+            track: bus,
+            effect: reverb,
+            param: 1,
+            value: 9.0,
+        },
+    ];
+    for command in harmless {
+        let applied = run(&mut doc, command);
+        assert!(!applied.touched.automations && !applied.touched.playlist);
+    }
+    assert_eq!(left(&doc).len(), targets.len());
+}
+
+#[test]
+fn an_effect_that_moves_to_another_track_keeps_its_automations() {
+    let (mut doc, targets) = automatable();
+    let bus = doc.project().mixer.tracks[3].id;
+    let kick_track = doc.project().mixer.tracks[1].id;
+    let reverb = doc.project().mixer.tracks[3].effects[0].id;
+    let setting = add_automation(&mut doc, targets[5]);
+    let mix = add_automation(&mut doc, targets[6]);
+    let other = add_automation(&mut doc, targets[0]);
+    let before = doc.project().clone();
+
+    // Within its own chain nothing about the automations changes.
+    let eq = add_effect(&mut doc, bus, EffectKind::Eq);
+    let within = Command::MoveEffect {
+        track: bus,
+        effect: reverb,
+        to_track: None,
+        index: 1,
+    };
+    let applied = run(&mut doc, within);
+    assert_eq!(applied.touched, touched(|t| t.mixer = true));
+    assert_eq!(effect_ids(&doc, bus), [eq, reverb]);
+
+    let across = Command::MoveEffect {
+        track: bus,
+        effect: reverb,
+        to_track: Some(kick_track),
+        index: 0,
+    };
+    let applied = run(&mut doc, across);
+    assert_eq!(applied.label, "Move effect");
+    assert_eq!(
+        applied.touched,
+        touched(|t| {
+            t.mixer = true;
+            t.automations = true;
+        })
+    );
+    let param = param_index::<ReverbParams>("decayS") as u32;
+    assert_eq!(
+        automation(&doc, setting).target,
+        AutomationTarget::EffectParam {
+            track: kick_track,
+            effect: reverb,
+            param,
+        }
+    );
+    assert_eq!(
+        automation(&doc, mix).target,
+        AutomationTarget::EffectMix {
+            track: kick_track,
+            effect: reverb,
+        }
+    );
+    assert_eq!(
+        automation(&doc, other),
+        before.automation(other).unwrap().clone()
+    );
+    doc.project().check().unwrap();
+
+    // And back again, to exactly where they were.
+    let back = Command::MoveEffect {
+        track: kick_track,
+        effect: reverb,
+        to_track: Some(bus),
+        index: 0,
+    };
+    run(&mut doc, back);
+    assert_eq!(doc.project().automations, before.automations);
+    // A drag across tracks and on under one gesture is one undo step,
+    // which puts the automations back where they were as well.
+    let start = doc.project().clone();
+    let steps = doc.history().entries.len();
+    let hop = |track, to| Command::MoveEffect {
+        track,
+        effect: reverb,
+        to_track: Some(to),
+        index: 0,
+    };
+    doc.dispatch(hop(bus, kick_track), Some(21)).unwrap();
+    doc.dispatch(hop(kick_track, TrackId::MASTER), Some(21))
+        .unwrap();
+    assert_eq!(doc.history().entries.len(), steps + 1);
+    assert_eq!(
+        automation(&doc, mix).target,
+        AutomationTarget::EffectMix {
+            track: TrackId::MASTER,
+            effect: reverb,
+        }
+    );
+    doc.undo().unwrap();
+    assert_eq!(doc.project(), &start);
+}
+
+#[test]
+fn check_names_each_broken_rule_of_an_automation() {
+    let (mut doc, targets) = automatable();
+    let lane = add_playlist_track(&mut doc);
+    for target in &targets {
+        let id = add_automation(&mut doc, *target);
+        run(
+            &mut doc,
+            Command::AddClips {
+                clips: vec![automation_clip(lane, 0, id)],
+            },
+        );
+    }
+    let first = doc.project().automations[0].id;
+    run(
+        &mut doc,
+        Command::SetAutomationPoints {
+            id: first,
+            points: vec![point(0, 0.0), point(960, 1.0)],
+        },
+    );
+    let valid = doc.project().clone();
+    valid.check().unwrap();
+
+    let cases: [(&str, Damage); 17] = [
+        ("more than one automation", |p| {
+            p.automations[1].id = p.automations[0].id;
+        }),
+        ("is not below the next id", |p| {
+            p.automations[0].id = AutomationId(p.next_id);
+        }),
+        ("not 0xRRGGBB", |p| p.automations[0].color = 0x1_000_000),
+        ("has no points", |p| p.automations[0].points.clear()),
+        ("does not keep its points in order", |p| {
+            p.automations[0].points.swap(0, 1);
+        }),
+        ("a point past the end of the longest song", |p| {
+            p.automations[0].points[1].tick = MAX_SONG_TICKS + 1;
+        }),
+        ("a point with value 1.5", |p| {
+            p.automations[0].points[0].value = 1.5;
+        }),
+        ("a point with value NaN", |p| {
+            p.automations[0].points[0].value = f32::NAN;
+        }),
+        ("a point with curve -2", |p| {
+            p.automations[0].points[0].curve = -2.0;
+        }),
+        ("more than the limit of 4096", |p| {
+            p.automations[0].points = vec![p.automations[0].points[0]; 4_097];
+        }),
+        // What each kind of target needs.
+        ("moves something the project does not have", |p| {
+            p.channels.remove(0);
+            p.patterns[0].lanes.clear();
+        }),
+        ("moves something the project does not have", |p| {
+            p.mixer.tracks[1].sends.clear();
+        }),
+        ("moves something the project does not have", |p| {
+            p.mixer.tracks[3].effects.clear();
+        }),
+        ("moves something the project does not have", |p| {
+            let AutomationTarget::EffectParam { param, .. } = &mut p.automations[5].target else {
+                panic!("not an effect setting");
+            };
+            *param = 400;
+        }),
+        ("moves something the project does not have", |p| {
+            // The effect is there, on another track than the target says.
+            let effect = p.mixer.tracks[3].effects.remove(0);
+            p.mixer.tracks[2].effects.push(effect);
+        }),
+        ("moves something the project does not have", |p| {
+            let AutomationTarget::InstrumentParam { channel, .. } = &mut p.automations[7].target
+            else {
+                panic!("not an instrument setting");
+            };
+            // A sampler has no settings to move.
+            *channel = p.channels[0].id;
+        }),
+        ("shows automation 999", |p| {
+            let clip = p.playlist.clips.iter_mut();
+            let shown = clip.filter_map(|clip| match &mut clip.content {
+                ClipContent::Automation { automation } => Some(automation),
+                _ => None,
+            });
+            for automation in shown.take(1) {
+                *automation = AutomationId(999);
+            }
+        }),
+    ];
+    for (index, (words, damage)) in cases.into_iter().enumerate() {
+        let mut project = valid.clone();
         damage(&mut project);
         match project.check() {
             Ok(()) => panic!("case {index} (\"{words}\") passed the check"),

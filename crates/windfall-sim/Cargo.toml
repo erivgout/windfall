@@ -1,0 +1,22 @@
+[package]
+name = "windfall-sim"
+description = "The Windfall document behind a C ABI, compiled to WebAssembly for the UI's in-browser mock backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# cdylib is the WebAssembly module. rlib lets the tests call the same code.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+windfall-project.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,74 @@
+//! Windfall's built-in signal processing: the effects and instruments that
+//! ship with the app, and the blocks they are made of.
+//!
+//! This crate knows nothing about audio devices, projects or the engine.
+//! It turns numbers into numbers, which is what lets every processor be
+//! tested by measurement.
+//!
+//! # The plugin interface
+//!
+//! Every effect implements [`Effect`] and every instrument implements
+//! [`Instrument`]. A host that picks processors at run time holds them as
+//! [`AnyEffect`] (usually inside an [`EffectSlot`], which adds bypass and
+//! mix) and [`AnyInstrument`], with their settings in the matching
+//! [`EffectParams`] and [`InstrumentParams`].
+//!
+//! The rules are the same for all of them:
+//!
+//! - **Allocation.** Building a processor and calling `prepare` allocate.
+//!   Nothing else does: `process`, `set_params`, `set_tempo`, `reset` and
+//!   the note calls are safe on a realtime thread. Dropping a processor
+//!   frees memory, so the host sends it back to another thread to be
+//!   dropped.
+//! - **Parameters** are plain structs, one per processor, that can be
+//!   saved, copied to the audio thread and exported to TypeScript. Each has
+//!   sensible defaults, forces whatever it is given into range, and comes
+//!   with a table of [`ParamInfo`] that describes every control for the UI
+//!   and for automation (see [`ParamSet`]). A change glides, so it never
+//!   clicks.
+//! - **Blocks.** A processor's output does not depend on how the host
+//!   divides the audio into blocks, and any block length from one sample up
+//!   is fine.
+//! - **Latency and tails** are reported, so a host can line tracks up and
+//!   knows when a track has gone silent.
+//! - **Bypass and mix.** No effect has a bypass of its own: switching an
+//!   effect off is the [`EffectSlot`]'s job, which crossfades and then stops
+//!   running it. The compressor, reverb and delay each have a `mix` control
+//!   because blending them with the dry signal is part of how they are
+//!   used; the slot adds a second, generic mix for every effect, with the
+//!   dry signal delayed to match the effect's latency.
+//!
+//! # Units
+//!
+//! Levels a mixer shares are linear gain, where 1.0 is unity. Thresholds
+//! and gains inside dynamics and equalisers are in dB, because that is how
+//! they are thought about. Frequencies are in Hz, times in milliseconds
+//! (reverb decay in seconds), mixes and amounts run from 0 to 1, and pan
+//! from -1 to 1. Each field's doc comment gives its unit, range and
+//! default.
+
+pub mod blocks;
+mod compressor;
+mod delay;
+mod effect;
+mod eq;
+mod instrument;
+mod limiter;
+mod param;
+mod reverb;
+mod synth;
+
+pub use blocks::lfo::LfoShape;
+pub use blocks::oscillator::Waveform;
+pub use compressor::{COMPRESSOR_MAX_RATIO, Compressor, CompressorParams, DetectorMode};
+pub use delay::{Delay, DelayMode, DelayParams, NoteDivision};
+pub use effect::{AnyEffect, Effect, EffectKind, EffectParams, EffectSlot, GainReductionMeter};
+pub use eq::{CutSlope, EqBand, EqCutBand, EqParams, ParametricEq};
+pub use instrument::{AnyInstrument, Instrument, InstrumentKind, InstrumentParams};
+pub use limiter::{Limiter, LimiterParams};
+pub use param::{ParamChoice, ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit};
+pub use reverb::{Reverb, ReverbParams};
+pub use synth::{
+    EnvelopeParams, FilterMode, FilterParams, FilterSlope, LfoParams, MAX_POLYPHONY, MAX_UNISON,
+    OscillatorParams, SubtractiveSynth, SynthParams, VoiceMode,
+};

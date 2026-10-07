@@ -1,0 +1,205 @@
+//! Nothing that runs on the audio thread may touch the allocator.
+
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+
+use windfall_dsp::blocks::noise::Rng;
+use windfall_dsp::{
+    AnyEffect, AnyInstrument, CompressorParams, DelayParams, EffectKind, EffectParams, EffectSlot,
+    EqParams, InstrumentKind, InstrumentParams, LimiterParams, ReverbParams, SynthParams,
+};
+
+use crate::support::{noise, random_params};
+
+thread_local! {
+    static WATCHING: Cell<bool> = const { Cell::new(false) };
+    static CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The system allocator, counting every call made on a thread while that
+/// thread is inside [`allocator_calls`].
+pub struct CountingAllocator;
+
+fn count() {
+    // The thread-locals hold plain values with no destructor, so reading
+    // them here cannot allocate. `try_with` covers a thread being torn down.
+    if WATCHING.try_with(Cell::get).unwrap_or(false) {
+        let _ = CALLS.try_with(|calls| calls.set(calls.get() + 1));
+    }
+}
+
+// SAFETY: every method forwards to the system allocator unchanged. Counting
+// reads and writes thread-local cells and nothing else.
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        count();
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        count();
+        // SAFETY: the caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        count();
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract.
+        unsafe { System.dealloc(pointer, layout) }
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        count();
+        // SAFETY: the caller upholds `GlobalAlloc::realloc`'s contract.
+        unsafe { System.realloc(pointer, layout, new_size) }
+    }
+}
+
+/// Runs `work` and returns how many times it allocated, reallocated or
+/// freed memory.
+fn allocator_calls(work: impl FnOnce()) -> usize {
+    CALLS.set(0);
+    WATCHING.set(true);
+    work();
+    WATCHING.set(false);
+    CALLS.get()
+}
+
+#[test]
+fn the_counter_sees_allocations_and_frees() {
+    let mut kept = None;
+    assert_eq!(allocator_calls(|| kept = Some(vec![1_u8; 64])), 1);
+    assert_eq!(allocator_calls(|| drop(kept.take())), 1);
+    assert_eq!(allocator_calls(|| assert_eq!(2 + 2, 4)), 0);
+}
+
+/// Random settings for one kind of effect.
+fn random_effect_params(kind: EffectKind, rng: &mut Rng) -> EffectParams {
+    match kind {
+        EffectKind::Eq => EffectParams::Eq(random_params::<EqParams>(rng)),
+        EffectKind::Compressor => EffectParams::Compressor(random_params::<CompressorParams>(rng)),
+        EffectKind::Limiter => EffectParams::Limiter(random_params::<LimiterParams>(rng)),
+        EffectKind::Reverb => EffectParams::Reverb(random_params::<ReverbParams>(rng)),
+        EffectKind::Delay => EffectParams::Delay(random_params::<DelayParams>(rng)),
+    }
+}
+
+#[test]
+fn effects_never_allocate_after_prepare() {
+    const SIZES: [usize; 8] = [128, 1, 7, 64, 480, 512, 33, 256];
+    for kind in EffectKind::ALL {
+        let mut rng = Rng::new(kind as u32 + 1);
+        // Everything the control side would do ahead of time: build the
+        // slot, prepare it, take its meter, and line up the settings and
+        // audio it is going to be given.
+        let mut slot = EffectSlot::new(AnyEffect::new(&kind.default_params()));
+        slot.prepare(48_000.0, 512);
+        let meter = slot.effect().gain_reduction();
+        let settings: Vec<EffectParams> = (0..64)
+            .map(|_| random_effect_params(kind, &mut rng))
+            .collect();
+        let wrong_kind = EffectKind::ALL[(kind as usize + 1) % EffectKind::ALL.len()];
+        let wrong = wrong_kind.default_params();
+        let mut left = noise(11, 0.8, 512);
+        let mut right = noise(12, 0.8, 512);
+        let mut loudest = 0.0_f32;
+
+        let calls = allocator_calls(|| {
+            for step in 0..800_usize {
+                match step % 40 {
+                    3 => assert!(slot.set_params(&settings[step % settings.len()])),
+                    9 => slot.set_tempo(60.0 + step as f32),
+                    14 => slot.set_enabled(step % 80 < 40),
+                    17 => slot.set_mix((step % 7) as f32 / 6.0),
+                    23 => assert!(!slot.set_params(&wrong)),
+                    31 => slot.reset(),
+                    _ => {}
+                }
+                // Setting one control by its index, as automation does.
+                if step % 5 == 0 {
+                    let mut params = settings[step % settings.len()];
+                    params.set(step % 4, 0.5);
+                    slot.set_params(&params.sanitized());
+                }
+                let frames = SIZES[step % SIZES.len()];
+                slot.process(&mut left[..frames], &mut right[..frames]);
+                loudest = loudest.max(left[0].abs());
+                let _ = (slot.latency_samples(), slot.tail_samples());
+                if let Some(meter) = &meter {
+                    let _ = meter.take_db();
+                }
+                // Keep the input lively: the slot processes in place.
+                left[step % 512] = 0.9;
+                right[(step * 7) % 512] = -0.9;
+            }
+        });
+        assert_eq!(calls, 0, "{} touched the allocator", kind.name());
+        assert!(loudest > 0.0);
+    }
+}
+
+#[test]
+fn a_slot_longer_than_its_prepared_block_still_does_not_allocate() {
+    let mut slot = EffectSlot::new(AnyEffect::new(&EffectKind::Reverb.default_params()));
+    slot.prepare(44_100.0, 64);
+    let mut left = noise(1, 0.5, 4_096);
+    let mut right = noise(2, 0.5, 4_096);
+    let calls = allocator_calls(|| {
+        slot.process(&mut left, &mut right);
+        slot.set_enabled(false);
+        slot.process(&mut left, &mut right);
+    });
+    assert_eq!(calls, 0);
+}
+
+#[test]
+fn the_synth_never_allocates_after_prepare() {
+    const SIZES: [usize; 8] = [128, 1, 7, 64, 480, 512, 33, 256];
+    let mut rng = Rng::new(99);
+    let kind = InstrumentKind::SubtractiveSynth;
+    let mut instrument = AnyInstrument::new(&kind.default_params());
+    instrument.prepare(48_000.0, 512);
+    let settings: Vec<InstrumentParams> = (0..32)
+        .map(|_| InstrumentParams::SubtractiveSynth(random_params::<SynthParams>(&mut rng)))
+        .collect();
+    let mut left = vec![0.0_f32; 512];
+    let mut right = vec![0.0_f32; 512];
+    let mut loudest = 0.0_f32;
+
+    let calls = allocator_calls(|| {
+        for step in 0..1_500_usize {
+            let key = (36 + (step * 7) % 60) as u8;
+            match step % 30 {
+                0 | 2 | 4 | 6 | 8 | 10 => instrument.note_on(key, 0.3 + (step % 7) as f32 * 0.1),
+                12 | 14 | 16 => instrument.note_off(key),
+                19 => assert!(instrument.set_params(&settings[step % settings.len()])),
+                21 => instrument.set_tempo(90.0 + step as f32 * 0.1),
+                25 if step % 150 == 25 => instrument.all_notes_off(),
+                27 if step % 600 == 27 => instrument.reset(),
+                _ => {}
+            }
+            if step % 9 == 0 {
+                let mut params = settings[step % settings.len()];
+                params.set(step % 50, 0.25);
+                instrument.set_params(&params);
+            }
+            // A burst of far more notes than there are voices.
+            if step % 200 == 100 {
+                for key in 20..100 {
+                    instrument.note_on(key, 0.5);
+                }
+            }
+            let frames = SIZES[step % SIZES.len()];
+            instrument.process(&mut left[..frames], &mut right[..frames]);
+            loudest = loudest.max(left[0].abs());
+            let _ = (
+                instrument.active_voices(),
+                instrument.latency_samples(),
+                instrument.tail_samples(),
+            );
+        }
+    });
+    assert_eq!(calls, 0, "the synth touched the allocator");
+    assert!(loudest > 0.0);
+}

@@ -1,15 +1,28 @@
 //! Sampler voices: one playing copy of a sample each, in a pool allocated
 //! once.
+//!
+//! The pool is the one hard limit on how much can sound at once. Up to
+//! [`MAX_VOICES`] voices play at full level. A note that would be one more
+//! steals a voice: the quietest one that is already releasing, or failing
+//! that the one that started first, with the lowest slot winning a tie. The
+//! stolen voice is not cut off but faded out over a few milliseconds in one
+//! of [`FADING_SLOTS`] extra slots. Only when those are all taken as well,
+//! which takes hundreds of notes within those few milliseconds, does the
+//! fading voice nearest silence end at once. Every one of these choices
+//! depends only on the voices themselves, so the same notes always steal
+//! the same voices.
 
 use std::ops::Range;
 
 use rtrb::Producer;
-use windfall_core::{AudioBuffer, pan_gains};
-use windfall_project::{ChannelId, Envelope};
+use windfall_core::{AudioBuffer, db_to_gain, pan_gains};
+use windfall_project::{ChannelId, Envelope, TrackId};
 
 use crate::message::{Garbage, retire};
 use crate::mixer::{Frame, Mixer};
-use crate::plan::{Plan, PlanState, Strip};
+use crate::plan::Plan;
+use crate::sequencer::Clock;
+use crate::state::{Heard, PlanState, Strip};
 
 /// Most voices that sound at full level at once. One more steals a voice.
 pub(crate) const MAX_VOICES: usize = 256;
@@ -23,6 +36,19 @@ const FADE_SECONDS: f64 = 0.004;
 
 /// Shortest envelope release. A release of zero would be a click.
 const MIN_RELEASE_SECONDS: f32 = 0.001;
+
+/// Level of a browser preview in decibels. A preview plays on top of
+/// whatever the project is playing, and a sample at full level added to a
+/// full mix would push the master into clipping.
+pub const PREVIEW_GAIN_DB: f32 = -6.0;
+
+/// How far short of its target a plain exponential would still be when a
+/// decay or release runs out of time: a thousandth of the way, which is
+/// 60 dB. The curve used is that exponential lowered by this much and
+/// scaled back to full height. It falls at a steady rate in decibels, as
+/// an exponential does, and still lands exactly on its target on its last
+/// frame instead of creeping up on it forever.
+const CURVE_FLOOR: f64 = 0.001;
 
 /// Who started a voice. It decides what stops it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,11 +66,45 @@ pub(crate) enum Origin {
 enum Route {
     /// Through the channel at this index of the current plan.
     Channel(usize),
-    /// The channel was removed while the voice sounded. It fades out into
-    /// the master with the gain and pan the channel last had.
-    Detached { gain: f32, pan: f32 },
     /// Straight into the master track.
     Master,
+    /// Into the mixer track with this id, at the gain each side of the
+    /// voice had on its channel when a change of plan took the channel
+    /// from under it. The voice was fading out for good, lost its channel,
+    /// or its channel moved to another track, and something on the way
+    /// from the track to the output has a memory: an effect or a
+    /// compensation delay. Leaving that path would be heard as a jump, so
+    /// the voice finishes inside it. `track` is the track's index in the
+    /// current plan.
+    Track {
+        track: usize,
+        id: TrackId,
+        left: f32,
+        right: f32,
+    },
+    /// Past the mixer, straight to the output. The voice was fading out
+    /// when the plan changed, and nothing but faders lay between it and
+    /// the output, or its track is gone. It finishes at the gain each side
+    /// of it was heard at in that moment, so nothing the new plan does to
+    /// the mixer can make it click, and no fader has to glide on its
+    /// account.
+    Apart { left: f32, right: f32 },
+}
+
+/// The gain a voice is given on each side while it renders.
+#[derive(Debug, Clone, Copy)]
+enum Mix {
+    /// A channel's gain and pan, which may be gliding.
+    Strip(Strip),
+    /// The same gain on every frame: left, then right.
+    Sides(f32, f32),
+}
+
+/// A stretch of the block being processed: the frame offsets `frames` of
+/// the block that starts on frame `base`.
+pub(crate) struct Stretch {
+    pub base: u64,
+    pub frames: Range<usize>,
 }
 
 /// A note to start.
@@ -55,17 +115,20 @@ pub(crate) struct Note {
     pub key: u8,
     pub velocity: f32,
     pub pan: f32,
-    /// Frame on which the note ends, for samplers with an envelope.
-    pub release_at: u64,
+    /// Tick on the sequencer's clock on which the note ends, for samplers
+    /// with an envelope. Infinity holds the note until it is released by
+    /// hand.
+    pub end: f64,
     pub origin: Origin,
 }
 
-/// The part of a sample a voice plays, and in which direction.
+/// The part of a sample a voice or an audio clip plays, and in which
+/// direction.
 #[derive(Debug, Clone, Copy)]
-struct Region {
-    first: usize,
-    frames: usize,
-    reverse: bool,
+pub(crate) struct Region {
+    pub first: usize,
+    pub frames: usize,
+    pub reverse: bool,
 }
 
 impl Region {
@@ -88,7 +151,7 @@ impl Region {
     /// interpolation. A whole-numbered position returns the stored frame
     /// untouched.
     #[inline]
-    fn read(&self, sample: &AudioBuffer, position: f64) -> (f32, f32) {
+    pub fn read(&self, sample: &AudioBuffer, position: f64) -> (f32, f32) {
         let index = position as isize;
         let fraction = (position - index as f64) as f32;
         let current = self.frame(sample, index);
@@ -124,74 +187,122 @@ enum Stage {
     Done,
 }
 
-/// A linear attack, decay, sustain, release envelope, advanced one frame at
-/// a time.
+/// An attack, decay, sustain, release envelope, advanced one frame at a
+/// time.
+///
+/// The attack is a straight line from silence to full level. The decay and
+/// the release are exponential curves, the decay from full level down to
+/// the sustain level and the release from wherever the level is down to
+/// silence.
+///
+/// Each stage counts its frames and ends on the frame its time says. The
+/// level is worked out from that count, never the other way round: a level
+/// that is nudged along a little every frame stops moving once the nudge is
+/// smaller than the level can resolve, and then the stage never ends.
 #[derive(Debug, Clone, Copy)]
 struct EnvelopeState {
     stage: Stage,
-    level: f32,
-    attack_step: f32,
-    decay_step: f32,
+    /// Frames spent in the current stage.
+    elapsed: u64,
+    attack_frames: u64,
+    decay_frames: u64,
+    release_frames: u64,
     sustain: f32,
-    release_frames: f32,
-    release_step: f32,
+    /// Level the release started from.
+    release_from: f32,
+    /// The plain exponential of the decay or release under way: 1 as the
+    /// stage starts, multiplied by the stage's ratio every frame. Sixty
+    /// seconds at 384 kHz are 23 million multiplications, which double
+    /// precision carries without visible drift.
+    curve: f64,
+    decay_ratio: f64,
+    release_ratio: f64,
+}
+
+/// What the plain exponential is multiplied by every frame to come down to
+/// its floor in `frames` frames.
+fn curve_ratio(frames: u64) -> f64 {
+    ((CURVE_FLOOR / (1.0 + CURVE_FLOOR)).ln() / frames.max(1) as f64).exp()
 }
 
 impl EnvelopeState {
     fn new(envelope: &Envelope, sample_rate: f64) -> Self {
-        let frames = |ms: f32| ms * sample_rate as f32 / 1000.0;
-        let attack_frames = frames(envelope.attack_ms);
-        let decay_frames = frames(envelope.decay_ms).max(1.0);
-        let instant_attack = attack_frames < 1.0;
-        Self {
-            stage: if instant_attack {
-                Stage::Decay
-            } else {
-                Stage::Attack
-            },
-            level: if instant_attack { 1.0 } else { 0.0 },
-            attack_step: if instant_attack {
-                0.0
-            } else {
-                1.0 / attack_frames
-            },
-            decay_step: (1.0 - envelope.sustain) / decay_frames,
+        let frames = |ms: f32| (f64::from(ms) * sample_rate / 1000.0).round() as u64;
+        let decay_frames = frames(envelope.decay_ms);
+        let release_frames = frames(envelope.release_ms.max(MIN_RELEASE_SECONDS * 1000.0)).max(1);
+        let mut state = Self {
+            stage: Stage::Attack,
+            elapsed: 0,
+            attack_frames: frames(envelope.attack_ms),
+            decay_frames,
+            release_frames,
             sustain: envelope.sustain,
-            release_frames: frames(envelope.release_ms.max(MIN_RELEASE_SECONDS * 1000.0)).max(1.0),
-            release_step: 0.0,
+            release_from: 0.0,
+            curve: 1.0,
+            decay_ratio: curve_ratio(decay_frames),
+            release_ratio: curve_ratio(release_frames),
+        };
+        state.settle();
+        state
+    }
+
+    /// Moves on from every stage whose time is up. A stage of no length is
+    /// passed without a single frame.
+    fn settle(&mut self) {
+        loop {
+            let (frames, next) = match self.stage {
+                Stage::Attack => (self.attack_frames, Stage::Decay),
+                Stage::Decay => (self.decay_frames, Stage::Sustain),
+                Stage::Release => (self.release_frames, Stage::Done),
+                Stage::Sustain | Stage::Done => return,
+            };
+            if self.elapsed < frames {
+                return;
+            }
+            self.stage = next;
+            self.elapsed = 0;
+            self.curve = 1.0;
+        }
+    }
+
+    /// How much of the decay or release under way is still to come: 1 on
+    /// its first frame, and 0 on the frame after its last.
+    fn fall(&self) -> f64 {
+        ((1.0 + CURVE_FLOOR) * self.curve - CURVE_FLOOR).max(0.0)
+    }
+
+    /// The level of the frame about to play.
+    fn level(&self) -> f32 {
+        match self.stage {
+            Stage::Attack => (self.elapsed as f64 / self.attack_frames as f64) as f32,
+            Stage::Decay => {
+                let sustain = f64::from(self.sustain);
+                (sustain + (1.0 - sustain) * self.fall()) as f32
+            }
+            Stage::Sustain => self.sustain,
+            Stage::Release => (f64::from(self.release_from) * self.fall()) as f32,
+            Stage::Done => 0.0,
         }
     }
 
     /// The level for this frame, or `None` once the envelope has run out.
     #[inline]
     fn next(&mut self) -> Option<f32> {
-        let level = self.level;
         match self.stage {
-            Stage::Attack => {
-                self.level += self.attack_step;
-                if self.level >= 1.0 {
-                    self.level = 1.0;
-                    self.stage = Stage::Decay;
-                }
-            }
-            Stage::Decay => {
-                self.level -= self.decay_step;
-                if self.level <= self.sustain {
-                    self.level = self.sustain;
-                    self.stage = Stage::Sustain;
-                }
-            }
+            Stage::Done => return None,
             // Holding a level of zero would only burn a voice.
             Stage::Sustain if self.sustain <= 0.0 => return None,
-            Stage::Sustain => {}
-            Stage::Release => {
-                self.level -= self.release_step;
-                if self.level <= 0.0 {
-                    self.stage = Stage::Done;
-                }
-            }
-            Stage::Done => return None,
+            Stage::Sustain => return Some(self.sustain),
+            Stage::Attack | Stage::Decay | Stage::Release => {}
         }
+        let level = self.level();
+        self.elapsed += 1;
+        match self.stage {
+            Stage::Decay => self.curve *= self.decay_ratio,
+            Stage::Release => self.curve *= self.release_ratio,
+            Stage::Attack | Stage::Sustain | Stage::Done => {}
+        }
+        self.settle();
         Some(level)
     }
 
@@ -199,12 +310,14 @@ impl EnvelopeState {
         if matches!(self.stage, Stage::Release | Stage::Done) {
             return;
         }
-        self.release_step = self.level / self.release_frames;
-        self.stage = if self.level > 0.0 {
+        self.release_from = self.level();
+        self.stage = if self.release_from > 0.0 {
             Stage::Release
         } else {
             Stage::Done
         };
+        self.elapsed = 0;
+        self.curve = 1.0;
     }
 
     fn releasing(&self) -> bool {
@@ -225,8 +338,10 @@ struct Voice {
     cut_group: u8,
     /// Frame the voice started on.
     started: u64,
-    /// Frame the note ends on. Voices without an envelope ignore it.
-    release_at: u64,
+    /// Tick on the sequencer's clock on which the note ends. It is kept as
+    /// a tick, not as a frame, so the end follows the tempo when that
+    /// changes under a sounding note. Voices without an envelope ignore it.
+    end: f64,
     region: Region,
     /// Frames into the region, in playing order.
     position: f64,
@@ -241,6 +356,10 @@ struct Voice {
     envelope: Option<EnvelopeState>,
     /// Frames left of an early fade-out. Zero means the voice is not fading.
     fade: u32,
+    /// Frames left of a fade-in. A voice whose channel moved to another
+    /// mixer track comes up on the new track while a copy of it fades out
+    /// on the old one.
+    fade_in: u32,
 }
 
 impl Voice {
@@ -254,7 +373,7 @@ impl Voice {
             key: 0,
             cut_group: 0,
             started: 0,
-            release_at: u64::MAX,
+            end: f64::INFINITY,
             region: Region {
                 first: 0,
                 frames: 0,
@@ -266,30 +385,54 @@ impl Voice {
             pan: 0.0,
             envelope: None,
             fade: 0,
+            fade_in: 0,
+        }
+    }
+
+    /// The voice as it carries on in another slot. Shares the sample.
+    fn copy(&self) -> Self {
+        Self {
+            sample: self.sample.clone(),
+            ..*self
         }
     }
 
     /// Adds the voice's next frames to `out`, a stretch of its mixer track's
-    /// buffer that begins on frame `start`. Returns true when the voice has
-    /// ended.
+    /// buffer that begins on frame `start`. The note ends on frame
+    /// `release_at`. Returns true when the voice has ended.
     ///
     /// Every piece of state moves one frame at a time, so cutting the output
     /// at different places gives the same samples.
-    fn render(&mut self, out: &mut [Frame], mix: Strip, start: u64, fade_frames: u32) -> bool {
+    fn render(
+        &mut self,
+        out: &mut [Frame],
+        mix: Mix,
+        start: u64,
+        release_at: u64,
+        fade_frames: u32,
+    ) -> bool {
         let Some(sample) = &self.sample else {
             return true;
         };
-        let steady = mix.gain.settled(start) && mix.pan.settled(start);
-        let (mut left, mut right) = stereo_gains(mix.gain.at(start), mix.pan.at(start) + self.pan);
+        // A strip that is still gliding is read again on every frame.
+        let (gliding, mut left, mut right) = match mix {
+            Mix::Sides(left, right) => (None, left, right),
+            Mix::Strip(strip) => {
+                let (left, right) =
+                    stereo_gains(strip.gain.at(start), strip.pan.at(start) + self.pan);
+                let steady = strip.gain.settled(start) && strip.pan.settled(start);
+                ((!steady).then_some(strip), left, right)
+            }
+        };
 
         for (offset, out) in out.iter_mut().enumerate() {
             let frame = start + offset as u64;
-            if !steady {
-                (left, right) = stereo_gains(mix.gain.at(frame), mix.pan.at(frame) + self.pan);
+            if let Some(strip) = gliding {
+                (left, right) = stereo_gains(strip.gain.at(frame), strip.pan.at(frame) + self.pan);
             }
             let mut level = self.gain;
             if let Some(envelope) = &mut self.envelope {
-                if frame >= self.release_at {
+                if frame >= release_at {
                     envelope.release();
                 }
                 match envelope.next() {
@@ -299,6 +442,10 @@ impl Voice {
             }
             if self.fade > 0 {
                 level *= self.fade as f32 / fade_frames as f32;
+            }
+            if self.fade_in > 0 {
+                level *= 1.0 - self.fade_in as f32 / fade_frames as f32;
+                self.fade_in -= 1;
             }
             let (sample_left, sample_right) = self.region.read(sample, self.position);
             out[0] += sample_left * level * left;
@@ -329,6 +476,7 @@ pub(crate) struct VoicePool {
     voices: Box<[Voice]>,
     sample_rate: f64,
     fade_frames: u32,
+    preview_gain: f32,
 }
 
 impl VoicePool {
@@ -340,12 +488,27 @@ impl VoicePool {
                 .collect(),
             sample_rate,
             fade_frames: ((FADE_SECONDS * sample_rate).round() as u32).max(1),
+            preview_gain: db_to_gain(PREVIEW_GAIN_DB),
         }
     }
 
     /// Voices sounding right now, fading ones included.
     pub fn active(&self) -> u32 {
         self.voices.iter().filter(|voice| voice.active).count() as u32
+    }
+
+    /// Where each voice that is heard through the mixer plays into, in the
+    /// plan the voices are bound to.
+    pub fn destinations(&self) -> impl Iterator<Item = Heard> {
+        self.voices
+            .iter()
+            .filter(|voice| voice.active)
+            .filter_map(|voice| match voice.route {
+                Route::Channel(channel) => Some(Heard::Channel(channel)),
+                Route::Track { track, .. } => Some(Heard::Track(track)),
+                Route::Master => Some(Heard::Track(0)),
+                Route::Apart { .. } => None,
+            })
     }
 
     /// Hands back samples that stopped voices could not return earlier.
@@ -383,6 +546,12 @@ impl VoicePool {
             }
         }
 
+        // A note with no velocity cuts like any other note-on, but it can
+        // never be heard, so it does not get a voice.
+        if note.velocity <= 0.0 {
+            return;
+        }
+
         self.make_room();
         let Some(slot) = self.free_slot(plan, garbage) else {
             return;
@@ -397,7 +566,7 @@ impl VoicePool {
             key: note.key,
             cut_group: sampler.cut_group,
             started: now,
-            release_at: note.release_at,
+            end: note.end,
             region: Region {
                 first: sampler.start,
                 frames: sampler.end - sampler.start,
@@ -412,11 +581,13 @@ impl VoicePool {
                 .as_ref()
                 .map(|envelope| EnvelopeState::new(envelope, self.sample_rate)),
             fade: 0,
+            fade_in: 0,
         };
     }
 
-    /// Plays a whole buffer straight into the master, replacing any preview
-    /// already playing. Gives the buffer back when it cannot be played.
+    /// Plays a whole buffer straight into the master at
+    /// [`PREVIEW_GAIN_DB`], replacing any preview already playing. Gives
+    /// the buffer back when it cannot be played.
     pub fn preview(
         &mut self,
         plan: &Plan,
@@ -442,7 +613,7 @@ impl VoicePool {
                 reverse: false,
             },
             step: f64::from(sample.sample_rate()) / self.sample_rate,
-            gain: 1.0,
+            gain: self.preview_gain,
             sample: Some(sample),
             ..Voice::idle()
         };
@@ -456,8 +627,28 @@ impl VoicePool {
             voice.active && voice.origin == Origin::Live && voice.channel == channel
         }) {
             if voice.key == key {
-                voice.release_at = 0;
+                // Before anything the clock can read, so the note has ended
+                // by the next frame.
+                voice.end = f64::NEG_INFINITY;
             }
+        }
+    }
+
+    /// Moves the end of every note by `ticks`. The sequencer's clock reads
+    /// that much more from now on because playback jumped, and the notes
+    /// still sounding are to last as long as they would have.
+    pub fn shift_ends(&mut self, ticks: f64) {
+        for voice in &mut self.voices {
+            voice.end += ticks;
+        }
+    }
+
+    /// Gives every note the end `moved` makes of the one it has: the tempo
+    /// map changed, and each clock tick now means another place in the
+    /// song.
+    pub fn move_ends(&mut self, moved: impl Fn(f64) -> f64) {
+        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+            voice.end = moved(voice.end);
         }
     }
 
@@ -471,55 +662,163 @@ impl VoicePool {
         }
     }
 
-    /// Points every voice at its channel's place in a new plan. Voices of
-    /// channels the new plan no longer has fade out with the gain and pan
-    /// their channel had in `old_state` on frame `now`.
-    pub fn rebind(&mut self, plan: &Plan, old_state: &PlanState, now: u64) {
+    /// Gets the voices ready for a new plan that takes over on frame `now`.
+    ///
+    /// A voice that carries on is pointed at its channel's place in the new
+    /// plan. If the channel now plays into another mixer track, the voice
+    /// fades in there while a copy of it fades out where it was, so the
+    /// move is a crossfade and not a jump.
+    ///
+    /// A voice that is fading out for good, a voice whose channel the new
+    /// plan no longer has, which starts fading here, and the copy a moved
+    /// voice leaves behind all finish at the gain their channel gave each
+    /// side of them on this frame. Where they finish depends on what lay
+    /// between them and the output under the old plan:
+    ///
+    /// - Nothing but faders and pans: they leave the mix and go straight
+    ///   to the output at the level they were heard at. That is the same
+    ///   sound, and it leaves the new plan's faders free to change at
+    ///   once, since nothing is heard through them.
+    /// - An effect or a compensation delay: they stay in the track they
+    ///   were in for as long as the new plan has it, and are heard through
+    ///   its effects and everything after it like any other sound there.
+    ///   Taking them out would be heard as a jump. If the track is gone
+    ///   too, they have nowhere to finish but the output.
+    ///
+    /// What is left in the mix is exactly what the new plan's gains have to
+    /// be gentle with.
+    pub fn rebind(&mut self, plan: &Plan, old_plan: &Plan, old_state: &PlanState, now: u64) {
         let fade_frames = self.fade_frames;
-        for voice in self.voices.iter_mut().filter(|voice| voice.active) {
-            let Route::Channel(old_index) = voice.route else {
-                continue;
-            };
-            match plan.channel_ids.get(voice.channel.0) {
-                Some(index) => voice.route = Route::Channel(index),
+        let through = old_state.gains_to_output(old_plan, now);
+        // Where a voice that was in the old plan's track `old_track`, at
+        // these gains, finishes.
+        let finish = |old_track: usize, left: f32, right: f32| {
+            let id = old_plan.tracks[old_track].id;
+            let stays = plan
+                .track_ids
+                .get(id.0)
+                .filter(|_| old_state.shaped[old_track]);
+            match stays {
+                Some(track) => Route::Track {
+                    track,
+                    id,
+                    left,
+                    right,
+                },
                 None => {
-                    let strip = &old_state.channels[old_index];
-                    voice.route = Route::Detached {
-                        gain: strip.gain.at(now),
-                        pan: strip.pan.at(now),
-                    };
-                    if voice.fade == 0 {
-                        voice.fade = fade_frames;
+                    let [track_left, track_right] = through[old_track];
+                    Route::Apart {
+                        left: left * track_left,
+                        right: right * track_right,
                     }
                 }
+            }
+        };
+
+        for index in 0..self.voices.len() {
+            let voice = &mut self.voices[index];
+            if !voice.active {
+                continue;
+            }
+            let leaving = voice.fade > 0;
+            match voice.route {
+                Route::Channel(old_index) => {
+                    let strip = &old_state.channels[old_index];
+                    let (left, right) =
+                        stereo_gains(strip.gain.at(now), strip.pan.at(now) + voice.pan);
+                    let old_track = old_plan.channels[old_index].track;
+                    let kept = plan.channel(voice.channel).filter(|_| !leaving);
+                    let Some(new_index) = kept else {
+                        voice.route = finish(old_track, left, right);
+                        if !leaving {
+                            voice.fade = fade_frames;
+                        }
+                        continue;
+                    };
+                    voice.route = Route::Channel(new_index);
+                    let moved = plan.tracks[plan.channels[new_index].track].id
+                        != old_plan.tracks[old_track].id;
+                    if !moved {
+                        continue;
+                    }
+                    let free = |voice: &Voice| !voice.active && voice.sample.is_none();
+                    // With no slot to spare the voice changes track at once.
+                    let Some(spare) = self.voices.iter().position(free) else {
+                        continue;
+                    };
+                    let mut behind = self.voices[index].copy();
+                    behind.route = finish(old_track, left, right);
+                    behind.fade = fade_frames;
+                    self.voices[spare] = behind;
+                    self.voices[index].fade_in = fade_frames;
+                }
+                Route::Track {
+                    track,
+                    id,
+                    left,
+                    right,
+                } => {
+                    voice.route = match plan.track_ids.get(id.0) {
+                        Some(track) => Route::Track {
+                            track,
+                            id,
+                            left,
+                            right,
+                        },
+                        None => {
+                            let [track_left, track_right] = through[track];
+                            Route::Apart {
+                                left: left * track_left,
+                                right: right * track_right,
+                            }
+                        }
+                    };
+                }
+                Route::Master if leaving && !old_state.shaped[0] => {
+                    let (left, right) = pan_gains(voice.pan);
+                    let [master_left, master_right] = through[0];
+                    voice.route = Route::Apart {
+                        left: left * master_left,
+                        right: right * master_right,
+                    };
+                }
+                Route::Master | Route::Apart { .. } => {}
             }
         }
     }
 
-    /// Adds every voice's output to its mixer track, for the frame offsets
-    /// `frames` of the block that starts on frame `base`.
+    /// Adds every voice's output to its mixer track over `stretch`. `clock`
+    /// says on which frame each note ends.
     pub fn render(
         &mut self,
         plan: &Plan,
         state: &PlanState,
+        clock: Clock,
         garbage: &mut Producer<Garbage>,
         mixer: &mut Mixer,
-        base: u64,
-        frames: Range<usize>,
+        stretch: Stretch,
     ) {
+        let Stretch { base, frames } = stretch;
         let start = base + frames.start as u64;
         for index in 0..self.voices.len() {
             let voice = &mut self.voices[index];
             if !voice.active {
                 continue;
             }
-            let (mix, track) = match voice.route {
-                Route::Channel(channel) => (state.channels[channel], plan.channels[channel].track),
-                Route::Detached { gain, pan } => (Strip::at_rest(gain, pan), 0),
-                Route::Master => (Strip::at_rest(1.0, 0.0), 0),
+            let (mix, out) = match voice.route {
+                Route::Channel(channel) => (
+                    Mix::Strip(state.channels[channel]),
+                    mixer.track_mut(plan.channels[channel].track),
+                ),
+                Route::Master => (Mix::Strip(Strip::at_rest(1.0, 0.0)), mixer.track_mut(0)),
+                Route::Track {
+                    track, left, right, ..
+                } => (Mix::Sides(left, right), mixer.track_mut(track)),
+                Route::Apart { left, right } => (Mix::Sides(left, right), mixer.apart_mut()),
             };
-            let out = &mut mixer.track_mut(track)[frames.clone()];
-            if voice.render(out, mix, start, self.fade_frames) {
+            let out = &mut out[frames.clone()];
+            let release_at = clock.frame_of(voice.end);
+            if voice.render(out, mix, start, release_at, self.fade_frames) {
                 self.end(index, plan, garbage);
             }
         }
@@ -538,7 +837,7 @@ impl VoicePool {
             voice
                 .envelope
                 .filter(EnvelopeState::releasing)
-                .map(|envelope| envelope.level)
+                .map(|envelope| envelope.level())
         };
         let mut victim: Option<&mut Voice> = None;
         for voice in self.voices.iter_mut().filter(sounding) {
@@ -598,7 +897,15 @@ impl VoicePool {
 
 #[cfg(test)]
 mod tests {
+    use windfall_project::MAX_ENVELOPE_MS;
+
     use super::*;
+
+    /// What a decay or release has left `elapsed` frames into `frames`.
+    fn fall(elapsed: u64, frames: u64) -> f64 {
+        let floor = CURVE_FLOOR / (1.0 + CURVE_FLOOR);
+        (1.0 + CURVE_FLOOR) * floor.powf(elapsed as f64 / frames as f64) - CURVE_FLOOR
+    }
 
     #[test]
     fn interpolation_passes_through_the_stored_points() {
@@ -624,20 +931,154 @@ mod tests {
     #[test]
     fn the_envelope_walks_through_its_stages() {
         let envelope = Envelope {
-            attack_ms: 1.0,
-            decay_ms: 1.0,
+            attack_ms: 2.0,
+            decay_ms: 2.0,
             sustain: 0.5,
             release_ms: 2.0,
         };
         // 1000 frames a second makes one frame one millisecond.
         let mut state = EnvelopeState::new(&envelope, 1000.0);
-        assert_eq!(state.next(), Some(0.0));
-        assert_eq!(state.next(), Some(1.0));
-        assert_eq!(state.next(), Some(0.5));
-        assert_eq!(state.next(), Some(0.5));
+        let mut next = || state.next().expect("the envelope is still open");
+        // Two frames up in a straight line.
+        assert_eq!(next(), 0.0);
+        assert_eq!(next(), 0.5);
+        // Two frames down a curve that has all but arrived half way.
+        let half_way = fall(1, 2) as f32;
+        assert!((0.03..0.031).contains(&half_way));
+        assert_eq!(next(), 1.0);
+        assert!((next() - (0.5 + 0.5 * half_way)).abs() < 1e-6);
+        assert_eq!(next(), 0.5);
+        assert_eq!(next(), 0.5);
         state.release();
         assert_eq!(state.next(), Some(0.5));
-        assert_eq!(state.next(), Some(0.25));
+        let level = state.next().expect("the release has a second frame");
+        assert!((level - 0.5 * half_way).abs() < 1e-6);
         assert_eq!(state.next(), None);
+    }
+
+    #[test]
+    fn stages_of_no_length_are_passed_over() {
+        let envelope = Envelope {
+            attack_ms: 0.0,
+            decay_ms: 0.0,
+            sustain: 0.25,
+            release_ms: 0.0,
+        };
+        let mut state = EnvelopeState::new(&envelope, 48_000.0);
+        assert_eq!(state.next(), Some(0.25));
+        state.release();
+        // The shortest release is a millisecond.
+        let levels: Vec<f32> = std::iter::from_fn(|| state.next()).collect();
+        assert_eq!(levels.len(), 48);
+        assert_eq!(levels[0], 0.25);
+    }
+
+    #[test]
+    fn a_decay_falls_at_a_steady_rate_in_decibels() {
+        let envelope = Envelope {
+            attack_ms: 0.0,
+            decay_ms: 1_000.0,
+            sustain: 0.0,
+            release_ms: 1_000.0,
+        };
+        let mut state = EnvelopeState::new(&envelope, 48_000.0);
+        let decay: Vec<f32> = (0..48_000).map(|_| state.next().unwrap()).collect();
+        assert_eq!(state.next(), None, "a decay to silence ends the voice");
+
+        // Every tenth of the time takes off the same 6 dB, a factor of two,
+        // until the curve bends down to meet silence at the very end.
+        for tenth in 0..5 {
+            let ratio = decay[(tenth + 1) * 4_800] / decay[tenth * 4_800];
+            assert!((0.49..0.51).contains(&ratio), "tenth {tenth}: {ratio}");
+        }
+        assert_eq!(decay[0], 1.0);
+        assert!(decay.is_sorted_by(|a, b| a > b));
+        assert!(decay[47_999] > 0.0 && decay[47_999] < 1e-6);
+    }
+
+    /// Runs an envelope with the same time for every stage and checks that
+    /// each stage takes exactly its number of frames.
+    fn assert_stages_end_on_time(ms: f32, sample_rate: u32, sustain: f32) {
+        let what = format!("{ms} ms at {sample_rate} Hz, sustain {sustain}");
+        let envelope = Envelope {
+            attack_ms: ms,
+            decay_ms: ms,
+            sustain,
+            release_ms: ms,
+        };
+        let frames = (f64::from(ms) * f64::from(sample_rate) / 1000.0).round() as u64;
+        let mut state = EnvelopeState::new(&envelope, f64::from(sample_rate));
+        // Where a curve of `frames` frames is when half its time is up.
+        let half_way = fall(frames / 2, frames.max(1)) as f32;
+
+        let mut last = 0.0;
+        for frame in 0..frames {
+            assert_eq!(state.stage, Stage::Attack, "{what}: frame {frame}");
+            let level = state.next().unwrap();
+            assert!(
+                level >= last && level <= 1.0,
+                "{what}: attack frame {frame}"
+            );
+            last = level;
+        }
+        last = 1.0;
+        for frame in 0..frames {
+            assert_eq!(state.stage, Stage::Decay, "{what}: frame {frame}");
+            let level = state.next().unwrap();
+            assert!(
+                level <= last && level >= sustain,
+                "{what}: decay frame {frame}"
+            );
+            if frame == 0 {
+                assert_eq!(level, 1.0, "{what}: the decay starts from the top");
+            }
+            if frame == frames / 2 {
+                let expected = sustain + (1.0 - sustain) * half_way;
+                assert!((level - expected).abs() < 1e-5, "{what}: half way {level}");
+            }
+            last = level;
+        }
+        // The frame after the last of the decay is the first on the
+        // sustain level, and the level stays there.
+        assert_eq!(state.stage, Stage::Sustain, "{what}");
+        for _ in 0..3 {
+            assert_eq!(state.next(), Some(sustain), "{what}: sustain");
+        }
+
+        state.release();
+        let shortest = (f64::from(MIN_RELEASE_SECONDS) * f64::from(sample_rate)).round() as u64;
+        let release_frames = frames.max(shortest);
+        last = sustain;
+        for frame in 0..release_frames {
+            assert_eq!(state.stage, Stage::Release, "{what}: frame {frame}");
+            let level = state.next().unwrap();
+            assert!(
+                level <= last && level >= 0.0,
+                "{what}: release frame {frame}"
+            );
+            if frame == release_frames / 2 {
+                let expected = sustain * fall(frame, release_frames) as f32;
+                assert!((level - expected).abs() < 1e-5, "{what}: half way {level}");
+            }
+            last = level;
+        }
+        assert_eq!(state.next(), None, "{what}: the release ran over");
+        assert!(last < sustain * 0.01, "{what}: the release ended on {last}");
+    }
+
+    #[test]
+    fn every_stage_ends_on_time_at_every_legal_length_and_sample_rate() {
+        for sample_rate in [8_000, 44_100, 48_000, 96_000, 192_000, 384_000] {
+            for ms in [0.0, 0.01, 1.0, 37.5, 1_000.0] {
+                for sustain in [0.5, 0.95] {
+                    assert_stages_end_on_time(ms, sample_rate, sustain);
+                }
+            }
+        }
+        // The longest stage the model allows. At 48 kHz a level stepped down
+        // from 1 toward 0.95 over this long would not move at all: the step
+        // is smaller than the gap between 1 and the next float below it.
+        assert_stages_end_on_time(MAX_ENVELOPE_MS, 48_000, 0.95);
+        assert_stages_end_on_time(MAX_ENVELOPE_MS, 384_000, 0.95);
     }
 }

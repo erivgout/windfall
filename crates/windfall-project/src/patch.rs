@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::model::{
-    Channel, Mixer, Pattern, PatternId, Playlist, Project, ProjectSettings, SampleAsset,
+    Automation, Channel, Mixer, Pattern, PatternId, Playlist, Project, ProjectSettings, SampleAsset,
 };
 
 /// The sections of a project an edit changed.
@@ -19,6 +19,7 @@ pub struct Touched {
     pub channels: bool,
     pub mixer: bool,
     pub playlist: bool,
+    pub automations: bool,
     /// A pattern was added, removed or reordered.
     pub pattern_list: bool,
     /// Patterns whose own data changed. Removed patterns are not listed.
@@ -34,6 +35,7 @@ impl Touched {
             channels: true,
             mixer: true,
             playlist: true,
+            automations: true,
             pattern_list: true,
             patterns: project.patterns.iter().map(|pattern| pattern.id).collect(),
         }
@@ -50,6 +52,7 @@ impl Touched {
         self.channels |= other.channels;
         self.mixer |= other.mixer;
         self.playlist |= other.playlist;
+        self.automations |= other.automations;
         self.pattern_list |= other.pattern_list;
         for id in &other.patterns {
             if !self.patterns.contains(id) {
@@ -84,6 +87,10 @@ pub struct ProjectPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub playlist: Option<Playlist>,
+    /// Every automation of the project, in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub automations: Option<Vec<Automation>>,
     /// Ids of every pattern, in order. Present when a pattern was added,
     /// removed or reordered. Patterns missing from it were removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]

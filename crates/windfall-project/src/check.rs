@@ -6,10 +6,12 @@
 use std::collections::HashSet;
 use std::hash::Hash;
 
+use crate::model::{AutomationId, MAX_AUTOMATION_POINTS};
 use crate::model::{
-    Channel, ChannelId, ChannelSource, ClipContent, Envelope, FORMAT_VERSION, MAX_ENVELOPE_MS,
-    MAX_GAIN, MAX_KEY, MAX_MIXER_TRACKS, MAX_PATTERN_STEPS, MAX_TEMPO_BPM, MAX_TUNE_SEMITONES,
-    MIN_TEMPO_BPM, Mixer, Note, NoteId, Pattern, Project, SamplerSettings, TimeSignature, TrackId,
+    Channel, ChannelId, ChannelSource, ClipContent, EffectId, Envelope, FORMAT_VERSION,
+    MAX_EFFECT_SLOTS, MAX_ENVELOPE_MS, MAX_GAIN, MAX_KEY, MAX_MIXER_TRACKS, MAX_PATTERN_STEPS,
+    MAX_SONG_TICKS, MAX_TEMPO_BPM, MAX_TUNE_SEMITONES, MIN_TEMPO_BPM, Mixer, MixerTrack, Note,
+    NoteId, Pattern, Project, SamplerSettings, TimeSignature, TrackId,
 };
 
 impl Project {
@@ -26,7 +28,16 @@ impl Project {
     ///   can never close a loop.
     /// - A track has at most one send to any other track.
     /// - No two samples share a path.
-    /// - A note or clip ends at or before the largest tick a `u32` holds.
+    /// - The sample and the mixer track of an audio clip exist.
+    /// - What an automation moves exists: its channel, track, send or
+    ///   effect is there, the effect is on the track the target names, and
+    ///   the setting is one its processor has.
+    /// - A note ends at or before the largest tick a `u32` holds. Where it
+    ///   starts is not checked: the commands keep new and moved notes
+    ///   inside the longest pattern, and a note that an older file has
+    ///   further out is harmless, because it never plays.
+    /// - The settings of an effect or instrument are stored with every
+    ///   value already inside its range.
     pub fn check(&self) -> Result<(), String> {
         if self.format_version != FORMAT_VERSION {
             return Err(format!(
@@ -39,6 +50,7 @@ impl Project {
         check_mixer(self)?;
         check_channels(self)?;
         check_patterns(self)?;
+        check_automations(self)?;
         check_playlist(self)
     }
 }
@@ -159,8 +171,10 @@ fn check_mixer(project: &Project) -> Result<(), String> {
     for track in &tracks[1..] {
         check_id(project, "mixer track", track.id, &mut ids)?;
     }
+    let mut effects = HashSet::new();
     for track in tracks {
         let owner = format!("mixer track {}", track.id.0);
+        check_effects(project, &owner, track, &mut effects)?;
         check_color(&owner, track.color)?;
         if !within(track.volume, 0.0, MAX_GAIN) {
             return Err(format!(
@@ -206,6 +220,31 @@ fn check_mixer(project: &Project) -> Result<(), String> {
             "mixer routing loops back on itself at track {}",
             track.0
         ));
+    }
+    Ok(())
+}
+
+fn check_effects(
+    project: &Project,
+    owner: &str,
+    track: &MixerTrack,
+    seen: &mut HashSet<EffectId>,
+) -> Result<(), String> {
+    if track.effects.len() > MAX_EFFECT_SLOTS {
+        return Err(format!(
+            "{owner} has {} effects, more than the limit of {MAX_EFFECT_SLOTS}",
+            track.effects.len()
+        ));
+    }
+    for effect in &track.effects {
+        check_id(project, "effect", effect.id, seen)?;
+        let name = format!("{owner}, effect {}", effect.id.0);
+        if !within(effect.mix, 0.0, 1.0) {
+            return Err(format!("{name} has mix {}, outside 0 to 1", effect.mix));
+        }
+        if effect.params.sanitized() != effect.params {
+            return Err(format!("{name} has a setting outside its range"));
+        }
     }
     Ok(())
 }
@@ -276,6 +315,14 @@ fn check_channel(project: &Project, channel: &Channel) -> Result<(), String> {
     }
     match &channel.source {
         ChannelSource::Sampler(sampler) => check_sampler(project, &owner, sampler),
+        ChannelSource::Instrument { params } => {
+            if params.sanitized() != *params {
+                return Err(format!(
+                    "{owner} has an instrument setting outside its range"
+                ));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -419,6 +466,54 @@ fn check_note(owner: &str, note: &Note) -> Result<(), String> {
     Ok(())
 }
 
+fn check_automations(project: &Project) -> Result<(), String> {
+    let mut ids: HashSet<AutomationId> = HashSet::new();
+    for automation in &project.automations {
+        check_id(project, "automation", automation.id, &mut ids)?;
+        let owner = format!("automation {}", automation.id.0);
+        check_color(&owner, automation.color)?;
+        if project.automation_range(&automation.target).is_none() {
+            return Err(format!(
+                "{owner} moves something the project does not have: {:?}",
+                automation.target
+            ));
+        }
+        let points = &automation.points;
+        if points.is_empty() {
+            return Err(format!("{owner} has no points"));
+        }
+        if points.len() > MAX_AUTOMATION_POINTS {
+            return Err(format!(
+                "{owner} has {} points, more than the limit of {MAX_AUTOMATION_POINTS}",
+                points.len()
+            ));
+        }
+        if !points.is_sorted_by_key(|point| point.tick) {
+            return Err(format!("{owner} does not keep its points in order"));
+        }
+        for point in points {
+            if point.tick > MAX_SONG_TICKS {
+                return Err(format!(
+                    "{owner} has a point past the end of the longest song, tick {MAX_SONG_TICKS}"
+                ));
+            }
+            if !within(point.value, 0.0, 1.0) {
+                return Err(format!(
+                    "{owner} has a point with value {}, outside 0 to 1",
+                    point.value
+                ));
+            }
+            if !within(point.curve, -1.0, 1.0) {
+                return Err(format!(
+                    "{owner} has a point with curve {}, outside -1 to 1",
+                    point.curve
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn check_playlist(project: &Project) -> Result<(), String> {
     let playlist = &project.playlist;
     let mut tracks = HashSet::new();
@@ -444,8 +539,15 @@ fn check_playlist(project: &Project) -> Result<(), String> {
         if clip.length == 0 {
             return Err(format!("{owner} has no length"));
         }
-        if clip.start.checked_add(clip.length).is_none() {
-            return Err(format!("{owner} ends past the last tick"));
+        if u64::from(clip.start) + u64::from(clip.length) > u64::from(MAX_SONG_TICKS) {
+            return Err(format!(
+                "{owner} ends past the end of the longest song, tick {MAX_SONG_TICKS}"
+            ));
+        }
+        if clip.offset > MAX_SONG_TICKS {
+            return Err(format!(
+                "{owner} has an offset past the end of the longest song, tick {MAX_SONG_TICKS}"
+            ));
         }
         match &clip.content {
             ClipContent::Pattern { pattern } => {
@@ -453,6 +555,53 @@ fn check_playlist(project: &Project) -> Result<(), String> {
                     return Err(format!(
                         "{owner} plays pattern {}, which does not exist",
                         pattern.0
+                    ));
+                }
+            }
+            ClipContent::Audio {
+                sample,
+                mixer_track,
+                gain,
+                pan,
+                fade_in,
+                fade_out,
+                reverse: _,
+                pitch,
+            } => {
+                if project.sample(*sample).is_none() {
+                    return Err(format!(
+                        "{owner} plays sample {}, which does not exist",
+                        sample.0
+                    ));
+                }
+                if project.mixer.track(*mixer_track).is_none() {
+                    return Err(format!(
+                        "{owner} plays into mixer track {}, which does not exist",
+                        mixer_track.0
+                    ));
+                }
+                if !within(*gain, 0.0, MAX_GAIN) {
+                    return Err(format!("{owner} has gain {gain}, outside 0 to {MAX_GAIN}"));
+                }
+                if !within(*pan, -1.0, 1.0) {
+                    return Err(format!("{owner} has pan {pan}, outside -1 to 1"));
+                }
+                if !within(*pitch, -MAX_TUNE_SEMITONES, MAX_TUNE_SEMITONES) {
+                    return Err(format!(
+                        "{owner} is pitched by {pitch} semitones, outside -{MAX_TUNE_SEMITONES} to {MAX_TUNE_SEMITONES}"
+                    ));
+                }
+                if *fade_in > MAX_SONG_TICKS || *fade_out > MAX_SONG_TICKS {
+                    return Err(format!(
+                        "{owner} has a fade longer than the longest song, {MAX_SONG_TICKS} ticks"
+                    ));
+                }
+            }
+            ClipContent::Automation { automation } => {
+                if project.automation(*automation).is_none() {
+                    return Err(format!(
+                        "{owner} shows automation {}, which does not exist",
+                        automation.0
                     ));
                 }
             }

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub use windfall_core::{PPQ, TICKS_PER_STEP};
+pub use windfall_dsp::{EffectKind, EffectParams, InstrumentKind, InstrumentParams};
 
 /// Version of the on-disk project format.
 pub const FORMAT_VERSION: u32 = 1;
@@ -17,6 +18,9 @@ pub const FORMAT_VERSION: u32 = 1;
 /// Mixer tracks including the master. The engine sizes its meter storage
 /// from this, so it is a hard limit.
 pub const MAX_MIXER_TRACKS: usize = 128;
+
+/// Effects one mixer track can hold.
+pub const MAX_EFFECT_SLOTS: usize = 10;
 
 /// MIDI key a step-sequencer step plays, and the default root key of a
 /// sampler. FL Studio labels this key C5.
@@ -29,13 +33,25 @@ pub const DEFAULT_PATTERN_STEPS: u32 = 16;
 /// Longest pattern, in sixteenth-note steps.
 pub const MAX_PATTERN_STEPS: u32 = 1024;
 
+/// Length of the longest pattern in ticks. A note that starts at or past
+/// this tick could never play in any pattern, so no edit may put one there.
+pub const MAX_PATTERN_TICKS: u32 = MAX_PATTERN_STEPS * TICKS_PER_STEP;
+
+/// Length of the longest song in ticks: a million quarter notes, which is
+/// 250,000 bars of 4/4 and about 139 hours at 120 bpm. Every clip ends at
+/// or before this tick, and no clip offset, fade or automation point lies
+/// past it. It is well under a quarter of what a `u32` holds, so a start,
+/// a length and an offset can be added up in a `u32` without overflowing.
+pub const MAX_SONG_TICKS: u32 = 1_000_000 * PPQ;
+
 pub const MIN_TEMPO_BPM: f64 = 10.0;
 pub const MAX_TEMPO_BPM: f64 = 522.0;
 
 /// Highest linear gain a channel or mixer fader allows, about +6 dB.
 pub const MAX_GAIN: f32 = 2.0;
 
-/// Furthest a sampler can be tuned up or down, in semitones.
+/// Furthest a sampler can be tuned, and an audio clip pitched, up or down,
+/// in semitones.
 pub const MAX_TUNE_SEMITONES: f32 = 48.0;
 
 /// Longest attack, decay or release time of an envelope, in milliseconds.
@@ -44,7 +60,11 @@ pub const MAX_ENVELOPE_MS: f32 = 60_000.0;
 /// Highest MIDI key.
 pub const MAX_KEY: u8 = 127;
 
-/// Colors handed to new channels, patterns and mixer tracks, as 0xRRGGBB.
+/// Most points one automation curve can have.
+pub const MAX_AUTOMATION_POINTS: usize = 4096;
+
+/// Colors handed to new channels, patterns, mixer tracks and automations,
+/// as 0xRRGGBB.
 /// Neighbours are far apart in hue so adjacent rows are easy to tell apart.
 pub const PALETTE: [u32; 12] = [
     0xE5484D, 0x12A594, 0xFFB224, 0x6E56CF, 0x46A758, 0xD6409F, 0x05A2C2, 0xF76B15, 0x3E63DD,
@@ -104,6 +124,11 @@ id_type!(
     TrackId
 );
 id_type!(
+    /// Identifies an effect on a mixer track. Unique across the whole
+    /// project, so an effect keeps its id when it moves to another track.
+    EffectId
+);
+id_type!(
     /// Identifies a playlist track (a lane of the song timeline).
     PlaylistTrackId
 );
@@ -111,9 +136,26 @@ id_type!(
     /// Identifies a clip on the playlist.
     ClipId
 );
+id_type!(
+    /// Identifies an automation: a curve and what it moves.
+    AutomationId
+);
 
 impl TrackId {
     pub const MASTER: TrackId = TrackId(0);
+}
+
+/// What the transport plays. It is not part of a [`Project`]: the transport
+/// has it, and a project file keeps it beside the project
+/// ([`ProjectSession`](crate::file::ProjectSession)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PlayMode {
+    /// Loops the selected pattern.
+    Pattern,
+    /// Plays the playlist.
+    Song,
 }
 
 /// A whole project. Ids are allocated from `next_id` and never reused, so an
@@ -133,6 +175,10 @@ pub struct Project {
     pub patterns: Vec<Pattern>,
     pub mixer: Mixer,
     pub playlist: Playlist,
+    /// The automation curves, in the order they were made. A curve plays
+    /// where a clip on the playlist puts it.
+    #[serde(default)]
+    pub automations: Vec<Automation>,
 }
 
 impl Project {
@@ -172,12 +218,14 @@ impl Project {
                     solo: false,
                     output: None,
                     sends: Vec::new(),
+                    effects: Vec::new(),
                 }],
             },
             playlist: Playlist {
                 tracks: Vec::new(),
                 clips: Vec::new(),
             },
+            automations: Vec::new(),
         }
     }
 
@@ -191,6 +239,12 @@ impl Project {
 
     pub fn pattern(&self, id: PatternId) -> Option<&Pattern> {
         self.patterns.iter().find(|pattern| pattern.id == id)
+    }
+
+    pub fn automation(&self, id: AutomationId) -> Option<&Automation> {
+        self.automations
+            .iter()
+            .find(|automation| automation.id == id)
     }
 }
 
@@ -225,7 +279,8 @@ impl TimeSignature {
     }
 }
 
-/// An audio file the project uses.
+/// An audio file the project uses: as the sample of a sampler channel, as
+/// the audio of a clip on the playlist, or both.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -299,13 +354,33 @@ pub struct Channel {
     pub source: ChannelSource,
 }
 
-/// What makes the sound of a channel. Synths and hosted plugins are added as
-/// new variants.
+/// What makes the sound of a channel: a sample or an instrument. Hosted
+/// plugins are added as new variants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
 pub enum ChannelSource {
     Sampler(SamplerSettings),
+    /// A built-in instrument that turns the channel's notes into sound. A
+    /// note's velocity is the instrument's velocity, and its pan is not
+    /// used: an instrument places its own voices.
+    #[serde(rename_all = "camelCase")]
+    Instrument {
+        /// The instrument and its settings, with every value inside its
+        /// range.
+        params: InstrumentParams,
+    },
+}
+
+impl ChannelSource {
+    /// The sample a sampler plays. `None` for an instrument, and for a
+    /// sampler with no sample.
+    pub fn sample(&self) -> Option<SampleId> {
+        match self {
+            ChannelSource::Sampler(sampler) => sampler.sample,
+            ChannelSource::Instrument { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -389,7 +464,8 @@ pub struct Pattern {
     /// Display color as 0xRRGGBB.
     pub color: u32,
     /// Length in sixteenth-note steps, 1 to 1024. The pattern loops at this
-    /// length, and notes that start at or after it do not play.
+    /// length, and notes that start at or after it do not play. They are
+    /// kept, so making the pattern longer again brings them back.
     pub length_steps: u32,
     /// Notes per channel, sorted by channel id. Channels with no notes have
     /// no lane.
@@ -428,7 +504,9 @@ pub struct Lane {
 #[ts(export)]
 pub struct Note {
     pub id: NoteId,
-    /// Start in ticks from the beginning of the pattern.
+    /// Start in ticks from the beginning of the pattern. An edit can put a
+    /// note anywhere before [`MAX_PATTERN_TICKS`], the end of the longest
+    /// pattern.
     pub start: u32,
     /// Length in ticks, at least 1.
     pub length: u32,
@@ -473,6 +551,42 @@ pub struct MixerTrack {
     pub output: Option<TrackId>,
     /// Extra copies of the post-fader signal sent to other tracks.
     pub sends: Vec<Send>,
+    /// The track's effects, in the order the signal passes through them,
+    /// at most [`MAX_EFFECT_SLOTS`]. They come before the fader: what
+    /// arrives on the track runs through the effects, then the fader and
+    /// pan, and from there to the meter, the output and the sends. The
+    /// master has effects like any other track.
+    #[serde(default)]
+    pub effects: Vec<EffectSlot>,
+}
+
+impl MixerTrack {
+    pub fn effect(&self, id: EffectId) -> Option<&EffectSlot> {
+        self.effects.iter().find(|effect| effect.id == id)
+    }
+}
+
+/// One effect on a mixer track.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EffectSlot {
+    pub id: EffectId,
+    /// Off lets the signal pass untouched. Switching crossfades, so it
+    /// never clicks, and an effect that is off costs no CPU.
+    pub enabled: bool,
+    /// Balance between the untouched signal (0) and the effect's output
+    /// (1). A new effect starts at 1.
+    pub mix: f32,
+    /// Which effect this is and its settings, with every value inside its
+    /// range. The kind never changes for the life of the slot.
+    pub params: EffectParams,
+}
+
+impl EffectSlot {
+    pub fn kind(&self) -> EffectKind {
+        self.params.kind()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
@@ -512,10 +626,12 @@ pub struct Clip {
     pub track: PlaylistTrackId,
     /// Start on the timeline in ticks.
     pub start: u32,
-    /// Length in ticks, at least 1.
+    /// Length in ticks, at least 1. The clip ends at or before
+    /// [`MAX_SONG_TICKS`].
     pub length: u32,
-    /// How far into its content the clip starts, in ticks. A pattern clip
-    /// loops its pattern, so this is taken modulo the pattern length.
+    /// How far into its content the clip starts, in ticks, at most
+    /// [`MAX_SONG_TICKS`]. A pattern clip loops its pattern, so this is
+    /// taken modulo the pattern length.
     pub offset: u32,
     pub muted: bool,
     pub content: ClipContent,
@@ -528,11 +644,249 @@ impl Clip {
     }
 }
 
-/// What a clip plays. Audio and automation clips are added as new variants.
+/// What a clip plays.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
 pub enum ClipContent {
     #[serde(rename_all = "camelCase")]
     Pattern { pattern: PatternId },
+    /// Plays an audio file straight onto the timeline: a vocal take, a
+    /// loop, a riser. It is heard in song mode only.
+    ///
+    /// # Timing
+    ///
+    /// The audio starts on the clip's `start` tick and then runs at its
+    /// own speed, in seconds. It does not follow the tempo. For every
+    /// second of the song, `2^(pitch / 12)` seconds of the file go by,
+    /// read at the file's own sample rate, so a file plays in tune at any
+    /// device rate.
+    ///
+    /// The clip's `offset` skips the beginning of the audio: the clip
+    /// starts as far into it as would have played by then, had the clip
+    /// begun `offset` ticks earlier at the project's tempo. In seconds of
+    /// the file that is `offset * 60 / (tempoBpm * 960) * 2^(pitch / 12)`,
+    /// with `tempoBpm` the tempo stored in the project's settings. Dragging
+    /// the clip's left edge to the right by `n` ticks (`start + n`,
+    /// `offset + n`, `length - n`) therefore leaves the rest of the audio
+    /// where it was. A reversed clip is skipped into from the end of the
+    /// file, which is where it starts playing.
+    ///
+    /// The clip ends on tick `start + length`, or sooner if the audio runs
+    /// out first. `length` is an upper bound that can cut the audio short,
+    /// never a stretch. The natural length of a clip, the one that ends
+    /// exactly with the audio, is
+    /// `duration / 2^(pitch / 12) * tempoBpm * 16 - offset` ticks, with
+    /// `duration` the file's length in seconds: 960 ticks a beat are 16
+    /// ticks a second for each beat a minute.
+    ///
+    /// Changing the tempo leaves `start`, `length` and `offset` as they
+    /// are, in ticks. The clip still starts on the same beat and the audio
+    /// still takes as many seconds as it did, so at a faster tempo it
+    /// reaches further along the timeline and `length` cuts off more of
+    /// its end, and at a slower tempo it ends before the clip does. What
+    /// `offset` skips is as many beats as before, which is fewer or more
+    /// seconds.
+    ///
+    /// # Level
+    ///
+    /// The clip fades in from silence over the `fade_in` ticks after its
+    /// start and out to silence over the `fade_out` ticks before tick
+    /// `start + length`. Both fades are equal-power curves (a quarter of a
+    /// sine wave), so two clips that fade into each other keep their
+    /// loudness through the overlap. Apart from them, the engine fades
+    /// every clip in and out over 3 ms wherever it starts or stops, so a
+    /// clip cut in the middle of a wave does not click.
+    #[serde(rename_all = "camelCase")]
+    Audio {
+        /// The audio to play. The sample cannot be removed from the pool
+        /// while a clip uses it.
+        sample: SampleId,
+        /// The mixer track the clip plays into, through its effects, its
+        /// fader and its sends.
+        mixer_track: TrackId,
+        /// Linear gain, 0 to [`MAX_GAIN`].
+        gain: f32,
+        /// -1 is hard left, 1 is hard right.
+        pan: f32,
+        /// Length of the fade in, in ticks from the clip's start. At most
+        /// [`MAX_SONG_TICKS`]; one that is longer than the clip never
+        /// reaches full level.
+        fade_in: u32,
+        /// Length of the fade out, in ticks before the clip's end. At most
+        /// [`MAX_SONG_TICKS`].
+        fade_out: u32,
+        /// Plays the audio backwards, from its last frame.
+        reverse: bool,
+        /// Pitch in semitones, -48 to 48. It changes speed and pitch
+        /// together, like a tape: 12 plays an octave up in half the time.
+        pitch: f32,
+    },
+    /// Puts an [`Automation`] on the timeline. While the song plays through
+    /// the clip, the automation's target follows its curve. It does
+    /// nothing in pattern mode.
+    ///
+    /// The clip is a window onto the curve: tick `start` of the song is
+    /// tick `offset` of the curve, and the clip shows `length` ticks of it.
+    /// A curve does not loop. Past its last point it stays on that point's
+    /// value. Several clips can show the same automation, at different
+    /// places and with different windows.
+    ///
+    /// # What the target does
+    ///
+    /// While the song plays, the value of a target at any place in the
+    /// song depends on that place alone, not on how playback got there:
+    ///
+    /// - Inside a clip the target follows the curve.
+    /// - After a clip the target holds the value the curve has at the
+    ///   clip's end, until another clip of that target begins, and after
+    ///   its last clip to the end of the song.
+    /// - Before the first clip of a target it has the value stored in the
+    ///   project.
+    ///
+    /// Playback that begins in the middle of the song therefore finds
+    /// every target where it would be had the song played from the start,
+    /// and a song that loops begins each time around from the values that
+    /// playing from the start gives.
+    ///
+    /// A song that stops, at its end or because it is told to, leaves its
+    /// targets where they were for as long as anything is still sounding,
+    /// so that a fade out keeps a reverb's tail faded. They return to
+    /// their stored values once that has rung out, or sooner when the
+    /// transport is used again or something is played by hand.
+    ///
+    /// Where clips of one target overlap, whether they show one automation
+    /// or several, one of them wins: the clip on the playlist track nearest
+    /// the top, then the clip that starts later, then the clip with the
+    /// lower id. A muted clip, or one on a muted playlist track, counts for
+    /// nothing, neither while it lasts nor afterwards.
+    ///
+    /// Automation is never written into the project. The stored value of a
+    /// target is what its fader or knob shows when no automation has it in
+    /// hand.
+    #[serde(rename_all = "camelCase")]
+    Automation { automation: AutomationId },
+}
+
+impl ClipContent {
+    /// The sample an audio clip plays. `None` for any other clip.
+    pub fn sample(&self) -> Option<SampleId> {
+        match self {
+            ClipContent::Audio { sample, .. } => Some(*sample),
+            ClipContent::Pattern { .. } | ClipContent::Automation { .. } => None,
+        }
+    }
+
+    /// The automation an automation clip shows. `None` for any other clip.
+    pub fn automation(&self) -> Option<AutomationId> {
+        match self {
+            ClipContent::Automation { automation } => Some(*automation),
+            ClipContent::Pattern { .. } | ClipContent::Audio { .. } => None,
+        }
+    }
+}
+
+/// A curve that moves one thing in the project while the song plays: a
+/// filter sweep, a volume ride, a send that opens for one word.
+///
+/// An automation does nothing by itself. Clips on the playlist
+/// ([`ClipContent::Automation`]) say where in the song it plays, and
+/// [`ClipContent::Automation`] says what the target does there and
+/// elsewhere. Several automations may have the same target.
+///
+/// An automation lives as long as its target does: deleting the channel,
+/// mixer track, send or effect it moves deletes the automation and its
+/// clips with it, and undo brings all of it back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Automation {
+    pub id: AutomationId,
+    pub name: String,
+    /// Display color as 0xRRGGBB.
+    pub color: u32,
+    pub target: AutomationTarget,
+    /// The curve: at least one point and at most
+    /// [`MAX_AUTOMATION_POINTS`], in order of their ticks. Two points may
+    /// share a tick, which makes the curve jump there.
+    /// [`curve_value`](crate::automation::curve_value) reads it.
+    pub points: Vec<AutomationPoint>,
+}
+
+/// One point of an automation curve.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AutomationPoint {
+    /// Ticks from the start of the curve, at most [`MAX_SONG_TICKS`].
+    pub tick: u32,
+    /// 0 to 1 across the target's range. What that is in the target's own
+    /// unit depends on the target: see [`AutomationTarget`] and
+    /// [`AutomationRange`](crate::automation::AutomationRange).
+    pub value: f32,
+    /// How the curve bends on its way from this point to the next, from
+    /// -1 to 1, with 0 a straight line. A positive value holds back and
+    /// catches up at the end, a negative one moves fast first and settles:
+    /// [`curve_shape`](crate::automation::curve_shape) has the formula.
+    #[serde(default)]
+    pub curve: f32,
+    /// Makes the curve a step: it stays on this point's value until the
+    /// next point and jumps there.
+    #[serde(default)]
+    pub hold: bool,
+}
+
+/// What an automation moves. Each kind says what a point's value of 0 to 1
+/// means for it; [`Project::automation_range`] gives the same as numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum AutomationTarget {
+    /// A channel's volume: linear gain `2 * value * value`, so 0 is
+    /// silence, 0.7071 is 0 dB and 1 is +6 dB ([`MAX_GAIN`]). A channel
+    /// that is muted, or silenced by another channel's solo, stays silent.
+    #[serde(rename_all = "camelCase")]
+    ChannelVolume { channel: ChannelId },
+    /// A channel's pan: `2 * value - 1`, from hard left at 0 through the
+    /// center at 0.5 to hard right at 1.
+    #[serde(rename_all = "camelCase")]
+    ChannelPan { channel: ChannelId },
+    /// A mixer track's fader, the master's included: linear gain
+    /// `2 * value * value`, as for a channel's volume. A track that is
+    /// muted, or silenced by another track's solo, stays silent.
+    #[serde(rename_all = "camelCase")]
+    TrackVolume { track: TrackId },
+    /// A mixer track's pan: `2 * value - 1`.
+    #[serde(rename_all = "camelCase")]
+    TrackPan { track: TrackId },
+    /// The level of the send from `track` to `target`: linear gain
+    /// `2 * value * value`. The send has to exist.
+    #[serde(rename_all = "camelCase")]
+    SendGain { track: TrackId, target: TrackId },
+    /// One setting of an effect. `param` is its index in the descriptors
+    /// of the effect's kind, and the value maps onto the descriptor's
+    /// `min` to `max`: linearly, or in equal ratios
+    /// (`min * (max / min)^value`) where the descriptor's scale is
+    /// logarithmic. A whole number or a choice takes the nearest step, and
+    /// a toggle is on from 0.5 up. `track` is the track the effect is on,
+    /// and follows the effect when it is moved to another.
+    #[serde(rename_all = "camelCase")]
+    EffectParam {
+        track: TrackId,
+        effect: EffectId,
+        param: u32,
+    },
+    /// The mix of an effect slot: 0 is the untouched signal and 1 is the
+    /// effect alone.
+    #[serde(rename_all = "camelCase")]
+    EffectMix { track: TrackId, effect: EffectId },
+    /// One setting of a channel's instrument, addressed and mapped like
+    /// [`AutomationTarget::EffectParam`].
+    #[serde(rename_all = "camelCase")]
+    InstrumentParam { channel: ChannelId, param: u32 },
+    /// The tempo: `10 + 512 * value` beats per minute, from
+    /// [`MIN_TEMPO_BPM`] to [`MAX_TEMPO_BPM`], so 120 bpm is 0.21484375.
+    /// It moves the song's own clock: notes, clip edges and the playhead
+    /// all follow it. Audio clips keep their own speed.
+    Tempo,
 }

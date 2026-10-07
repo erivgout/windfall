@@ -9,6 +9,15 @@ use windfall_project::MAX_MIXER_TRACKS;
 /// How much of each new measurement goes into the running CPU load average.
 const LOAD_SMOOTHING: f32 = 0.05;
 
+/// Most automations whose values are published at once. A project that has
+/// more of them at work reports the first so many, in the order of the
+/// project's automations.
+pub(crate) const MAX_REPORTED_AUTOMATIONS: usize = 128;
+
+/// Times a reader tries to get the published automation values in one
+/// piece before it gives up for this time.
+const READ_ATTEMPTS: u32 = 4;
+
 pub(crate) struct Shared {
     /// The transport sequence number of the last play or stop the audio
     /// thread handled, shifted left one bit, with the playing flag in the
@@ -17,7 +26,13 @@ pub(crate) struct Shared {
     transport: AtomicU64,
     /// Playhead in ticks, as `f64` bits.
     tick: AtomicU64,
+    /// Where stopping returns the playhead to, in ticks, as `f64` bits.
+    start: AtomicU64,
     voices: AtomicU32,
+    /// Audio clips playing, and audio clips that would be had there been a
+    /// slot for them.
+    audio_clips: AtomicU32,
+    dropped_clips: AtomicU32,
     /// Peak level per mixer track and side since the control side last
     /// looked, as `f32` bits: left, right, left, right.
     meters: [AtomicU32; MAX_MIXER_TRACKS * 2],
@@ -30,6 +45,14 @@ pub(crate) struct Shared {
     frames: AtomicU64,
     /// Size of the most recent device buffer in frames.
     buffer_frames: AtomicU32,
+    /// Counts the changes to the automation values below, twice each: it
+    /// is odd while the audio thread is writing them, and a reader that
+    /// finds it changed has read a mixture.
+    automated_version: AtomicU32,
+    automated_count: AtomicU32,
+    /// An automation's id in the high half and its value, as `f32` bits,
+    /// in the low half.
+    automated: [AtomicU64; MAX_REPORTED_AUTOMATIONS],
 }
 
 impl Shared {
@@ -37,14 +60,57 @@ impl Shared {
         Self {
             transport: AtomicU64::new(0),
             tick: AtomicU64::new(0.0_f64.to_bits()),
+            start: AtomicU64::new(0.0_f64.to_bits()),
             voices: AtomicU32::new(0),
+            audio_clips: AtomicU32::new(0),
+            dropped_clips: AtomicU32::new(0),
             meters: [const { AtomicU32::new(0) }; MAX_MIXER_TRACKS * 2],
             load: AtomicU32::new(0),
             load_peak: AtomicU32::new(0),
             xruns: AtomicU32::new(0),
             frames: AtomicU64::new(0),
             buffer_frames: AtomicU32::new(0),
+            automated_version: AtomicU32::new(0),
+            automated_count: AtomicU32::new(0),
+            automated: [const { AtomicU64::new(0) }; MAX_REPORTED_AUTOMATIONS],
         }
+    }
+
+    /// Publishes the automations at work as their id and their value, 0
+    /// to 1. Only the audio thread calls this.
+    pub fn publish_automated(&self, values: impl Iterator<Item = (u32, f32)>) {
+        self.automated_version.fetch_add(1, Ordering::AcqRel);
+        let mut count = 0;
+        for (slot, (id, value)) in self.automated.iter().zip(values) {
+            let packed = u64::from(id) << 32 | u64::from(value.to_bits());
+            slot.store(packed, Ordering::Relaxed);
+            count += 1;
+        }
+        self.automated_count.store(count, Ordering::Relaxed);
+        self.automated_version.fetch_add(1, Ordering::Release);
+    }
+
+    /// Reads what [`publish_automated`](Self::publish_automated) last
+    /// published into `out`. Should the audio thread be writing at every
+    /// attempt, `out` is left empty for this once.
+    pub fn automated(&self, out: &mut Vec<(u32, f32)>) {
+        for _ in 0..READ_ATTEMPTS {
+            out.clear();
+            let version = self.automated_version.load(Ordering::Acquire);
+            if version % 2 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let count = self.automated_count.load(Ordering::Relaxed) as usize;
+            for slot in &self.automated[..count.min(MAX_REPORTED_AUTOMATIONS)] {
+                let packed = slot.load(Ordering::Relaxed);
+                out.push(((packed >> 32) as u32, f32::from_bits(packed as u32)));
+            }
+            if self.automated_version.load(Ordering::Acquire) == version {
+                return;
+            }
+        }
+        out.clear();
     }
 
     pub fn publish_transport(&self, sequence: u32, playing: bool) {
@@ -61,8 +127,9 @@ impl Shared {
         ((value >> 1) as u32, value & 1 == 1)
     }
 
-    pub fn publish_position(&self, tick: f64, voices: u32) {
+    pub fn publish_position(&self, tick: f64, start: f64, voices: u32) {
         self.tick.store(tick.to_bits(), Ordering::Relaxed);
+        self.start.store(start.to_bits(), Ordering::Relaxed);
         self.voices.store(voices, Ordering::Relaxed);
     }
 
@@ -74,8 +141,31 @@ impl Shared {
         f64::from_bits(self.tick.load(Ordering::Relaxed))
     }
 
+    pub fn set_start(&self, tick: f64) {
+        self.start.store(tick.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn start(&self) -> f64 {
+        f64::from_bits(self.start.load(Ordering::Relaxed))
+    }
+
     pub fn voices(&self) -> u32 {
         self.voices.load(Ordering::Relaxed)
+    }
+
+    /// Publishes how many audio clips are playing and how many are left
+    /// out for lack of a slot.
+    pub fn publish_clips(&self, playing: u32, dropped: u32) {
+        self.audio_clips.store(playing, Ordering::Relaxed);
+        self.dropped_clips.store(dropped, Ordering::Relaxed);
+    }
+
+    pub fn audio_clips(&self) -> u32 {
+        self.audio_clips.load(Ordering::Relaxed)
+    }
+
+    pub fn dropped_clips(&self) -> u32 {
+        self.dropped_clips.load(Ordering::Relaxed)
     }
 
     /// Raises a track's meter to these peaks if they are higher.

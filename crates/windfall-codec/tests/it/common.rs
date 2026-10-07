@@ -81,6 +81,25 @@ pub fn max_difference(left: &[f32], right: &[f32]) -> f32 {
         .fold(0.0, f32::max)
 }
 
+/// The CRC-32 of an Ogg page: polynomial 0x04C11DB7, nothing reflected.
+pub fn ogg_checksum(bytes: &[u8]) -> u32 {
+    let mut table = [0_u32; 256];
+    for (index, entry) in table.iter_mut().enumerate() {
+        let mut value = (index as u32) << 24;
+        for _ in 0..8 {
+            value = if value & 0x8000_0000 != 0 {
+                (value << 1) ^ 0x04C1_1DB7
+            } else {
+                value << 1
+            };
+        }
+        *entry = value;
+    }
+    bytes.iter().fold(0, |crc, &byte| {
+        (crc << 8) ^ table[usize::from((crc >> 24) as u8 ^ byte)]
+    })
+}
+
 /// A fresh, empty directory under the system temp folder, removed again when
 /// dropped.
 pub struct TempDir(PathBuf);

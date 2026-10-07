@@ -445,3 +445,181 @@ fn a_transport_pattern_missing_from_the_project_falls_back_to_the_first() {
     let audio = run(&mut processor, 10_000, 256);
     assert_eq!(sounding_frames(&audio), vec![6_000]);
 }
+
+/// A project with one note that sounds at a level of 0.5 for exactly as
+/// long as it is held, and for a millisecond of release after.
+fn held_note_rig(sample_rate: u32, start: u32, length: u32) -> Rig {
+    let mut rig = Rig::new();
+    let channel = rig.channel(level(sample_rate, 0.5, 4.0));
+    rig.sampler_mut(channel).envelope = Some(Envelope {
+        attack_ms: 0.0,
+        decay_ms: 0.0,
+        sustain: 1.0,
+        release_ms: 1.0,
+    });
+    rig.note(channel, start, length);
+    rig
+}
+
+/// Plays `rig` at 120 bpm, changes the tempo to `tempo` on frame
+/// `change_at`, and returns the frames on which the left side is at the
+/// full 0.5 of a held note. Every buffer size has to give the same audio.
+fn held_frames_across_a_tempo_change(
+    rig: &mut Rig,
+    transport: TransportPatch,
+    change_at: usize,
+    tempo: f64,
+    frames: usize,
+) -> Vec<usize> {
+    let sample_rate = 48_000;
+    let mut outputs = Vec::new();
+    for block in [1, 7, 64, 128, 1024] {
+        rig.project.settings.tempo_bpm = 120.0;
+        let (mut processor, controller) = rig.processor(sample_rate);
+        controller.set_transport(transport);
+        controller.play();
+        let mut audio = run(&mut processor, change_at, block);
+        rig.project.settings.tempo_bpm = tempo;
+        controller.set_project(&rig.project, &rig.pool);
+        audio.extend(run(&mut processor, frames - change_at, block));
+        outputs.push(audio);
+    }
+    assert!(
+        outputs.iter().all(|audio| audio == &outputs[0]),
+        "the buffer size changed the audio"
+    );
+    left(&outputs[0])
+        .iter()
+        .enumerate()
+        .filter(|(_, sample)| **sample == 0.5)
+        .map(|(frame, _)| frame)
+        .collect()
+}
+
+#[test]
+fn a_tempo_change_moves_the_end_of_a_sounding_note() {
+    // A quarter note, 960 ticks, would end on frame 24000 at 120 bpm. The
+    // change comes on frame 6000, at tick 240, with 720 ticks to go.
+    let mut rig = held_note_rig(48_000, 0, 960);
+    let pattern = TransportPatch::default();
+
+    // At 60 bpm a tick takes 50 frames, so the note ends on frame 42000.
+    let held = held_frames_across_a_tempo_change(&mut rig, pattern, 6_000, 60.0, 50_000);
+    assert_eq!(held, (0..=42_000).collect::<Vec<_>>());
+
+    // At 240 bpm a tick takes 12.5 frames, so it ends on frame 15000.
+    let held = held_frames_across_a_tempo_change(&mut rig, pattern, 6_000, 240.0, 20_000);
+    assert_eq!(held, (0..=15_000).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_tempo_change_moves_the_end_of_a_note_held_across_the_loop_point() {
+    // A pattern of four steps is 24000 frames long at 120 bpm. The note
+    // starts on tick 720, frame 18000, and is held for 480 ticks, 240 of
+    // them in the next pass, so it would end on frame 30000.
+    let mut rig = held_note_rig(48_000, 720, 480);
+    let pattern = rig.first_pattern();
+    rig.pattern_mut(pattern).length_steps = 4;
+
+    // The change comes on frame 26000, 80 ticks into the second pass, with
+    // 160 ticks to go at 50 frames each.
+    let held = held_frames_across_a_tempo_change(
+        &mut rig,
+        TransportPatch::default(),
+        26_000,
+        60.0,
+        40_000,
+    );
+    assert_eq!(held, (18_000..=34_000).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_tempo_change_moves_the_end_a_clip_gives_a_note() {
+    // The note is a whole bar long, but the clip shows only its first
+    // beat, so it ends with the clip on tick 960.
+    let mut rig = held_note_rig(48_000, 0, 3_840);
+    let lane = rig.playlist_track();
+    let pattern = rig.first_pattern();
+    rig.clip(lane, pattern, 0, 960);
+    rig.clip(lane, pattern, 7_680, 1);
+
+    let held = held_frames_across_a_tempo_change(&mut rig, song_mode(false), 6_000, 60.0, 50_000);
+    assert_eq!(held, (0..=42_000).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_crowd_of_silent_notes_does_not_push_out_the_note_after_it() {
+    // 1024 notes with no velocity on tick 0 are as many as the engine takes
+    // from the sequencer in one go. At 522 bpm the note on tick 40 is due
+    // 230 frames later, inside the same block of 256.
+    let sample_rate = 48_000;
+    let mut rig = Rig::new();
+    rig.project.settings.tempo_bpm = 522.0;
+    let silent = rig.channel(impulse(sample_rate));
+    for _ in 0..1_024 {
+        rig.note(silent, 0, 240).velocity = 0.0;
+    }
+    let click = rig.channel(impulse(sample_rate));
+    rig.note(click, 40, 240);
+    let due = frame_of_tick(40, 52_200, sample_rate);
+    assert_eq!(due, 230);
+
+    for block in [1, 7, 64, 128, 256, 1024] {
+        let audio = rig.play(sample_rate, 2_048, block);
+        assert_eq!(sounding_frames(&audio), vec![due], "blocks of {block}");
+    }
+}
+
+#[test]
+fn more_notes_in_one_block_than_the_sequencer_hands_over_at_once_all_play() {
+    // Six chords of 250 notes inside one block of 256 frames: half as many
+    // notes again as one round holds, yet never more on a frame than there
+    // are voices. A single note sits between the chords and after them.
+    let sample_rate = 48_000;
+    let mut rig = Rig::new();
+    rig.project.settings.tempo_bpm = 522.0;
+    let quiet = rig.channel(impulse(sample_rate));
+    let chords = [0, 6, 12, 18, 24, 30];
+    for tick in chords {
+        for _ in 0..250 {
+            rig.note(quiet, tick, 240).velocity = 1.0 / 4_096.0;
+        }
+    }
+    let click = rig.channel(impulse(sample_rate));
+    rig.note(click, 3, 240);
+    rig.note(click, 40, 240);
+
+    let frames = 256;
+    let mut expected = vec![0.0; frames];
+    for tick in chords {
+        expected[frame_of_tick(u64::from(tick), 52_200, sample_rate)] = 250.0 / 4_096.0;
+    }
+    expected[frame_of_tick(3, 52_200, sample_rate)] = 1.0;
+    expected[frame_of_tick(40, 52_200, sample_rate)] = 1.0;
+    for block in [1, 7, 64, 256, 1024] {
+        let audio = left(&rig.play(sample_rate, frames, block));
+        assert_eq!(audio, expected, "blocks of {block}");
+    }
+}
+
+#[test]
+fn notes_past_the_voice_limit_are_the_only_ones_that_go_unheard() {
+    // 1500 notes on one frame are more than one round of notes and far
+    // more than the 256 voices with their 64 slots for fading out. Every
+    // slot plays one note, the rest find no voice, and which ones those are
+    // does not depend on the buffer size.
+    let sample_rate = 48_000;
+    let mut rig = Rig::new();
+    let quiet = rig.channel(impulse(sample_rate));
+    for _ in 0..1_500 {
+        rig.note(quiet, 0, 240).velocity = 1.0 / 4_096.0;
+    }
+    let click = rig.channel(impulse(sample_rate));
+    rig.note(click, 1, 240);
+    for block in [1, 64, 1024] {
+        let audio = left(&rig.play(sample_rate, 64, block));
+        assert_eq!(audio[0], 320.0 / 4_096.0, "blocks of {block}");
+        // The note a tick later, 25 frames on, is not among the lost.
+        assert_eq!(sounding_frames(&rig.play(sample_rate, 64, block)), [0, 25]);
+    }
+}

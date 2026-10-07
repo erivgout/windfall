@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 windfall-core.workspace = true
+windfall-dsp.workspace = true
 serde.workspace = true
 # Without float_roundtrip a tempo can come back from a file one bit off.
 serde_json = { workspace = true, features = ["float_roundtrip"] }

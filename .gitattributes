@@ -10,3 +10,4 @@
 *.woff2 binary
 *.aif binary
 *.aifc binary
+*.wasm binary

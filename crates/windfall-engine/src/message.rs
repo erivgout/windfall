@@ -12,7 +12,8 @@ use windfall_core::AudioBuffer;
 use windfall_ipc::PlayMode;
 use windfall_project::{ChannelId, PatternId};
 
-use crate::plan::{Plan, PlanState};
+use crate::plan::Plan;
+use crate::state::PlanState;
 
 /// Messages the control side can have waiting for the audio thread.
 pub(crate) const MESSAGE_CAPACITY: usize = 1024;
@@ -31,10 +32,12 @@ pub(crate) enum Message {
         state: Box<PlanState>,
     },
     /// `passes` makes playback stop by itself after that many times through
-    /// the pattern or song.
+    /// the pattern or song. `from` starts it somewhere other than the
+    /// stopped position, which stays where stopping returns to.
     Play {
         sequence: u32,
         passes: Option<u32>,
+        from: Option<f64>,
     },
     Stop {
         sequence: u32,

@@ -7,18 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
-use windfall_project::PatternId;
-
-/// What the transport plays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub enum PlayMode {
-    /// Loops the selected pattern.
-    Pattern,
-    /// Plays the playlist.
-    Song,
-}
+pub use windfall_project::PlayMode;
+use windfall_project::{AutomationId, EffectId, PatternId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -62,8 +52,61 @@ pub struct RealtimeFrame {
     pub cpu: f32,
     /// Audio buffers that arrived late since the stream started.
     pub xruns: u32,
-    /// Sampler voices sounding right now.
+    /// Voices sounding right now: the samplers' and the instruments'.
+    /// Audio clips are counted in `audio_clips`.
     pub voices: u32,
+    /// Audio clips of the playlist playing right now, at most 128. A clip
+    /// that is fading out after a stop, a seek or an edit is not counted.
+    #[serde(default)]
+    pub audio_clips: u32,
+    /// Audio clips that should be sounding right now and are silent,
+    /// because 128 were playing already when each was to start. Such a
+    /// clip stays silent for its whole length. Zero while the song is not
+    /// playing. No more than 1,024 are counted.
+    #[serde(default)]
+    pub dropped_clips: u32,
+    /// How far each compressor and limiter of the project turned its
+    /// signal down since the last frame, in mixer order and, on one track,
+    /// in chain order. Effects of other kinds are not listed.
+    #[serde(default)]
+    pub gain_reductions: Vec<GainReduction>,
+    /// The automations that have their target in hand right now, in the
+    /// order of the project's automations, with the value each is giving
+    /// it. An automation is listed from the start of its first clip that
+    /// plays: while a clip of it plays, while its target holds the value
+    /// the last clip left, and after the song has stopped for as long as
+    /// it is still ringing out with the target held there. So this can
+    /// have entries while `playing` is false. Where several automations
+    /// move one target, the one whose clip decides is listed. Empty in
+    /// pattern mode, and once a stopped song has let go of its targets. At
+    /// most 128 are listed.
+    ///
+    /// A control whose target is listed here is being moved by the song:
+    /// show it at this value instead of the one stored in the project.
+    #[serde(default)]
+    pub automated: Vec<AutomatedValue>,
+}
+
+/// What one automation is doing to its target at this moment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AutomatedValue {
+    pub automation: AutomationId,
+    /// 0 to 1 across the target's range, like the value of a point of the
+    /// automation's curve.
+    pub value: f32,
+}
+
+/// The reading of one compressor's or limiter's gain reduction meter.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct GainReduction {
+    pub effect: EffectId,
+    /// The deepest reduction since the last frame, in dB: 0 means the
+    /// signal was not turned down, 6 means it was turned down by 6 dB.
+    pub db: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -80,6 +123,14 @@ pub struct EngineStatus {
     pub buffer_frames: u32,
     /// Output latency of one buffer in milliseconds.
     pub latency_ms: f32,
+    /// Frames by which the project's instruments and effects delay the
+    /// output, at `sample_rate`: a limiter by its look-ahead, for one. The
+    /// engine lines every path up with the slowest, so this is one figure
+    /// for the whole mix. It comes on top of `latency_ms`, and it changes
+    /// with the project, so ask for the status again after an edit to an
+    /// effect.
+    #[serde(default)]
+    pub latency_frames: u32,
     /// Why the stream is not running, when it is not.
     pub error: Option<String>,
 }
@@ -210,7 +261,14 @@ pub struct ExportOptions {
     pub mode: PlayMode,
     pub pattern_loops: u32,
     /// Extra time rendered after the end so reverb and release tails finish.
+    /// With `auto_tail` it is the longest the tail may get.
     pub tail_secs: f32,
+    /// Ends the tail as soon as everything has rung out: every note, every
+    /// instrument and every effect is done and the output has fallen
+    /// silent. The file is then as long as the sound, up to `tail_secs`
+    /// past the end. Without it the tail is always `tail_secs` long.
+    #[serde(default)]
+    pub auto_tail: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -222,4 +280,10 @@ pub struct ExportProgress {
     pub fraction: f32,
     pub done: bool,
     pub error: Option<String>,
+    /// Audio clips that are not in the file, because more than 128 would
+    /// have played at once and the ones that started last were left out.
+    /// Only the last event, the one with `done` set, says: it is zero on
+    /// every event before it.
+    #[serde(default)]
+    pub dropped_clips: u32,
 }

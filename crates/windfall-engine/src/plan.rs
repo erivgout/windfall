@@ -3,20 +3,23 @@
 //! [`compile`] runs on the control side. It resolves every id to an index,
 //! applies swing, sorts notes by time, orders the mixer tracks and works out
 //! what mute and solo leave audible, so the audio thread only ever follows
-//! indices. A [`Plan`] is immutable once built. The values that move while
-//! it plays, the gain and pan ramps, live in a [`PlanState`] sized to match.
+//! indices. A [`Plan`] is immutable once built. Everything that moves while
+//! it plays, from the gain ramps to the effects themselves, lives in a
+//! [`PlanState`](crate::state::PlanState) sized to match.
 
 use std::collections::HashSet;
 
-use windfall_core::{AudioBuffer, TICKS_PER_STEP};
+use windfall_core::{AudioBuffer, PPQ, TICKS_PER_STEP};
 use windfall_project::{
-    Channel, ChannelId, ChannelSource, ClipContent, DEFAULT_PATTERN_STEPS, Envelope, MAX_GAIN,
-    MAX_KEY, MAX_MIXER_TRACKS, MAX_TEMPO_BPM, MIN_TEMPO_BPM, Mixer, MixerTrack, Pattern, PatternId,
-    Playlist, Project, SamplerSettings, TrackId,
+    Channel, ChannelId, ChannelSource, Clip, ClipContent, ClipId, DEFAULT_PATTERN_STEPS, EffectId,
+    EffectParams, Envelope, InstrumentParams, MAX_EFFECT_SLOTS, MAX_ENVELOPE_MS, MAX_GAIN, MAX_KEY,
+    MAX_MIXER_TRACKS, MAX_TEMPO_BPM, MAX_TUNE_SEMITONES, MIN_TEMPO_BPM, Mixer, MixerTrack, Pattern,
+    PatternId, Playlist, Project, SamplerSettings, TrackId,
 };
 
+use crate::automation::{self, Lane};
 use crate::pool::SamplePool;
-use crate::ramp::Ramp;
+use crate::tempo::TempoMap;
 
 /// Tempo used when a project carries one that is not a number.
 const FALLBACK_TEMPO_BPM: f64 = 120.0;
@@ -39,7 +42,7 @@ pub(crate) struct IdIndex {
 }
 
 impl IdIndex {
-    fn new(ids: impl Iterator<Item = u32>) -> Self {
+    pub fn new(ids: impl Iterator<Item = u32>) -> Self {
         let mut entries: Vec<(u32, u32)> = ids
             .enumerate()
             .map(|(position, id)| (id, position as u32))
@@ -73,12 +76,26 @@ pub(crate) struct Plan {
     /// it.
     pub order: Vec<usize>,
     /// Number of routing edges, which is the number of edge ramps a
-    /// [`PlanState`] holds.
+    /// [`PlanState`](crate::state::PlanState) holds.
     pub edge_count: usize,
+    /// Finds an effect that is part of the project: an index into
+    /// `effect_places`.
+    pub effect_ids: IdIndex,
+    /// The track of each such effect and its place in that track's chain.
+    pub effect_places: Vec<(usize, usize)>,
     /// Pattern clips that sound, sorted by start.
     pub clips: Vec<PlanClip>,
+    /// Audio clips that sound, sorted by start and then by id.
+    pub audio_clips: Vec<PlanAudioClip>,
+    /// Finds an audio clip that sounds: an index into `audio_clips`.
+    pub audio_clip_ids: IdIndex,
     /// End of the last clip on the playlist in ticks, muted clips included.
     pub song_end: u32,
+    /// What automation does to each of its targets along the song.
+    pub lanes: Vec<Lane>,
+    /// How long the song takes to get to each of its ticks, when
+    /// automation moves the tempo. `None` when the tempo is steady.
+    pub tempo_map: Option<TempoMap>,
 }
 
 #[derive(Debug)]
@@ -88,8 +105,18 @@ pub(crate) struct PlanChannel {
     pub track: usize,
     /// Channel volume, or zero when mute or solo silences the channel.
     pub gain: f32,
+    /// Neither mute nor solo silences the channel.
+    pub audible: bool,
     pub pan: f32,
+    /// What a sampler channel plays. An instrument channel has a sampler
+    /// with no sample.
     pub sampler: PlanSampler,
+    /// The settings of the instrument an instrument channel plays.
+    pub instrument: Option<InstrumentParams>,
+    /// The channel is no longer in the project. It is listed after the
+    /// project's channels, where no note finds it, for as long as its
+    /// instrument takes to fade out. See [`Plan::keep_leaving`].
+    pub leaving: bool,
 }
 
 #[derive(Debug)]
@@ -138,9 +165,29 @@ pub(crate) struct PlanTrack {
     pub id: TrackId,
     /// Fader gain, or zero when mute or solo silences the track.
     pub gain: f32,
+    /// Neither mute nor solo silences the track.
+    pub audible: bool,
     pub pan: f32,
     /// Where the post-fader signal goes: the output first, then the sends.
     pub edges: Vec<PlanEdge>,
+    /// The effects the track's input runs through before the fader, in
+    /// order.
+    pub effects: Vec<PlanEffect>,
+    /// Indices of the channels whose instruments play into this track.
+    pub instruments: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PlanEffect {
+    pub id: EffectId,
+    /// Every value inside its range.
+    pub params: EffectParams,
+    pub enabled: bool,
+    pub mix: f32,
+    /// The effect is no longer in the project. It keeps its place in the
+    /// chain for as long as it takes to fade out. See
+    /// [`Plan::keep_leaving`].
+    pub leaving: bool,
 }
 
 #[derive(Debug)]
@@ -169,6 +216,35 @@ pub(crate) struct PlanClip {
     pub reach: u32,
 }
 
+/// An audio clip: a sample that plays straight onto the timeline.
+#[derive(Debug)]
+pub(crate) struct PlanAudioClip {
+    pub id: ClipId,
+    pub start: u32,
+    pub end: u32,
+    /// How far into the audio the clip starts, in ticks at the project's
+    /// tempo.
+    pub offset: u32,
+    pub sample: AudioBuffer,
+    /// Index of the mixer track the clip plays into, and that track's id.
+    pub track: usize,
+    pub track_id: TrackId,
+    pub gain: f32,
+    pub pan: f32,
+    /// Length of the fade in, in ticks from the start.
+    pub fade_in: u32,
+    /// Length of the fade out, in ticks before the end.
+    pub fade_out: u32,
+    pub reverse: bool,
+    pub pitch: f32,
+    /// Seconds of the sample that go by in one second of the song.
+    pub speed: f64,
+    /// Frames of the sample, in playing order, that `offset` skips.
+    pub skip: f64,
+    /// Largest `end` among this clip and all clips before it.
+    pub reach: u32,
+}
+
 impl Plan {
     /// What plays before a project is set: nothing, through a master track
     /// at unity so sample previews are still heard.
@@ -176,16 +252,117 @@ impl Plan {
         compile(&Project::new(""), &SamplePool::new())
     }
 
+    /// Keeps what `previous` played and this plan does not for one more
+    /// plan, so that it can fade out instead of stopping dead.
+    ///
+    /// An effect that left the project stays in its track's chain, marked
+    /// as leaving, right after the effect it followed. An instrument
+    /// channel that left the project is listed after the project's own
+    /// channels, on the track it played into or on the master if that
+    /// track is gone, at the gain and pan it had. What is already leaving
+    /// in `previous` is not kept again, so a leaver lasts exactly one plan.
+    ///
+    /// A track that is gone takes its effects with it at once: there is
+    /// nowhere left for them to be heard.
+    pub fn keep_leaving(&mut self, previous: &Plan) {
+        for track in &mut self.tracks {
+            let Some(before) = previous.track_ids.get(track.id.0) else {
+                continue;
+            };
+            // Where the next leaver goes: after the last effect that was
+            // ahead of it and is still in this chain.
+            let mut at = 0;
+            for effect in &previous.tracks[before].effects {
+                if effect.leaving {
+                    continue;
+                }
+                if let Some(kept) = track.effects.iter().position(|e| e.id == effect.id) {
+                    at = at.max(kept + 1);
+                } else if self.effect_ids.get(effect.id.0).is_none() {
+                    track.effects.insert(
+                        at,
+                        PlanEffect {
+                            leaving: true,
+                            ..*effect
+                        },
+                    );
+                    at += 1;
+                }
+            }
+        }
+        for channel in &previous.channels {
+            let instrument = channel.instrument.filter(|_| !channel.leaving);
+            if instrument.is_none() || self.channel_ids.get(channel.id.0).is_some() {
+                continue;
+            }
+            let track = previous.tracks[channel.track].id;
+            self.channels.push(PlanChannel {
+                id: channel.id,
+                track: self.track_ids.get(track.0).unwrap_or(0),
+                gain: channel.gain,
+                audible: channel.audible,
+                pan: channel.pan,
+                sampler: PlanSampler::silent(),
+                instrument,
+                leaving: true,
+            });
+        }
+        self.link();
+    }
+
+    /// Works out the lists that follow from the channels and the chains.
+    fn link(&mut self) {
+        for track in &mut self.tracks {
+            track.instruments.clear();
+        }
+        for (index, channel) in self.channels.iter().enumerate() {
+            if channel.instrument.is_some() {
+                self.tracks[channel.track].instruments.push(index);
+            }
+        }
+        let places = self.tracks.iter().enumerate().flat_map(|(track, entry)| {
+            let effects = entry.effects.iter().enumerate();
+            effects
+                .filter(|(_, effect)| !effect.leaving)
+                .map(move |(place, effect)| (effect.id, (track, place)))
+        });
+        let (ids, places): (Vec<u32>, Vec<(usize, usize)>) =
+            places.map(|(id, place)| (id.0, place)).unzip();
+        self.effect_ids = IdIndex::new(ids.into_iter());
+        self.effect_places = places;
+    }
+
+    /// The channel with this id, if the project has it.
+    pub fn channel(&self, id: ChannelId) -> Option<usize> {
+        self.channel_ids.get(id.0)
+    }
+
+    /// The place in the song's own time of a tick of the song: the tick
+    /// itself while the tempo is steady, and the tick at which the same
+    /// moment would come at the stored tempo when automation moves it.
+    pub fn warp(&self, tick: f64) -> f64 {
+        match &self.tempo_map {
+            Some(map) => map.warp(tick),
+            None => tick,
+        }
+    }
+
+    /// The inverse of [`warp`](Self::warp).
+    pub fn unwarp(&self, warped: f64) -> f64 {
+        match &self.tempo_map {
+            Some(map) => map.unwarp(warped),
+            None => warped,
+        }
+    }
+
     /// True when the plan keeps `buffer` alive, which makes dropping another
     /// handle to it free of any deallocation.
     pub fn holds(&self, buffer: &AudioBuffer) -> bool {
-        self.channels.iter().any(|channel| {
-            channel
-                .sampler
-                .sample
-                .as_ref()
-                .is_some_and(|sample| same_audio(sample, buffer))
-        })
+        let channels = self.channels.iter();
+        let mut samples = channels
+            .filter_map(|channel| channel.sampler.sample.as_ref())
+            .chain(self.audio_clips.iter().map(|clip| &clip.sample));
+        samples.any(|sample| same_audio(sample, buffer))
     }
 }
 
@@ -194,96 +371,10 @@ pub(crate) fn same_audio(a: &AudioBuffer, b: &AudioBuffer) -> bool {
     std::ptr::eq(a.samples(), b.samples())
 }
 
-/// The gain and pan ramps of one plan. The control side allocates it and the
-/// audio thread carries values over from the plan it replaces.
-#[derive(Debug)]
-pub(crate) struct PlanState {
-    pub channels: Vec<Strip>,
-    pub tracks: Vec<Strip>,
-    pub edges: Vec<Ramp>,
-}
-
-/// The smoothed gain and pan of a channel or mixer track.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Strip {
-    pub gain: Ramp,
-    pub pan: Ramp,
-}
-
-impl Strip {
-    pub fn at_rest(gain: f32, pan: f32) -> Self {
-        Self {
-            gain: Ramp::at_rest(gain),
-            pan: Ramp::at_rest(pan),
-        }
-    }
-
-    fn retarget(&mut self, gain: f32, pan: f32, now: u64, frames: u64) {
-        self.gain.retarget(gain, now, frames);
-        self.pan.retarget(pan, now, frames);
-    }
-}
-
-impl PlanState {
-    /// Every ramp resting on its target.
-    pub fn new(plan: &Plan) -> Self {
-        let mut edges = vec![Ramp::at_rest(0.0); plan.edge_count];
-        for edge in plan.tracks.iter().flat_map(|track| &track.edges) {
-            edges[edge.slot] = Ramp::at_rest(edge.gain);
-        }
-        Self {
-            channels: plan
-                .channels
-                .iter()
-                .map(|channel| Strip::at_rest(channel.gain, channel.pan))
-                .collect(),
-            tracks: plan
-                .tracks
-                .iter()
-                .map(|track| Strip::at_rest(track.gain, track.pan))
-                .collect(),
-            edges,
-        }
-    }
-
-    /// Carries the current values over from the state of the plan being
-    /// replaced, matching channels and tracks by id, and starts every value
-    /// that changed gliding to its new target. Runs on the audio thread, so
-    /// it must not allocate.
-    pub fn inherit(
-        &mut self,
-        plan: &Plan,
-        old_plan: &Plan,
-        old: &PlanState,
-        now: u64,
-        frames: u64,
-    ) {
-        for (channel, strip) in plan.channels.iter().zip(&mut self.channels) {
-            if let Some(found) = old_plan.channel_ids.get(channel.id.0) {
-                *strip = old.channels[found];
-                strip.retarget(channel.gain, channel.pan, now, frames);
-            }
-        }
-        for (track, strip) in plan.tracks.iter().zip(&mut self.tracks) {
-            let Some(found) = old_plan.track_ids.get(track.id.0) else {
-                continue;
-            };
-            *strip = old.tracks[found];
-            strip.retarget(track.gain, track.pan, now, frames);
-            for edge in &track.edges {
-                let before = old_plan.tracks[found]
-                    .edges
-                    .iter()
-                    .find(|old_edge| {
-                        old_edge.target_id == edge.target_id && old_edge.send == edge.send
-                    })
-                    .map(|old_edge| old.edges[old_edge.slot]);
-                // A route that did not exist a moment ago fades in.
-                let mut ramp = before.unwrap_or(Ramp::at_rest(0.0));
-                ramp.retarget(edge.gain, now, frames);
-                self.edges[edge.slot] = ramp;
-            }
-        }
+impl PlanSampler {
+    /// A sampler with nothing to play.
+    fn silent() -> Self {
+        compile_sampler(&SamplerSettings::default(), &SamplePool::new())
     }
 }
 
@@ -323,8 +414,10 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let pattern_ids = IdIndex::new(patterns.iter().map(|pattern| pattern.id.0));
 
     let (clips, song_end) = compile_playlist(&project.playlist, &pattern_ids, &patterns);
+    let audio_clips = compile_audio_clips(&project.playlist, pool, &track_ids, tempo_bpm);
+    let audio_clip_ids = IdIndex::new(audio_clips.iter().map(|clip| clip.id.0));
 
-    Plan {
+    let mut plan = Plan {
         tempo_bpm,
         channels,
         channel_ids,
@@ -334,9 +427,20 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         track_ids,
         order,
         edge_count,
+        effect_ids: IdIndex::default(),
+        effect_places: Vec::new(),
         clips,
+        audio_clips,
+        audio_clip_ids,
         song_end,
-    }
+        lanes: Vec::new(),
+        tempo_map: None,
+    };
+    plan.link();
+    plan.lanes = automation::compile(project, &plan);
+    let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());
+    plan.tempo_map = tempo_lane.map(|lane| TempoMap::new(lane, tempo_bpm, f64::from(song_end)));
+    plan
 }
 
 fn compile_channel(
@@ -345,15 +449,21 @@ fn compile_channel(
     track_ids: &IdIndex,
     any_solo: bool,
 ) -> PlanChannel {
-    let ChannelSource::Sampler(settings) = &channel.source;
+    let (sampler, instrument) = match &channel.source {
+        ChannelSource::Sampler(settings) => (compile_sampler(settings, pool), None),
+        ChannelSource::Instrument { params } => (PlanSampler::silent(), Some(params.sanitized())),
+    };
     let audible = !channel.muted && (!any_solo || channel.solo);
     PlanChannel {
         id: channel.id,
         // A channel whose track is gone plays into the master.
         track: track_ids.get(channel.mixer_track.0).unwrap_or(0),
         gain: if audible { gain(channel.volume) } else { 0.0 },
+        audible,
         pan: pan(channel.pan),
-        sampler: compile_sampler(settings, pool),
+        sampler,
+        instrument,
+        leaving: false,
     }
 }
 
@@ -475,7 +585,9 @@ fn compile_playlist(
         if clip.muted || muted_tracks.contains(&clip.track) || end == clip.start {
             continue;
         }
-        let ClipContent::Pattern { pattern } = &clip.content;
+        let ClipContent::Pattern { pattern } = &clip.content else {
+            continue;
+        };
         let Some(pattern) = pattern_ids.get(pattern.0) else {
             continue;
         };
@@ -496,6 +608,82 @@ fn compile_playlist(
     (clips, song_end)
 }
 
+/// The audio clips that sound: not muted, not on a muted playlist track, and
+/// with audio in the pool. A clip whose mixer track is gone plays into the
+/// master.
+fn compile_audio_clips(
+    playlist: &Playlist,
+    pool: &SamplePool,
+    track_ids: &IdIndex,
+    tempo_bpm: f64,
+) -> Vec<PlanAudioClip> {
+    let muted_track = |clip: &Clip| {
+        let tracks = playlist.tracks.iter();
+        tracks
+            .into_iter()
+            .any(|track| track.id == clip.track && track.muted)
+    };
+    let mut clips = Vec::new();
+    for clip in &playlist.clips {
+        let ClipContent::Audio {
+            sample,
+            mixer_track,
+            gain: clip_gain,
+            pan: clip_pan,
+            fade_in,
+            fade_out,
+            reverse,
+            pitch,
+        } = clip.content
+        else {
+            continue;
+        };
+        let end = clip.start.saturating_add(clip.length);
+        let buffer = pool.get(sample).filter(|buffer| buffer.frames() > 0);
+        let Some(buffer) = buffer.filter(|_| !clip.muted && end > clip.start) else {
+            continue;
+        };
+        if muted_track(clip) {
+            continue;
+        }
+        let pitch = if pitch.is_finite() {
+            pitch.clamp(-MAX_TUNE_SEMITONES, MAX_TUNE_SEMITONES)
+        } else {
+            0.0
+        };
+        let speed = 2.0_f64.powf(f64::from(pitch) / 12.0);
+        let offset_seconds = f64::from(clip.offset) * 60.0 / (tempo_bpm * f64::from(PPQ));
+        let track = track_ids.get(mixer_track.0);
+        clips.push(PlanAudioClip {
+            id: clip.id,
+            start: clip.start,
+            end,
+            offset: clip.offset,
+            sample: buffer.clone(),
+            track: track.unwrap_or(0),
+            track_id: track.map_or(TrackId::MASTER, |_| mixer_track),
+            gain: gain(clip_gain),
+            pan: pan(clip_pan),
+            fade_in,
+            fade_out,
+            reverse,
+            pitch,
+            speed,
+            skip: offset_seconds * speed * f64::from(buffer.sample_rate()),
+            reach: end,
+        });
+    }
+    // Clips that start together take their slots in the order of their
+    // ids, which settles who is left out when there are too many.
+    clips.sort_by_key(|clip| (clip.start, clip.id));
+    let mut reach = 0;
+    for clip in &mut clips {
+        reach = reach.max(clip.end);
+        clip.reach = reach;
+    }
+    clips
+}
+
 /// Builds the mixer tracks and the order to process them in.
 ///
 /// Mute and solo are folded into each track's gain. A muted track is always
@@ -513,6 +701,7 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
         solo: false,
         output: None,
         sends: Vec::new(),
+        effects: Vec::new(),
     }];
     let source: &[MixerTrack] = if mixer.tracks.is_empty() {
         &fallback_master
@@ -520,6 +709,9 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
         &mixer.tracks[..mixer.tracks.len().min(MAX_MIXER_TRACKS)]
     };
     let ids = IdIndex::new(source.iter().map(|track| track.id.0));
+    // An effect id is one effect. If a damaged project repeats one, the
+    // first wins.
+    let mut effects_seen = HashSet::new();
 
     let mut tracks: Vec<PlanTrack> = source
         .iter()
@@ -541,11 +733,31 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
                 .sends
                 .iter()
                 .filter_map(|send| edge(send.target, true, gain(send.gain)));
+            let effects = track
+                .effects
+                .iter()
+                .filter(|effect| effects_seen.insert(effect.id))
+                .take(MAX_EFFECT_SLOTS)
+                .map(|effect| PlanEffect {
+                    id: effect.id,
+                    params: effect.params.sanitized(),
+                    enabled: effect.enabled,
+                    mix: if effect.mix.is_finite() {
+                        effect.mix.clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    },
+                    leaving: false,
+                })
+                .collect();
             PlanTrack {
                 id: track.id,
                 gain: gain(track.volume),
+                audible: true,
                 pan: pan(track.pan),
                 edges: output.into_iter().chain(sends).collect(),
+                effects,
+                instruments: Vec::new(),
             }
         })
         .collect();
@@ -558,6 +770,7 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
     for (index, track) in tracks.iter_mut().enumerate() {
         if source[index].muted || !heard[index] {
             track.gain = 0.0;
+            track.audible = false;
         }
         for edge in &mut track.edges {
             edge.slot = slot;
@@ -661,7 +874,11 @@ fn unit(value: f32) -> f32 {
 }
 
 fn duration(ms: f32) -> f32 {
-    if ms.is_finite() { ms.max(0.0) } else { 0.0 }
+    if ms.is_finite() {
+        ms.clamp(0.0, MAX_ENVELOPE_MS)
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
@@ -687,6 +904,7 @@ mod tests {
                     gain: 0.5,
                 })
                 .collect(),
+            effects: Vec::new(),
         }
     }
 

@@ -11,7 +11,8 @@ pub enum CodecError {
     #[error("could not access the file: {0}")]
     Io(#[from] io::Error),
 
-    /// The data is not in a container or codec Windfall can read.
+    /// The data is not in a container or codec Windfall can read, or it
+    /// states more channels or a higher sample rate than any real file has.
     #[error("this is not a supported audio file ({0})")]
     UnsupportedFormat(String),
 
@@ -59,7 +60,9 @@ pub(crate) fn from_symphonia(error: SymphoniaError) -> CodecError {
         SymphoniaError::IoError(io) if io.kind() == io::ErrorKind::UnexpectedEof => {
             CodecError::Corrupt("the file ends unexpectedly".to_owned())
         }
-        SymphoniaError::IoError(io) => CodecError::Io(io),
+        // The guard can only stop a reader by failing its read, and puts the
+        // refusal to report inside the I/O error.
+        SymphoniaError::IoError(io) => io.downcast().unwrap_or_else(CodecError::Io),
         SymphoniaError::Unsupported(what) => CodecError::UnsupportedFormat(
             // The two refusals a user is likely to meet get plain wording.
             // Any other keeps Symphonia's own.

@@ -4,7 +4,7 @@ use crate::command::Command;
 use crate::edit::{self, Direction, Edit};
 use crate::error::CommandError;
 use crate::lower;
-use crate::model::Project;
+use crate::model::{Project, SampleId, SamplePath};
 use crate::patch::{DocumentSnapshot, HistoryEntry, HistoryView, ProjectPatch, Touched};
 
 /// What a successful [`Document::dispatch`] did.
@@ -208,8 +208,61 @@ impl Document {
         self.open_gesture = None;
     }
 
+    /// Changes where a sample's audio file is stored, as when saving the
+    /// project to another folder had to give the file a new name there.
+    ///
+    /// This is not an edit: it adds no step to the history and leaves the
+    /// dirty state alone, because the project means the same sound as
+    /// before. The path changes in the project and in every stored edit
+    /// that holds the sample, so undoing or redoing across the point where
+    /// the sample was added or removed brings it back under the new path
+    /// too.
+    ///
+    /// Fails, with nothing changed, when no sample has this id, neither in
+    /// the project nor in the history; when the path is not well formed;
+    /// and when another sample, in the project or anywhere in the history,
+    /// has the same path, since two samples must never share one. Returns
+    /// what changed in the project: its samples, or nothing when the sample
+    /// had that path already or exists only in the history.
+    pub fn relink_sample(
+        &mut self,
+        id: SampleId,
+        path: SamplePath,
+    ) -> Result<Touched, CommandError> {
+        if let Some(problem) = path.problem() {
+            return Err(CommandError::invalid(format!(
+                "the sample path is not valid: {problem}"
+            )));
+        }
+        let stored = || self.entries.iter().flat_map(|entry| &entry.edits);
+        let held = stored().filter_map(Edit::sample);
+        let mut known = self.project.samples.iter().chain(held);
+        if !known.clone().any(|sample| sample.id == id) {
+            return Err(CommandError::not_found("sample", id));
+        }
+        if known.any(|sample| sample.id != id && sample.path == path) {
+            return Err(CommandError::invalid(
+                "another sample of the project already has that path",
+            ));
+        }
+
+        let mut touched = Touched::default();
+        if let Some(sample) = self.project.samples.iter_mut().find(|s| s.id == id)
+            && sample.path != path
+        {
+            sample.path = path.clone();
+            touched.samples = true;
+        }
+        let edits = self.entries.iter_mut().flat_map(|entry| &mut entry.edits);
+        for sample in edits.filter_map(|edit| edit.sample_mut(id)) {
+            sample.path = path.clone();
+        }
+        Ok(touched)
+    }
+
     /// Builds the patch for the UI and bumps the revision. Call it once for
-    /// every `Touched` that `dispatch`, `undo`, `redo` or `jump` returns.
+    /// every `Touched` that `dispatch`, `undo`, `redo`, `jump` or
+    /// `relink_sample` returns.
     pub fn patch(&mut self, touched: &Touched) -> ProjectPatch {
         self.revision += 1;
         let project = &self.project;
@@ -220,6 +273,7 @@ impl Document {
             channels: touched.channels.then(|| project.channels.clone()),
             mixer: touched.mixer.then(|| project.mixer.clone()),
             playlist: touched.playlist.then(|| project.playlist.clone()),
+            automations: touched.automations.then(|| project.automations.clone()),
             pattern_order: touched
                 .pattern_list
                 .then(|| project.patterns.iter().map(|pattern| pattern.id).collect()),
