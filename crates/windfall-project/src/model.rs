@@ -181,6 +181,7 @@ pub struct Project {
     pub automations: Vec<Automation>,
     /// Native plugin instances, saved even when their files are unavailable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<crate::PluginBinding>>", optional)]
     pub plugins: Vec<crate::PluginBinding>,
 }
 
