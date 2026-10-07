@@ -4,6 +4,7 @@ import type { Channel } from "./Channel";
 import type { Mixer } from "./Mixer";
 import type { Pattern } from "./Pattern";
 import type { Playlist } from "./Playlist";
+import type { PluginBinding } from "./PluginBinding";
 import type { ProjectSettings } from "./ProjectSettings";
 import type { SampleAsset } from "./SampleAsset";
 
@@ -28,4 +29,8 @@ patterns: Array<Pattern>, mixer: Mixer, playlist: Playlist,
  * The automation curves, in the order they were made. A curve plays
  * where a clip on the playlist puts it.
  */
-automations: Array<Automation>, };
+automations: Array<Automation>, 
+/**
+ * Native plugin instances, saved even when their files are unavailable.
+ */
+plugins?: Array<PluginBinding>, };

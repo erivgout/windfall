@@ -17,6 +17,7 @@ import { TitleBar } from "./title-bar"
 import { useToastOffset } from "./toast-place"
 import { useAppBoot, useWindowTitle } from "./use-app-boot"
 import { Workspace } from "./workspace"
+import { PluginManager } from "@/features/plugins/manager"
 
 /** The most room a toast takes across, however long its message. */
 const TOAST_WIDTH = 340
@@ -45,6 +46,7 @@ export function Overlays() {
   return (
     <>
       <PromptHost />
+      <PluginManager />
       <Toaster
         theme={theme}
         position="bottom-right"

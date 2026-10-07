@@ -4,6 +4,7 @@ import { registerMixerActions } from "@/features/mixer/actions"
 import { registerPianoRollActions } from "@/features/piano-roll/actions"
 import { registerPlaylistActions } from "@/features/playlist/actions"
 import { registerBuiltinActions } from "@/lib/actions/builtin"
+import { registerPluginActions } from "@/features/plugins/store"
 
 /**
  * Puts every action the app has in the registry: the shell's own and each
@@ -12,6 +13,7 @@ import { registerBuiltinActions } from "@/lib/actions/builtin"
 export function registerAllActions(): () => void {
   const stops = [
     registerBuiltinActions(),
+    registerPluginActions(),
     registerBrowserActions(),
     registerChannelRackActions(),
     registerMixerActions(),

@@ -4,6 +4,7 @@ import type {
   AutomationTarget,
   EffectSlot,
   ParamInfo,
+  PluginBinding,
   Project,
 } from "@/bindings"
 import descriptors from "@/bindings/descriptors.json"
@@ -38,7 +39,34 @@ const INSTRUMENTS = descriptors.instruments as unknown as Record<
   Described
 >
 
-type Source = Pick<Project, "channels" | "mixer" | "settings">
+type Source = Pick<Project, "channels" | "mixer" | "settings" | "plugins">
+
+function pluginParameter(
+  binding: PluginBinding,
+  index: number
+): TargetState | null {
+  const parameter = binding.parameters[index]
+  if (!parameter || parameter.readOnly || !parameter.automatable) return null
+  return {
+    range: {
+      min: parameter.min,
+      max: parameter.max,
+      taper: parameter.stepped ? "stepped" : "linear",
+    },
+    stored: parameter.value,
+    info: {
+      id: String(parameter.id),
+      name: parameter.name,
+      min: parameter.min,
+      max: parameter.max,
+      default: parameter.value,
+      kind: parameter.stepped ? "integer" : "float",
+      unit: "none",
+      scale: "linear",
+      choices: [],
+    },
+  }
+}
 
 function findEffect(
   project: Source,
@@ -117,6 +145,12 @@ export function targetState(
       return send ? { range: GAIN_RANGE, stored: send.gain, info: null } : null
     }
     case "effectParam": {
+      const plugin = project.plugins?.find(
+        (plugin) =>
+          plugin.target.type === "effect" &&
+          plugin.target.effect === target.effect
+      )
+      if (plugin) return pluginParameter(plugin, target.param)
       const found = findEffect(project, target.effect)
       const info = found
         ? EFFECTS[found.slot.params.type]?.params[target.param]
@@ -133,6 +167,12 @@ export function targetState(
         : null
     }
     case "instrumentParam": {
+      const plugin = project.plugins?.find(
+        (plugin) =>
+          plugin.target.type === "instrument" &&
+          plugin.target.channel === target.channel
+      )
+      if (plugin) return pluginParameter(plugin, target.param)
       const source = channel(target.channel)?.source
       if (source?.type !== "instrument") return null
       const info = INSTRUMENTS[source.params.type]?.params[target.param]
@@ -174,6 +214,11 @@ export function storedNormalized(
 }
 
 function effectLabel(project: Source, effect: number): string {
+  const plugin = project.plugins?.find(
+    (plugin) =>
+      plugin.target.type === "effect" && plugin.target.effect === effect
+  )
+  if (plugin) return plugin.name
   const found = findEffect(project, effect)
   return found
     ? (EFFECTS[found.slot.params.type]?.name ?? "Effect")

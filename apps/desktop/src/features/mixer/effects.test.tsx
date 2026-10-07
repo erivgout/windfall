@@ -125,7 +125,7 @@ describe("the effect rack on a strip", () => {
     )
     expect(
       (await screen.findAllByRole("menuitem")).map((item) => item.textContent)
-    ).toEqual(EFFECT_KINDS.map(nameOfKind))
+    ).toEqual(["Browse plugins…", ...EFFECT_KINDS.map(nameOfKind)])
     await user.click(screen.getByRole("menuitem", { name: "Reverb" }))
     await flush()
 

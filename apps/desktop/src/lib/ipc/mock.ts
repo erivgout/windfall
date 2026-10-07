@@ -553,6 +553,29 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    pluginsState: async () => ({
+      folders: [],
+      entries: [],
+      blocked: [],
+      scanning: false,
+      completed: 0,
+      total: 0,
+      current: null,
+      error: "Native plugins require the Windows desktop app",
+      instances: [],
+    }),
+    pluginsScan: async () => {
+      throw new Error("Native plugins require the Windows desktop app")
+    },
+    pluginsAddFolder: async () => {
+      throw new Error("Native plugins require the Windows desktop app")
+    },
+    pluginsAdd: async () => {
+      throw new Error("Native plugins require the Windows desktop app")
+    },
+    pluginEditor: async () => {
+      throw new Error("Native editors require the Windows desktop app")
+    },
 
     documentSnapshot: () => ipc(() => doc.snapshot(path)),
     dispatch: (command, gesture) => ipc(() => dispatchNow(command, gesture)),

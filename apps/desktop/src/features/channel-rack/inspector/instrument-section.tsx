@@ -1,4 +1,6 @@
 import { instrumentDescriptor } from "@/features/params"
+import { PluginControls } from "@/features/plugins/controls"
+import { usePluginBinding } from "@/features/plugins/store"
 import type { InstrumentChannel } from "@/lib/channel-source"
 import { colorToCss } from "@/lib/units"
 
@@ -11,6 +13,13 @@ import { Section } from "./parts"
  * its name, with the list of starting sounds beside it.
  */
 export function InstrumentSection({ channel }: { channel: InstrumentChannel }) {
+  const plugin = usePluginBinding({ type: "instrument", channel: channel.id })
+  if (plugin)
+    return (
+      <Section title={plugin.name}>
+        <PluginControls binding={plugin} />
+      </Section>
+    )
   const { params } = channel.source
   return (
     <Section

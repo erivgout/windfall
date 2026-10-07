@@ -14,6 +14,8 @@ import type {
   ExportProgress,
   PlaylistTrackId,
   ProjectPatch,
+  PluginManagerState,
+  PluginTarget,
   RealtimeFrame,
   SampleId,
   SampleInfo,
@@ -55,6 +57,11 @@ export type AudioClipPlace = {
 export interface Backend {
   /** "tauri" inside the app, "mock" in a plain browser. */
   readonly kind: "tauri" | "mock"
+  pluginsState(): Promise<PluginManagerState>
+  pluginsScan(retry?: string): Promise<void>
+  pluginsAddFolder(folder: string): Promise<void>
+  pluginsAdd(path: string, id: string, track?: TrackId): Promise<DispatchResult>
+  pluginEditor(target: PluginTarget, open: boolean): Promise<void>
 
   documentSnapshot(): Promise<DocumentSnapshot>
   dispatch(command: Command, gesture?: number): Promise<DispatchResult>

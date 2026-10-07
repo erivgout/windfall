@@ -44,6 +44,12 @@ function target(state: AppState): FoundEffect | undefined {
 function isFull(count: number | undefined): boolean {
   return (count ?? 0) >= MAX_EFFECT_SLOTS
 }
+function hosted(state: AppState, id: number): boolean {
+  return (state.document.project.plugins ?? []).some(
+    (binding) =>
+      binding.target.type === "effect" && binding.target.effect === id
+  )
+}
 
 /** Runs `work` on the selected effect. Does nothing when there is none. */
 function onTarget(work: (id: number) => void | Promise<void>) {
@@ -203,7 +209,10 @@ export const EFFECT_ACTIONS: Action[] = [
     keywords: "swap change",
     enabled: (state) => {
       const found = target(state)
-      return found !== undefined && found.slot.params.type !== kind
+      return (
+        found !== undefined &&
+        (hosted(state, found.slot.id) || found.slot.params.type !== kind)
+      )
     },
     run: onTarget((id) => replaceEffect(id, kind)),
   })),
@@ -212,7 +221,10 @@ export const EFFECT_ACTIONS: Action[] = [
     title: "Reset effect to defaults",
     section: SECTION,
     keywords: "initialize settings",
-    enabled: (state) => target(state) !== undefined,
+    enabled: (state) => {
+      const found = target(state)
+      return found !== undefined && !hosted(state, found.slot.id)
+    },
     run: onTarget(resetEffect),
   },
   {

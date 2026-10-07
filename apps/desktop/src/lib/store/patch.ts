@@ -94,6 +94,7 @@ export function applyPatch(
   const { project } = state
   const next: Project = {
     ...project,
+    plugins: shareStructure(project.plugins, patch.plugins ?? project.plugins),
     settings: shareStructure(
       project.settings,
       patch.settings ?? project.settings

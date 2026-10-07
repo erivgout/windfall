@@ -1,6 +1,8 @@
 import { useEffect } from "react"
 
 import { ContextActions } from "@/components/context-actions"
+import { Button } from "@/components/ui/button"
+import { openPluginManager } from "@/features/plugins/store"
 import { useShortcutScope } from "@/lib/actions"
 
 import { BrowserHeader } from "./browser-header"
@@ -37,6 +39,9 @@ export default function BrowserPanel() {
         {...scope}
       >
         <BrowserHeader />
+        <Button variant="ghost" size="sm" onClick={() => openPluginManager()}>
+          Browse plugins
+        </Button>
         <TreeView />
         <PreviewPane />
       </div>
