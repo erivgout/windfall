@@ -117,7 +117,11 @@ describe("the whole list of actions", () => {
     expect(titles("unmute all")[0]).toBe("Unmute all tracks")
     expect(titles("delete track")[0]).toBe("Delete mixer track")
     expect(titles("new proj")[0]).toBe("New project")
-    expect(titles("export")[0]).toBe("Export audio…")
+    expect(titles("export audio")[0]).toBe("Export audio…")
+    expect(titles("export midi")[0]).toBe("Export MIDI…")
+    expect(titles("export")).toEqual(
+      expect.arrayContaining(["Export audio…", "Export MIDI…"])
+    )
     // Every result that starts with the word comes before any that only
     // has it inside.
     const mute = titles("mute")
