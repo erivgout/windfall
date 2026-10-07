@@ -16,9 +16,14 @@ use windfall_project::{ClipStretch, SampleId};
 pub struct SamplePool {
     samples: Arc<HashMap<SampleId, AudioBuffer>>,
     clip_audio: Arc<Mutex<ClipAudioCache>>,
+    pub(crate) plugin_factory: Option<Arc<dyn crate::plugins::PluginFactory>>,
 }
 
 impl SamplePool {
+    /// Installs the control-side native plugin provider used by playback and render.
+    pub fn set_plugin_factory(&mut self, factory: Arc<dyn crate::plugins::PluginFactory>) {
+        self.plugin_factory = Some(factory);
+    }
     pub fn new() -> Self {
         Self::default()
     }

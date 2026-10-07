@@ -324,6 +324,7 @@ fn last_sound(block: &[[f32; 2]], silence: f32) -> (Option<usize>, Option<usize>
 /// the last plan sent: enough to build the next [`PlanState`] with only
 /// what is missing.
 pub(crate) struct Ledger {
+    plugins: HashMap<windfall_project::PluginTarget, (u64, usize)>,
     pub sample_rate: u32,
     effects: HashMap<EffectId, EffectKind>,
     instruments: HashMap<ChannelId, InstrumentKind>,
@@ -350,7 +351,11 @@ struct Layout {
 }
 
 impl Layout {
-    fn of(plan: &Plan, sample_rate: u32) -> Self {
+    fn of(
+        plan: &Plan,
+        sample_rate: u32,
+        plugins: &HashMap<windfall_project::PluginTarget, (u64, usize)>,
+    ) -> Self {
         let rate = sample_rate as f32;
         // No path is compensated for more than a second of latency. Past
         // that it plays late instead.
@@ -363,7 +368,12 @@ impl Layout {
         // nothing waits for it.
         for channel in plan.channels.iter().filter(|channel| !channel.leaving) {
             if let Some(params) = &channel.instrument {
-                let latency = params.latency_samples(rate).min(most);
+                let latency = plugins
+                    .get(&windfall_project::PluginTarget::Instrument {
+                        channel: channel.id,
+                    })
+                    .map_or_else(|| params.latency_samples(rate), |record| record.1)
+                    .min(most);
                 arrival[channel.track] = arrival[channel.track].max(latency);
                 reach[channel.track] = reach[channel.track].max(latency);
             }
@@ -373,6 +383,11 @@ impl Layout {
             let track = &plan.tracks[index];
             let chain = track.effects.iter().filter(|effect| !effect.leaving);
             let (latency, longest) = chain.fold((0, 0), |(latency, longest), effect| {
+                if let Some(record) =
+                    plugins.get(&windfall_project::PluginTarget::Effect { effect: effect.id })
+                {
+                    return (latency + record.1, longest + record.1);
+                }
                 (
                     latency + effect.params.latency_samples(rate),
                     longest + effect.params.kind().max_latency_samples(rate),
@@ -432,6 +447,9 @@ pub(crate) struct PlanState {
 }
 
 impl PlanState {
+    pub fn tempo(&self) -> f64 {
+        self.tempo_told
+    }
     /// Builds the state for `plan` on a processor that runs at
     /// `sample_rate`. With `held`, what the processor holds now, only what
     /// it lacks is built and the rest is left for
@@ -441,8 +459,14 @@ impl PlanState {
     /// Allocates and prepares effects, so it is for the control side.
     pub fn build(plan: &Plan, sample_rate: u32, held: Option<&Ledger>) -> (Self, Ledger) {
         let sample_rate = sample_rate.max(1);
-        let layout = Layout::of(plan, sample_rate);
+        let empty = HashMap::new();
+        let known_plugins = held
+            .filter(|held| held.sample_rate == sample_rate)
+            .map_or(&empty, |held| &held.plugins);
+        let (mut prepared, plugins) = crate::plugins::prepare(plan, sample_rate, known_plugins);
+        let layout = Layout::of(plan, sample_rate, &plugins);
         let mut ledger = Ledger {
+            plugins,
             sample_rate,
             effects: HashMap::new(),
             instruments: HashMap::new(),
@@ -478,7 +502,11 @@ impl PlanState {
 
             let chain = track.effects.iter().map(|effect| {
                 let kind = effect.params.kind();
-                let known = held.and_then(|held| held.effects.get(&effect.id)) == Some(&kind);
+                let target = windfall_project::PluginTarget::Effect { effect: effect.id };
+                let known = held.and_then(|held| held.effects.get(&effect.id)) == Some(&kind)
+                    && held.is_some_and(|held| {
+                        held.plugins.get(&target) == ledger.plugins.get(&target)
+                    });
                 if effect.leaving {
                     // Only there to fade out what is already playing.
                     return None;
@@ -490,8 +518,16 @@ impl PlanState {
                     ledger.meters.extend(meter.cloned());
                     return None;
                 }
-                let (unit, meter) =
+                let (mut unit, meter) =
                     EffectUnit::build(effect, track.id, sample_rate, plan.tempo_bpm);
+                if let Some(binding) = plan.plugins.iter().find(|binding| binding.target == target)
+                {
+                    let native = match prepared.remove(&target) {
+                        Some(crate::plugins::PreparedPlugin::Effect(unit)) => unit,
+                        _ => None,
+                    };
+                    unit.install_plugin(native, binding);
+                }
                 ledger.meters.extend(meter.map(|meter| (effect.id, meter)));
                 Some(unit)
             });
@@ -501,7 +537,12 @@ impl PlanState {
         let instruments = plan.channels.iter().map(|channel| {
             let params = channel.instrument.as_ref()?;
             let kind = params.kind();
-            let known = held.and_then(|held| held.instruments.get(&channel.id)) == Some(&kind);
+            let target = windfall_project::PluginTarget::Instrument {
+                channel: channel.id,
+            };
+            let known = held.and_then(|held| held.instruments.get(&channel.id)) == Some(&kind)
+                && held
+                    .is_some_and(|held| held.plugins.get(&target) == ledger.plugins.get(&target));
             let unit = if channel.leaving {
                 if !known {
                     return None;
@@ -509,9 +550,24 @@ impl PlanState {
                 None
             } else {
                 ledger.instruments.insert(channel.id, kind);
-                (!known).then(|| InstrumentUnit::build(params, sample_rate, plan.tempo_bpm))
+                (!known).then(|| {
+                    let mut unit = InstrumentUnit::build(params, sample_rate, plan.tempo_bpm);
+                    if let Some(binding) =
+                        plan.plugins.iter().find(|binding| binding.target == target)
+                    {
+                        let native = match prepared.remove(&target) {
+                            Some(crate::plugins::PreparedPlugin::Instrument(unit)) => unit,
+                            _ => None,
+                        };
+                        unit.install_plugin(native, binding);
+                    }
+                    unit
+                })
             };
-            let behind = params.latency_samples(sample_rate as f32);
+            let behind = ledger.plugins.get(&target).map_or_else(
+                || params.latency_samples(sample_rate as f32),
+                |record| record.1,
+            );
             Some(InstrumentSeat {
                 unit,
                 delay: DelaySlot::seat(
@@ -666,6 +722,14 @@ impl PlanState {
                     .and_then(|before| before.unit.take_if(|unit| unit.kind() == params.kind()));
                 if let Some(unit) = &mut seat.unit {
                     unit.apply(params);
+                    if let Some(binding) = plan.plugins.iter().find(|binding| {
+                        binding.target
+                            == windfall_project::PluginTarget::Instrument {
+                                channel: channel.id,
+                            }
+                    }) {
+                        unit.apply_plugin(binding);
+                    }
                     if retempo {
                         unit.set_tempo(plan.tempo_bpm);
                     }
@@ -750,6 +814,12 @@ impl PlanState {
                 };
                 if !new {
                     unit.apply(effect);
+                    if let Some(binding) = plan.plugins.iter().find(|binding| {
+                        binding.target
+                            == windfall_project::PluginTarget::Effect { effect: effect.id }
+                    }) {
+                        unit.apply_plugin(binding);
+                    }
                     if retempo {
                         unit.set_tempo(plan.tempo_bpm);
                     }

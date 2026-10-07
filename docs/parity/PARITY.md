@@ -67,7 +67,7 @@ As of 2026-10-07. Sources:
 | Time signature changes | Time signature changes | 2 | todo |  |
 | MIDI Support | MIDI input | 3 | todo |  |
 | MIDI Out | MIDI output | 3 | todo |  |
-| VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | CLAP backend hosting and isolated CLAP/VST3 scanning are implemented; desktop integration remains. VST3 audio hosting and AU are pending. The plan covers CLAP, VST3 and AU, not VST2. |
+| VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and state persistence are integrated. VST3 audio hosting and Windows editors exist in the backend; desktop addition awaits safe active state capture. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md. |
 | FL Studio Remote | Phone remote | 6 | todo | The plan's phase-6 phone remote. |
 | Fruity Envelope Controller | TBD | 5 | todo |  |
 | Fruity Keyboard Controller | TBD | 5 | todo |  |
@@ -375,10 +375,10 @@ As of 2026-10-07. Sources:
 | Export: loop, slice and note markers in WAV files | WAV marker export | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | WavPack compressed audio | WavPack support | 6 | todo | Not in the plan. |
 | Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. Surge XT/Effects and OB-Xf produced verified audio, and Surge XT/OB-Xf editors were exercised. Desktop addition remains unavailable until safe active-instance state capture is integrated. Linux paths are untested; macOS loading and non-Windows embedded editors are unsupported. In-process crashes remain uncontained. See docs/plugins/vst3-hosting.md. |
-| Plugin hosting: CLAP | CLAP hosting | 4 | in-progress | windfall-plugin-host implements CLAP audio lifecycle, events, parameters, transport, state, adapters and Win32 editors. Windows verified with Surge XT, Surge XT Effects and OB-Xf. Engine/model/shell integration remains; in-process audio plugin crashes are uncontained. See docs/plugins/host-evaluation.md. |
+| Plugin hosting: CLAP | CLAP hosting | 4 | in-progress | Windows desktop CLAP instruments/effects now integrate project persistence, native-range automation, playback/export, mixer latency compensation, parameter inspectors and native editors. Real CLAP fixtures verify session audio, state round-trip and current-instance ownership. The host backend was also exercised with Surge XT/Effects and OB-Xf. Native macOS/Linux desktop hosting and audio crash containment remain unfinished. See docs/plugins/desktop-integration.md and docs/plugins/host-evaluation.md. |
 | Plugin hosting: Audio Unit | AU hosting | 4 | todo | macOS only. |
 | Plugin hosting: VST2 | VST2 hosting | 4 | todo | unverified: licensing path. Not in the plan; Steinberg no longer issues VST2 SDK licenses, so this needs a decision and may become wont-do. |
-| Plugin manager (scan and verify) | Plugin scanner | 4 | in-progress | Isolated CLAP/VST3 scanner, metadata cache and blocklist are implemented and tested in windfall-plugin-host. Desktop plugin manager and project/engine integration remain. |
+| Plugin manager (scan and verify) | Plugin scanner | 4 | in-progress | Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. CLAP entries can be added as rack instruments or mixer effects; VST3 addition explains its active-state capture limitation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md. |
 | Bridged plugins (separate process) | Out-of-process plugins | 4 | todo | The plan's crash protection. |
 | Plugin wrapper options (smart disable, fixed-size buffers, threaded processing, scaling, detached window) | Plugin host options | 4 | todo |  |
 | FL Studio as a VST or AU plugin | Windfall as a plugin | 6 | todo | The plan lists this as 'possible later' and assigns no phase. |

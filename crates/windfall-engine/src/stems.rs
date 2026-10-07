@@ -57,7 +57,7 @@ use windfall_project::{ClipContent, Project, TrackId};
 
 use crate::controller::Controller;
 use crate::mixer::Mixer;
-use crate::plan::{Plan, compile};
+use crate::plan::{Plan, compile_render as compile};
 use crate::pool::SamplePool;
 use crate::processor::Processor;
 use crate::render::{RenderOptions, TAIL_HOLD_SECONDS, TAIL_SILENCE_DB};

@@ -663,9 +663,28 @@ fn stored(plan: &Plan, target: Target) -> Option<f32> {
         Target::TrackGain(track) => Some(plan.tracks[track].gain),
         Target::TrackPan(track) => Some(plan.tracks[track].pan),
         Target::Send { track, edge } => Some(plan.tracks[track].edges[edge].gain),
-        Target::EffectParam { effect: id, param } => effect(id)?.params.get(param),
+        Target::EffectParam { effect: id, param } => {
+            if let Some(binding) = plan.plugins.iter().find(|binding| {
+                binding.target == windfall_project::PluginTarget::Effect { effect: id }
+            }) {
+                binding.parameters.get(param).map(|param| param.value)
+            } else {
+                effect(id)?.params.get(param)
+            }
+        }
         Target::EffectMix(id) => Some(effect(id)?.mix),
-        Target::InstrumentParam { channel, param } => plan.channels[channel].instrument?.get(param),
+        Target::InstrumentParam { channel, param } => {
+            if let Some(binding) = plan.plugins.iter().find(|binding| {
+                binding.target
+                    == windfall_project::PluginTarget::Instrument {
+                        channel: plan.channels[channel].id,
+                    }
+            }) {
+                binding.parameters.get(param).map(|param| param.value)
+            } else {
+                plan.channels[channel].instrument?.get(param)
+            }
+        }
         Target::Tempo => None,
     }
 }

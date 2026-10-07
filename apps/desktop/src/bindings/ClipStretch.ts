@@ -4,11 +4,11 @@ import type { ClipStretchQuality } from "./ClipStretchQuality";
 /**
  * How a playlist audio clip changes time and pitch. Source files remain intact.
  */
-export type ClipStretch = { "mode": "tape" } | { "mode": "spectral",
+export type ClipStretch = { "mode": "tape" } | { "mode": "spectral", 
 /**
  * Output duration divided by source duration, from 0.25 to 4.
  */
-ratio: number, quality: ClipStretchQuality,
+ratio: number, quality: ClipStretchQuality, 
 /**
  * Approximate voiced-spectrum formant preservation.
  */

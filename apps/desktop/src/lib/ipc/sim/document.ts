@@ -152,6 +152,7 @@ export class SimDocument {
     const project = this.mirror
     this.mirror = {
       ...project,
+      plugins: patch.plugins ?? project.plugins,
       settings: patch.settings ?? project.settings,
       samples: patch.samples ?? project.samples,
       channels: patch.channels ?? project.channels,
@@ -160,6 +161,7 @@ export class SimDocument {
       automations: patch.automations ?? project.automations,
       patterns: mergePatterns(project.patterns, patch),
     }
+    if (!this.mirror.plugins?.length) delete this.mirror.plugins
     this.dirty = patch.dirty
     return patch
   }

@@ -228,6 +228,7 @@ export const MENUS: MenuSpec[] = [
     title: "Options",
     entries: [
       "options.settings",
+      "plugins.manage",
       separator,
       "options.keymapWindfall",
       "options.keymapFl",

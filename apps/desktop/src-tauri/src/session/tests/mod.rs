@@ -14,6 +14,9 @@ mod import_recording;
 mod library;
 mod midi;
 mod playback;
+mod plugin_recording;
+#[cfg(windows)]
+mod plugins;
 mod recording;
 mod song;
 

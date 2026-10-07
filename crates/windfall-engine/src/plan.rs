@@ -63,6 +63,9 @@ impl IdIndex {
 
 #[derive(Debug)]
 pub(crate) struct Plan {
+    pub signature: windfall_project::TimeSignature,
+    pub plugins: Vec<windfall_project::PluginBinding>,
+    pub plugin_factory: Option<std::sync::Arc<dyn crate::plugins::PluginFactory>>,
     pub tempo_bpm: f64,
     /// Channel rack order.
     pub channels: Vec<PlanChannel>,
@@ -418,6 +421,9 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let audio_clip_ids = IdIndex::new(audio_clips.iter().map(|clip| clip.id.0));
 
     let mut plan = Plan {
+        signature: project.settings.time_signature,
+        plugins: project.plugins.clone(),
+        plugin_factory: pool.plugin_factory.clone(),
         tempo_bpm,
         channels,
         channel_ids,
@@ -441,6 +447,16 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());
     plan.tempo_map = tempo_lane.map(|lane| TempoMap::new(lane, tempo_bpm, f64::from(song_end)));
     plan
+}
+
+pub(crate) fn compile_render(project: &Project, pool: &SamplePool) -> Plan {
+    let mut pool = pool.clone();
+    if let Some(factory) = &pool.plugin_factory
+        && let Some(render) = factory.render_factory()
+    {
+        pool.plugin_factory = Some(render);
+    }
+    compile(project, &pool)
 }
 
 fn compile_channel(

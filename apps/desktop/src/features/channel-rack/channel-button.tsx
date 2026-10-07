@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { useHint } from "@/lib/store/hint"
+import { usePluginBinding } from "@/features/plugins/store"
 import { colorToCss } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
@@ -133,6 +134,7 @@ export const ChannelButton = memo(function ChannelButton({
 }: ChannelButtonProps) {
   const audition = useAudition(id)
   // Only an empty sampler is drawn as missing its sound.
+  const plugin = usePluginBinding({ type: "instrument", channel: id })
   const hasSample = instrument !== null || sampleSet
   const hint = useHint(
     instrument !== null
@@ -153,7 +155,7 @@ export const ChannelButton = memo(function ChannelButton({
     contextSeparator,
     // Greyed out on an instrument, with the reason beside it.
     "channel.replaceSample",
-    ...(instrument !== null ? ["channel.initInstrument"] : []),
+    ...(instrument !== null && !plugin ? ["channel.initInstrument"] : []),
     contextSeparator,
     { title: muted ? "Unmute" : "Mute", run: () => toggleMute(id) },
     { title: solo ? "Unsolo" : "Solo", run: () => toggleSolo(id) },

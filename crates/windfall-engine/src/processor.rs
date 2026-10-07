@@ -515,6 +515,37 @@ impl Processor {
 
     /// Processes up to [`MAX_BLOCK`] frames.
     fn process_block(&mut self, out: &mut [Frame]) {
+        let tick = self.sequencer.tick(&self.plan, self.frame);
+        let warped = self
+            .plan
+            .tempo_map
+            .as_ref()
+            .map_or(tick, |map| map.warp(tick));
+        let transport = crate::plugins::PluginTransport {
+            playing: self.sequencer.playing(),
+            tempo_bpm: self.state.tempo(),
+            position_beats: tick / windfall_core::PPQ as f64,
+            position_seconds: warped * 60.0 / (self.plan.tempo_bpm * windfall_core::PPQ as f64),
+            numerator: self.plan.signature.numerator as u16,
+            denominator: self.plan.signature.denominator as u16,
+        };
+        for (index, chain) in self.state.chains.iter_mut().enumerate() {
+            for (place, unit) in chain.iter_mut().enumerate() {
+                if !self.plan.tracks[index].effects[place].leaving
+                    && let Some(unit) = unit
+                {
+                    unit.plugin_transport(transport);
+                }
+            }
+        }
+        for (index, seat) in self.state.instruments.iter_mut().enumerate() {
+            if !self.plan.channels[index].leaving
+                && let Some(seat) = seat
+                && let Some(unit) = &mut seat.unit
+            {
+                unit.plugin_transport(transport);
+            }
+        }
         let frames = out.len();
         let base = self.frame;
         let end = base + frames as u64;

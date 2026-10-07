@@ -95,10 +95,43 @@ function fullProject() {
       ],
     })
   })
-  const pattern = project.patterns[0]
+  const scratch = SimDocument.create(project)
+  const [pluginChannel] = scratch.dispatch({
+    type: "addPluginInstrument",
+    plugin: pluginBinding(),
+  }).created
+  const withPlugin = scratch.project()
+  scratch.dispose()
+  const pattern = withPlugin.patterns[0]
   const note = pattern.lanes.find((lane) => lane.channel === ids.channel)!
     .notes[0].id
-  return { project, ids: { ...ids, pattern: pattern.id, note } }
+  return {
+    project: withPlugin,
+    ids: { ...ids, pattern: pattern.id, note, pluginChannel },
+  }
+}
+
+function pluginBinding() {
+  return {
+    target: { type: "instrument" as const, channel: 0 },
+    format: "clap",
+    path: "missing/test.clap",
+    id: "test.synth",
+    name: "Test plugin",
+    state: [1],
+    parameters: [
+      {
+        id: 7,
+        name: "Level",
+        min: 0,
+        max: 1,
+        value: 0.5,
+        stepped: false,
+        readOnly: false,
+        automatable: true,
+      },
+    ],
+  }
 }
 
 type Ids = ReturnType<typeof fullProject>["ids"]
@@ -108,6 +141,26 @@ type Ids = ReturnType<typeof fullProject>["ids"]
  * for a new entry when the Rust `Command` gains a variant.
  */
 const EVERY_COMMAND: { [Type in Command["type"]]: (ids: Ids) => Command } = {
+  addPluginInstrument: () => ({
+    type: "addPluginInstrument",
+    plugin: pluginBinding(),
+  }),
+  addPluginEffect: (ids) => ({
+    type: "addPluginEffect",
+    track: ids.track,
+    plugin: pluginBinding(),
+  }),
+  setPluginParam: (ids) => ({
+    type: "setPluginParam",
+    target: { type: "instrument", channel: ids.pluginChannel },
+    id: 7,
+    value: 0.75,
+  }),
+  setPluginState: (ids) => ({
+    type: "setPluginState",
+    target: { type: "instrument", channel: ids.pluginChannel },
+    state: [1, 2],
+  }),
   updateSettings: () => ({ type: "updateSettings", patch: { swing: 0.25 } }),
   addSample: () => ({
     type: "addSample",

@@ -82,10 +82,16 @@ const hasSelection = (state: AppState) => selected(state) !== undefined
 const isSampler = (state: AppState) =>
   selected(state)?.source.type === "sampler"
 const isInstrument = (state: AppState) =>
-  selected(state)?.source.type === "instrument"
+  selected(state)?.source.type === "instrument" &&
+  !state.document.project.plugins?.some(
+    (plugin) =>
+      plugin.target.type === "instrument" &&
+      plugin.target.channel === state.ui.selectedChannel
+  )
 
 /** The selected channel's synth settings, when it is a subtractive synth. */
 function selectedSynth(state: AppState) {
+  if (!isInstrument(state)) return null
   const params = instrumentParams(selected(state))
   return params?.type === "subtractiveSynth" ? params : null
 }

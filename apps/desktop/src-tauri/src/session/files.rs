@@ -224,6 +224,7 @@ impl Session {
         };
         #[cfg(test)]
         self.pause("save:write");
+        project = self.capture_plugins(project)?;
 
         // Where the file will look for its own samples when it is opened.
         let target_dir = file::sample_dir(&target);
@@ -313,6 +314,7 @@ impl Session {
         };
         #[cfg(test)]
         self.pause("backup:write");
+        let project = self.capture_plugins(project)?;
         file::write_backup_with(
             &project,
             Some(&played),
@@ -362,9 +364,16 @@ impl Session {
         save_to: Option<PathBuf>,
         played: Option<ProjectSession>,
         sample_dir: Option<PathBuf>,
-        decoded: Decoded,
+        mut decoded: Decoded,
     ) -> Result<DocumentSnapshot, Refusal> {
         drop(self.recording_idle().map_err(|_| Refusal::Recording)?);
+        let runtime = lock(&self.inner.plugins)
+            .as_ref()
+            .map(|manager| manager.runtime.clone());
+        let staged = runtime.as_ref().map(|runtime| runtime.prepare_document());
+        if let Some(staged) = &staged {
+            decoded.pool.set_plugin_factory(staged.clone());
+        }
         let prepared =
             windfall_engine::Controller::prepare_project(document.project(), &decoded.pool);
         let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
@@ -397,6 +406,9 @@ impl Session {
                 loop_song: None,
             },
         };
+        if let Some(runtime) = runtime {
+            decoded.pool.set_plugin_factory(runtime);
+        }
         *state = State {
             document,
             path: save_to,
@@ -412,6 +424,9 @@ impl Session {
             midi_ticket: state.midi_ticket,
         };
         controller.set_prepared_project(state.document.project(), prepared);
+        if let Some(staged) = staged {
+            staged.install_document();
+        }
         controller.set_transport(transport);
         controller.seek(0.0);
 

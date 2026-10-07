@@ -4869,6 +4869,7 @@ dependencies = [
  "windfall-flp",
  "windfall-ipc",
  "windfall-midi",
+ "windfall-plugin-host",
  "windfall-project",
  "windfall-stretch",
 ]

@@ -44,7 +44,7 @@ reverse: boolean,
  * Tape changes speed and pitch together: 12 plays an octave up
  * in half the time. Spectral pitch does not change duration.
  */
-pitch: number,
+pitch: number, 
 /**
  * Defaults to tape for older projects. Spectral mode supports +/-24 semitones.
  */

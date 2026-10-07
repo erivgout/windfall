@@ -268,6 +268,8 @@ impl Session {
                 self.controller().transport().pattern,
             )
         };
+        // Native state capture runs on its owner after releasing the document lock.
+        let project = self.capture_plugins(project)?;
         if options.mode == PlayMode::Song && project.playlist.clips.is_empty() {
             return Err("The playlist is empty, so there is no song to export.".to_owned());
         }

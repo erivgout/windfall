@@ -8,7 +8,11 @@ It is early. `WINDFALL_PLAN.md` describes the whole plan, and `docs/parity/PARIT
 
 Windfall is not affiliated with Image-Line. It contains no FL Studio code, samples, presets or artwork.
 
-Audio export supports WAV, FLAC, OGG and MP3, with mixer stems and cancellation. MIDI and FL project import, CLAP hosting and independent time-stretch have backend libraries; their desktop workflows still need integration. VST3 currently supports discovery and scanning only.
+Audio export supports WAV, FLAC, OGG and MP3, with mixer stems and cancellation. Desktop workflows include MIDI import/export, reviewed FL Studio project conversion with retained unsupported sound data, and independent playlist time-stretch and pitch controls.
+
+The Windows app hosts CLAP instruments and effects with a plugin manager, parameter automation, native editors and saved state. Its VST3 backend processes audio and supports Windows editors, while desktop VST3 addition remains gated on active state capture. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md`.
+
+Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.
 
 ## Run it
 
@@ -36,7 +40,7 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 | `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV, FLAC, OGG and MP3 |
 | `crates/windfall-midi` | Reads and writes MIDI files; project import plans and playlist export |
 | `crates/windfall-dsp` | Effects and synth DSP |
-| `crates/windfall-plugin-host` | CLAP hosting, isolated CLAP/VST3 scanning and native plugin editors |
+| `crates/windfall-plugin-host` | CLAP/VST3 audio hosting, isolated scanning and Windows native editors |
 | `crates/windfall-stretch` | Pure Rust streaming/offline time-stretch, pitch-shift and loop tempo helpers |
 | `crates/windfall-ipc` | Types the engine, shell and interface exchange |
 | `crates/windfall-factory` | Generates the factory sounds |

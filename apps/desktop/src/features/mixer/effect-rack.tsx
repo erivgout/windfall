@@ -4,6 +4,7 @@ import type { EffectId, TrackId } from "@/bindings"
 import { ToggleLed } from "@/components/audio"
 import { ContextActions } from "@/components/context-actions"
 import { GainReductionBar } from "@/features/effects"
+import { usePluginBinding } from "@/features/plugins/store"
 import { useShortcutScope } from "@/lib/actions"
 import { useHint } from "@/lib/store"
 import { cn } from "@/lib/utils"
@@ -48,6 +49,7 @@ const EffectSlotRow = memo(function EffectSlotRow({
   effect,
 }: SlotProps) {
   const view = useSlotView(track, effect)
+  const plugin = usePluginBinding({ type: "effect", effect })
   const selected = useEffectsUi((state) => state.selectedEffect === effect)
   const focusing = useEffectsUi((state) => state.focusing === effect)
   const open = useRef<HTMLButtonElement>(null)
@@ -66,10 +68,10 @@ const EffectSlotRow = memo(function EffectSlotRow({
   }, [focusing])
 
   if (!view) return null
-  const name = effectName(view.kind)
+  const name = plugin?.name ?? effectName(view.kind)
 
   return (
-    <ContextActions items={effectMenu(view.kind)}>
+    <ContextActions items={effectMenu(view.kind, !!plugin)}>
       <li
         data-slot="effect-slot"
         data-effect-row={effect}

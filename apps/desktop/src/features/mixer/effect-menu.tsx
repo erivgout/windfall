@@ -1,5 +1,6 @@
 import { Add01Icon, MoreHorizontalIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { openPluginManager, usePluginBinding } from "@/features/plugins/store"
 import type { ReactNode } from "react"
 
 import type { EffectId, EffectKind, TrackId } from "@/bindings"
@@ -38,7 +39,7 @@ import { addEffect, effectName, selectEffect } from "./effect-ops"
  * the "…" menu of its panel. Every entry runs a registry action on the
  * selected effect, so open the menu only after selecting the effect.
  */
-export function effectMenu(kind: EffectKind): ContextItem[] {
+export function effectMenu(kind: EffectKind, hosted = false): ContextItem[] {
   return [
     "mixer.openEffect",
     "mixer.bypassEffect",
@@ -50,11 +51,11 @@ export function effectMenu(kind: EffectKind): ContextItem[] {
       submenu: "Replace with",
       items: EFFECT_KINDS.map((other) => ({
         title: effectName(other),
-        disabled: other === kind,
+        disabled: !hosted && other === kind,
         run: () => runAction(replaceEffectActionId(other)),
       })),
     },
-    "mixer.resetEffect",
+    ...(!hosted ? ["mixer.resetEffect"] : []),
     contextSeparator,
     {
       title: "Remove effect",
@@ -140,7 +141,8 @@ export function EffectMenuButton({
   kind,
   className,
 }: EffectMenuButtonProps) {
-  const name = effectName(kind)
+  const plugin = usePluginBinding({ type: "effect", effect })
+  const name = plugin?.name ?? effectName(kind)
   const hint = useHint(`Everything that can be done to this ${name}`)
   return (
     <DropdownMenu
@@ -169,7 +171,7 @@ export function EffectMenuButton({
         />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-auto min-w-48">
-        <MenuItems items={effectMenu(kind)} inset />
+        <MenuItems items={effectMenu(kind, !!plugin)} inset />
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -222,6 +224,9 @@ export function AddEffectMenu({
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-auto min-w-40">
+        <DropdownMenuItem onClick={() => openPluginManager(track)}>
+          Browse plugins…
+        </DropdownMenuItem>
         {EFFECT_KINDS.map((kind) => (
           <DropdownMenuItem
             key={kind}

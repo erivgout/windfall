@@ -373,6 +373,83 @@ async fn export_midi(
     blocking(move || session.export_midi(&path, options)).await
 }
 
+#[tauri::command]
+fn plugins_state(
+    manager: State<'_, std::sync::Arc<crate::plugins::PluginManager>>,
+) -> windfall_ipc::PluginManagerState {
+    manager.state()
+}
+
+#[tauri::command]
+fn plugins_scan(
+    manager: State<'_, std::sync::Arc<crate::plugins::PluginManager>>,
+    session: State<'_, Session>,
+    retry: Option<String>,
+) -> Result<(), String> {
+    session.while_recording_idle(|| manager.inner().scan(retry))
+}
+
+#[tauri::command]
+fn plugins_add_folder(
+    manager: State<'_, std::sync::Arc<crate::plugins::PluginManager>>,
+    session: State<'_, Session>,
+    folder: String,
+) -> Result<(), String> {
+    session.while_recording_idle(|| manager.add_folder(folder))
+}
+
+#[tauri::command]
+async fn plugins_add(
+    manager: State<'_, std::sync::Arc<crate::plugins::PluginManager>>,
+    session: State<'_, Session>,
+    path: String,
+    id: String,
+    track: Option<TrackId>,
+) -> Result<DispatchResult, String> {
+    let manager = manager.inner().clone();
+    let session = session.inner().clone();
+    blocking(move || {
+        let target = track.map_or(
+            windfall_project::PluginTarget::Instrument {
+                channel: ChannelId(0),
+            },
+            |_| windfall_project::PluginTarget::Effect {
+                effect: windfall_project::EffectId(0),
+            },
+        );
+        let plugin = session.while_recording_idle(|| manager.binding(&path, &id, target))?;
+        let command = match track {
+            Some(track) => Command::AddPluginEffect { track, plugin },
+            None => Command::AddPluginInstrument { plugin },
+        };
+        session.dispatch(command, None)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn plugin_editor(
+    session: State<'_, Session>,
+    manager: State<'_, std::sync::Arc<crate::plugins::PluginManager>>,
+    target: windfall_project::PluginTarget,
+    open: bool,
+) -> Result<(), String> {
+    let runtime = manager.runtime.clone();
+    let session = session.inner().clone();
+    blocking(move || {
+        session.while_recording_idle(|| {
+            let binding = session
+                .document_snapshot()
+                .project
+                .plugin(target)
+                .cloned()
+                .ok_or("Plugin no longer exists")?;
+            runtime.editor_binding(target, Some(binding), open)
+        })
+    })
+    .await
+}
+
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -428,6 +505,11 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         import_midi,
         midi_discard,
         export_midi,
+        plugins_state,
+        plugins_scan,
+        plugins_add_folder,
+        plugins_add,
+        plugin_editor,
     ]
 }
 

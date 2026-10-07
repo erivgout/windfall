@@ -1,0 +1,550 @@
+//! Control-side factory and prepared audio-only halves of hosted plugins.
+
+use std::collections::HashMap;
+use windfall_project::{PluginBinding, PluginTarget};
+
+/// Musical position at the first frame of a processing block.
+#[derive(Debug, Clone, Copy)]
+pub struct PluginTransport {
+    pub playing: bool,
+    pub tempo_bpm: f64,
+    pub position_beats: f64,
+    pub position_seconds: f64,
+    pub numerator: u16,
+    pub denominator: u16,
+}
+
+/// Prepared effects. Setup and destruction belong to the factory's owner thread.
+pub trait HostedEffect: Send {
+    fn transport(&mut self, _transport: PluginTransport) {}
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+    fn set_param(&mut self, id: u32, value: f32);
+    fn set_tempo(&mut self, bpm: f32);
+    fn latency(&self) -> usize;
+    fn tail(&self) -> usize;
+}
+
+/// Prepared instruments, fed on the exact frame of each note boundary.
+pub trait HostedInstrument: HostedEffect {
+    fn note_on(&mut self, key: u8, velocity: f32);
+    fn note_off(&mut self, key: u8);
+    fn all_notes_off(&mut self);
+    fn voices(&self) -> usize;
+}
+
+/// Creates independent instances for playback and offline render, off the callback.
+pub trait PluginFactory: Send + Sync + std::fmt::Debug {
+    /// An independent provider whose instances cannot become playback/editor owners.
+    fn render_factory(&self) -> Option<std::sync::Arc<dyn PluginFactory>> {
+        None
+    }
+    /// Changes when an explicit retry or plugin restart requires fresh instances.
+    fn revision(&self) -> u64 {
+        0
+    }
+    fn effect(
+        &self,
+        binding: &PluginBinding,
+        sample_rate: u32,
+        max_block: usize,
+    ) -> Result<Box<dyn HostedEffect>, String>;
+    fn instrument(
+        &self,
+        binding: &PluginBinding,
+        sample_rate: u32,
+        max_block: usize,
+    ) -> Result<Box<dyn HostedInstrument>, String>;
+}
+
+pub(crate) enum PreparedPlugin {
+    Effect(Option<Box<dyn HostedEffect>>),
+    Instrument(Option<Box<dyn HostedInstrument>>),
+}
+
+impl PreparedPlugin {
+    pub fn latency(&self) -> usize {
+        match self {
+            Self::Effect(unit) => unit.as_ref().map_or(0, |unit| unit.latency()),
+            Self::Instrument(unit) => unit.as_ref().map_or(0, |unit| unit.latency()),
+        }
+    }
+}
+
+/// Identity excludes parameter values, so edits keep sounding instances alive.
+pub(crate) fn identity(binding: &PluginBinding) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    binding.path.hash(&mut hash);
+    binding.id.hash(&mut hash);
+    binding.format.hash(&mut hash);
+    binding.state.hash(&mut hash);
+    hash.finish()
+}
+
+pub(crate) fn prepare(
+    plan: &crate::plan::Plan,
+    sample_rate: u32,
+    known: &HashMap<PluginTarget, (u64, usize)>,
+) -> (
+    HashMap<PluginTarget, PreparedPlugin>,
+    HashMap<PluginTarget, (u64, usize)>,
+) {
+    let mut units = HashMap::new();
+    let mut records = HashMap::new();
+    for binding in &plan.plugins {
+        let identity = identity(binding)
+            ^ plan
+                .plugin_factory
+                .as_ref()
+                .map_or(0, |factory| factory.revision().rotate_left(17));
+        if let Some(&(before, latency)) = known.get(&binding.target)
+            && before == identity
+        {
+            records.insert(binding.target, (identity, latency));
+            continue;
+        }
+        let unit = match binding.target {
+            PluginTarget::Effect { .. } => {
+                PreparedPlugin::Effect(plan.plugin_factory.as_ref().and_then(|factory| {
+                    factory
+                        .effect(binding, sample_rate, crate::mixer::MAX_BLOCK)
+                        .ok()
+                }))
+            }
+            PluginTarget::Instrument { .. } => {
+                PreparedPlugin::Instrument(plan.plugin_factory.as_ref().and_then(|factory| {
+                    factory
+                        .instrument(binding, sample_rate, crate::mixer::MAX_BLOCK)
+                        .ok()
+                }))
+            }
+        };
+        records.insert(binding.target, (identity, unit.latency()));
+        units.insert(binding.target, unit);
+    }
+    (units, records)
+}
+
+/// A plugin slot with a latency-matched dry path and smoothed wet mix.
+pub(crate) struct ExternalEffect {
+    pub unit: Option<Box<dyn HostedEffect>>,
+    pub params: Box<[(u32, f32)]>,
+    dry: crate::rack::Compensation,
+    scratch: Box<[[f32; 2]]>,
+    wet: f32,
+    target: f32,
+    step: f32,
+    remaining: usize,
+    latency: usize,
+    sample_rate: u32,
+}
+
+impl ExternalEffect {
+    pub fn new(
+        unit: Option<Box<dyn HostedEffect>>,
+        binding: &PluginBinding,
+        rate: u32,
+        enabled: bool,
+        mix: f32,
+    ) -> Self {
+        let latency = unit.as_ref().map_or(0, |unit| unit.latency());
+        let wet = if enabled && unit.is_some() { mix } else { 0.0 };
+        let mut slot = Self {
+            unit,
+            params: binding
+                .parameters
+                .iter()
+                .map(|p| (p.id, f32::NAN))
+                .collect(),
+            dry: crate::rack::Compensation::new(latency, latency),
+            scratch: vec![[0.0; 2]; crate::mixer::MAX_BLOCK].into_boxed_slice(),
+            wet,
+            target: wet,
+            step: 0.0,
+            remaining: 0,
+            latency,
+            sample_rate: rate,
+        };
+        slot.apply(binding);
+        slot
+    }
+    pub fn apply(&mut self, binding: &PluginBinding) {
+        for (cached, param) in self.params.iter_mut().zip(&binding.parameters) {
+            if cached.0 == param.id && cached.1 != param.value {
+                if let Some(unit) = &mut self.unit {
+                    unit.set_param(param.id, param.value);
+                }
+                cached.1 = param.value;
+            }
+        }
+    }
+    pub fn automate(&mut self, index: usize, value: f32) {
+        if let Some(param) = self.params.get_mut(index)
+            && param.1 != value
+        {
+            if let Some(unit) = &mut self.unit {
+                unit.set_param(param.0, value);
+            }
+            param.1 = value;
+        }
+    }
+    pub fn set_mix(&mut self, enabled: bool, mix: f32) {
+        let target = if enabled && self.unit.is_some() {
+            mix
+        } else {
+            0.0
+        };
+        if target == self.target {
+            return;
+        }
+        self.target = target;
+        self.remaining = (self.sample_rate as usize / 200).max(1);
+        self.step = (target - self.wet) / self.remaining as f32;
+    }
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let dry = &mut self.scratch[..left.len()];
+        for ((frame, left), right) in dry.iter_mut().zip(left.iter()).zip(right.iter()) {
+            *frame = [*left, *right];
+        }
+        self.dry.process(dry);
+        if let Some(unit) = &mut self.unit {
+            unit.process(left, right);
+        }
+        for index in 0..left.len() {
+            if self.remaining > 0 {
+                self.wet += self.step;
+                self.remaining -= 1;
+                if self.remaining == 0 {
+                    self.wet = self.target;
+                }
+            }
+            left[index] = dry[index][0] + (left[index] - dry[index][0]) * self.wet;
+            right[index] = dry[index][1] + (right[index] - dry[index][1]) * self.wet;
+        }
+    }
+    pub fn latency(&self) -> usize {
+        self.latency
+    }
+    pub fn tail(&self) -> usize {
+        self.unit.as_ref().map_or(0, |unit| unit.tail())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use windfall_project::*;
+
+    #[derive(Debug, Default)]
+    struct FixtureFactory {
+        made: AtomicUsize,
+        latency: usize,
+    }
+    struct Fixture {
+        level: f32,
+        held: bool,
+        instrument: bool,
+        delay: Box<[[f32; 2]]>,
+        cursor: usize,
+    }
+    impl HostedEffect for Fixture {
+        fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+            for (left, right) in left.iter_mut().zip(right) {
+                if self.instrument {
+                    *left = if self.held { self.level } else { 0.0 };
+                    *right = *left;
+                } else {
+                    *left *= self.level;
+                    *right *= self.level;
+                }
+                if !self.delay.is_empty() {
+                    let previous = self.delay[self.cursor];
+                    self.delay[self.cursor] = [*left, *right];
+                    self.cursor = (self.cursor + 1) % self.delay.len();
+                    *left = previous[0];
+                    *right = previous[1];
+                }
+            }
+        }
+        fn set_param(&mut self, id: u32, value: f32) {
+            assert_eq!(id, 43);
+            self.level = value;
+        }
+        fn set_tempo(&mut self, _: f32) {}
+        fn latency(&self) -> usize {
+            self.delay.len()
+        }
+        fn tail(&self) -> usize {
+            0
+        }
+    }
+    impl HostedInstrument for Fixture {
+        fn note_on(&mut self, _: u8, _: f32) {
+            self.held = true;
+        }
+        fn note_off(&mut self, _: u8) {
+            self.held = false;
+        }
+        fn all_notes_off(&mut self) {
+            self.held = false;
+        }
+        fn voices(&self) -> usize {
+            usize::from(self.held)
+        }
+    }
+    impl PluginFactory for FixtureFactory {
+        fn effect(
+            &self,
+            _: &PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn HostedEffect>, String> {
+            self.made.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(Fixture {
+                level: 1.0,
+                held: false,
+                instrument: false,
+                delay: vec![[0.0; 2]; self.latency].into_boxed_slice(),
+                cursor: 0,
+            }))
+        }
+        fn instrument(
+            &self,
+            _: &PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn HostedInstrument>, String> {
+            self.made.fetch_add(1, Ordering::Relaxed);
+            Ok(Box::new(Fixture {
+                level: 1.0,
+                held: false,
+                instrument: true,
+                delay: Box::new([]),
+                cursor: 0,
+            }))
+        }
+    }
+    fn binding() -> PluginBinding {
+        PluginBinding {
+            target: PluginTarget::Instrument {
+                channel: ChannelId(0),
+            },
+            format: "clap".into(),
+            path: "fixture.clap".into(),
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            state: vec![],
+            parameters: vec![PluginParameter {
+                id: 43,
+                name: "Level".into(),
+                min: 0.0,
+                max: 2.0,
+                value: 0.5,
+                stepped: false,
+                read_only: false,
+                automatable: true,
+            }],
+        }
+    }
+    fn project() -> Project {
+        let mut doc = Document::new(Project::new("Fixture"));
+        doc.dispatch(Command::AddPluginInstrument { plugin: binding() }, None)
+            .unwrap();
+        let channel = doc.project().channels[0].id;
+        let mut project = doc.project().clone();
+        let id = NoteId(project.next_id);
+        project.next_id += 1;
+        project.patterns[0].lanes.push(Lane {
+            channel,
+            notes: vec![Note {
+                id,
+                start: 0,
+                length: 96,
+                key: 60,
+                velocity: 1.0,
+                pan: 0.0,
+            }],
+        });
+        project.check().unwrap();
+        project
+    }
+    #[test]
+    fn fixture_instrument_and_effect_render_and_missing_plugins_are_silent() {
+        let mut project = project();
+        let factory = Arc::new(FixtureFactory::default());
+        let mut pool = crate::SamplePool::new();
+        pool.set_plugin_factory(factory.clone());
+        let options = crate::RenderOptions::default();
+        let audio = crate::render(&project, &pool, &options, &mut |_| true);
+        assert!(audio.samples().iter().any(|sample| *sample > 0.1));
+        assert!(
+            crate::render(&project, &crate::SamplePool::new(), &options, &mut |_| true)
+                .samples()
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        let mut doc = Document::new(project);
+        doc.dispatch(
+            Command::AddPluginEffect {
+                track: TrackId(0),
+                plugin: binding(),
+            },
+            None,
+        )
+        .unwrap();
+        project = doc.project().clone();
+        let effected = crate::render(&project, &pool, &options, &mut |_| true);
+        assert!(effected.samples().iter().any(|sample| *sample > 0.05));
+        let peak = |audio: &windfall_core::AudioBuffer| {
+            audio.samples().iter().copied().fold(0.0_f32, f32::max)
+        };
+        assert!((peak(&effected) / peak(&audio) - 0.5).abs() < 0.001);
+    }
+    #[test]
+    fn parameter_updates_reuse_instances_and_never_allocate_on_audio_thread() {
+        let mut project = project();
+        let factory = Arc::new(FixtureFactory::default());
+        let mut pool = crate::SamplePool::new();
+        pool.set_plugin_factory(factory.clone());
+        let (mut processor, control) = crate::Processor::new(48_000);
+        control.set_project(&project, &pool);
+        control.play();
+        let mut out = [0.0; 512];
+        processor.process(&mut out);
+        assert_eq!(factory.made.load(Ordering::Relaxed), 1);
+        project.plugins[0].parameters[0].value = 0.75;
+        control.set_project(&project, &pool);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert_eq!(factory.made.load(Ordering::Relaxed), 1);
+        assert!(out.iter().any(|sample| *sample > 0.5));
+    }
+    #[test]
+    fn native_latency_is_compensated_and_notes_keep_their_sample_boundaries() {
+        let mut project = project();
+        let note = &mut project.patterns[0].lanes[0].notes[0];
+        note.start = 48;
+        note.length = 48;
+        let mut doc = Document::new(project);
+        doc.dispatch(
+            Command::AddPluginEffect {
+                track: TrackId(0),
+                plugin: binding(),
+            },
+            None,
+        )
+        .unwrap();
+        let project = doc.project();
+        let mut plain = crate::SamplePool::new();
+        plain.set_plugin_factory(Arc::new(FixtureFactory::default()));
+        let mut delayed = crate::SamplePool::new();
+        delayed.set_plugin_factory(Arc::new(FixtureFactory {
+            latency: 32,
+            ..Default::default()
+        }));
+        let options = crate::RenderOptions::default();
+        let reference = crate::render(project, &plain, &options, &mut |_| true);
+        let compensated = crate::render(project, &delayed, &options, &mut |_| true);
+        assert_eq!(
+            reference.samples(),
+            compensated.samples(),
+            "offline PDC must remove native latency without moving note boundaries"
+        );
+        let first = reference
+            .samples()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .position(|frame| frame[0] != 0.0)
+            .unwrap();
+        let expected = (48.0
+            * windfall_core::samples_per_tick(
+                project.settings.tempo_bpm,
+                f64::from(options.sample_rate),
+            ))
+        .ceil() as usize;
+        assert!(
+            first.abs_diff(expected) <= 1,
+            "native note starts on its scheduled frame: {first} vs {expected}"
+        );
+    }
+    #[test]
+    fn native_automation_uses_discovered_ranges_and_stable_ids() {
+        let mut doc = Document::new(project());
+        doc.dispatch(
+            Command::AddPlaylistTrack {
+                name: None,
+                index: None,
+            },
+            None,
+        )
+        .unwrap();
+        let mut project = doc.project().clone();
+        let channel = project.channels[0].id;
+        let track = project.playlist.tracks[0].id;
+        let mut id = || {
+            let id = project.next_id;
+            project.next_id += 1;
+            id
+        };
+        let pattern_clip = ClipId(id());
+        let automation = AutomationId(id());
+        let automation_clip = ClipId(id());
+        project.playlist.clips.push(Clip {
+            id: pattern_clip,
+            track,
+            start: 0,
+            length: 192,
+            offset: 0,
+            muted: false,
+            content: ClipContent::Pattern {
+                pattern: project.patterns[0].id,
+            },
+        });
+        let mut pool = crate::SamplePool::new();
+        pool.set_plugin_factory(Arc::new(FixtureFactory::default()));
+        let options = crate::RenderOptions {
+            mode: windfall_ipc::PlayMode::Song,
+            ..Default::default()
+        };
+        let baseline = crate::render(&project, &pool, &options, &mut |_| true);
+        project.automations.push(Automation {
+            id: automation,
+            name: "Native level".into(),
+            color: 0,
+            target: AutomationTarget::InstrumentParam { channel, param: 0 },
+            points: vec![AutomationPoint {
+                tick: 0,
+                value: 0.4,
+                curve: 0.0,
+                hold: true,
+            }],
+        });
+        project.playlist.clips.push(Clip {
+            id: automation_clip,
+            track,
+            start: 0,
+            length: 192,
+            offset: 0,
+            muted: false,
+            content: ClipContent::Automation { automation },
+        });
+        project.check().unwrap();
+        let automated = crate::render(&project, &pool, &options, &mut |_| true);
+        let at = baseline
+            .samples()
+            .iter()
+            .position(|sample| *sample > 0.1)
+            .unwrap();
+        assert!(
+            (automated.samples()[at] / baseline.samples()[at] - 1.6).abs() < 0.001,
+            "normalized 0.4 must map to native 0.8 in the discovered 0..2 range, using native ID 43"
+        );
+    }
+}

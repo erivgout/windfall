@@ -83,6 +83,15 @@ pub fn start(app: &AppHandle) -> Result<Session, Box<dyn Error>> {
         settings,
     });
     log::info!("factory content: {}", session.factory_dir().display());
+    match crate::plugins::PluginManager::new(&config_dir) {
+        Ok(manager) => {
+            session.install_plugins(manager.clone());
+            manager.attach(session.downgrade());
+            let _ = manager.scan(None);
+            app.manage(manager);
+        }
+        Err(error) => log::warn!("plugins: {error}"),
+    }
     session.spawn_realtime()?;
     session.spawn_autosave(AUTOSAVE_INTERVAL)?;
     Ok(session)

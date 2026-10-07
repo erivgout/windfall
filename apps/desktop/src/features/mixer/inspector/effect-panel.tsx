@@ -12,6 +12,8 @@ import { ContextActions } from "@/components/context-actions"
 import { ValueContextItems } from "@/components/value-context-menu"
 import { useAutomation } from "@/features/automation/live"
 import { EffectEditor } from "@/features/effects"
+import { PluginControls } from "@/features/plugins/controls"
+import { usePluginBinding } from "@/features/plugins/store"
 import { useShortcutScope } from "@/lib/actions"
 import { useHint, useProjectStore } from "@/lib/store"
 import { clamp } from "@/lib/units"
@@ -34,7 +36,8 @@ const clampMix = (mix: number) => (Number.isFinite(mix) ? clamp(mix, 0, 1) : 1)
 
 /** How much of the effect is heard against the untouched signal. */
 function MixKnob({ track, slot }: { track: TrackId; slot: EffectSlot }) {
-  const name = effectName(slot.params.type)
+  const plugin = usePluginBinding({ type: "effect", effect: slot.id })
+  const name = plugin?.name ?? effectName(slot.params.type)
   const mix = useGestureValue(
     slot.mix,
     (value) => ({
@@ -90,6 +93,7 @@ export const EffectPanel = memo(function EffectPanel({
   effect,
 }: EffectPanelProps) {
   const slot = useEffectSlot(track, effect)
+  const plugin = usePluginBinding({ type: "effect", effect })
   const collapsed = useEffectsUi((state) => state.collapsed.includes(effect))
   const selected = useEffectsUi((state) => state.selectedEffect === effect)
   const revealing = useEffectsUi((state) => state.revealing === effect)
@@ -108,7 +112,7 @@ export const EffectPanel = memo(function EffectPanel({
 
   if (!slot) return null
   const kind = slot.params.type
-  const name = effectName(kind)
+  const name = plugin?.name ?? effectName(kind)
   const select = () => selectEffect(effect)
 
   return (
@@ -123,7 +127,7 @@ export const EffectPanel = memo(function EffectPanel({
       onPointerDownCapture={select}
       onFocusCapture={select}
     >
-      <ContextActions items={effectMenu(kind)}>
+      <ContextActions items={effectMenu(kind, !!plugin)}>
         <header
           className="flex h-7 items-center gap-1 pr-1 pl-0.5 group-data-selected/panel:bg-accent/60"
           {...scope}
@@ -187,7 +191,11 @@ export const EffectPanel = memo(function EffectPanel({
           // The editors lay themselves out by the width they are given here.
           className="@container/editor px-2 pt-1 pb-1.5 transition-opacity group-data-bypassed/panel:opacity-50 in-data-enlarged:pb-2.5"
         >
-          <EffectEditor trackId={track} slot={slot} />
+          {plugin ? (
+            <PluginControls binding={plugin} />
+          ) : (
+            <EffectEditor trackId={track} slot={slot} />
+          )}
         </div>
       )}
     </li>

@@ -232,7 +232,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "CLAP backend hosting and isolated CLAP/VST3 scanning are implemented; desktop integration remains. VST3 audio hosting and AU are pending. The plan covers CLAP, VST3 and AU, not VST2."
+      "notes": "Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and state persistence are integrated. VST3 audio hosting and Windows editors exist in the backend; desktop addition awaits safe active state capture. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md."
     },
     {
       "id": "core-fl-studio-remote",
@@ -3568,7 +3568,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "windfall-plugin-host implements CLAP audio lifecycle, events, parameters, transport, state, adapters and Win32 editors. Windows verified with Surge XT, Surge XT Effects and OB-Xf. Engine/model/shell integration remains; in-process audio plugin crashes are uncontained. See docs/plugins/host-evaluation.md."
+      "notes": "Windows desktop CLAP instruments/effects now integrate project persistence, native-range automation, playback/export, mixer latency compensation, parameter inspectors and native editors. Real CLAP fixtures verify session audio, state round-trip and current-instance ownership. The host backend was also exercised with Surge XT/Effects and OB-Xf. Native macOS/Linux desktop hosting and audio crash containment remain unfinished. See docs/plugins/desktop-integration.md and docs/plugins/host-evaluation.md."
     },
     {
       "id": "fmt-host-au",
@@ -3604,7 +3604,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Isolated CLAP/VST3 scanner, metadata cache and blocklist are implemented and tested in windfall-plugin-host. Desktop plugin manager and project/engine integration remain."
+      "notes": "Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. CLAP entries can be added as rack instruments or mixer effects; VST3 addition explains its active-state capture limitation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md."
     },
     {
       "id": "fmt-host-bridging",
