@@ -49,6 +49,10 @@ pub enum CodecError {
     /// with no channels.
     #[error("cannot write the audio file: {0}")]
     InvalidInput(String),
+
+    /// An encoder gave up on audio it was handed.
+    #[error("the audio could not be encoded ({0})")]
+    Encoding(String),
 }
 
 /// The reason given when a file's codec has no decoder built in.

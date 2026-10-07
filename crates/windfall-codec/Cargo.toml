@@ -1,6 +1,6 @@
 [package]
 name = "windfall-codec"
-description = "Audio file decoding, WAV writing and waveform overviews for Windfall"
+description = "Audio file decoding, encoding and waveform overviews for Windfall"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -26,6 +26,14 @@ symphonia = { version = "0.6.1", default-features = false, features = [
 ] }
 # MIT OR Apache-2.0.
 thiserror = "2"
+# BSD-3-Clause. The Ogg Vorbis encoder: libvorbis with the aoTuV and Lancer
+# patches and libogg, all BSD-3-Clause, built with `cc` from the C sources
+# its two -sys crates carry. Its default feature draws stream serial numbers
+# from the system's randomness and is left off: ours are fixed.
+vorbis_rs = { version = "0.5.6", default-features = false }
+# LGPL-3.0 bindings; vendored LAME 3.100 is LGPL-2.0-or-later.
+# MSVC uses cc; Unix uses the bundled configure scripts via autotools.
+mp3lame-encoder = "0.2.5"
 
 [lints]
 workspace = true

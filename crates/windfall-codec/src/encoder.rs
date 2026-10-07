@@ -4,6 +4,8 @@ use std::path::Path;
 
 use crate::error::CodecError;
 use crate::flac::{self, FlacBitDepth, FlacWriter};
+use crate::mp3::{self, Mp3Settings, Mp3Writer};
+use crate::vorbis::{self, VorbisWriter};
 use crate::wav::{self, WavSampleFormat, WavWriter};
 
 /// The audio file formats Windfall writes.
@@ -11,6 +13,9 @@ use crate::wav::{self, WavSampleFormat, WavWriter};
 pub enum AudioFormat {
     Wav,
     Flac,
+    /// Vorbis audio in an Ogg file.
+    Ogg,
+    Mp3,
 }
 
 impl AudioFormat {
@@ -19,6 +24,8 @@ impl AudioFormat {
         match self {
             Self::Wav => "wav",
             Self::Flac => "flac",
+            Self::Ogg => "ogg",
+            Self::Mp3 => "mp3",
         }
     }
 
@@ -27,6 +34,8 @@ impl AudioFormat {
         match self {
             Self::Wav => "WAV",
             Self::Flac => "FLAC",
+            Self::Ogg => "Ogg Vorbis",
+            Self::Mp3 => "MP3",
         }
     }
 }
@@ -35,10 +44,25 @@ impl AudioFormat {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EncoderSettings {
     /// Uncompressed. See [`WavWriter`].
-    Wav { format: WavSampleFormat },
+    Wav {
+        format: WavSampleFormat,
+    },
     /// Lossless. `level` is the compression level, 0 to
     /// [`MAX_FLAC_LEVEL`](crate::MAX_FLAC_LEVEL). See [`FlacWriter`].
-    Flac { depth: FlacBitDepth, level: u8 },
+    Flac {
+        depth: FlacBitDepth,
+        level: u8,
+    },
+    /// Lossy. `quality` runs from
+    /// [`MIN_VORBIS_QUALITY`](crate::MIN_VORBIS_QUALITY) to
+    /// [`MAX_VORBIS_QUALITY`](crate::MAX_VORBIS_QUALITY). One or two
+    /// channels. See [`VorbisWriter`].
+    Vorbis {
+        quality: f32,
+    },
+    Mp3 {
+        settings: Mp3Settings,
+    },
 }
 
 impl EncoderSettings {
@@ -46,6 +70,8 @@ impl EncoderSettings {
         match self {
             Self::Wav { .. } => AudioFormat::Wav,
             Self::Flac { .. } => AudioFormat::Flac,
+            Self::Vorbis { .. } => AudioFormat::Ogg,
+            Self::Mp3 { .. } => AudioFormat::Mp3,
         }
     }
 
@@ -54,8 +80,12 @@ impl EncoderSettings {
     /// here is what [`Encoder::open`] would refuse, with the same message.
     pub fn check(&self, sample_rate: u32, channels: u16) -> Result<(), CodecError> {
         match *self {
+            Self::Mp3 { settings } => mp3::check_layout(sample_rate, channels, settings),
             Self::Wav { format } => wav::check_layout(sample_rate, channels, format),
             Self::Flac { level, .. } => flac::check_layout(sample_rate, channels, level),
+            Self::Vorbis { quality } => {
+                vorbis::check_layout(sample_rate, channels, quality).map(drop)
+            }
         }
     }
 }
@@ -80,6 +110,8 @@ pub struct Encoder {
 enum Inner {
     Wav(WavWriter),
     Flac(Box<FlacWriter>),
+    Vorbis(Box<VorbisWriter>),
+    Mp3(Mp3Writer),
 }
 
 impl Encoder {
@@ -90,15 +122,22 @@ impl Encoder {
         sample_rate: u32,
         channels: u16,
     ) -> Result<Self, CodecError> {
-        let inner = match *settings {
-            EncoderSettings::Wav { format } => {
-                Inner::Wav(WavWriter::create(path, sample_rate, channels, format)?)
-            }
-            EncoderSettings::Flac { depth, level } => {
-                let writer = FlacWriter::create(path, sample_rate, channels, depth, level)?;
-                Inner::Flac(Box::new(writer))
-            }
-        };
+        let inner =
+            match *settings {
+                EncoderSettings::Mp3 { settings } => {
+                    Inner::Mp3(Mp3Writer::create(path, sample_rate, channels, settings)?)
+                }
+                EncoderSettings::Wav { format } => {
+                    Inner::Wav(WavWriter::create(path, sample_rate, channels, format)?)
+                }
+                EncoderSettings::Flac { depth, level } => {
+                    let writer = FlacWriter::create(path, sample_rate, channels, depth, level)?;
+                    Inner::Flac(Box::new(writer))
+                }
+                EncoderSettings::Vorbis { quality } => Inner::Vorbis(Box::new(
+                    VorbisWriter::create(path, sample_rate, channels, quality)?,
+                )),
+            };
         Ok(Self { inner })
     }
 
@@ -108,6 +147,8 @@ impl Encoder {
         match &mut self.inner {
             Inner::Wav(writer) => writer.write(interleaved),
             Inner::Flac(writer) => writer.write(interleaved),
+            Inner::Vorbis(writer) => writer.write(interleaved),
+            Inner::Mp3(writer) => writer.write(interleaved),
         }
     }
 
@@ -117,6 +158,8 @@ impl Encoder {
         match self.inner {
             Inner::Wav(writer) => writer.finalize(),
             Inner::Flac(writer) => writer.finalize(),
+            Inner::Vorbis(writer) => writer.finalize(),
+            Inner::Mp3(writer) => writer.finalize(),
         }
     }
 }

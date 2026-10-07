@@ -6,6 +6,7 @@ mod encoder;
 mod fixtures;
 mod flac;
 mod heap;
+mod lossy;
 mod metadata;
 mod robustness;
 mod roundtrip;
