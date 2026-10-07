@@ -92,6 +92,54 @@ impl Transaction<'_> {
 
     fn run(&mut self, command: Command) -> Result<String, CommandError> {
         let label = match command {
+            Command::AddPluginInstrument { mut plugin } => {
+                plugin.validate().map_err(CommandError::invalid)?;
+                let first = self.created.len();
+                self.add_channel(
+                    Some(plugin.name.clone()),
+                    None,
+                    Some(InstrumentKind::SubtractiveSynth),
+                    None,
+                    None,
+                )?;
+                plugin.target = crate::PluginTarget::Instrument {
+                    channel: ChannelId(self.created[first]),
+                };
+                self.bind_plugin(plugin);
+                "Add plugin instrument"
+            }
+            Command::AddPluginEffect { track, mut plugin } => {
+                plugin.validate().map_err(CommandError::invalid)?;
+                self.add_effect(track, EffectKind::Eq, None)?;
+                plugin.target = crate::PluginTarget::Effect {
+                    effect: EffectId(
+                        *self
+                            .created
+                            .last()
+                            .ok_or_else(|| CommandError::invalid("the effect was not created"))?,
+                    ),
+                };
+                self.bind_plugin(plugin);
+                "Add plugin effect"
+            }
+            Command::SetPluginParam { target, id, value } => {
+                self.plugin_param(target, id, value)?;
+                "Change plugin parameter"
+            }
+            Command::SetPluginState { target, state } => {
+                let mut plugins = self.project.plugins.clone();
+                let plugin = plugins
+                    .iter_mut()
+                    .find(|plugin| plugin.target == target)
+                    .ok_or_else(|| CommandError::invalid("the plugin is not in this project"))?;
+                plugin.state = state;
+                plugin.validate().map_err(CommandError::invalid)?;
+                self.push(Edit::Plugins(Change {
+                    old: self.project.plugins.clone(),
+                    new: plugins,
+                }));
+                "Save plugin state"
+            }
             Command::UpdateSettings { patch } => self.update_settings(patch)?,
             Command::AddSample { name, path } => self.add_sample(name, path)?,
             Command::RemoveSample { id } => self.remove_sample(id)?,
@@ -210,7 +258,76 @@ impl Transaction<'_> {
                 return Ok(label.or(first).unwrap_or_else(|| "Edit".to_owned()));
             }
         };
+        self.prune_plugins();
         Ok(label.to_owned())
+    }
+
+    fn bind_plugin(&mut self, plugin: crate::PluginBinding) {
+        let mut plugins = self.project.plugins.clone();
+        plugins.retain(|other| other.target != plugin.target);
+        plugins.push(plugin);
+        self.push(Edit::Plugins(Change {
+            old: self.project.plugins.clone(),
+            new: plugins,
+        }));
+    }
+
+    fn plugin_param(
+        &mut self,
+        target: crate::PluginTarget,
+        id: u32,
+        value: f32,
+    ) -> Result<(), CommandError> {
+        if !value.is_finite() {
+            return Err(CommandError::invalid("the plugin parameter must be finite"));
+        }
+        let mut plugins = self.project.plugins.clone();
+        let plugin = plugins
+            .iter_mut()
+            .find(|plugin| plugin.target == target)
+            .ok_or_else(|| CommandError::invalid("the plugin is not in this project"))?;
+        let param = plugin
+            .parameters
+            .iter_mut()
+            .find(|param| param.id == id && !param.read_only)
+            .ok_or_else(|| CommandError::invalid("the plugin parameter cannot be changed"))?;
+        let value = value.clamp(param.min, param.max);
+        param.value = if param.stepped {
+            value.round().clamp(param.min, param.max)
+        } else {
+            value
+        };
+        self.push(Edit::Plugins(Change {
+            old: self.project.plugins.clone(),
+            new: plugins,
+        }));
+        Ok(())
+    }
+
+    fn prune_plugins(&mut self) {
+        let plugins = self
+            .project
+            .plugins
+            .iter()
+            .filter(|plugin| match plugin.target {
+                crate::PluginTarget::Instrument { channel } => {
+                    self.project.channels.iter().any(|c| {
+                        c.id == channel && matches!(c.source, ChannelSource::Instrument { .. })
+                    })
+                }
+                crate::PluginTarget::Effect { effect } => self
+                    .project
+                    .mixer
+                    .tracks
+                    .iter()
+                    .any(|track| track.effects.iter().any(|slot| slot.id == effect)),
+            })
+            .cloned()
+            .collect();
+        self.push(Edit::Plugins(Change {
+            old: self.project.plugins.clone(),
+            new: plugins,
+        }));
     }
 
     fn update_settings(&mut self, patch: SettingsPatch) -> Result<Label, CommandError> {
@@ -420,6 +537,14 @@ impl Transaction<'_> {
             });
         }
         self.created.push(copy_id.0);
+        if let Some(mut plugin) = self
+            .project
+            .plugin(crate::PluginTarget::Instrument { channel: id })
+            .cloned()
+        {
+            plugin.target = crate::PluginTarget::Instrument { channel: copy_id };
+            self.bind_plugin(plugin);
+        }
         Ok("Duplicate channel")
     }
 
@@ -581,6 +706,17 @@ impl Transaction<'_> {
         param: u32,
         value: f32,
     ) -> Result<String, CommandError> {
+        let target = crate::PluginTarget::Instrument { channel };
+        if let Some(plugin) = self.project.plugin(target) {
+            let parameter = plugin
+                .parameters
+                .get(param as usize)
+                .ok_or_else(|| CommandError::invalid("the plugin parameter does not exist"))?;
+            let id = parameter.id;
+            let label = format!("Change {}", parameter.name);
+            self.plugin_param(target, id, value)?;
+            return Ok(label);
+        }
         let index = self.channel_index(channel)?;
         let mut params = self.instrument(index)?;
         let kind = params.kind();
@@ -596,6 +732,13 @@ impl Transaction<'_> {
         channel: ChannelId,
         params: InstrumentParams,
     ) -> Result<Label, CommandError> {
+        if self
+            .project
+            .plugin(crate::PluginTarget::Instrument { channel })
+            .is_some()
+        {
+            return Err(CommandError::invalid("use the hosted plugin's parameters"));
+        }
         let index = self.channel_index(channel)?;
         let current = self.instrument(index)?;
         if params.kind() != current.kind() {
@@ -1228,6 +1371,18 @@ impl Transaction<'_> {
         param: u32,
         value: f32,
     ) -> Result<String, CommandError> {
+        let target = crate::PluginTarget::Effect { effect };
+        if let Some(plugin) = self.project.plugin(target) {
+            self.effect_index(track, effect)?;
+            let parameter = plugin
+                .parameters
+                .get(param as usize)
+                .ok_or_else(|| CommandError::invalid("the plugin parameter does not exist"))?;
+            let id = parameter.id;
+            let label = format!("Change {}", parameter.name);
+            self.plugin_param(target, id, value)?;
+            return Ok(label);
+        }
         let (track, slot) = self.effect_index(track, effect)?;
         let mut params = self.project.mixer.tracks[track].effects[slot].params;
         let kind = params.kind();
@@ -1244,6 +1399,13 @@ impl Transaction<'_> {
         effect: EffectId,
         params: EffectParams,
     ) -> Result<Label, CommandError> {
+        if self
+            .project
+            .plugin(crate::PluginTarget::Effect { effect })
+            .is_some()
+        {
+            return Err(CommandError::invalid("use the hosted plugin's parameters"));
+        }
         let (track, slot) = self.effect_index(track, effect)?;
         let kind = self.project.mixer.tracks[track].effects[slot].kind();
         if params.kind() != kind {
@@ -1266,6 +1428,14 @@ impl Transaction<'_> {
         let id = copy.id;
         self.change_track(track, |track| track.effects.insert(slot + 1, copy));
         self.created.push(id.0);
+        if let Some(mut plugin) = self
+            .project
+            .plugin(crate::PluginTarget::Effect { effect })
+            .cloned()
+        {
+            plugin.target = crate::PluginTarget::Effect { effect: id };
+            self.bind_plugin(plugin);
+        }
         Ok("Duplicate effect")
     }
 
@@ -1786,6 +1956,9 @@ impl Transaction<'_> {
         // "Kick Reverb", or "Kick Reverb 2" for the second reverb in the
         // track's chain.
         let effect = |track_id: TrackId, effect: EffectId| {
+            if let Some(plugin) = project.plugin(crate::PluginTarget::Effect { effect }) {
+                return format!("{} {}", track(track_id), plugin.name);
+            }
             let chain = project.mixer.track(track_id).map(|track| &track.effects);
             let chain = chain.map_or(&[][..], Vec::as_slice);
             let Some(place) = chain.iter().position(|slot| slot.id == effect) else {
@@ -1826,6 +1999,19 @@ impl Transaction<'_> {
                 effect: id,
                 param,
             } => {
+                if let Some(plugin) = project.plugin(crate::PluginTarget::Effect { effect: id }) {
+                    let name = plugin
+                        .parameters
+                        .get(param as usize)
+                        .map_or("setting", |parameter| parameter.name.as_str());
+                    return unused_name(
+                        format!("{} {name}", effect(track, id)),
+                        project
+                            .automations
+                            .iter()
+                            .map(|automation| automation.name.as_str()),
+                    );
+                }
                 let descriptors = effect_kind(track, id).map_or(&[][..], EffectKind::descriptors);
                 format!("{} {}", effect(track, id), setting(descriptors, param))
             }
@@ -1833,6 +2019,21 @@ impl Transaction<'_> {
                 format!("{} mix", effect(track, id))
             }
             AutomationTarget::InstrumentParam { channel: id, param } => {
+                if let Some(plugin) =
+                    project.plugin(crate::PluginTarget::Instrument { channel: id })
+                {
+                    let name = plugin
+                        .parameters
+                        .get(param as usize)
+                        .map_or("setting", |parameter| parameter.name.as_str());
+                    return unused_name(
+                        format!("{} {name}", channel(id)),
+                        project
+                            .automations
+                            .iter()
+                            .map(|automation| automation.name.as_str()),
+                    );
+                }
                 let source = project.channel(id).map(|channel| &channel.source);
                 let name = match source {
                     Some(ChannelSource::Instrument { params }) => {

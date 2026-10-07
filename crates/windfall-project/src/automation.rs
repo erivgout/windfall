@@ -262,6 +262,9 @@ impl Project {
                 param,
             } => {
                 let slot = effect(track, id)?;
+                if let Some(plugin) = self.plugin(crate::PluginTarget::Effect { effect: id }) {
+                    return plugin_automation(plugin, param);
+                }
                 let info = slot.kind().descriptors().get(param as usize)?;
                 let value = slot.params.get(param as usize)?;
                 (AutomationRange::of_param(info), value)
@@ -270,6 +273,9 @@ impl Project {
                 (AutomationRange::MIX, effect(track, id)?.mix)
             }
             AutomationTarget::InstrumentParam { channel, param } => {
+                if let Some(plugin) = self.plugin(crate::PluginTarget::Instrument { channel }) {
+                    return plugin_automation(plugin, param);
+                }
                 let ChannelSource::Instrument { params } = &self.channel(channel)?.source else {
                     return None;
                 };
@@ -281,6 +287,25 @@ impl Project {
         };
         Some(found)
     }
+}
+
+fn plugin_automation(plugin: &crate::PluginBinding, index: u32) -> Option<(AutomationRange, f32)> {
+    let param = plugin.parameters.get(index as usize)?;
+    if param.read_only || !param.automatable {
+        return None;
+    }
+    Some((
+        AutomationRange {
+            min: param.min,
+            max: param.max,
+            taper: if param.stepped {
+                AutomationTaper::Stepped
+            } else {
+                AutomationTaper::Linear
+            },
+        },
+        param.value,
+    ))
 }
 
 #[cfg(test)]
