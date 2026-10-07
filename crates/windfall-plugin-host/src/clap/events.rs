@@ -13,7 +13,7 @@ use clack_host::events::{Event, Match, Pckn, UnknownEvent};
 use clack_host::utils::ClapId;
 
 use crate::events::{HostEvent, PluginEvent};
-use crate::processor::EVENT_CAPACITY;
+use crate::processor::{EVENT_CAPACITY, IMMEDIATE_RELEASE_CAPACITY};
 
 /// The language a plugin's note port understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,9 +63,20 @@ fn midi_velocity(velocity: f32) -> u8 {
 
 impl EventList {
     /// Allocates room for every event a block can carry.
-    pub fn new() -> Self {
+    pub fn new(dialect: Dialect) -> Self {
+        let capacity = match dialect {
+            Dialect::None => EVENT_CAPACITY,
+            Dialect::Clap => EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY,
+            // Every ordinary event could be a panic. The adapter reserve
+            // adds at most 128 note-offs and one further 32-message panic.
+            // Translation must not silently drop an admitted release.
+            Dialect::Midi => {
+                EVENT_CAPACITY * ALL_NOTES_OFF_MESSAGES + IMMEDIATE_RELEASE_CAPACITY - 1
+                    + ALL_NOTES_OFF_MESSAGES
+            }
+        };
         Self {
-            slots: Vec::with_capacity(EVENT_CAPACITY + ALL_NOTES_OFF_MESSAGES),
+            slots: Vec::with_capacity(capacity),
             dropped: 0,
         }
     }

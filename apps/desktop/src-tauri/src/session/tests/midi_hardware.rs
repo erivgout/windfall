@@ -256,3 +256,99 @@ fn midi_hardware_native_clap_fixture_audition_note_off_and_panic_preserve_owners
     assert_eq!(manager.runtime.revision(), revision);
     assert_eq!(rig.session.document_snapshot(), before);
 }
+
+#[cfg(windows)]
+#[test]
+fn midi_hardware_native_clap_saturated_panic_releases_queued_notes() {
+    use windfall_engine::plugins::PluginFactory;
+    use windfall_project::PluginTarget;
+    let mut rig = Rig::new();
+    let (manager, path) = super::plugins::manager(&rig);
+    let binding = manager
+        .binding(
+            &path,
+            "org.windfall.test.sine",
+            PluginTarget::Instrument {
+                channel: ChannelId(0),
+            },
+        )
+        .unwrap();
+    let added = rig
+        .session
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    select(&rig, ChannelId(added.created[0]));
+    rig.run(2048); // Install and warm the native adapter before saturating it.
+    let before = rig.session.document_snapshot();
+    let revision = manager.runtime.revision();
+    let epoch = rig.session.controller().hardware_epoch();
+    for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+        assert!(rig.session.hardware_note(epoch, 64, 100));
+    }
+    // Handle engine messages without rendering: all note-ons remain in the
+    // native processor's bounded event queue when the panic arrives.
+    rig.processor.process(&mut []);
+    rig.session.midi_hardware_panic();
+    let out = rig.run(4096);
+    assert!(
+        out.iter().all(|sample| *sample == 0.0),
+        "queued hardware notes sounded after panic"
+    );
+    assert_eq!(rig.session.controller().frame().voices, 0);
+    rig.session.midi_hardware_panic();
+    assert!(rig.run(2048).iter().all(|sample| *sample == 0.0));
+    assert_eq!(manager.runtime.revision(), revision);
+    assert_eq!(rig.session.document_snapshot(), before);
+}
+
+#[cfg(windows)]
+#[test]
+fn midi_hardware_native_clap_saturated_panic_preserves_a_ui_key() {
+    use windfall_project::PluginTarget;
+    let mut rig = Rig::new();
+    let (manager, path) = super::plugins::manager(&rig);
+    let binding = manager
+        .binding(
+            &path,
+            "org.windfall.test.sine",
+            PluginTarget::Instrument {
+                channel: ChannelId(0),
+            },
+        )
+        .unwrap();
+    let added = rig
+        .session
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    let channel = ChannelId(added.created[0]);
+    select(&rig, channel);
+    rig.run(2048);
+    let before = rig.session.document_snapshot();
+    let epoch = rig.session.controller().hardware_epoch();
+    // Two hardware keys ensure that the fixture's first-voice stealing under
+    // saturation leaves a hardware voice to release as well as UI voices.
+    assert!(rig.session.hardware_note(epoch, 64, 100));
+    assert!(rig.session.hardware_note(epoch, 67, 100));
+    rig.session.audition_note_on(channel, 69, 0.8);
+    rig.run(2048);
+    for _ in 0..windfall_plugin_host::EVENT_CAPACITY {
+        rig.session.audition_note_on(channel, 69, 0.8);
+    }
+    rig.processor.process(&mut []);
+    rig.session.midi_hardware_panic();
+    assert!(
+        rig.run(4096).iter().any(|sample| sample.abs() > 0.01),
+        "independent UI key must survive hardware panic"
+    );
+    assert_eq!(rig.session.controller().frame().voices, 1);
+    rig.session.midi_hardware_panic();
+    assert!(rig.run(2048).iter().any(|sample| sample.abs() > 0.01));
+    rig.session.audition_note_off(channel, 69);
+    rig.run(2048);
+    assert!(
+        rig.run(2048).iter().all(|sample| *sample == 0.0),
+        "hardware key survived panic after UI release"
+    );
+    assert_eq!(rig.session.controller().frame().voices, 0);
+    assert_eq!(rig.session.document_snapshot(), before);
+}

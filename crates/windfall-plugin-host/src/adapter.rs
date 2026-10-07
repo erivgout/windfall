@@ -210,7 +210,9 @@ impl PluginInstrument {
     /// Lets go of a note on the first frame of the next block.
     pub fn note_off(&mut self, key: u8) {
         let key = key.min(127);
-        self.processor.note_off(0, key);
+        // The processor reserves bounded space for this immediate release,
+        // so ownership can be cleared even when ordinary admission is full.
+        self.processor.release_note(key);
         if self.held[usize::from(key)] {
             self.held[usize::from(key)] = false;
             self.held_count -= 1;
@@ -219,7 +221,7 @@ impl PluginInstrument {
 
     /// Stops every note without its release, as when the transport stops.
     pub fn all_notes_off(&mut self) {
-        self.processor.all_notes_off(0);
+        self.processor.release_all_notes();
         self.held = [false; KEYS];
         self.held_count = 0;
     }
