@@ -624,7 +624,9 @@ describe("playing and routing", () => {
     expect(
       within(menu)
         .getAllByRole("menuitemcheckbox")
-        .map((item) => `${item.textContent}:${item.getAttribute("aria-checked")}`)
+        .map(
+          (item) => `${item.textContent}:${item.getAttribute("aria-checked")}`
+        )
     ).toEqual([
       "Note names:true",
       "Around the root key (C3 to C7):true",

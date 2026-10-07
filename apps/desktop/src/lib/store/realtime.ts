@@ -20,6 +20,8 @@ const latest: RealtimeFrame = {
   voices: 0,
   gainReductions: [],
   automated: [],
+  audioClips: 0,
+  droppedClips: 0,
 }
 
 type Listener = (frame: Readonly<RealtimeFrame>) => void

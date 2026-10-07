@@ -234,7 +234,9 @@ describe("menus and popovers", () => {
               })
             )
             await flush()
-            fireEvent.click(screen.getByRole("menuitem", { name: "Add effect" }))
+            fireEvent.click(
+              screen.getByRole("menuitem", { name: "Add effect" })
+            )
           },
           pick: () => innermostItems()[0],
         },

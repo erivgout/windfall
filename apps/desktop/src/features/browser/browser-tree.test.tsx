@@ -490,7 +490,9 @@ describe("filter", () => {
     expect((await screen.findAllByRole("treeitem")).length).toBeGreaterThan(1)
     expect(list.mock.calls).toHaveLength(calls)
     // With only the factory in the browser there is nothing to explain.
-    expect(screen.queryByText(/looks only in folders you have opened/)).toBeNull()
+    expect(
+      screen.queryByText(/looks only in folders you have opened/)
+    ).toBeNull()
   })
 
   it("says so when no factory sound matches", async () => {
@@ -517,8 +519,7 @@ describe("filter", () => {
     await backend.browserAddRoot("/samples/Mine")
     render(<BrowserPanel />)
     await findItem("Drums")
-    const note = () =>
-      document.querySelector("[data-slot=browser-search-note]")
+    const note = () => document.querySelector("[data-slot=browser-search-note]")
     expect(note()).toBeNull()
 
     // With matches: the note is there, since a sound in a closed folder of

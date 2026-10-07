@@ -79,10 +79,7 @@ export function panelMenu(hideAction: string | undefined): ContextItem[] {
  * The divider between two docked panels: put it back where it was, or hide
  * the panel it sizes. `group` is the panel group the divider belongs to.
  */
-export function dividerMenu(
-  group: string,
-  hideAction: string
-): ContextItem[] {
+export function dividerMenu(group: string, hideAction: string): ContextItem[] {
   return [
     {
       title: "Reset size",

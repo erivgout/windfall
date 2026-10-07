@@ -25,6 +25,8 @@ const QUIET: RealtimeFrame = {
   voices: 0,
   gainReductions: [],
   automated: [],
+  audioClips: 0,
+  droppedClips: 0,
 }
 
 let stop: () => void

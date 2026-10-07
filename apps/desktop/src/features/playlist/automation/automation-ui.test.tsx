@@ -82,7 +82,7 @@ describe("the automations to place", () => {
     await automate({ type: "tempo" })
     expect(rows().map((row) => row.textContent)).toEqual([
       "Kick volumeKick → volume",
-      "Kick panKick → pan",
+      "Kick track panKick → pan",
       "TempoTempo",
     ])
     // The words follow the thing: rename the channel and the row says so.

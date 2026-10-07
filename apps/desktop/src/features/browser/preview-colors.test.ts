@@ -8,8 +8,18 @@ import { PREVIEW_BRAND_SHARE, PREVIEW_WAVE } from "./preview-colors"
  * written out here.
  */
 const TOKENS = {
-  light: { brand: 0.592, displayForeground: 0.96, display: 0.235, chassis: 0.948 },
-  dark: { brand: 0.66, displayForeground: 0.95, display: 0.125, chassis: 0.165 },
+  light: {
+    brand: 0.592,
+    displayForeground: 0.96,
+    display: 0.235,
+    chassis: 0.948,
+  },
+  dark: {
+    brand: 0.66,
+    displayForeground: 0.95,
+    display: 0.125,
+    chassis: 0.165,
+  },
 }
 
 /** The lightness of the brand color mixed with the display's foreground. */
@@ -38,8 +48,8 @@ describe("the waveform in the browser's preview", () => {
 
   it("was the color of the light theme's panel when drawn in the display's own foreground", () => {
     // What it used to be: no brand color at all.
-    expect(
-      Math.abs(mixed("light", 0) - TOKENS.light.chassis)
-    ).toBeLessThan(0.02)
+    expect(Math.abs(mixed("light", 0) - TOKENS.light.chassis)).toBeLessThan(
+      0.02
+    )
   })
 })

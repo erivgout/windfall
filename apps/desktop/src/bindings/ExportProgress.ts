@@ -4,4 +4,11 @@ export type ExportProgress = { path: string,
 /**
  * 0 to 1.
  */
-fraction: number, done: boolean, error: string | null, };
+fraction: number, done: boolean, error: string | null, 
+/**
+ * Audio clips that are not in the file, because more than 128 would
+ * have played at once and the ones that started last were left out.
+ * Only the last event, the one with `done` set, says: it is zero on
+ * every event before it.
+ */
+droppedClips: number, };

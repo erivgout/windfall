@@ -242,7 +242,11 @@ describe("what plays into a track", () => {
     audioClip(21, 2, 960),
     audioClip(20, 2, 0),
     audioClip(22, 3),
-    { id: 23, start: 0, content: { type: "pattern", pattern: 1 } } as unknown as Clip,
+    {
+      id: 23,
+      start: 0,
+      content: { type: "pattern", pattern: 1 },
+    } as unknown as Clip,
   ]
 
   it("lists channels, audio clips, outputs and sends", () => {

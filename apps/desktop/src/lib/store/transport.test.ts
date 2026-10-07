@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type {
-  DocumentSnapshot,
-  EngineStatus,
-  TransportState,
-} from "@/bindings"
+import type { DocumentSnapshot, EngineStatus, TransportState } from "@/bindings"
 import { backend, setBackend, type Backend } from "@/lib/ipc"
 import { createMockBackend } from "@/lib/ipc/mock"
 import { settle, startTestApp, TEST_DIALOGS } from "@/test/harness"

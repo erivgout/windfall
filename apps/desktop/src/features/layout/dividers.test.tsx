@@ -38,9 +38,9 @@ describe("the dividers between the docked panels", () => {
     ] as const) {
       const divider = screen.getByRole("separator", { name })
       // Taken by the app, so the webview's own menu stays away.
-      expect(
-        fireEvent.contextMenu(divider, { clientX: 30, clientY: 30 })
-      ).toBe(false)
+      expect(fireEvent.contextMenu(divider, { clientX: 30, clientY: 30 })).toBe(
+        false
+      )
       await act(settle)
       const menu = screen.getByRole("menu")
       const entries = [...menu.querySelectorAll("[role^=menuitem]")].map(

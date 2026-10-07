@@ -45,7 +45,9 @@ export function CompressorEditor({
         <GainReductionMeter
           effect={effect}
           label="Compressor"
-          className="in-data-enlarged:h-48 @min-[26rem]/editor:h-32"
+          // The enlarged height carries the docked rule's container query, so
+          // it is the later rule of the two and wins.
+          className="@min-[26rem]/editor:h-32 in-data-enlarged:@min-[26rem]/editor:h-48"
         />
       </div>
       <div className="flex min-w-0 flex-col justify-between gap-2 @min-[26rem]/editor:flex-row @min-[26rem]/editor:items-center">

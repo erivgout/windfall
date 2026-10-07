@@ -14,19 +14,19 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**45 of 342 rows accounted for (13.2%).** A row is accounted for when it is done or won't do.
+**47 of 342 rows accounted for (13.7%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 278 |
-| In progress | 19 |
-| Done | 43 |
+| Todo | 273 |
+| In progress | 22 |
+| Done | 45 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
-| Core features | 23 | 19 | 3 | 0 | 1 |
-| Main windows | 113 | 73 | 10 | 29 | 1 |
+| Core features | 23 | 17 | 4 | 1 | 1 |
+| Main windows | 113 | 70 | 12 | 30 | 1 |
 | Instruments | 41 | 39 | 1 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,7 +38,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
-| 2. Write a song | 99 | 65 | 11 | 23 | 0 |
+| 2. Write a song | 99 | 60 | 14 | 25 | 0 |
 | 3. Record and edit audio | 34 | 34 | 0 | 0 | 0 |
 | 4. Plugins and files | 13 | 13 | 0 | 0 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ As of 2026-10-07. Sources:
 | Lifetime Free Updates | Free updates | 7 | todo | Windfall is free under GPL-3.0; this row closes when auto-update ships. |
 | Stem Separation | Stem separation | 5 | todo | unverified: lowest edition. The compare table ticks Producer, but the purchase box on the same page shows it locked below Signature. Candidate basis: Demucs (MIT). |
 | Audio Recording | Audio recording | 3 | todo |  |
-| Audio Clips | Audio clips | 2 | todo | Fruity edition is limited to 8 audio clips; unlimited from Producer. |
+| Audio Clips | Audio clips | 2 | in-progress | Audio clips with gain, pan, fades, reverse and tape-style pitch. Time-stretch and recording are not in yet. |
 | Loop Starter | Loop starter | 6 | todo | Needs Windfall's own CC0 loop content; FL's loops cannot be reused. |
 | FL Studio Mobile Rack + FX | TBD | 5 | todo | A Windfall equivalent would be a rack of Windfall's own modules. FL 2026 added a SoundFont player and a note arpeggiator module. |
 | Audio Logger | Audio logger | 3 | todo | unverified: edition availability (the compare page leaves every edition cell blank). New in FL Studio 2026. |
@@ -62,8 +62,8 @@ As of 2026-10-07. Sources:
 | Sound Content | Factory sound library | 1 | wont-do | Reason: Image-Line owns its bundled samples, loops and presets, so they can never be shipped. Windfall ships its own content under CC0 or a similar license. |
 | Piano Roll | Piano roll | 2 | in-progress | Umbrella row; sub-features are tracked as win-piano-* rows. Draw, paint, select and erase tools, clipboard, quantize, velocity and pan lane, ghost notes. The specialist tools are separate rows. |
 | Mixer | Mixer | 2 | in-progress | Umbrella row; the basic mixer lands in phase 1 and routing, sends and effect slots in phase 2 (win-mixer-* rows). Tracks, routing, sends, effect slots, meters and delay compensation are in. Sidechain, track EQ and track presets are separate rows. |
-| Full Song Arrangement | Playlist | 2 | in-progress | Umbrella row; sub-features are tracked as win-playlist-* rows. Pattern clips on the playlist and song mode are in. Audio clips and automation clips are not. |
-| Automation Clips | Automation clips | 2 | todo |  |
+| Full Song Arrangement | Playlist | 2 | done | Pattern, audio and automation clips on the playlist, with song mode. |
+| Automation Clips | Automation clips | 2 | in-progress | Curves with bends and holds for volume, pan, sends, effect and instrument settings, effect mix and tempo. No LFO or step drawing modes yet. |
 | Time signature changes | Time signature changes | 2 | todo |  |
 | MIDI Support | MIDI input | 3 | todo |  |
 | MIDI Out | MIDI output | 3 | todo |  |
@@ -143,19 +143,19 @@ As of 2026-10-07. Sources:
 | Playlist: Select tool | Playlist select tool | 2 | done |  |
 | Playlist: Zoom tool | Playlist zoom tool | 2 | todo |  |
 | Playlist: Playback tool | Playlist scrub tool | 2 | todo |  |
-| Playlist tracks (name, color, mute, solo, resize) | Playlist tracks | 2 | in-progress | Name and mute. No color, solo or resize yet. |
+| Playlist tracks (name, color, mute, solo, resize) | Playlist tracks | 2 | in-progress | Name, mute and reordering. No color, solo or per-track resize yet. |
 | Playlist: track grouping | Track groups | 2 | todo |  |
 | Playlist: instrument tracks and audio tracks | Linked tracks | 2 | todo |  |
 | Playlist: time markers | Time markers | 2 | todo |  |
 | Playlist: arrangements | Arrangements | 2 | todo |  |
-| Playlist: clip source menu and picker panel | Clip picker | 2 | in-progress | Pattern picker only. |
+| Playlist: clip source menu and picker panel | Clip picker | 2 | done | Patterns, audio and automations can each be picked as the brush. |
 | Playlist: clip grouping | Clip groups | 2 | todo |  |
 | Playlist: make unique | Make unique | 2 | todo |  |
 | Playlist: snap | Playlist snap | 2 | done |  |
 | Playlist: timeline selection and loop region | Loop region | 2 | todo |  |
-| Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | todo |  |
-| Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | todo | Gain normalization and clip pan were added in FL Studio 2026. |
-| Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | todo |  |
+| Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | in-progress | Fade in, fade out and gain handles. No automatic crossfades yet. |
+| Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Gain, pan, pitch and reverse. No normalize or independent time-stretch yet. |
+| Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
 | Event editor | Event automation editor | 2 | todo |  |
 | Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | todo | Candidate basis: Signalsmith Stretch (MIT). |
 | Playlist: detect tempo and fit to tempo | Tempo detection | 3 | todo |  |

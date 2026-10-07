@@ -226,9 +226,9 @@ describe("choosing the range a clip shows", () => {
     expect(
       entries(automationMenu(automations()[0])).map((item) => item.title)
     ).toEqual(["Fit to curve", "Full range", "Set range…", "Around the tempo"])
-    expect(entry(viewRangeItems([automation]), "Around the tempo").checked).toBe(
-      true
-    )
+    expect(
+      entry(viewRangeItems([automation]), "Around the tempo").checked
+    ).toBe(true)
 
     // Another target zooms, and has no tempo to follow.
     const fader = await automate({
@@ -238,9 +238,9 @@ describe("choosing the range a clip shows", () => {
     expect(
       entries(viewRangeItems([fader.automation])).map((item) => item.title)
     ).toEqual(["Zoom to curve", "Full range", "Set range…"])
-    expect(entry(viewRangeItems([fader.automation]), "Full range").checked).toBe(
-      true
-    )
+    expect(
+      entry(viewRangeItems([fader.automation]), "Full range").checked
+    ).toBe(true)
     // Nothing for clips that are not automation.
     ui().clearSelection()
     expect(selectedViewRangeItems()).toEqual([])

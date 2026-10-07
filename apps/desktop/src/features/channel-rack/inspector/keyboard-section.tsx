@@ -56,7 +56,10 @@ function keyboardMenu(source: "sampler" | "instrument"): ContextItem[] {
       run: () => setKeyboardLabels(!keyboardLabels),
     },
     contextSeparator,
-    choice("auto", source === "sampler" ? "Around the root key" : "Six octaves"),
+    choice(
+      "auto",
+      source === "sampler" ? "Around the root key" : "Six octaves"
+    ),
     // For an instrument the wide range is the one it has already.
     ...(source === "sampler" ? [choice("wide", "Six octaves")] : []),
     choice("full", "Every key"),

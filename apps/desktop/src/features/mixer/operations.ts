@@ -252,9 +252,7 @@ export async function removeSend(from: TrackId, to: TrackId): Promise<void> {
     const choice = await askConfirm({
       title: `Remove the send to "${target}"?`,
       description: `${automation} Undo brings them back.`,
-      choices: [
-        { id: "remove", label: "Remove send", variant: "destructive" },
-      ],
+      choices: [{ id: "remove", label: "Remove send", variant: "destructive" }],
     })
     if (choice !== "remove") return
   }

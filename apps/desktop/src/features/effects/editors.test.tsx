@@ -248,6 +248,66 @@ describe("the editor of each kind", () => {
   })
 })
 
+describe("the editors docked beside the mixer's strips", () => {
+  /*
+   * jsdom lays nothing out, so these hold the editors to the layout that
+   * was measured in a browser: in the 460 by 246 pixel dock of a 1440 by
+   * 900 window the reverb is 211 pixels tall, the delay 239 and the
+   * equaliser 244, where they were 323, 283 and 252 and had to be scrolled.
+   */
+  const DOCKED = "@min-[26rem]/editor:"
+  // With the docked rule's own container query, so it is the later rule.
+  const ROOMY = "in-data-enlarged:@min-[26rem]/editor:"
+  const classesOf = (element: Element | null | undefined) =>
+    (element?.getAttribute("class") ?? "").split(/\s+/)
+
+  it("stands the reverb's groups side by side, as wide as their knobs", async () => {
+    await open("reverb")
+    const root = document.querySelector("[data-slot=reverb-editor]")
+    expect(classesOf(root)).toContain(`${DOCKED}grid-cols-[3fr_2fr_1.15fr]`)
+    // Enlarged, the groups are equally wide again and wrap.
+    expect(classesOf(root)).toContain(
+      `${ROOMY}grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))]`
+    )
+    const rows = [...(root?.querySelectorAll("[data-slot=param-row]") ?? [])]
+    // Three, two and one knob across; three across everywhere enlarged.
+    expect(
+      rows.map((row) =>
+        classesOf(row).filter((name) => name.startsWith(DOCKED))
+      )
+    ).toEqual([[], [`${DOCKED}grid-cols-2!`], [`${DOCKED}grid-cols-1!`]])
+    for (const row of rows.slice(1)) {
+      expect(classesOf(row)).toContain(`${ROOMY}grid-cols-3!`)
+    }
+  })
+
+  it("puts the delay's Time and Echoes one above the other, with Stereo beside them", async () => {
+    await open("delay")
+    const root = document.querySelector("[data-slot=delay-editor]")
+    expect(classesOf(root)).toContain(`${DOCKED}grid-cols-2`)
+    const stereo = within(root as HTMLElement).getByRole("region", {
+      name: "Stereo",
+    })
+    expect(classesOf(stereo)).toEqual(
+      expect.arrayContaining([
+        `${DOCKED}col-start-2`,
+        `${DOCKED}row-start-1`,
+        `${DOCKED}row-span-2`,
+        `${ROOMY}col-start-auto`,
+        `${ROOMY}row-span-1`,
+      ])
+    )
+  })
+
+  it("draws the equaliser's parts closer together docked than enlarged", async () => {
+    await open("eq")
+    const root = document.querySelector("[data-slot=eq-editor]")
+    expect(classesOf(root)).toEqual(
+      expect.arrayContaining(["gap-1.5", "in-data-enlarged:gap-2"])
+    )
+  })
+})
+
 describe("the equaliser display", () => {
   // The size the display has until it is measured, which is never in jsdom.
   const plot = plotRect(320, 160)

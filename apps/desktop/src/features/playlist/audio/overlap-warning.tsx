@@ -9,7 +9,7 @@ import { tickToPosition } from "@/lib/time"
 import { MAX_AUDIO_CLIPS } from "@/lib/units"
 
 import type { GridMetrics } from "../metrics"
-import { usePlaylistStore } from "../store"
+import { seekSong } from "../ops"
 
 /** Where audio clips will be silent, and what to say about it. */
 export type SilentClips = {
@@ -66,7 +66,8 @@ function Warning({
       ...viewport,
       scrollTick: Math.max(0, silent.tick - visible * LEAD),
     })
-    usePlaylistStore.getState().setCursorTick(silent.tick)
+    // The song position goes there too, so Play starts on the spot.
+    void seekSong(silent.tick)
   }
 
   return (

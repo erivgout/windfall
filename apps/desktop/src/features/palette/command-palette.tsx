@@ -68,7 +68,9 @@ function PaletteList({ search, onRun }: ListProps) {
           <span className="text-[0.625rem] text-muted-foreground">{where}</span>
         )}
         {reason ? (
-          <CommandShortcut className="tracking-normal">{reason}</CommandShortcut>
+          <CommandShortcut className="tracking-normal">
+            {reason}
+          </CommandShortcut>
         ) : (
           shortcut && <CommandShortcut>{shortcut}</CommandShortcut>
         )}

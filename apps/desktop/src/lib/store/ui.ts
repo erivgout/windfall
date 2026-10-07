@@ -18,10 +18,7 @@ export type PanelId = SidePanel | CenterTab
  * settings of the selected audio clips above the timeline.
  */
 export type InnerScope =
-  | "rackInspector"
-  | "effectInspector"
-  | "effect"
-  | "clipInspector"
+  "rackInspector" | "effectInspector" | "effect" | "clipInspector"
 /** Anywhere keyboard shortcuts can be scoped to. */
 export type ScopeId = PanelId | InnerScope
 export type AppDialog = "palette" | "settings" | "export"

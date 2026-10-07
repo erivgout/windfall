@@ -247,6 +247,9 @@ export class TransportSim {
         (track) => meters[track * 2] ?? 0
       ),
       automated: this.automated(project),
+      // The mock plays every clip; it has no limit to run into.
+      audioClips: 0,
+      droppedClips: 0,
     }
   }
 

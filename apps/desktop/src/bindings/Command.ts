@@ -64,8 +64,14 @@ name?: string,
  */
 index?: number, } | { "type": "removePlaylistTrack", id: PlaylistTrackId, } | { "type": "updatePlaylistTrack", id: PlaylistTrackId, patch: PlaylistTrackPatch, } | { "type": "movePlaylistTrack", id: PlaylistTrackId, index: number, } | { "type": "addClips", clips: Array<ClipInit>, } | { "type": "removeClips", clips: Array<ClipId>, } | { "type": "updateClips", updates: Array<ClipUpdate>, } | { "type": "updateAudioClips", updates: Array<AudioClipUpdate>, } | { "type": "addAutomation", 
 /**
- * Defaults to a name made from the target, such as "Kick volume",
- * "Reverb Decay" or "Tempo".
+ * Defaults to a name made from the target, which says what kind
+ * of thing it is: "Kick volume" and "Kick pan" for a channel,
+ * "Kick track volume" and "Kick track pan" for a mixer track,
+ * "Kick to Bus send", "Bus Reverb mix" and "Bus Reverb Decay" for
+ * an effect on the track Bus ("Bus Reverb 2 Decay" for the second
+ * reverb of that track), "Lead Cutoff" for a setting of the
+ * instrument on the channel Lead, and "Tempo". A name that an
+ * automation already has is numbered: "Kick pan 2".
  */
 name?: string, target: AutomationTarget, 
 /**

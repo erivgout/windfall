@@ -180,7 +180,9 @@ describe("what goes with a thing", () => {
         automations: [automation("A"), automation("B")],
         clips: 5,
       })
-    ).toBe("2 automations and their 5 clips on the playlist are deleted with it.")
+    ).toBe(
+      "2 automations and their 5 clips on the playlist are deleted with it."
+    )
   })
 })
 
@@ -283,7 +285,7 @@ describe("deleting something that owns automation", () => {
     const lone = deleteTrack(bus)
     await settle()
     expect(question()?.description).toBe(
-      'The automation "Bus volume" and its clip on the playlist are deleted with it.'
+      'The automation "Bus track volume" and its clip on the playlist are deleted with it.'
     )
     await answer(null)
     await lone

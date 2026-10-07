@@ -141,18 +141,15 @@ describe("the bound the sounds are held to", () => {
 
   it.each(
     SYNTH_PRESETS.map((sound) => [sound.name, sound.id, sound.params] as const)
-  )(
-    "is not under the measured note or chord of %s",
-    (_, id, params) => {
-      const change = changeDb(id, params)
-      expect(notePeakDb(params)).toBeGreaterThanOrEqual(
-        MEASURED[id].note + change
-      )
-      expect(chordPeakDb(params, CHORD_NOTES)).toBeGreaterThanOrEqual(
-        MEASURED[id].chord + change
-      )
-    }
-  )
+  )("is not under the measured note or chord of %s", (_, id, params) => {
+    const change = changeDb(id, params)
+    expect(notePeakDb(params)).toBeGreaterThanOrEqual(
+      MEASURED[id].note + change
+    )
+    expect(chordPeakDb(params, CHORD_NOTES)).toBeGreaterThanOrEqual(
+      MEASURED[id].chord + change
+    )
+  })
 
   it("would have caught the Bass that clipped on one note", () => {
     expect(notePeakDb(oldBass)).toBeGreaterThan(FULL_SCALE_DB)

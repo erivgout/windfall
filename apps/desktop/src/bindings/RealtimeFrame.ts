@@ -27,8 +27,21 @@ cpu: number,
 xruns: number, 
 /**
  * Voices sounding right now: the samplers' and the instruments'.
+ * Audio clips are counted in `audio_clips`.
  */
 voices: number, 
+/**
+ * Audio clips of the playlist playing right now, at most 128. A clip
+ * that is fading out after a stop, a seek or an edit is not counted.
+ */
+audioClips: number, 
+/**
+ * Audio clips that should be sounding right now and are silent,
+ * because 128 were playing already when each was to start. Such a
+ * clip stays silent for its whole length. Zero while the song is not
+ * playing. No more than 1,024 are counted.
+ */
+droppedClips: number, 
 /**
  * How far each compressor and limiter of the project turned its
  * signal down since the last frame, in mixer order and, on one track,
@@ -39,11 +52,13 @@ gainReductions: Array<GainReduction>,
  * The automations that have their target in hand right now, in the
  * order of the project's automations, with the value each is giving
  * it. An automation is listed from the start of its first clip that
- * plays until the song stops: while a clip of it plays, and while its
- * target holds the value the last clip left. Where several
- * automations move one target, the one whose clip decides is listed.
- * Empty while the song is not playing, and in pattern mode. At most
- * 128 are listed.
+ * plays: while a clip of it plays, while its target holds the value
+ * the last clip left, and after the song has stopped for as long as
+ * it is still ringing out with the target held there. So this can
+ * have entries while `playing` is false. Where several automations
+ * move one target, the one whose clip decides is listed. Empty in
+ * pattern mode, and once a stopped song has let go of its targets. At
+ * most 128 are listed.
  *
  * A control whose target is listed here is being moved by the song:
  * show it at this value instead of the one stored in the project.

@@ -817,6 +817,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
             fraction,
             done,
             error: null,
+            droppedClips: 0,
           })
           if (done) clearInterval(timer)
         }, 60)

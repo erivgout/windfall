@@ -49,10 +49,10 @@
       "summary": "Places audio files or recordings on the timeline with per-clip gain, fades and stretch settings.",
       "windfall_name": "Audio clips",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Fruity edition is limited to 8 audio clips; unlimited from Producer."
+      "notes": "Audio clips with gain, pan, fades, reverse and tape-style pitch. Time-stretch and recording are not in yet."
     },
     {
       "id": "core-loop-starter",
@@ -169,10 +169,10 @@
       "summary": "The timeline where patterns, audio and automation are laid out into a complete song.",
       "windfall_name": "Playlist",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Umbrella row; sub-features are tracked as win-playlist-* rows. Pattern clips on the playlist and song mode are in. Audio clips and automation clips are not."
+      "notes": "Pattern, audio and automation clips on the playlist, with song mode."
     },
     {
       "id": "core-automation-clips",
@@ -181,10 +181,10 @@
       "summary": "Timeline clips holding a curve that moves any linked parameter over time.",
       "windfall_name": "Automation clips",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Curves with bends and holds for volume, pan, sends, effect and instrument settings, effect mix and tempo. No LFO or step drawing modes yet."
     },
     {
       "id": "core-time-signature-changes",
@@ -1084,7 +1084,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Name and mute. No color, solo or resize yet."
+      "notes": "Name, mute and reordering. No color, solo or per-track resize yet."
     },
     {
       "id": "win-playlist-track-groups",
@@ -1141,10 +1141,10 @@
       "summary": "A list of every pattern, audio clip and automation clip for choosing what to place next.",
       "windfall_name": "Clip picker",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Pattern picker only."
+      "notes": "Patterns, audio and automations can each be picked as the brush."
     },
     {
       "id": "win-playlist-clip-groups",
@@ -1201,10 +1201,10 @@
       "summary": "On-clip handles for fade-in, fade-out and gain, with crossfades between overlapping clips.",
       "windfall_name": "Clip fades and gain",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Fade in, fade out and gain handles. No automatic crossfades yet."
     },
     {
       "id": "win-playlist-audio-clip-properties",
@@ -1213,10 +1213,10 @@
       "summary": "Per-instance settings for an audio clip's gain, pan, pitch, direction and normalization.",
       "windfall_name": "Audio clip properties",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Gain normalization and clip pan were added in FL Studio 2026."
+      "notes": "Gain, pan, pitch and reverse. No normalize or independent time-stretch yet."
     },
     {
       "id": "win-playlist-automation-editing",
@@ -1225,10 +1225,10 @@
       "summary": "Control points with adjustable curves, freehand step drawing and an LFO generator inside the clip.",
       "windfall_name": "Automation curve editor",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet."
     },
     {
       "id": "win-event-editor",

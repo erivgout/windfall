@@ -86,6 +86,7 @@ export type { PlaylistTrackId } from "./PlaylistTrackId";
 export type { PlaylistTrackPatch } from "./PlaylistTrackPatch";
 export type { Project } from "./Project";
 export type { ProjectPatch } from "./ProjectPatch";
+export type { ProjectSession } from "./ProjectSession";
 export type { ProjectSettings } from "./ProjectSettings";
 export type { RealtimeFrame } from "./RealtimeFrame";
 export type { ReverbParams } from "./ReverbParams";

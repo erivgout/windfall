@@ -73,8 +73,9 @@ describe("the audio clip settings", () => {
     expect(within(idle).queryByRole("slider")).toBeNull()
     const held = idle.querySelector("[inert]")!
     expect(held).toHaveAttribute("aria-hidden", "true")
-    expect(within(held as HTMLElement).getAllByRole("slider", { hidden: true }))
-      .toHaveLength(5)
+    expect(
+      within(held as HTMLElement).getAllByRole("slider", { hidden: true })
+    ).toHaveLength(5)
 
     await act(async () => ui().select([id]))
     expect(inspector()).not.toHaveAttribute("data-idle")
@@ -347,9 +348,22 @@ describe("the warning about clips that will be silent", () => {
     )
     expect(warning()).toHaveTextContent("Over 64 clips at bar 7")
 
-    // Clicking it puts the song position there.
+    // Clicking it puts the song position there, in song mode as well,
+    // where the playhead is the engine's.
     fireEvent.click(warning()!)
     expect(ui().cursorTick).toBe(6 * BAR)
+    await act(async () => {
+      await setPlayMode("song")
+      ui().setCursorTick(0)
+    })
+    const seek = vi.spyOn(backend, "transportSeek")
+    fireEvent.click(warning()!)
+    await flush()
+    expect(seek).toHaveBeenCalledWith(6 * BAR)
+    expect(ui().cursorTick).toBe(6 * BAR)
+    await act(async () => {
+      await setPlayMode("pattern")
+    })
 
     // One muted clip fewer and all of them can sound.
     await dispatch({

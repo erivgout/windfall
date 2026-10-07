@@ -15,9 +15,15 @@ function grid() {
 describe("createPointerFrame", () => {
   it("follows the grid while no button is held", () => {
     const { place, frame } = grid()
-    expect(frame.point({ clientX: 150, clientY: 200 })).toEqual({ x: 50, y: 32 })
+    expect(frame.point({ clientX: 150, clientY: 200 })).toEqual({
+      x: 50,
+      y: 32,
+    })
     place.top = 204
-    expect(frame.point({ clientX: 150, clientY: 200 })).toEqual({ x: 50, y: -4 })
+    expect(frame.point({ clientX: 150, clientY: 200 })).toEqual({
+      x: 50,
+      y: -4,
+    })
   })
 
   it("keeps the frame of the press when the grid moves under a held pointer", () => {
@@ -30,7 +36,10 @@ describe("createPointerFrame", () => {
     // A strip appears above the grid and pushes it 36 pixels down.
     place.top = 204
     expect(frame.point(press)).toEqual({ x: 50, y: 32 })
-    expect(frame.point({ clientX: 190, clientY: 200 })).toEqual({ x: 90, y: 32 })
+    expect(frame.point({ clientX: 190, clientY: 200 })).toEqual({
+      x: 90,
+      y: 32,
+    })
 
     frame.release()
     expect(frame.held).toBe(false)

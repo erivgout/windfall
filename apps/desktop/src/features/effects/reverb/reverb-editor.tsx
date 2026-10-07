@@ -10,11 +10,15 @@ import type { EditorProps } from "../editor-props"
  * columns of knobs (three, two and one), so nothing is below the fold.
  * Enlarged, and where the panel is too narrow for that, the groups are
  * equally wide with three knobs across, and wrap.
+ *
+ * The enlarged rules carry the same container query as the docked ones
+ * they undo. A rule with two conditions is written after one with either
+ * alone, so it wins; `in-data-enlarged:` by itself came first and lost.
  */
 const DOCKED = {
-  root: "@min-[26rem]/editor:grid-cols-[3fr_2fr_1.15fr] @min-[26rem]/editor:gap-1.5 in-data-enlarged:grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))] in-data-enlarged:gap-2",
-  two: "@min-[26rem]/editor:grid-cols-2! in-data-enlarged:grid-cols-3!",
-  one: "@min-[26rem]/editor:grid-cols-1! in-data-enlarged:grid-cols-3!",
+  root: "@min-[26rem]/editor:grid-cols-[3fr_2fr_1.15fr] @min-[26rem]/editor:gap-1.5 in-data-enlarged:@min-[26rem]/editor:grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))] in-data-enlarged:@min-[26rem]/editor:gap-2",
+  two: "@min-[26rem]/editor:grid-cols-2! in-data-enlarged:@min-[26rem]/editor:grid-cols-3!",
+  one: "@min-[26rem]/editor:grid-cols-1! in-data-enlarged:@min-[26rem]/editor:grid-cols-3!",
 } as const
 
 /** The reverb, in three groups: the room, its color, and how much of it. */

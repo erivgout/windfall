@@ -39,6 +39,8 @@ const QUIET: RealtimeFrame = {
   voices: 0,
   gainReductions: [],
   automated: [],
+  audioClips: 0,
+  droppedClips: 0,
 }
 
 let stop: () => void
@@ -301,7 +303,7 @@ describe("editing a control that automation is moving", () => {
     frame()
     await setVolume(0.25)
     expect(notice()).toBe(
-      "Automated by Kick volume — this sets the value used outside its clips"
+      "Automated by Kick track volume — this sets the value used outside its clips"
     )
     // The edit went through all the same.
     expect(project().mixer.tracks[1].volume).toBe(0.25)

@@ -125,9 +125,9 @@ describe("the whole list of actions", () => {
       (title) => !title.toLowerCase().startsWith("mute")
     )
     expect(firstInside).toBeGreaterThan(0)
-    expect(
-      mute.slice(firstInside).some((title) => /^mute/i.test(title))
-    ).toBe(false)
+    expect(mute.slice(firstInside).some((title) => /^mute/i.test(title))).toBe(
+      false
+    )
   })
 })
 

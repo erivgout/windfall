@@ -77,7 +77,14 @@ describe("toasts", () => {
       return 1
     })
     // The docked effects: the bottom right 460 by 270 pixels of the window.
-    corner({ left: 980, right: 1440, top: 606, bottom: 876, width: 460, height: 270 })
+    corner({
+      left: 980,
+      right: 1440,
+      top: 606,
+      bottom: 876,
+      width: 460,
+      height: 270,
+    })
     expect(toastInset()).toBe(460)
 
     render(<Overlays />)
@@ -94,14 +101,42 @@ describe("toasts", () => {
     vi.stubGlobal("innerWidth", 1440)
     vi.stubGlobal("innerHeight", 900)
     // Enlarged into the editor area, the effects end above the mixer.
-    corner({ left: 274, right: 1440, top: 108, bottom: 573, width: 1166, height: 465 })
+    corner({
+      left: 274,
+      right: 1440,
+      top: 108,
+      bottom: 573,
+      width: 1166,
+      height: 465,
+    })
     // Something at the bottom, but at the left.
-    corner({ left: 0, right: 274, top: 700, bottom: 876, width: 274, height: 176 })
+    corner({
+      left: 0,
+      right: 274,
+      top: 700,
+      bottom: 876,
+      width: 274,
+      height: 176,
+    })
     // Something that is not showing.
-    corner({ left: 900, right: 1440, top: 606, bottom: 876, width: 0, height: 0 })
+    corner({
+      left: 900,
+      right: 1440,
+      top: 606,
+      bottom: 876,
+      width: 0,
+      height: 0,
+    })
     expect(toastInset()).toBe(0)
     // The strip that brings the effects back, 22 pixels along the right.
-    corner({ left: 1418, right: 1440, top: 602, bottom: 876, width: 22, height: 274 })
+    corner({
+      left: 1418,
+      right: 1440,
+      top: 602,
+      bottom: 876,
+      width: 22,
+      height: 274,
+    })
     expect(toastInset()).toBe(22)
     vi.unstubAllGlobals()
   })

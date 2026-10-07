@@ -94,9 +94,9 @@ describe("dropping the same sound again", () => {
 
     // Three clips, one "Drum loop 128" track: not a staircase of three.
     expect(project().mixer.tracks).toHaveLength(count)
-    expect(mixerNames().filter((name) => name === "Drum loop 128")).toHaveLength(
-      1
-    )
+    expect(
+      mixerNames().filter((name) => name === "Drum loop 128")
+    ).toHaveLength(1)
     const track = audio(first).mixerTrack
     expect([audio(second).mixerTrack, audio(third).mixerTrack]).toEqual([
       track,
@@ -109,7 +109,11 @@ describe("dropping the same sound again", () => {
       track,
     ])
     // Each drop is still one undo step.
-    expect(labels()).toEqual(["Add audio clip", "Add audio clip", "Add audio clip"])
+    expect(labels()).toEqual([
+      "Add audio clip",
+      "Add audio clip",
+      "Add audio clip",
+    ])
   })
 
   it("follows the most recent clip of the file to the track it was routed to", async () => {

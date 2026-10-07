@@ -193,7 +193,7 @@ return (
 )
 ```
 
-`useDragValue(options)` takes `ValueControlProps` plus `orientation`, `dragRange` (pixels, or a function of the element), `fineFactor`, `trackOvershoot`, `detents`, `doubleClick` (`"reset" | "edit" | "none"`), `wheel` and `editable`. It returns `value`, `normalized` (0 to 1), `text`, `dragging`, `editing`, `sliderProps`, `entryProps`, `startEditing()`, `reset()` and `change(value)`.
+`useDragValue(options)` takes `ValueControlProps` plus `orientation`, `dragRange` (pixels, or a function of the element), `fineFactor`, `trackOvershoot`, `detents`, `doubleClick` (`"reset" | "edit" | "none"`), `wheel`, `editable` and `live` (a `LiveValueFeed`, which the slider reads out in `aria-valuetext`). It returns `value`, `normalized` (0 to 1), `text`, `dragging`, `editing`, `sliderProps`, `entryProps`, `startEditing()`, `reset()` and `change(value)`.
 
 The pure helpers are exported too: `clampValue`, `snapValue`, `valueToNormalized`, `normalizedToValue`, `stepValue`, `dragTravel`, `parseEntry`, `defaultFormat`.
 

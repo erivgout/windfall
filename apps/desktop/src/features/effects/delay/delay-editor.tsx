@@ -44,7 +44,7 @@ export function DelayEditor({ bind }: EditorProps<DelayParams>) {
       // tall: Time and Echoes go one above the other and Stereo beside
       // them, so the whole editor is in view. Enlarged, or in a panel too
       // narrow for that, the three groups are equally wide and wrap.
-      className="grid grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))] items-start gap-2 @min-[26rem]/editor:grid-cols-2 @min-[26rem]/editor:gap-1.5 in-data-enlarged:grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))] in-data-enlarged:gap-2"
+      className="grid grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))] items-start gap-2 @min-[26rem]/editor:grid-cols-2 @min-[26rem]/editor:gap-1.5 in-data-enlarged:@min-[26rem]/editor:grid-cols-[repeat(auto-fit,minmax(11.5rem,1fr))] in-data-enlarged:@min-[26rem]/editor:gap-2"
     >
       <ParamGroup
         title="Time"
@@ -107,7 +107,7 @@ export function DelayEditor({ bind }: EditorProps<DelayParams>) {
       </ParamGroup>
       <ParamGroup
         title="Stereo"
-        className="@min-[26rem]/editor:col-start-2 @min-[26rem]/editor:row-span-2 @min-[26rem]/editor:row-start-1 in-data-enlarged:col-start-auto in-data-enlarged:row-span-1 in-data-enlarged:row-start-auto"
+        className="@min-[26rem]/editor:col-start-2 @min-[26rem]/editor:row-span-2 @min-[26rem]/editor:row-start-1 in-data-enlarged:@min-[26rem]/editor:col-start-auto in-data-enlarged:@min-[26rem]/editor:row-span-1 in-data-enlarged:@min-[26rem]/editor:row-start-auto"
       >
         <ParamControl
           {...bind("mode")}

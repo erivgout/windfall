@@ -319,7 +319,10 @@ describe("Create automation clip", () => {
     await waitFor(() => expect(grid).toHaveFocus())
     expect(project().playlist.clips).toHaveLength(1)
 
-    fireEvent.keyDown(document.activeElement!, { key: "Delete", code: "Delete" })
+    fireEvent.keyDown(document.activeElement!, {
+      key: "Delete",
+      code: "Delete",
+    })
     await flush()
     expect(project().playlist.clips).toEqual([])
     expect(labels().at(-1)).toMatch(/^Delete/)
@@ -336,7 +339,7 @@ describe("Create automation clip", () => {
     })
     act(() => fader().focus())
     await menuOf(fader())
-    await pick("Show automation: Kick volume")
+    await pick("Show automation: Kick track volume")
     await waitFor(() =>
       expect(
         screen.getByRole("application", { name: "Song timeline" })
@@ -434,7 +437,7 @@ describe("Create automation clip", () => {
     ).toBeNull()
     await pick("Create automation clip")
     const [automation] = project().automations
-    expect(automation.name).toBe("Kick volume")
+    expect(automation.name).toBe("Kick track volume")
 
     // The control now carries a marker, in the automation's color.
     const fader = slider("Kick volume")
@@ -447,7 +450,7 @@ describe("Create automation clip", () => {
       usePlaylistStore.getState().clearSelection()
     })
     await menuOf(slider("Kick volume"))
-    await pick("Show automation: Kick volume")
+    await pick("Show automation: Kick track volume")
     expect(useUiStore.getState().centerTab).toBe("playlist")
     const clip = project().playlist.clips[0]
     expect([...usePlaylistStore.getState().selection]).toEqual([clip.id])
@@ -485,8 +488,8 @@ describe("Create automation clip", () => {
         .slice(0, 4)
     ).toEqual([
       "Create automation clip",
-      "Show automation: Kick pan",
-      "Show automation: Kick pan (2)",
+      "Show automation: Kick track pan",
+      "Show automation: Kick track pan 2",
       "Remove automation",
     ])
   })

@@ -233,8 +233,11 @@ describe("the right-click menu of a value control", () => {
         return Number.isNaN(value) ? null : value
       },
     })
-    const copied = (unitKind: string | undefined, value: number, text: string) =>
-      ({ unitKind, value, text })
+    const copied = (
+      unitKind: string | undefined,
+      value: number,
+      text: string
+    ) => ({ unitKind, value, text })
     // The same kind: the number as it is.
     expect(
       pasteOutcome(control("gain"), copied("gain", 0.4217, "−7.5 dB"))
@@ -267,7 +270,10 @@ describe("the right-click menu of a value control", () => {
 
   it("puts the readout on the system clipboard, for other programs", async () => {
     const written = vi.fn(() => Promise.resolve())
-    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: written } })
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText: written },
+    })
     render(
       <ValueContextMenus>
         <Fader aria-label="Volume" value={1} />

@@ -108,7 +108,10 @@ describe("the default view of a tempo curve", () => {
 })
 
 describe("the view of an automation", () => {
-  const tempo = { target: { type: "tempo" } as const, points: [point(bpm(120))] }
+  const tempo = {
+    target: { type: "tempo" } as const,
+    points: [point(bpm(120))],
+  }
   const fader = {
     target: { type: "trackVolume", track: 1 } as const,
     points: [point(0.5), point(0.7, 960)],

@@ -10,11 +10,7 @@ import { useHint } from "@/lib/store"
 import { MASTER_TRACK } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
-import {
-  FeedList,
-  useTrackAudioClips,
-  useTrackChannels,
-} from "./channel-chips"
+import { FeedList, useTrackAudioClips, useTrackChannels } from "./channel-chips"
 import { OutputSelect } from "./output-select"
 import { AddSendMenu, SendList } from "./sends"
 import type { StripTrack } from "./strip-track"

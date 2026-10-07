@@ -163,15 +163,17 @@ describe("audioClipOverlap", () => {
     const moved = pile.map((clip, index) =>
       index < 10 ? { ...clip, track: 2 } : clip
     )
-    expect(
-      audioClipOverlap({ clips: moved, tracks: tracks([2]) }).most
-    ).toBe(60)
+    expect(audioClipOverlap({ clips: moved, tracks: tracks([2]) }).most).toBe(
+      60
+    )
     const patterns = pile.map((clip, index) =>
       index < 10
         ? ({ ...clip, content: { type: "pattern", pattern: 1 } } as Clip)
         : clip
     )
-    expect(audioClipOverlap({ clips: patterns, tracks: tracks() }).most).toBe(60)
+    expect(audioClipOverlap({ clips: patterns, tracks: tracks() }).most).toBe(
+      60
+    )
   })
 
   it("takes another limit", () => {

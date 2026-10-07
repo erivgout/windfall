@@ -101,7 +101,9 @@ export function pasteOutcome(
     (copied.unitKind === undefined && control.unitKind === undefined)
   if (!byText) return { reason: "Another unit" }
   const parsed = control.parse(copied.text)
-  return parsed === null ? { reason: "Not a value for this" } : { value: parsed }
+  return parsed === null
+    ? { reason: "Not a value for this" }
+    : { value: parsed }
 }
 
 /** What a value control's menu acts on. A kit control is one already. */

@@ -30,9 +30,8 @@ function RootsUnreadable({ message }: { message: string | null }) {
 function SearchedNote() {
   return (
     <p data-slot="browser-search-note" className="text-muted-foreground">
-      In your own folders the filter looks only in folders you have opened.
-      Open a folder to include what is in it. The factory sounds are all
-      searched.
+      In your own folders the filter looks only in folders you have opened. Open
+      a folder to include what is in it. The factory sounds are all searched.
     </p>
   )
 }
