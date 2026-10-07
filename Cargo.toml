@@ -21,6 +21,7 @@ windfall-factory = { path = "crates/windfall-factory" }
 windfall-midi = { path = "crates/windfall-midi" }
 windfall-flp = { path = "crates/windfall-flp" }
 windfall-plugin-host = { path = "crates/windfall-plugin-host" }
+windfall-stretch = { path = "crates/windfall-stretch" }
 
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

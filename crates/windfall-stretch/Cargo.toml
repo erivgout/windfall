@@ -1,0 +1,18 @@
+[package]
+name = "windfall-stretch"
+description = "Time-stretching and pitch-shifting for Windfall, with tempo fitting helpers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+
+# MIT OR Apache-2.0. Pure Rust, and it builds for wasm32-unknown-unknown.
+rustfft = "6.4"
+
+[lints]
+workspace = true
