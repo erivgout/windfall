@@ -12,7 +12,7 @@ use tauri::ipc::{Channel, Invoke};
 use tauri::{State, WebviewWindow};
 use windfall_ipc::{
     AudioHost, AudioSettings, BrowserEntry, BrowserRoot, EngineStatus, ExportOptions,
-    RealtimeFrame, SampleInfo, TransportPatch, TransportState,
+    FlpImportOptions, FlpImportPreview, RealtimeFrame, SampleInfo, TransportPatch, TransportState,
 };
 use windfall_project::{
     AutomationTarget, ChannelId, Command, DispatchResult, DocumentSnapshot, PlaylistTrackId,
@@ -85,6 +85,25 @@ async fn project_open(
     blocking(move || session.project_open(&path)).await
 }
 
+#[tauri::command]
+async fn flp_preview(
+    session: State<'_, Session>,
+    path: String,
+    options: FlpImportOptions,
+) -> Result<FlpImportPreview, String> {
+    let session = session.inner().clone();
+    blocking(move || session.flp_preview(&path, &options)).await
+}
+
+#[tauri::command]
+fn flp_open(session: State<'_, Session>, token: u64) -> Result<DocumentSnapshot, String> {
+    session.flp_open(token)
+}
+
+#[tauri::command]
+fn flp_cancel(session: State<'_, Session>, token: u64) {
+    session.flp_cancel(token);
+}
 #[tauri::command]
 async fn project_save(session: State<'_, Session>, path: Option<String>) -> Result<String, String> {
     let session = session.inner().clone();
@@ -354,6 +373,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         history_jump,
         project_new,
         project_open,
+        flp_preview,
+        flp_open,
+        flp_cancel,
         project_save,
         recent_projects,
         transport_play,

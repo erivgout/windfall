@@ -11,6 +11,7 @@ authors.workspace = true
 [dependencies]
 windfall-project.workspace = true
 windfall-midi.workspace = true
+windfall-flp.workspace = true
 serde.workspace = true
 ts-rs.workspace = true
 

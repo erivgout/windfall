@@ -62,6 +62,7 @@ mod autosave;
 mod edit;
 mod export;
 mod files;
+mod flp;
 mod library;
 mod midi;
 mod realtime;
@@ -148,6 +149,7 @@ struct Inner {
     /// Held by a save or a backup from before it copies the project until
     /// its file is written. Taken before `state`, never under it.
     save: Mutex<()>,
+    flp_import: Mutex<Option<flp::PreparedFlp>>,
     state: Mutex<State>,
     /// The transport as the UI was last told. Locked after `state`, never
     /// before it.
@@ -248,6 +250,7 @@ impl Session {
         Self {
             inner: Arc::new(Inner {
                 save: Mutex::new(()),
+                flp_import: Mutex::new(None),
                 state: Mutex::new(State {
                     document: Document::new(project),
                     path: None,

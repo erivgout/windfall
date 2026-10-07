@@ -197,6 +197,13 @@ export const BUILTIN_ACTIONS: Action[] = [
     run: openProject,
   },
   {
+    id: "file.importFlp",
+    title: "Import FL Studio project…",
+    section: "File",
+    keywords: "flp convert notes arrangement samples",
+    run: () => ui().openDialog("flpImport"),
+  },
+  {
     id: "file.save",
     title: "Save",
     section: "File",

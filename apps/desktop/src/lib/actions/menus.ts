@@ -30,6 +30,7 @@ export const MENUS: MenuSpec[] = [
     entries: [
       "file.new",
       "file.open",
+      "file.importFlp",
       {
         submenu: "Open recent",
         section: RECENT_SECTION,

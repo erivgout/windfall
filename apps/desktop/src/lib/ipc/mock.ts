@@ -1,4 +1,6 @@
 import type {
+  FlpImportPreview,
+  ImportReport,
   AudioHost,
   BrowserRoot,
   Command,
@@ -37,6 +39,7 @@ import {
   sampleInfoFor,
   samplePathFor,
 } from "./sim/browser"
+import { sim } from "./sim/wasm"
 import { SimDocument } from "./sim/document"
 import { simulatedLatencyFrames } from "./sim/effects"
 import { demoProject, starterProject } from "./sim/project"
@@ -49,10 +52,13 @@ export type MockDialogs = {
   saveProject(suggestedPath: string): Promise<string | null>
   exportPath(suggestedPath: string): Promise<string | null>
   folder(): Promise<string | null>
+  flpFile?(): Promise<string | null>
   audioFile(): Promise<string | null>
 }
 
 export type MockOptions = MockMidiOptions & {
+  /** Original FL bytes supplied by tests, or selected with the browser picker. */
+  flpFiles?: Record<string, Uint8Array>
   /** Where "saved" projects live. Pass null to keep them in memory only. */
   storage?: Pick<Storage, "getItem" | "setItem"> | null
   dialogs?: MockDialogs
@@ -258,6 +264,14 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let audioSettings = storedSettings({})
   let engine = describeStatus(audioSettings)
   let roots: BrowserRoot[] = defaultRoots()
+  const flpFiles = new Map(Object.entries(options.flpFiles ?? {}))
+  let flpSequence = 0
+  let flpPending: {
+    preview: FlpImportPreview
+    next: SimDocument
+    original: SimDocument
+    originalRevision: number
+  } | null = null
   let memoryFiles: Record<string, string> = {}
   let memoryRecent: string[] = []
   let memoryTransports: Record<string, SavedTransport> = {}
@@ -410,6 +424,10 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     loaded.emit(snapshot)
     emitTransport()
     const missing = missingSamples()
+    if ((doc.project().retainedPlugins?.length ?? 0) > 0)
+      missing.push(
+        `${doc.project().retainedPlugins?.length} imported plugin states are retained; unsupported instruments stay silent and effects bypassed.`
+      )
     if (missing.length > 0) warnings.emit(missing)
     return snapshot
   }
@@ -569,6 +587,114 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         return patch ? publish(patch) : null
       }),
     historyJump: (cursor) => ipc(() => publish(doc.jump(cursor))),
+
+    async pickFlpFile() {
+      if (dialogs.flpFile) return dialogs.flpFile()
+      return new Promise<string | null>((resolve) => {
+        const input = document.createElement("input")
+        input.type = "file"
+        input.accept = ".flp"
+        input.addEventListener("cancel", () => resolve(null), { once: true })
+        input.addEventListener(
+          "change",
+          () => {
+            const file = input.files?.[0]
+            if (!file) {
+              resolve(null)
+              return
+            }
+            void file.arrayBuffer().then(
+              (buffer) => {
+                flpFiles.set(file.name, new Uint8Array(buffer))
+                resolve(file.name)
+              },
+              () => resolve(null)
+            )
+          },
+          { once: true }
+        )
+        input.click()
+      })
+    },
+    flpPreview: (sourcePath, importOptions) =>
+      ipc(() => {
+        flpPending?.next.dispose()
+        flpPending = null
+        const bytes = flpFiles.get(sourcePath)
+        if (!bytes)
+          throw new Error(
+            "Choose an FL project from this browser's file picker first."
+          )
+        const { project, report } = sim.call<{
+          project: Project
+          report: ImportReport
+        }>("flp_convert", 0, {
+          bytes: Array.from(bytes),
+          options: {
+            projectDir: sourcePath.includes("/")
+              ? sourcePath.slice(0, sourcePath.lastIndexOf("/"))
+              : undefined,
+            fallbackName: baseName(sourcePath).replace(/\.flp$/i, ""),
+            pathStyle: "posix",
+            factoryDataDir: importOptions.factoryDataDir,
+            userDataDir: importOptions.userDataDir,
+          },
+        })
+        const missingSamples = project.samples.flatMap((sample) => {
+          try {
+            sampleInfoFor(roots, sample.path.path)
+            return []
+          } catch {
+            return [
+              { sample: sample.id, name: sample.name, path: sample.path.path },
+            ]
+          }
+        })
+        const preview: FlpImportPreview = {
+          token: ++flpSequence,
+          name: project.settings.name,
+          report,
+          missingSamples,
+          retainedPlugins: project.retainedPlugins?.length ?? 0,
+          warnings: missingSamples.map((s) => `Missing sample: ${s.path}`),
+        }
+        if (missingSamples.length > 0)
+          preview.warnings.push(
+            "The browser cannot read external sample folders. Open the desktop app to locate and load those samples."
+          )
+        const next = SimDocument.imported(project)
+        flpPending = {
+          preview,
+          next,
+          original: doc,
+          originalRevision: doc.snapshot(null).revision,
+        }
+        return preview
+      }),
+    flpOpen: (token) =>
+      ipc(() => {
+        const pending = flpPending
+        if (!pending || pending.preview.token !== token)
+          throw new Error(
+            "The import review expired. Choose the FL project again."
+          )
+        if (
+          pending.original !== doc ||
+          pending.originalRevision !== doc.snapshot(null).revision
+        )
+          throw new Error(
+            "The current project changed. Review the FL project again before opening it."
+          )
+        flpPending = null
+        return load(pending.next, null)
+      }),
+    flpCancel: (token) =>
+      ipc(() => {
+        if (flpPending?.preview.token === token) {
+          flpPending.next.dispose()
+          flpPending = null
+        }
+      }),
 
     projectNew: () =>
       ipc(() => load(SimDocument.create(starterProject()), null)),
@@ -911,6 +1037,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       exporting = null
       if (frameTimer !== null) clearInterval(frameTimer)
       frameTimer = null
+      flpPending?.next.dispose()
+      flpPending = null
       doc.dispose()
     },
   }

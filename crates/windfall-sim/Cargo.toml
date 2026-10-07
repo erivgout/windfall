@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 windfall-project.workspace = true
 windfall-midi.workspace = true
 windfall-ipc.workspace = true
+windfall-flp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -75,7 +75,7 @@ for a multi-version real-project corpus.
 | FLhd/FLdt, typed events, unknown ids, version | PyFLP + LMMS; all four event ranges tested | File size capped at 512 MiB; object counts and diagnostics capped; unknown data preserved up to the documented retention cap and all occurrences counted |
 | Tempo/fine tempo, signature, text, master controls | Multiple sources; old denominator meaning from PyFLP | Tempo, signature and name imported via commands; unsupported metadata and main pitch reported; master volume folded into master gain |
 | Sampler controls, sample paths, cut groups, reverse, window/envelope | Multiple sources; envelope timing is a DawVert fit | External normalized references; variables resolve only from options; unresolved paths stay written; asymmetric groups, stretching, looping, LFOs and unsupported effects reported |
-| Generator/wrapper/layer | Wrapper records from PyFLP/DawVert; type 4 interpretation follows DawVert | Three-oscillator source synth maps approximately to subtractive synth; unsupported plugins are silent samplers with raw wrapper state in Conversion.plugins; layers expand notes with cycle protection |
+| Generator/wrapper/layer | Wrapper records from PyFLP/DawVert; type 4 interpretation follows DawVert | Three-oscillator source synth maps approximately to subtractive synth; unsupported plugins are silent samplers with raw wrapper state in Conversion.plugins and Project.retainedPlugins; layers expand notes with cycle protection |
 | Notes/patterns/legacy steps | Modern 24-byte and historical 20-byte generated records; real 20.8.4 records | Exact ticks when representable; nearest-tick rounding otherwise; step-grid pattern lengths; fine pitch, slides, release, group/modulation and MIDI-channel expression reported as unsupported |
 | Mixer slots, mute/solo, routing/sends | Multiple implementations; generated controls and routing fixtures | Command-enforced cycles refused; 128 tracks, 10 effects per track; EQ/compressor/reverb/delay have partial parameter translations; limiter/delay 3 use defaults; unsupported effect states retained separately |
 | Playlist tracks/clips/audio | 32-byte and generated 60-byte records; real 20.8.4 | Pattern position/length/offset/mute imported; audio references, reverse, pitch, approximate fades/gain imported; track name/mute imported; colour/height unsupported; channel offsets disputed and reported |
@@ -102,7 +102,8 @@ odd source ticks require rounding; even source ticks are exact.
 Required checks: `cargo clippy -p windfall-flp --all-targets -- -D warnings`,
 `cargo fmt -p windfall-flp -- --check`, and
 `cargo build -p windfall-flp --target wasm32-unknown-unknown` all pass.
-No shell or UI was changed.
+Those checks verified the reader/converter stage. The desktop workflow is now
+implemented and documented in [desktop-import.md](desktop-import.md).
 
 ## Integration API
 
@@ -112,11 +113,15 @@ pub fn convert(flp: &FlpProject, options: &ConvertOptions) -> Conversion;
 pub fn import(bytes: &[u8], options: &ConvertOptions) -> Result<Conversion, FlpError>;
 ```
 
-Conversion contains Project, ImportReport and Vec<PluginPlaceholder>. The shell
-should read bytes, call import, preserve unsupported states for a future plugin
-host, and create a fresh Document only after Project::check succeeds. Recommended
-IPC: `import_flp(path, options)` returns a snapshot plus report (and retained
-plugin state storage handles). UI: show version/read diagnostics, category counts
-and expandable plain-language losses; offer missing sample-directory selection
-and clearly identify silent placeholders before playback. This crate does not
-check whether referenced samples exist or implement hosted-plugin recovery.
+Conversion contains Project, ImportReport and Vec<PluginPlaceholder>. The project
+also stores unsupported states in the additive `retainedPlugins` field. The
+shell now reads bytes, checks the conversion, resolves and decodes samples for
+review, and opens a fresh unsaved Document only after confirmation and the
+shared replacement ticket checks. IPC is `flp_preview`, `flp_open` and
+`flp_cancel`; the report dialog groups counts and expandable diagnostics. The
+Imported sounds status button exposes retained metadata after save/reopen.
+The browser mock uses the same converter through wasm. See
+[desktop-import.md](desktop-import.md) for the workflow, bounds and tests.
+This crate does not check referenced sample files itself or implement hosted
+plugin recovery; those responsibilities remain with the shell and a future
+compatible state decoder.

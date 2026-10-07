@@ -129,7 +129,15 @@ pub enum PluginPlace {
 /// Reads a file and converts it: [`parse`](crate::parse) and then
 /// [`convert`].
 pub fn import(bytes: &[u8], options: &ConvertOptions) -> Result<Conversion, FlpError> {
-    Ok(convert(&crate::parse(bytes)?, options))
+    let source = crate::parse(bytes)?;
+    if source
+        .header
+        .as_ref()
+        .is_none_or(|h| h.format != crate::FileFormat::Project)
+    {
+        return Err(FlpError::NotProject);
+    }
+    Ok(convert(&source, options))
 }
 
 /// Builds a Windfall project from what an FL Studio file says.
@@ -545,7 +553,28 @@ impl<'a> Builder<'a> {
             name,
             ..
         } = self;
-        let project = document.project().clone();
+        let mut project = document.project().clone();
+        project.retained_plugins = plugins
+            .iter()
+            .map(|plugin| {
+                let (channel, track, slot) = match plugin.place {
+                    PluginPlace::Channel { channel } => (Some(channel), None, None),
+                    PluginPlace::Effect { track, slot } => (None, Some(track), Some(slot)),
+                };
+                windfall_project::RetainedPluginState {
+                    source: "flStudio".to_owned(),
+                    internal_name: plugin.internal_name.clone(),
+                    name: plugin.name.clone(),
+                    vendor: plugin.vendor.clone(),
+                    format: plugin.format.map(|format| format.label().to_owned()),
+                    path: plugin.path.clone(),
+                    channel,
+                    track,
+                    slot,
+                    state: plugin.state.clone(),
+                }
+            })
+            .collect();
         match project.check() {
             Ok(()) => Conversion {
                 project,
@@ -565,10 +594,12 @@ impl<'a> Builder<'a> {
                     category.approximated = 0;
                     category.placeholders = 0;
                 }
+                let mut empty = Project::new(name);
+                empty.retained_plugins = project.retained_plugins;
                 Conversion {
-                    project: Project::new(name),
+                    project: empty,
                     report,
-                    plugins: Vec::new(),
+                    plugins,
                 }
             }
         }

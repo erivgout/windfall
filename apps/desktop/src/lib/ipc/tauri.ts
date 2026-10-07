@@ -69,6 +69,19 @@ export function createTauriBackend(): Backend {
     redo: () => call("redo"),
     historyJump: (cursor) => call("history_jump", { cursor }),
 
+    flpPreview: (path, options) => call("flp_preview", { path, options }),
+    flpOpen: (token) => call("flp_open", { token }),
+    flpCancel: (token) => call("flp_cancel", { token }),
+    async pickFlpFile() {
+      const picked = await open({
+        title: "Import FL Studio project",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "FL Studio project", extensions: ["flp"] }],
+      })
+      return typeof picked === "string" ? picked : null
+    },
+
     projectNew: () => call("project_new"),
     projectOpen: (path) => call("project_open", { path }),
     projectSave: (path) => call("project_save", { path }),

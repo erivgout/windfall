@@ -55,6 +55,11 @@ export class SimDocument {
     return new SimDocument(sim.call<number>("doc_new", 0, project))
   }
 
+  /** A checked imported project which has not been saved. */
+  static imported(project: Project): SimDocument {
+    return new SimDocument(sim.call<number>("doc_new_unsaved", 0, project))
+  }
+
   /** A document on the text of a `.windfall` file, loaded as the app loads one. */
   static open(fileText: string): SimDocument {
     return new SimDocument(sim.call<number>("doc_from_file_json", 0, fileText))

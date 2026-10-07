@@ -109,6 +109,8 @@ fn json(value: &impl Serialize) -> Reply {
     serde_json::to_string(value).map_err(|error| format!("could not encode the result: {error}"))
 }
 
+mod flp;
+
 /// The operations, as plain functions over JSON text.
 pub mod ops {
     pub use crate::midi::{doc_midi_export, doc_midi_import, midi_preview};
@@ -118,10 +120,22 @@ pub mod ops {
 
     use super::{Reply, documents, json, not_open, open, parse, with_document};
 
+    /// Reads and converts FL bytes for review without touching any document.
+    pub fn flp_convert(handle: u32, input: &str) -> Reply {
+        super::flp::convert(handle, input)
+    }
+
     /// An empty project. Input: its name. Result: the `Project`.
     pub fn project_new(_handle: u32, input: &str) -> Reply {
         let name: String = parse("project name", input)?;
         json(&Project::new(name))
+    }
+
+    /// An imported project starts unsaved, so closing asks the user to save it.
+    pub fn doc_new_unsaved(_handle: u32, input: &str) -> Reply {
+        let project: Project = parse("project", input)?;
+        project.check().map_err(|e| e.to_string())?;
+        json(&open(Document::new_unsaved(project))?)
     }
 
     /// Opens a document on a project that is taken to be saved. Input: the
@@ -358,7 +372,9 @@ macro_rules! export_ops {
 
 export_ops! {
     project_new
+    flp_convert
     doc_new
+    doc_new_unsaved
     doc_from_file_json
     doc_free
     doc_dispatch

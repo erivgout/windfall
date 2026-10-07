@@ -7,6 +7,8 @@ use thiserror::Error;
 /// rest is still read.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FlpError {
+    #[error("this FL container holds a preset or score, not an FL Studio project")]
+    NotProject,
     #[error(
         "the file is {size} bytes long, and no more than {limit} bytes of an FL Studio project are read"
     )]
