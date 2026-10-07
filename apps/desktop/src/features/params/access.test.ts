@@ -45,6 +45,13 @@ describe("descriptors", () => {
       limiter: true,
       reverb: true,
       delay: true,
+      balance: true,
+      dcBlock: true,
+      channelMute: true,
+      polarity: true,
+      stereoMatrix: true,
+      softClipper: true,
+      distortion: true,
     }
     const instruments: Record<InstrumentKind, true> = {
       subtractiveSynth: true,
@@ -207,14 +214,16 @@ describe("readParam and writeParam", () => {
         type: "addChannel",
         instrument: "subtractiveSynth",
       })
-      for (const kind of EFFECT_KINDS) run({ type: "addEffect", track, kind })
+      for (const [index, kind] of EFFECT_KINDS.entries()) {
+        run({ type: "addEffect", track: index < 10 ? track : 0, kind })
+      }
     })
     const source = project.channels[0].source
     if (source.type !== "instrument") throw new Error("not an instrument")
     expect(source.params).toEqual(
       instrumentDescriptor("subtractiveSynth").defaults
     )
-    const effects = project.mixer.tracks[1].effects
+    const effects = project.mixer.tracks.flatMap((track) => track.effects)
     expect(effects).toHaveLength(EFFECT_KINDS.length)
     for (const slot of effects) {
       expect(slot.params).toEqual(effectDescriptor(slot.params.type).defaults)

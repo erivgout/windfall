@@ -57,9 +57,10 @@ fn any_effect_reports_what_it_holds_and_refuses_other_settings() {
         }
         let has_meter = matches!(kind, EffectKind::Compressor | EffectKind::Limiter);
         assert_eq!(effect.gain_reduction().is_some(), has_meter);
-        let is_limiter = kind == EffectKind::Limiter;
-        assert_eq!(effect.latency_samples() > 0, is_limiter);
-        assert_eq!(effect.max_latency_samples(RATE) > 0, is_limiter);
+        let has_latency = matches!(kind, EffectKind::Limiter | EffectKind::Distortion);
+        let can_delay = has_latency || kind == EffectKind::StereoMatrix;
+        assert_eq!(effect.latency_samples() > 0, has_latency);
+        assert_eq!(effect.max_latency_samples(RATE) > 0, can_delay);
         assert!(effect.max_latency_samples(RATE) >= effect.latency_samples());
 
         let (mut left, mut right) = (noise(1, 0.3, 2_000), noise(2, 0.3, 2_000));

@@ -6,9 +6,11 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use windfall_dsp::blocks::noise::Rng;
 use windfall_dsp::{
-    AnyEffect, AnyInstrument, CompressorParams, DelayMode, DelayParams, DetectorMode, EffectKind,
-    EffectParams, EqParams, InstrumentKind, InstrumentParams, LimiterParams, NoteDivision,
-    ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit, ReverbParams, SynthParams, Waveform,
+    AnyEffect, AnyInstrument, BalanceParams, ChannelMuteParams, CompressorParams, DcBlockParams,
+    DelayMode, DelayParams, DetectorMode, DistortionParams, EffectKind, EffectParams, EqParams,
+    InstrumentKind, InstrumentParams, LimiterParams, NoteDivision, ParamInfo, ParamKind,
+    ParamScale, ParamSet, ParamUnit, PolarityParams, ReverbParams, SoftClipperParams,
+    StereoMatrixParams, SynthParams, Waveform,
 };
 
 use crate::support::random_params;
@@ -187,6 +189,13 @@ fn every_parameter_struct_agrees_with_its_description() {
     check::<LimiterParams>();
     check::<ReverbParams>();
     check::<DelayParams>();
+    check::<BalanceParams>();
+    check::<DcBlockParams>();
+    check::<ChannelMuteParams>();
+    check::<PolarityParams>();
+    check::<StereoMatrixParams>();
+    check::<SoftClipperParams>();
+    check::<DistortionParams>();
     check::<SynthParams>();
 }
 
@@ -367,6 +376,13 @@ fn names_are_plain_descriptions() {
             "Limiter",
             "Reverb",
             "Delay",
+            "Balance",
+            "DC blocker",
+            "Channel mute",
+            "Polarity",
+            "Stereo matrix",
+            "Soft clipper",
+            "Drive distortion",
             "Subtractive synth"
         ]
     );
