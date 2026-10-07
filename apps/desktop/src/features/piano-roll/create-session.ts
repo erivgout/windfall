@@ -1,6 +1,8 @@
 import type { ChannelId, Note, PatternId, TimeSignature } from "@/bindings"
+import { registry } from "@/lib/actions"
 import { refuse } from "@/lib/errors"
 import { dispatch, useProjectStore } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
 
 import { auditionOff, auditionOn } from "./audition"
 import { Editor, type EditorContext, type EditorHost } from "./editor"
@@ -44,6 +46,7 @@ export function readContext(
  */
 export function createSession(): PianoRollSession {
   const host: EditorHost = {
+    generation: getProjectGeneration,
     dispatch: (command) => dispatch(command),
     context: () => {
       const editing = session.editing
@@ -56,6 +59,9 @@ export function createSession(): PianoRollSession {
         snap: snapTicks(state.snap, currentSignature()),
         lastLength: state.lastLength,
         lastVelocity: state.lastVelocity,
+        pitchScale: state.snapToScale
+          ? { root: state.scaleRoot, id: state.scaleId }
+          : null,
       }
     },
     remember: (length, velocity) =>
@@ -68,6 +74,7 @@ export function createSession(): PianoRollSession {
   const session: PianoRollSession = new PianoRollSession(editor)
   // Actions and buttons ask the store whether anything is selected.
   editor.subscribe((event) => {
+    if (event === "stamp") registry.invalidate()
     if (event !== "selection" && event !== "scene") return
     const selectionCount = editor.selectionCount
     if (usePianoRollStore.getState().selectionCount !== selectionCount) {

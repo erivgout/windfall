@@ -47,6 +47,8 @@ import { useSession } from "./context"
 import { VIEW_MENU } from "./menu"
 import { isSnapId, SNAP_OPTIONS, type SnapOption } from "./snap"
 import { usePianoRollStore } from "./store"
+import { ScaleControls } from "./scale-controls"
+import { StampMenu } from "./stamp-menu"
 
 type RollButtonProps = {
   action: string
@@ -158,7 +160,7 @@ function SnapPicker() {
   const snap = usePianoRollStore((state) => state.snap)
   const setSnap = usePianoRollStore((state) => state.setSnap)
   const hint = useHint(
-    "Snap: the grid that drawing, moving and resizing notes stick to. Hold Shift while dragging to ignore it"
+    "Snap: the grid that drawing, moving and resizing notes stick to. Hold Alt while dragging to ignore it"
   )
   const items = SNAP_OPTIONS.map((option) => ({
     value: option.id,
@@ -225,6 +227,8 @@ export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
           <RollButton action="pianoRoll.toolErase" icon={Eraser01Icon} />
         </Group>
         <SnapPicker />
+        <ScaleControls />
+        <StampMenu />
         <ActionButton action="pianoRoll.quantize" variant="outline" size="sm">
           Note tools
         </ActionButton>
