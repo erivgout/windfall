@@ -51,6 +51,7 @@
 //! automatic tail ends all of them where it ends the mix.
 
 use windfall_core::{db_to_gain, samples_per_tick};
+pub use windfall_ipc::StemMode;
 use windfall_ipc::{PlayMode, TransportPatch};
 use windfall_project::{ClipContent, Project, TrackId};
 
@@ -66,16 +67,6 @@ const MIX_NAME: &str = "Mix";
 
 /// Most characters of a track's name that go into the name of its stem.
 const MAX_NAME_CHARS: usize = 60;
-
-/// What the stems of a render hold. The module's documentation says more.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StemMode {
-    /// What leaves each track, as its meter shows it. One pass.
-    TrackOutputs,
-    /// What each track adds to the mix, heard at the output. One pass for
-    /// each stem.
-    ToMaster,
-}
 
 /// Which stems to render.
 #[derive(Debug, Clone, PartialEq, Eq)]

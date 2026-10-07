@@ -92,6 +92,7 @@ fn export(rig: &Rig, name: &str) -> (Vec<u8>, AudioBuffer) {
         pattern_loops: 1,
         tail_secs: 2.0,
         auto_tail: false,
+        ..ExportOptions::default()
     };
     rig.session.export_audio(options.clone()).unwrap();
     assert_eq!(rig.events.wait_for_export().error, None);
@@ -206,6 +207,7 @@ fn an_automatic_tail_ends_the_export_when_the_sound_does() {
             pattern_loops: 1,
             tail_secs: 30.0,
             auto_tail,
+            ..ExportOptions::default()
         };
         rig.session.export_audio(options.clone()).unwrap();
         assert_eq!(rig.events.wait_for_export().error, None);

@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 pub use windfall_project::PlayMode;
-use windfall_project::{AutomationId, EffectId, PatternId};
+use windfall_project::{AutomationId, EffectId, PatternId, TrackId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -235,15 +235,21 @@ pub struct SampleInfo {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum ExportFormat {
+    /// Uncompressed, at any of the bit depths.
     Wav,
+    /// Lossless and about half the size of WAV, at 16 or 24 bits.
+    Flac,
 }
 
+/// How samples are stored in a WAV or FLAC file. The other formats have no
+/// bit depth and ignore it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum BitDepth {
     Int16,
     Int24,
+    /// WAV only.
     Float32,
 }
 
@@ -251,9 +257,13 @@ pub enum BitDepth {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ExportOptions {
-    /// Absolute path of the file to write.
+    /// Absolute path of the file to write. With `stems` no file of this
+    /// name is written: for `Song.flac` the files are `Song - Mix.flac`,
+    /// `Song - Bass.flac` and so on, in a folder `Song` beside it or,
+    /// without `stems.folder`, where `Song.flac` would have been.
     pub path: String,
     pub format: ExportFormat,
+    /// Used by WAV and FLAC. FLAC has no 32-bit float.
     pub bit_depth: BitDepth,
     pub sample_rate: u32,
     /// Pattern mode renders the transport's pattern `pattern_loops` times.
@@ -269,6 +279,95 @@ pub struct ExportOptions {
     /// past the end. Without it the tail is always `tail_secs` long.
     #[serde(default)]
     pub auto_tail: bool,
+    /// FLAC compression level, 0 to 8. Every level is lossless; a higher
+    /// one takes longer and gives a slightly smaller file. Absent means 5.
+    #[serde(default)]
+    #[ts(optional)]
+    pub flac_level: Option<u8>,
+    /// Exports stems instead of one file. Absent means one file, the mix.
+    #[serde(default)]
+    #[ts(optional)]
+    pub stems: Option<ExportStems>,
+}
+
+impl Default for ExportOptions {
+    /// The song as one 24-bit WAV file at 48 kHz, with no path yet and no
+    /// tail.
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            format: ExportFormat::Wav,
+            bit_depth: BitDepth::Int24,
+            sample_rate: 48_000,
+            mode: PlayMode::Song,
+            pattern_loops: 1,
+            tail_secs: 0.0,
+            auto_tail: false,
+            flac_level: None,
+            stems: None,
+        }
+    }
+}
+
+/// What the stems of an export hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum StemMode {
+    /// What leaves each mixer track, as its meter shows it: after its
+    /// effects, its fader and its pan, and before whatever a bus or the
+    /// master does to it. A bus is a stem of its own. The stems add up to
+    /// the mix only when no bus and no master effect comes after them.
+    /// All stems are rendered in one pass.
+    TrackOutputs,
+    /// What each mixer track adds to the mix: the song with only what
+    /// plays straight into that track sounding, heard at the output
+    /// through its sends, its buses and the master's effects. The stems
+    /// add up to the mix as long as everything on the way is linear; a
+    /// compressor or limiter on a bus or the master reacts to each stem
+    /// alone. The song is rendered once for every stem.
+    ToMaster,
+}
+
+/// Exports the mixer tracks apart, each to a file of its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportStems {
+    pub mode: StemMode,
+    /// The mixer tracks to export. Absent means every track that has
+    /// something to give: with `trackOutputs` every track a channel or an
+    /// audio clip plays into, straight or by way of other tracks, and with
+    /// `toMaster` every track one plays straight into. The master cannot
+    /// be listed; its sound is the mix.
+    #[serde(default)]
+    #[ts(optional)]
+    pub tracks: Option<Vec<TrackId>>,
+    /// Writes the whole mix as well, as one more file.
+    pub include_mix: bool,
+    /// Puts each track's place in the mixer in front of its name, as in
+    /// "03 Bass", so the files sort the way the mixer shows the tracks.
+    pub numbered: bool,
+    /// Puts the files in a folder of their own, named like the export.
+    /// Without it they are written where the export's path points.
+    pub folder: bool,
+}
+
+/// One file an export wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExportedFile {
+    /// Absolute path of the file.
+    pub path: String,
+    /// The mixer track the file is the stem of. `None` for the mix.
+    pub track: Option<TrackId>,
+    /// Length of the audio in frames, at the export's sample rate.
+    #[ts(type = "number")]
+    pub frames: u64,
+    /// Size of the file in bytes.
+    #[ts(type = "number")]
+    pub bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -286,4 +385,15 @@ pub struct ExportProgress {
     /// every event before it.
     #[serde(default)]
     pub dropped_clips: u32,
+    /// The files the export wrote: the mix first, then the stems in mixer
+    /// order. Only on the last event of an export that went through. An
+    /// export that failed or was cancelled leaves no file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub files: Option<Vec<ExportedFile>>,
+    /// Set on the last event of an export that `export_cancel` stopped. It
+    /// has no `error`: nothing went wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cancelled: Option<bool>,
 }

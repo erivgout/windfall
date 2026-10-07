@@ -301,6 +301,11 @@ async fn export_audio(session: State<'_, Session>, options: ExportOptions) -> Re
     blocking(move || session.export_audio(options)).await
 }
 
+#[tauri::command]
+fn export_cancel(session: State<'_, Session>) {
+    session.export_cancel();
+}
+
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -341,5 +346,6 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         add_audio_clip_from_file,
         add_audio_clip_from_sample,
         export_audio,
+        export_cancel,
     ]
 }
