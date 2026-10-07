@@ -11,6 +11,7 @@ mod realtime;
 mod rendering;
 mod sampler;
 mod sequencing;
+mod stems;
 mod support;
 
 /// Counts allocator calls for the realtime tests. It does nothing on a

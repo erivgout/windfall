@@ -131,6 +131,7 @@ mod render;
 mod sequencer;
 mod shared;
 mod state;
+mod stems;
 mod tempo;
 #[cfg(test)]
 mod test_alloc;
@@ -142,6 +143,9 @@ pub use device::Engine;
 pub use pool::SamplePool;
 pub use processor::Processor;
 pub use render::{RenderOptions, Rendered, TAIL_SILENCE_DB, render, render_reporting};
+pub use stems::{
+    Stem, StemError, StemMode, StemOptions, Streamed, render_stems, render_streaming, stems,
+};
 pub use voice::PREVIEW_GAIN_DB;
 
 /// Lets the unit tests of code that runs on the audio thread count its
