@@ -49,6 +49,45 @@ fn demo_project() -> Project {
     doc.project().clone()
 }
 
+#[test]
+fn sampler_loops_round_trip_and_legacy_defaults_stay_omitted() {
+    let legacy = from_json(DEMO_JSON).unwrap();
+    let ChannelSource::Sampler(settings) = &legacy.channels[0].source else {
+        panic!()
+    };
+    assert_eq!(settings.loop_mode, SamplerLoopMode::Off);
+    assert_eq!((settings.loop_start, settings.loop_end), (0.0, 1.0));
+    let json = to_json(&legacy).unwrap();
+    assert!(!json.contains("loopMode"));
+    assert!(!json.contains("loopStart"));
+    assert!(!json.contains("loopEnd"));
+    for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+        let mut project = legacy.clone();
+        let ChannelSource::Sampler(settings) = &mut project.channels[0].source else {
+            panic!()
+        };
+        settings.loop_mode = mode;
+        settings.loop_start = 0.125;
+        settings.loop_end = 0.875;
+        let json = to_json(&project).unwrap();
+        assert_eq!(from_json(&json).unwrap(), project);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("loop.windfall");
+        save(&project, &path).unwrap();
+        assert_eq!(load(&path).unwrap(), project);
+    }
+}
+
+#[test]
+fn malformed_persisted_sampler_loop_points_are_rejected() {
+    for (start, end) in [(0.7, 0.3), (0.5, 0.5), (-0.1, 1.0), (0.0, 1.1)] {
+        let mut value: serde_json::Value = serde_json::from_str(DEMO_JSON).unwrap();
+        value["channels"][0]["source"]["loopStart"] = start.into();
+        value["channels"][0]["source"]["loopEnd"] = end.into();
+        assert!(from_json(&value.to_string()).is_err());
+    }
+}
+
 const DEMO_JSON: &str = r#"{
   "formatVersion": 1,
   "nextId": 8,

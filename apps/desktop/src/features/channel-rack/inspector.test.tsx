@@ -86,6 +86,57 @@ function tap(target: HTMLElement, key: string, times = 1) {
 }
 
 describe("the settings panel", () => {
+  it("edits sampler loop modes and points through undoable project commands", async () => {
+    const user = userEvent.setup()
+    await openSettings("Kick")
+    const modes = within(settings()).getByRole("group", {
+      name: "Sample loop mode",
+    })
+    expect(within(modes).getByRole("button", { name: "Off" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    await user.click(within(modes).getByRole("button", { name: "Forward" }))
+    await settle()
+    expect(sampler("Kick").loopMode).toBe("forward")
+    expect(labels().at(-1)).toBe("Change sample loop mode")
+    tap(slider("Loop start"), "ArrowUp", 20)
+    await settle()
+    expect(sampler("Kick").loopStart).toBeCloseTo(0.02)
+    expect(labels().at(-1)).toBe("Change sample loop range")
+    tap(slider("Loop end"), "ArrowDown", 20)
+    await settle()
+    expect(sampler("Kick").loopEnd).toBeCloseTo(0.98)
+    await user.click(within(modes).getByRole("button", { name: "Ping-pong" }))
+    await settle()
+    expect(sampler("Kick").loopMode).toBe("pingPong")
+    // Turning it off preserves the selected points.
+    await user.click(within(modes).getByRole("button", { name: "Off" }))
+    await settle()
+    expect(sampler("Kick").loopMode ?? "off").toBe("off")
+    expect(sampler("Kick").loopStart).toBeCloseTo(0.02)
+    await act(() => undo())
+    expect(sampler("Kick").loopMode).toBe("pingPong")
+  })
+
+  it("prevents loop point crossings and follows the selected sampler", async () => {
+    await openSettings("Kick")
+    await act(() =>
+      dispatch({
+        type: "updateSampler",
+        id: channel("Kick").id,
+        patch: { loopStart: 0.4, loopEnd: 0.401 },
+      })
+    )
+    tap(slider("Loop start"), "ArrowUp", 3)
+    await settle()
+    expect(sampler("Kick").loopStart).toBeLessThan(sampler("Kick").loopEnd ?? 1)
+    expect(toast.error).not.toHaveBeenCalled()
+    await act(() => useUiStore.getState().selectChannel(channel("Hat").id))
+    expect(slider("Loop start")).toHaveAttribute("aria-valuenow", "0")
+    expect(slider("Loop end")).toHaveAttribute("aria-valuenow", "1")
+  })
+
   it("is closed until a channel is opened, and follows the selection", async () => {
     const user = userEvent.setup()
     render(<ChannelRackPanel />)

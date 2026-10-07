@@ -16,7 +16,7 @@ use std::ops::Range;
 
 use rtrb::Producer;
 use windfall_core::{AudioBuffer, db_to_gain, pan_gains};
-use windfall_project::{ChannelId, Envelope, TrackId};
+use windfall_project::{ChannelId, Envelope, SamplerLoopMode, TrackId};
 
 use crate::message::{Garbage, retire};
 use crate::mixer::{Frame, Mixer};
@@ -116,7 +116,7 @@ pub(crate) struct Note {
     pub velocity: f32,
     pub pan: f32,
     /// Tick on the sequencer's clock on which the note ends, for samplers
-    /// with an envelope. Infinity holds the note until it is released by
+    /// with an envelope or loop. Infinity holds the note until it is released by
     /// hand.
     pub end: f64,
     pub origin: Origin,
@@ -152,20 +152,84 @@ impl Region {
     /// untouched.
     #[inline]
     pub fn read(&self, sample: &AudioBuffer, position: f64) -> (f32, f32) {
-        let index = position as isize;
-        let fraction = (position - index as f64) as f32;
-        let current = self.frame(sample, index);
-        if fraction == 0.0 {
-            return current;
-        }
-        let before = self.frame(sample, index - 1);
-        let next = self.frame(sample, index + 1);
-        let after = self.frame(sample, index + 2);
-        (
-            hermite(before.0, current.0, next.0, after.0, fraction),
-            hermite(before.1, current.1, next.1, after.1, fraction),
-        )
+        interpolate(position, |index| self.frame(sample, index))
     }
+}
+
+/// Prepared loop bounds in the trimmed region's playing order. The voice's
+/// position advances through a virtual periodic sequence; reflected taps at
+/// ping-pong turns and wrapped taps at forward seams follow that sequence.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoopRegion {
+    pub first: usize,
+    pub frames: usize,
+    pub mode: SamplerLoopMode,
+}
+
+impl LoopRegion {
+    fn period(self) -> usize {
+        match self.mode {
+            SamplerLoopMode::PingPong => 2 * self.frames.saturating_sub(1).max(1),
+            SamplerLoopMode::Off | SamplerLoopMode::Forward => self.frames,
+        }
+    }
+
+    fn advance(self, position: &mut f64, cycled: &mut bool, step: f64) {
+        *position += step;
+        let first = self.first as f64;
+        let period = self.period() as f64;
+        if *position >= first + period {
+            *position = first + (*position - first).rem_euclid(period);
+            *cycled = true;
+        }
+    }
+
+    fn read(self, region: Region, sample: &AudioBuffer, position: f64, cycled: bool) -> (f32, f32) {
+        // A one-frame loop holds that frame at every rate, without interpolating
+        // into silence or borrowing a frame outside the loop.
+        if self.frames == 1 && position >= self.first as f64 {
+            return region.frame(sample, self.first as isize);
+        }
+        interpolate(position, |index| {
+            let first = self.first as isize;
+            if index < first && !cycled {
+                return region.frame(sample, index.max(0));
+            }
+            let offset = index - first;
+            let mapped = if self.frames == 1 {
+                0
+            } else {
+                match self.mode {
+                    SamplerLoopMode::PingPong => {
+                        let period = self.period() as isize;
+                        let phase = offset.rem_euclid(period);
+                        phase.min(period - phase)
+                    }
+                    SamplerLoopMode::Off | SamplerLoopMode::Forward => {
+                        offset.rem_euclid(self.frames as isize)
+                    }
+                }
+            };
+            region.frame(sample, first + mapped)
+        })
+    }
+}
+
+#[inline]
+fn interpolate(position: f64, frame: impl Fn(isize) -> (f32, f32)) -> (f32, f32) {
+    let index = position.floor() as isize;
+    let fraction = (position - index as f64) as f32;
+    let current = frame(index);
+    if fraction == 0.0 {
+        return current;
+    }
+    let before = frame(index - 1);
+    let next = frame(index + 1);
+    let after = frame(index + 2);
+    (
+        hermite(before.0, current.0, next.0, after.0, fraction),
+        hermite(before.1, current.1, next.1, after.1, fraction),
+    )
 }
 
 /// Catmull-Rom spline through four evenly spaced points, evaluated
@@ -343,6 +407,8 @@ struct Voice {
     /// changes under a sounding note. Voices without an envelope ignore it.
     end: f64,
     region: Region,
+    loop_region: Option<LoopRegion>,
+    loop_cycled: bool,
     /// Frames into the region, in playing order.
     position: f64,
     /// Sample frames to advance per output frame: pitch times the ratio of
@@ -379,6 +445,8 @@ impl Voice {
                 frames: 0,
                 reverse: false,
             },
+            loop_region: None,
+            loop_cycled: false,
             position: 0.0,
             step: 1.0,
             gain: 0.0,
@@ -447,18 +515,27 @@ impl Voice {
                 level *= 1.0 - self.fade_in as f32 / fade_frames as f32;
                 self.fade_in -= 1;
             }
-            let (sample_left, sample_right) = self.region.read(sample, self.position);
+            let (sample_left, sample_right) = match self.loop_region {
+                Some(loop_region) => {
+                    loop_region.read(self.region, sample, self.position, self.loop_cycled)
+                }
+                None => self.region.read(sample, self.position),
+            };
             out[0] += sample_left * level * left;
             out[1] += sample_right * level * right;
 
-            self.position += self.step;
+            if let Some(loop_region) = self.loop_region {
+                loop_region.advance(&mut self.position, &mut self.loop_cycled, self.step);
+            } else {
+                self.position += self.step;
+            }
             if self.fade > 0 {
                 self.fade -= 1;
                 if self.fade == 0 {
                     return true;
                 }
             }
-            if self.position >= self.region.frames as f64 {
+            if self.loop_region.is_none() && self.position >= self.region.frames as f64 {
                 return true;
             }
         }
@@ -573,6 +650,8 @@ impl VoicePool {
                 reverse: sampler.reverse,
             },
             position: 0.0,
+            loop_region: sampler.loop_region,
+            loop_cycled: sampler.loop_region.is_some_and(|region| region.first == 0),
             step: pitch * f64::from(sample.sample_rate()) / self.sample_rate,
             gain: note.velocity * sampler.gain,
             pan: note.pan,
@@ -620,8 +699,8 @@ impl VoicePool {
         None
     }
 
-    /// Ends a note played by hand. Samplers without an envelope play on to
-    /// the end of the sample.
+    /// Ends a note played by hand. One-shots without an envelope play on to
+    /// the end of the sample; loops always release.
     pub fn release_live(&mut self, channel: ChannelId, key: u8) {
         for voice in self.voices.iter_mut().filter(|voice| {
             voice.active && voice.origin == Origin::Live && voice.channel == channel
@@ -926,6 +1005,101 @@ mod tests {
         assert_eq!(region.read(&sample, 0.0), (3.0, 3.0));
         assert_eq!(region.read(&sample, 1.0), (2.0, 2.0));
         assert_eq!(region.frame(&sample, 2), (0.0, 0.0));
+    }
+
+    #[test]
+    fn loop_interpolation_follows_periodic_taps_at_fractional_seams_and_turns() {
+        // Outside values must never leak into a cycled loop's interpolation.
+        let sample = AudioBuffer::from_interleaved(
+            48_000,
+            2,
+            vec![9.0, -9.0, 0.2, -0.2, 0.8, -0.8, 9.0, -9.0],
+        );
+        let region = Region {
+            first: 0,
+            frames: 4,
+            reverse: false,
+        };
+        for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+            let loop_region = LoopRegion {
+                first: 1,
+                frames: 2,
+                mode,
+            };
+            // Both two-frame modes alternate, and the half-way points average.
+            for position in [1.5, 2.5] {
+                let read = loop_region.read(region, &sample, position, true);
+                assert!((read.0 - 0.5).abs() < 1e-6, "{mode:?}: {read:?}");
+                assert_eq!(read.0, -read.1);
+            }
+            // An exact period plus a fraction must preserve the fraction.
+            let mut position = 1.0;
+            let mut cycled = false;
+            loop_region.advance(&mut position, &mut cycled, 2000.5);
+            assert_eq!(position, 1.5);
+            assert!(cycled);
+        }
+    }
+
+    #[test]
+    fn ping_pong_turns_reflect_the_curve_and_do_not_duplicate_endpoints() {
+        let sample = AudioBuffer::from_interleaved(48_000, 1, vec![0.1, 0.2, 0.4]);
+        let region = Region {
+            first: 0,
+            frames: 3,
+            reverse: false,
+        };
+        let loop_region = LoopRegion {
+            first: 0,
+            frames: 3,
+            mode: SamplerLoopMode::PingPong,
+        };
+        let mut position = 0.0;
+        let mut cycled = true;
+        let got: Vec<f32> = (0..9)
+            .map(|_| {
+                let value = loop_region.read(region, &sample, position, cycled).0;
+                loop_region.advance(&mut position, &mut cycled, 1.0);
+                value
+            })
+            .collect();
+        assert_eq!(got, [0.1, 0.2, 0.4, 0.2, 0.1, 0.2, 0.4, 0.2, 0.1]);
+        for (a, b) in [(1.75, 2.25), (0.25, 3.75)] {
+            assert!(
+                (loop_region.read(region, &sample, a, true).0
+                    - loop_region.read(region, &sample, b, true).0)
+                    .abs()
+                    < 1e-7
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_frame_loop_is_constant_at_fractional_and_large_rates() {
+        let sample = AudioBuffer::from_interleaved(48_000, 1, vec![9.0, 0.25, 9.0]);
+        let region = Region {
+            first: 0,
+            frames: 3,
+            reverse: false,
+        };
+        for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+            let loop_region = LoopRegion {
+                first: 1,
+                frames: 1,
+                mode,
+            };
+            for step in [0.01, 0.5, 1.0, 13.7, 1000.25] {
+                let mut position = 1.0;
+                let mut cycled = true;
+                for _ in 0..1000 {
+                    assert_eq!(
+                        loop_region.read(region, &sample, position, cycled),
+                        (0.25, 0.25)
+                    );
+                    loop_region.advance(&mut position, &mut cycled, step);
+                }
+            }
+        }
     }
 
     #[test]

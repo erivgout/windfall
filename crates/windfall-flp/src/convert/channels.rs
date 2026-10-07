@@ -254,6 +254,7 @@ impl Builder<'_> {
                             } else {
                                 0
                             }),
+                            ..SamplerPatch::default()
                         },
                     },
                 );

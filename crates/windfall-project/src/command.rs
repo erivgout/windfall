@@ -504,6 +504,12 @@ pub struct SamplerPatch {
     #[ts(optional)]
     pub reverse: Option<bool>,
     #[ts(optional)]
+    pub loop_mode: Option<crate::SamplerLoopMode>,
+    #[ts(optional)]
+    pub loop_start: Option<f32>,
+    #[ts(optional)]
+    pub loop_end: Option<f32>,
+    #[ts(optional)]
     pub cut_self: Option<bool>,
     #[ts(optional)]
     pub cut_group: Option<u8>,

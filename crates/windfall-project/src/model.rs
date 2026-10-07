@@ -440,8 +440,19 @@ pub struct SamplerSettings {
     /// Playback end as a fraction of the sample, 0 to 1, greater than `start`.
     pub end: f32,
     pub reverse: bool,
-    /// With no envelope the sample plays to its end and ignores note length,
-    /// which is what drum hits want. With one, the note length gates it.
+    #[serde(default, skip_serializing_if = "SamplerLoopMode::is_off")]
+    #[ts(as = "Option<SamplerLoopMode>", optional)]
+    pub loop_mode: SamplerLoopMode,
+    /// Loop start as a fraction of the trimmed region, in source order.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub loop_start: f32,
+    /// Exclusive loop end as a fraction of the trimmed region.
+    #[serde(default = "loop_end_default", skip_serializing_if = "is_one")]
+    #[ts(as = "Option<f32>", optional)]
+    pub loop_end: f32,
+    /// With no envelope a one-shot ignores note length, which drum hits want.
+    /// Loops use a short release when this is absent; an envelope gates either.
     pub envelope: Option<Envelope>,
     /// A new note on this channel stops the notes already playing on it.
     pub cut_self: bool,
@@ -460,11 +471,43 @@ impl Default for SamplerSettings {
             start: 0.0,
             end: 1.0,
             reverse: false,
+            loop_mode: SamplerLoopMode::Off,
+            loop_start: 0.0,
+            loop_end: 1.0,
             envelope: None,
             cut_self: false,
             cut_group: 0,
         }
     }
+}
+
+/// A loop repeats while a note is held and during its envelope release.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SamplerLoopMode {
+    #[default]
+    Off,
+    Forward,
+    PingPong,
+}
+
+impl SamplerLoopMode {
+    fn is_off(&self) -> bool {
+        *self == Self::Off
+    }
+}
+
+fn loop_end_default() -> f32 {
+    1.0
+}
+
+fn is_one(value: &f32) -> bool {
+    *value == 1.0
+}
+
+fn is_zero(value: &f32) -> bool {
+    *value == 0.0
 }
 
 /// An attack, decay, sustain, release volume envelope. The three times run

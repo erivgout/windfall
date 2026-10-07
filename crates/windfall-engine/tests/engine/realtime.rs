@@ -80,6 +80,44 @@ fn the_counter_sees_allocations_and_frees() {
     assert_eq!(allocator_calls(|| assert_eq!(2 + 2, 4)), 0);
 }
 
+#[test]
+fn sampler_loops_never_allocate_or_free_during_notes_cuts_edits_and_retirement() {
+    for mode in [
+        windfall_project::SamplerLoopMode::Forward,
+        windfall_project::SamplerLoopMode::PingPong,
+    ] {
+        let mut rig = Rig::new();
+        let channel = rig.channel(sine(44_100, 220.0, 0.001));
+        rig.sampler_mut(channel).loop_mode = mode;
+        let (mut processor, controller) = rig.processor(48_000);
+        let mut out = vec![0.0; 512 * 2];
+        for round in 0..8 {
+            for note in 0..320 {
+                controller.note_on(channel, (note % 128) as u8, 0.001);
+            }
+            assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+            for key in 0..128 {
+                controller.note_off(channel, key);
+            }
+            assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+            let sampler = rig.sampler_mut(channel);
+            sampler.loop_start = round as f32 * 0.05;
+            sampler.loop_end = 1.0 - round as f32 * 0.05;
+            sampler.cut_self = true;
+            if round == 4 {
+                let sample = sampler.sample.unwrap();
+                rig.pool.insert(sample, sine(32_000, 440.0, 0.002));
+            }
+            controller.set_project(&rig.project, &rig.pool);
+            assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+            controller.frame();
+        }
+        controller.stop();
+        assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+        controller.frame();
+    }
+}
+
 /// A project that keeps every part of the engine busy: resampled and
 /// pitched voices, envelopes, cut groups, sends, swing and a playlist.
 fn busy_rig() -> Rig {

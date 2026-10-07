@@ -759,9 +759,16 @@ fn sampler_patch() -> impl Strategy<Value = SamplerPatch> {
         maybe(any::<bool>()),
         maybe(any::<bool>()),
         maybe(any::<u8>()),
+        maybe(prop_oneof![
+            Just(SamplerLoopMode::Off),
+            Just(SamplerLoopMode::Forward),
+            Just(SamplerLoopMode::PingPong)
+        ]),
+        maybe(level()),
+        maybe(level()),
     )
         .prop_map(
-            |(root_key, tune, gain, start, end, reverse, cut_self, cut_group)| SamplerPatch {
+            |(
                 root_key,
                 tune,
                 gain,
@@ -770,6 +777,21 @@ fn sampler_patch() -> impl Strategy<Value = SamplerPatch> {
                 reverse,
                 cut_self,
                 cut_group,
+                loop_mode,
+                loop_start,
+                loop_end,
+            )| SamplerPatch {
+                root_key,
+                tune,
+                gain,
+                start,
+                end,
+                reverse,
+                cut_self,
+                cut_group,
+                loop_mode,
+                loop_start,
+                loop_end,
             },
         )
 }

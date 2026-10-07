@@ -150,8 +150,11 @@ function EnvelopeControls({
 export function EnvelopeSection({ channel }: { channel: SamplerChannel }) {
   const { id } = channel
   const envelope = channel.source.envelope
+  const looping = (channel.source.loopMode ?? "off") !== "off"
   const hint = useHint(
-    "Envelope: when on, the note's length shapes the sound. When off, every hit plays the sample to its end"
+    looping
+      ? "Envelope: shape held loops and their release. When off, looped notes use a short release"
+      : "Envelope: when on, the note's length shapes the sound. When off, every hit plays the sample to its end"
   )
 
   function setOn(on: boolean) {
@@ -189,8 +192,9 @@ export function EnvelopeSection({ channel }: { channel: SamplerChannel }) {
         <EnvelopeControls channel={channel} envelope={envelope} />
       ) : (
         <p className="text-muted-foreground">
-          Off. Every hit plays the sample to its end, which suits drums. Turn it
-          on to shape held notes.
+          {looping
+            ? "Off. Looped notes hold until note-off, then release over 4 ms. Turn it on to shape the loop and its release."
+            : "Off. Every hit plays the sample to its end, which suits drums. Turn it on to shape held notes."}
         </p>
       )}
     </Section>
