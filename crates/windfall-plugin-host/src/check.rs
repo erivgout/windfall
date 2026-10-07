@@ -180,10 +180,19 @@ pub fn check_in_process(path: &Path, id: &str, out: &mut dyn Write) {
         let plays_notes = instance.layout().note_inputs > 0;
         let mut peak = 0.0_f32;
         for block in 0..BLOCKS {
-            // The input is silence. An instrument also gets one note, so
-            // that its voices run.
-            left.fill(0.0);
-            right.fill(0.0);
+            // Exercise an effect with a signal, not just a silence path.
+            for (frame, (left, right)) in left.iter_mut().zip(&mut right).enumerate() {
+                let value = if plays_notes {
+                    0.0
+                } else {
+                    ((block * BLOCK + frame) as f32 * std::f32::consts::TAU * 440.0
+                        / SAMPLE_RATE as f32)
+                        .sin()
+                        * 0.1
+                };
+                *left = value;
+                *right = value * 0.75;
+            }
             if plays_notes && block == 2 {
                 processor.note_on(0, 60, 0.8);
             }
@@ -237,7 +246,11 @@ pub fn check_in_process(path: &Path, id: &str, out: &mut dyn Write) {
         }
     });
 
-    stage!(CheckStep::State, {
+    let mut processor = stage!(CheckStep::State, {
+        // VST3 component state is a main-thread operation that must not
+        // race process. Return ownership before saving/restoring either format.
+        processor.stop();
+        instance.deactivate(processor);
         instance
             .save_state()
             .and_then(|saved| {
@@ -254,7 +267,7 @@ pub fn check_in_process(path: &Path, id: &str, out: &mut dyn Write) {
                     "parameter values"
                 };
                 Ok((
-                    (),
+                    instance.activate(SAMPLE_RATE, BLOCK)?,
                     format!("{} bytes of {kind}, {same}", saved.as_bytes().len()),
                 ))
             })

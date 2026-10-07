@@ -9,8 +9,8 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-# Reserved for future VST3 audio hosting. It currently enables no extra
-# behavior. Factory/layout scanning is independent of this feature.
+# Compatibility feature retained for callers. VST3 hosting, like scanning,
+# is available in the default build on supported platforms.
 vst3-hosting = []
 
 [dependencies]
@@ -39,7 +39,7 @@ clack-extensions = { version = "=0.2.0", features = [
 # itself. The version clack-host uses.
 clap-sys = "0.5.0"
 # MIT OR Apache-2.0. Bindings generated from the MIT-licensed VST3 SDK.
-vst3 = "0.3.0"
+vst3 = "=0.3.0"
 # ISC. Loads VST3 modules. The version clack-host uses for CLAP files.
 libloading = "0.8"
 # MIT OR Apache-2.0. Lock-free queues between the main and audio threads.

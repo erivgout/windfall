@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        2
+        6
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..2).contains(&index) {
+        if info.is_null() || !(0..6).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -50,11 +50,16 @@ impl IPluginFactoryTrait for Factory {
                 cid: cid(index),
                 cardinality: i32::MAX,
                 category: chars("Audio Module Class"),
-                name: chars(if index == 0 {
-                    "VST3 Test Effect"
-                } else {
-                    "VST3 Absurd Ports"
-                }),
+                name: chars(
+                    [
+                        "VST3 Test Effect",
+                        "VST3 Absurd Ports",
+                        "VST3 Test Instrument",
+                        "VST3 Mono",
+                        "VST3 Process Error",
+                        "VST3 NaN",
+                    ][index as usize],
+                ),
             });
         }
         kResultOk
@@ -73,11 +78,26 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || (class != cid(0) && class != cid(1)) {
+            if iid != IComponent::IID || !(0..6).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
                 absurd: class == cid(1),
+                instrument: class == cid(2),
+                mono: class == cid(3),
+                fault: if class == cid(4) {
+                    1
+                } else if class == cid(5) {
+                    2
+                } else {
+                    0
+                },
+                initialized: std::sync::atomic::AtomicBool::new(false),
+                active: std::sync::atomic::AtomicBool::new(false),
+                processing: std::sync::atomic::AtomicBool::new(false),
+                gain: std::sync::atomic::AtomicU64::new(0.5_f64.to_bits()),
+                meters: std::array::from_fn(|_| std::sync::atomic::AtomicU64::new(0)),
+                audio: std::cell::UnsafeCell::new(Audio::default()),
             })
             .to_com_ptr::<IComponent>()
             .unwrap();
@@ -88,7 +108,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..2).contains(&index) {
+        if info.is_null() || !(0..6).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -97,13 +117,22 @@ impl IPluginFactory2Trait for Factory {
                 cid: cid(index),
                 cardinality: i32::MAX,
                 category: chars("Audio Module Class"),
-                name: chars(if index == 0 {
-                    "VST3 Test Effect"
-                } else {
-                    "VST3 Absurd Ports"
-                }),
+                name: chars(
+                    [
+                        "VST3 Test Effect",
+                        "VST3 Absurd Ports",
+                        "VST3 Test Instrument",
+                        "VST3 Mono",
+                        "VST3 Process Error",
+                        "VST3 NaN",
+                    ][index as usize],
+                ),
                 classFlags: 0,
-                subCategories: chars("Fx|Tools"),
+                subCategories: chars(if index == 2 {
+                    "Instrument|Synth"
+                } else {
+                    "Fx|Tools"
+                }),
                 vendor: chars("Windfall Tests"),
                 version: chars("1.0"),
                 sdkVersion: chars("3.8"),
@@ -114,9 +143,18 @@ impl IPluginFactory2Trait for Factory {
 }
 struct Component {
     absurd: bool,
+    instrument: bool,
+    mono: bool,
+    fault: u8,
+    initialized: std::sync::atomic::AtomicBool,
+    active: std::sync::atomic::AtomicBool,
+    processing: std::sync::atomic::AtomicBool,
+    gain: std::sync::atomic::AtomicU64,
+    meters: [std::sync::atomic::AtomicU64; 3],
+    audio: std::cell::UnsafeCell<Audio>,
 }
 impl Class for Component {
-    type Interfaces = (IComponent,);
+    type Interfaces = (IComponent, IAudioProcessor, IEditController);
 }
 impl IPluginBaseTrait for Component {
     unsafe fn initialize(&self, context: *mut FUnknown) -> tresult {
@@ -132,6 +170,12 @@ impl IPluginBaseTrait for Component {
         if unsafe { host.getName(&mut name) } != kResultOk || name[0] != u16::from(b'W') {
             return kInvalidArgument;
         }
+        if self
+            .initialized
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return kResultFalse;
+        }
         kResultOk
     }
     unsafe fn terminate(&self) -> tresult {
@@ -145,13 +189,13 @@ impl IComponentTrait for Component {
     unsafe fn setIoMode(&self, _mode: IoMode) -> tresult {
         kResultOk
     }
-    unsafe fn getBusCount(&self, media: MediaType, _dir: BusDirection) -> i32 {
+    unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
         if self.absurd {
             1000
         } else if media == 0 {
-            1
+            if self.instrument && dir == 0 { 0 } else { 1 }
         } else {
-            0
+            i32::from(self.instrument && dir == 0)
         }
     }
     unsafe fn getBusInfo(
@@ -161,7 +205,7 @@ impl IComponentTrait for Component {
         index: i32,
         bus: *mut BusInfo,
     ) -> tresult {
-        if media != 0 || index != 0 || bus.is_null() {
+        if index != 0 || bus.is_null() || unsafe { self.getBusCount(media, dir) } == 0 {
             return kInvalidArgument;
         }
         let mut name = [0; 128];
@@ -173,7 +217,7 @@ impl IComponentTrait for Component {
             bus.write(BusInfo {
                 mediaType: media,
                 direction: dir,
-                channelCount: 2,
+                channelCount: if media == 1 || self.mono { 1 } else { 2 },
                 name,
                 busType: 0,
                 flags: 1,
@@ -197,14 +241,349 @@ impl IComponentTrait for Component {
     ) -> tresult {
         kResultOk
     }
-    unsafe fn setActive(&self, _state: TBool) -> tresult {
+    unsafe fn setActive(&self, state: TBool) -> tresult {
+        if self.processing.load(std::sync::atomic::Ordering::Relaxed) {
+            return kResultFalse;
+        }
+        self.active
+            .store(state != 0, std::sync::atomic::Ordering::Relaxed);
         kResultOk
     }
-    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
-        kNotImplemented
+    unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+        // SAFETY: forwarded borrowed stream from the host.
+        unsafe { self.read_state(state) }
     }
-    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
-        kNotImplemented
+    unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        unsafe { self.write_state(state) }
+    }
+}
+#[derive(Default)]
+struct Audio {
+    rate: f64,
+    phase: f64,
+    velocity: f32,
+    configured: bool,
+}
+impl Component {
+    unsafe fn read_state(&self, state: *mut IBStream) -> tresult {
+        let Some(stream) = (unsafe { vst3::ComRef::from_raw(state) }) else {
+            return kInvalidArgument;
+        };
+        let mut bytes = [0; 8];
+        let mut count = 0;
+        if unsafe { stream.read(bytes.as_mut_ptr().cast(), 8, &mut count) } != kResultOk
+            || count != 8
+        {
+            return kResultFalse;
+        }
+        let value = f64::from_le_bytes(bytes);
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return kInvalidArgument;
+        }
+        self.gain
+            .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        kResultOk
+    }
+    unsafe fn write_state(&self, state: *mut IBStream) -> tresult {
+        let Some(stream) = (unsafe { vst3::ComRef::from_raw(state) }) else {
+            return kInvalidArgument;
+        };
+        let mut bytes = self
+            .gain
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .to_le_bytes();
+        let mut count = 0;
+        if unsafe { stream.write(bytes.as_mut_ptr().cast(), 8, &mut count) } == kResultOk
+            && count == 8
+        {
+            kResultOk
+        } else {
+            kResultFalse
+        }
+    }
+}
+impl IAudioProcessorTrait for Component {
+    unsafe fn setBusArrangements(
+        &self,
+        _inputs: *mut SpeakerArrangement,
+        numIns: i32,
+        _outputs: *mut SpeakerArrangement,
+        numOuts: i32,
+    ) -> tresult {
+        if numIns == i32::from(!self.instrument) && numOuts == 1 {
+            kResultOk
+        } else {
+            kResultFalse
+        }
+    }
+    unsafe fn getBusArrangement(
+        &self,
+        _dir: BusDirection,
+        index: i32,
+        arr: *mut SpeakerArrangement,
+    ) -> tresult {
+        if index != 0 || arr.is_null() {
+            return kInvalidArgument;
+        }
+        unsafe {
+            arr.write(if self.mono { 1 } else { 3 });
+        }
+        kResultOk
+    }
+    unsafe fn canProcessSampleSize(&self, size: i32) -> tresult {
+        if size == 0 { kResultOk } else { kResultFalse }
+    }
+    unsafe fn getLatencySamples(&self) -> u32 {
+        17
+    }
+    unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
+        if setup.is_null() || self.active.load(std::sync::atomic::Ordering::Relaxed) {
+            return kInvalidArgument;
+        }
+        let setup = unsafe { &*setup };
+        if setup.symbolicSampleSize != 0 || setup.maxSamplesPerBlock <= 0 || setup.sampleRate <= 0.0
+        {
+            return kInvalidArgument;
+        }
+        let audio = unsafe { &mut *self.audio.get() };
+        audio.rate = setup.sampleRate;
+        audio.configured = true;
+        kResultOk
+    }
+    unsafe fn setProcessing(&self, state: TBool) -> tresult {
+        if !self.active.load(std::sync::atomic::Ordering::Relaxed) {
+            return kResultFalse;
+        }
+        self.processing
+            .store(state != 0, std::sync::atomic::Ordering::Relaxed);
+        if state == 0 {
+            let audio = unsafe { &mut *self.audio.get() };
+            audio.phase = 0.0;
+            audio.velocity = 0.0;
+        }
+        kResultOk
+    }
+    unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+        if self.fault == 1 {
+            return kInternalError;
+        }
+        if data.is_null() || !self.processing.load(std::sync::atomic::Ordering::Relaxed) {
+            return kResultFalse;
+        }
+        let data = unsafe { &mut *data };
+        let audio = unsafe { &mut *self.audio.get() };
+        if !audio.configured
+            || data.numOutputs != 1
+            || data.numSamples <= 0
+            || data.processContext.is_null()
+        {
+            return kInvalidArgument;
+        }
+        let context = unsafe { &*data.processContext };
+        if context.sampleRate != audio.rate
+            || context.state & 1024 == 0
+            || !context.tempo.is_finite()
+        {
+            return kResultFalse;
+        }
+        for (index, value) in [
+            context.tempo / 300.0,
+            f64::from(context.state & 2 != 0),
+            context.projectTimeMusic / 1000.0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.meters[index].store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            if let Some(changes) = unsafe { vst3::ComRef::from_raw(data.outputParameterChanges) } {
+                let mut at = 0;
+                let id = 22 + index as u32;
+                if let Some(queue) =
+                    unsafe { vst3::ComRef::from_raw(changes.addParameterData(&id, &mut at)) }
+                {
+                    unsafe {
+                        queue.addPoint(0, value, &mut at);
+                    }
+                }
+            }
+        }
+        let output = unsafe { &mut *data.outputs };
+        if output.numChannels != if self.mono { 1 } else { 2 } {
+            return kInvalidArgument;
+        }
+        let mut gain = f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed));
+        let changes = unsafe { vst3::ComRef::from_raw(data.inputParameterChanges) };
+        let events = unsafe { vst3::ComRef::from_raw(data.inputEvents) };
+        for frame in 0..data.numSamples {
+            if let Some(changes) = &changes {
+                for index in 0..unsafe { changes.getParameterCount() } {
+                    let Some(queue) =
+                        (unsafe { vst3::ComRef::from_raw(changes.getParameterData(index)) })
+                    else {
+                        continue;
+                    };
+                    if unsafe { queue.getParameterId() } != 7 {
+                        continue;
+                    }
+                    for point in 0..unsafe { queue.getPointCount() } {
+                        let (mut offset, mut value) = (0, 0.0);
+                        if unsafe { queue.getPoint(point, &mut offset, &mut value) } == kResultOk
+                            && offset == frame
+                        {
+                            gain = value;
+                            self.gain
+                                .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+            if let Some(events) = &events {
+                for index in 0..unsafe { events.getEventCount() } {
+                    let mut event: Event = unsafe { std::mem::zeroed() };
+                    if unsafe { events.getEvent(index, &mut event) } == kResultOk
+                        && event.sampleOffset == frame
+                    {
+                        if event.r#type == 0 {
+                            audio.velocity = unsafe { event.__field0.noteOn.velocity };
+                        } else if event.r#type == 1 {
+                            audio.velocity = 0.0;
+                        }
+                    }
+                }
+            }
+            let synth = if self.instrument {
+                (audio.phase * std::f64::consts::TAU).sin() as f32 * audio.velocity
+            } else {
+                0.0
+            };
+            audio.phase = (audio.phase + 440.0 / audio.rate).fract();
+            for channel in 0..output.numChannels {
+                let out = unsafe { *output.__field0.channelBuffers32.add(channel as usize) };
+                let input = if self.instrument {
+                    0.0
+                } else {
+                    let input = unsafe { &*data.inputs };
+                    unsafe {
+                        *(*input.__field0.channelBuffers32.add(channel as usize))
+                            .add(frame as usize)
+                    }
+                };
+                unsafe {
+                    out.add(frame as usize).write(if self.fault == 2 {
+                        f32::NAN
+                    } else {
+                        (input + synth) * (gain as f32 * 2.0)
+                    });
+                }
+            }
+        }
+        kResultOk
+    }
+    unsafe fn getTailSamples(&self) -> u32 {
+        64
+    }
+}
+impl IEditControllerTrait for Component {
+    unsafe fn setComponentState(&self, state: *mut IBStream) -> tresult {
+        unsafe { self.read_state(state) }
+    }
+    unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+        unsafe { self.read_state(state) }
+    }
+    unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        unsafe { self.write_state(state) }
+    }
+    unsafe fn getParameterCount(&self) -> i32 {
+        4
+    }
+    unsafe fn getParameterInfo(&self, index: i32, info: *mut ParameterInfo) -> tresult {
+        if !(0..4).contains(&index) || info.is_null() {
+            return kInvalidArgument;
+        }
+        let mut title = [0; 128];
+        for (s, c) in title
+            .iter_mut()
+            .zip(["Gain", "Tempo", "Playing", "Beats"][index as usize].encode_utf16())
+        {
+            *s = c;
+        }
+        unsafe {
+            info.write(ParameterInfo {
+                id: if index == 0 { 7 } else { 21 + index as u32 },
+                title,
+                shortTitle: title,
+                units: [0; 128],
+                stepCount: 0,
+                defaultNormalizedValue: if index == 0 { 0.5 } else { 0.0 },
+                unitId: 0,
+                flags: if index == 0 { 1 } else { 2 },
+            });
+        }
+        kResultOk
+    }
+    unsafe fn getParamStringByValue(&self, id: u32, value: f64, text: *mut String128) -> tresult {
+        if id != 7 || text.is_null() {
+            return kInvalidArgument;
+        }
+        let mut result = [0; 128];
+        for (s, c) in result
+            .iter_mut()
+            .zip(format!("{:.2}", value * 2.0).encode_utf16())
+        {
+            *s = c;
+        }
+        unsafe {
+            text.write(result);
+        }
+        kResultOk
+    }
+    unsafe fn getParamValueByString(&self, id: u32, text: *mut TChar, value: *mut f64) -> tresult {
+        if id != 7 || text.is_null() || value.is_null() {
+            return kInvalidArgument;
+        }
+        let mut bytes = Vec::new();
+        for index in 0..128 {
+            let unit = unsafe { *text.add(index) };
+            if unit == 0 {
+                break;
+            }
+            bytes.push(unit);
+        }
+        let Ok(parsed) = String::from_utf16_lossy(&bytes).parse::<f64>() else {
+            return kResultFalse;
+        };
+        unsafe {
+            value.write(parsed * 0.5);
+        }
+        kResultOk
+    }
+    unsafe fn normalizedParamToPlain(&self, _id: u32, value: f64) -> f64 {
+        value * 2.0
+    }
+    unsafe fn plainParamToNormalized(&self, _id: u32, value: f64) -> f64 {
+        value * 0.5
+    }
+    unsafe fn getParamNormalized(&self, id: u32) -> f64 {
+        if (22..=24).contains(&id) {
+            return f64::from_bits(
+                self.meters[(id - 22) as usize].load(std::sync::atomic::Ordering::Relaxed),
+            );
+        }
+        f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed))
+    }
+    unsafe fn setParamNormalized(&self, id: u32, value: f64) -> tresult {
+        if id != 7 || !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return kInvalidArgument;
+        }
+        self.gain
+            .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        kResultOk
+    }
+    unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
+        kResultOk
+    }
+    unsafe fn createView(&self, _name: FIDString) -> *mut IPlugView {
+        ptr::null_mut()
     }
 }
 /// SDK factory export, independently implemented from the host.

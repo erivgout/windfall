@@ -71,6 +71,36 @@ fn allocator_calls(work: impl FnOnce()) -> usize {
 const RATE: f64 = 48_000.0;
 
 #[test]
+fn vst3_effect_and_instrument_callbacks_allocate_and_free_nothing() {
+    for index in [0, 2, 3] {
+        let path = common::plugin_file("vst3", "fixture.vst3");
+        let module = windfall_plugin_host::PluginHost::windfall()
+            .load(&path)
+            .unwrap();
+        let mut instance = module.create(&module.descriptors()[index].id).unwrap();
+        let mut p = instance.activate(RATE, 64).unwrap();
+        p.set_realtime(false);
+        let mut left = [0.25; 256];
+        let mut right = [0.5; 256];
+        let calls = allocator_calls(|| {
+            for _ in 0..20 {
+                p.note_on(3, 60, 0.5);
+                p.note_off(125, 60);
+                p.set_param(80, 7, 0.75);
+                p.process(&mut left, &mut right);
+            }
+            p.reset();
+            p.stop();
+            p.all_notes_off(0);
+            p.process(&mut left, &mut right);
+        });
+        assert_eq!(calls, 0, "VST3 fixture {index}");
+        assert_eq!(p.health().dropped_events, 0);
+        instance.deactivate(p);
+    }
+}
+
+#[test]
 fn the_counter_counts() {
     assert_eq!(
         allocator_calls(|| drop(std::hint::black_box(Box::new(1_u8)))),
