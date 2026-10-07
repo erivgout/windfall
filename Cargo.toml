@@ -3,11 +3,11 @@ resolver = "3"
 members = ["crates/*", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.90"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/windfall-daw/windfall"
+repository = "https://github.com/erivgout/windfall"
 authors = ["The Windfall contributors"]
 
 [workspace.dependencies]

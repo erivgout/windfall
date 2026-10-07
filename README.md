@@ -16,6 +16,8 @@ Microphone/line recording writes a take to an ordinary audio clip with undo and 
 
 ## Run it
 
+Windows users can download the installer from [GitHub Releases](https://github.com/erivgout/windfall/releases). The first release is `v0.1.0-alpha.1`; this private repository and its downloads require repository access.
+
 You need Rust, Node 24 or newer, and pnpm. On Windows you also need the Visual Studio C++ build tools, and on Linux the WebKitGTK and ALSA development packages that the CI workflow installs.
 
 ```bash
