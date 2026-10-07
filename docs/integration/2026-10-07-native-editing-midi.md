@@ -59,4 +59,23 @@ The initial CLAP findings have implementations and passing fixture regressions.
 Independent follow-up review and the inspector lifetime repair still need to
 finish before this local batch is pushed as verified progress.
 
+## Browser library integration
+
+Browser library `e2558567` is merged through `433234e0`. Four additive conflicts
+in session fields, mock imports, IPC exports and WASM exports retained both
+features' additions. Recursive indexing, Boolean/wildcard path queries and
+separate persisted favorites/tags now coexist with editing, slicing and MIDI.
+Native file tokens check root generation and filesystem identity for audition,
+waveform and rack/playlist/replacement imports. See
+[browser library](../BROWSER-LIBRARY.md) for bounds and deliberate limits.
+
+The combined artifacts contain 155 TypeScript files and a 1,743,421-byte WASM
+module. Parent browser/rack/playlist-import UI checks passed all 403 tests
+across 20 files, followed by ESLint and the production TypeScript/Vite build.
+Native library and sample-cache checks passed 16 and 14 tests respectively;
+remaining shared/native checks are still running at this checkpoint.
+Independent library review is pending, so its three parity rows remain in
+progress. The matrix now has 60 done, 42 in progress, 238 todo and two won't-do
+rows. These are development-source counts, not release or platform readiness.
+
 Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.

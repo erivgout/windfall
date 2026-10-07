@@ -18,15 +18,15 @@ As of 2026-10-07. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 240 |
-| In progress | 40 |
+| Todo | 238 |
+| In progress | 42 |
 | Done | 60 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 13 | 7 | 2 | 1 |
-| Main windows | 113 | 58 | 21 | 33 | 1 |
+| Main windows | 113 | 56 | 23 | 33 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,7 +38,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 9 | 6 | 22 | 2 |
-| 2. Write a song | 99 | 52 | 21 | 26 | 0 |
+| 2. Write a song | 99 | 50 | 23 | 26 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
@@ -180,11 +180,11 @@ As of 2026-10-07. Sources:
 | Browser: folder tree | Browser | 1 | done |  |
 | Browser: sample preview | Sample preview | 1 | done |  |
 | Browser: waveform preview | Waveform preview | 1 | done | Inline waveforms were added in FL Studio 2026. |
-| Browser: search | Browser search | 1 | in-progress | Filters folders that have been opened. No recursive index yet. |
+| Browser: search | Browser search | 1 | in-progress | Recursive native indexing and shared Rust filename/path wildcard/Boolean queries are integrated with bounded scans, cancellation and checked imports. Independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
 | Browser: drag and drop | Drag and drop | 1 | done |  |
 | Browser: project backups folder | Backups list | 1 | todo |  |
-| Browser: tags | Tags | 2 | todo |  |
-| Browser: starred items | Favorites | 2 | todo |  |
+| Browser: tags | Tags | 2 | in-progress | Normalized per-file tags persist atomically in separate local metadata and combine with query/favorite filters. Corrupt metadata is preserved and reported. Independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
+| Browser: starred items | Favorites | 2 | in-progress | Per-file favorites persist across restart and root removal; the Starred filtered view combines with queries and tags. Native/mock/UI checks pass; independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
 | Browser: current project tab | Project tab | 2 | todo |  |
 | Project picker | Project overview | 2 | todo |  |
 | Browser: plugin database | Plugin database | 4 | todo |  |

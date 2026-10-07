@@ -1528,7 +1528,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Filters folders that have been opened. No recursive index yet."
+      "notes": "Recursive native indexing and shared Rust filename/path wildcard/Boolean queries are integrated with bounded scans, cancellation and checked imports. Independent integration review is pending. See docs/BROWSER-LIBRARY.md."
     },
     {
       "id": "win-browser-drag-drop",
@@ -1561,10 +1561,10 @@
       "summary": "User-defined labels on files for filtering the list.",
       "windfall_name": "Tags",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Normalized per-file tags persist atomically in separate local metadata and combine with query/favorite filters. Corrupt metadata is preserved and reported. Independent integration review is pending. See docs/BROWSER-LIBRARY.md."
     },
     {
       "id": "win-browser-starred",
@@ -1573,10 +1573,10 @@
       "summary": "Marks favorite files and shows them in their own tab.",
       "windfall_name": "Favorites",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Per-file favorites persist across restart and root removal; the Starred filtered view combines with queries and tags. Native/mock/UI checks pass; independent integration review is pending. See docs/BROWSER-LIBRARY.md."
     },
     {
       "id": "win-browser-current-project",
