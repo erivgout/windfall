@@ -550,6 +550,9 @@ impl HostedInstrument for Audio {
     }
 }
 impl PluginFactory for Runtime {
+    fn provider_identity(&self) -> u64 {
+        Arc::as_ptr(&self.revision) as usize as u64
+    }
     fn render_factory(&self) -> Option<Arc<dyn PluginFactory>> {
         let mut runtime = self.clone();
         runtime.rendering = true;

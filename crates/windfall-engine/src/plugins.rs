@@ -34,6 +34,11 @@ pub trait HostedInstrument: HostedEffect {
 
 /// Creates independent instances for playback and offline render, off the callback.
 pub trait PluginFactory: Send + Sync + std::fmt::Debug {
+    /// Stable provider identity; clones sharing one native owner should override
+    /// this with the identity of that shared owner. Plans retain their factory.
+    fn provider_identity(&self) -> u64 {
+        std::ptr::from_ref(self) as *const () as usize as u64
+    }
     /// An independent provider whose instances cannot become playback/editor owners.
     fn render_factory(&self) -> Option<std::sync::Arc<dyn PluginFactory>> {
         None
@@ -78,6 +83,9 @@ pub(crate) fn identity(binding: &PluginBinding) -> u64 {
     binding.id.hash(&mut hash);
     binding.format.hash(&mut hash);
     binding.state.hash(&mut hash);
+    for parameter in &binding.parameters {
+        parameter.id.hash(&mut hash);
+    }
     hash.finish()
 }
 
@@ -93,10 +101,9 @@ pub(crate) fn prepare(
     let mut records = HashMap::new();
     for binding in &plan.plugins {
         let identity = identity(binding)
-            ^ plan
-                .plugin_factory
-                .as_ref()
-                .map_or(0, |factory| factory.revision().rotate_left(17));
+            ^ plan.plugin_factory.as_ref().map_or(0, |factory| {
+                factory.revision().rotate_left(17) ^ factory.provider_identity()
+            });
         if let Some(&(before, latency)) = known.get(&binding.target)
             && before == identity
         {
@@ -424,6 +431,34 @@ mod tests {
         );
         assert_eq!(factory.made.load(Ordering::Relaxed), 1);
         assert!(out.iter().any(|sample| *sample > 0.5));
+        let replacement = Arc::new(FixtureFactory::default());
+        pool.set_plugin_factory(replacement.clone());
+        control.set_project(&project, &pool);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert_eq!(
+            replacement.made.load(Ordering::Relaxed),
+            1,
+            "replacing a provider with the same revision must prepare its own native units"
+        );
+    }
+    #[test]
+    fn reordered_native_ids_invalidate_cached_parameter_routing() {
+        let mut plugin = binding();
+        let mut other = plugin.parameters[0].clone();
+        other.id = 99;
+        plugin.parameters.push(other);
+        let before = identity(&plugin);
+        plugin.parameters[0].value = 0.9;
+        assert_eq!(identity(&plugin), before, "value edits reuse the instance");
+        plugin.parameters.swap(0, 1);
+        assert_ne!(
+            identity(&plugin),
+            before,
+            "reordering native IDs must rebuild index-to-ID routing"
+        );
     }
     #[test]
     fn native_latency_is_compensated_and_notes_keep_their_sample_boundaries() {
