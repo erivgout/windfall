@@ -2,6 +2,7 @@
 use crate::balance::{Controls, audio, rate};
 use crate::blocks::delay_line::DelayLine;
 use crate::blocks::math::{flush, ms_to_samples};
+use crate::blocks::tap_crossfade::TapCrossfade;
 use crate::effect::Effect;
 use crate::limiter::LOOKAHEAD_FADE_MS;
 use crate::param::{ParamSet, param_set};
@@ -110,9 +111,7 @@ pub struct StereoMatrix {
     sample_rate: f32,
     controls: Controls<4>,
     lines: [DelayLine; 2],
-    delays: [usize; 2],
-    from: [usize; 2],
-    fade_left: u32,
+    delays: [TapCrossfade; 2],
     fade_len: u32,
     fresh: bool,
 }
@@ -123,9 +122,7 @@ impl Default for StereoMatrix {
             sample_rate: 48_000.0,
             controls: Controls::new([1.0, 0.0, 0.0, 1.0]),
             lines: std::array::from_fn(|_| DelayLine::default()),
-            delays: [0; 2],
-            from: [0; 2],
-            fade_left: 0,
+            delays: std::array::from_fn(|_| TapCrossfade::new(0, 0)),
             fade_len: 240,
             fresh: true,
         }
@@ -137,15 +134,12 @@ impl StereoMatrix {
     }
     fn update(&mut self) {
         self.controls.set(self.params.coefficients());
-        let delays = self.params.delays(self.sample_rate);
-        if delays != self.delays {
-            if self.fresh {
-                self.fade_left = 0;
-            } else if self.fade_left == 0 {
-                self.from = self.delays;
-                self.fade_left = self.fade_len;
-            }
-            self.delays = delays;
+        for (fade, delay) in self
+            .delays
+            .iter_mut()
+            .zip(self.params.delays(self.sample_rate))
+        {
+            fade.retarget(delay, if self.fresh { 0 } else { self.fade_len });
         }
     }
 }
@@ -155,6 +149,9 @@ impl Effect for StereoMatrix {
         self.sample_rate = rate(sample_rate);
         self.lines =
             std::array::from_fn(|_| DelayLine::new(Self::max_latency_samples(self.sample_rate)));
+        self.delays = std::array::from_fn(|_| {
+            TapCrossfade::new(Self::max_latency_samples(self.sample_rate), 0)
+        });
         self.fade_len = ms_to_samples(LOOKAHEAD_FADE_MS, self.sample_rate);
         self.controls.prepare(self.sample_rate);
         self.reset();
@@ -164,7 +161,6 @@ impl Effect for StereoMatrix {
             line.clear();
         }
         self.controls.reset();
-        self.fade_left = 0;
         self.fresh = true;
         self.update();
     }
@@ -187,27 +183,23 @@ impl Effect for StereoMatrix {
                         line.tap(delay.min(line.max_delay()))
                     }
                 };
-                let mut out = tap(self.delays[side]);
-                if self.fade_left > 0 {
-                    out +=
-                        (tap(self.from[side]) - out) * self.fade_left as f32 / self.fade_len as f32;
-                }
+                let out = self.delays[side].read(tap);
                 *sample = flush(out);
                 line.push(inputs[side]);
+                self.delays[side].advance();
             }
-            self.fade_left = self.fade_left.saturating_sub(1);
         }
     }
     fn latency_samples(&self) -> usize {
-        self.delays[0].min(self.delays[1])
+        self.params.latency_samples(self.sample_rate)
+    }
+    fn warm_up_samples(&self) -> usize {
+        self.tail_samples()
     }
     fn tail_samples(&self) -> usize {
-        let tail = self.delays[0].max(self.delays[1]);
-        if self.fade_left > 0 {
-            tail.max(self.from[0]).max(self.from[1])
-        } else {
-            tail
-        }
+        self.delays[0]
+            .longest_delay()
+            .max(self.delays[1].longest_delay())
     }
     fn gap_samples(&self) -> usize {
         self.tail_samples()

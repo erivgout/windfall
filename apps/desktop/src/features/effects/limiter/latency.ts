@@ -10,8 +10,8 @@ export function lookaheadFrames(lookaheadMs: number, sampleRate: number) {
 }
 
 /**
- * The frames a chain of effects delays its track by. Only a limiter adds
- * any, and it adds the same whether it is on, off or half mixed.
+ * Shared latency of built-in slots, including bypassed and dry slots.
+ * Matrix channel differences remain intentional stereo processing.
  */
 export function chainLatencyFrames(
   effects: readonly EffectSlot[],
@@ -21,6 +21,22 @@ export function chainLatencyFrames(
   for (const slot of effects) {
     if (slot.params.type === "limiter") {
       frames += lookaheadFrames(slot.params.lookaheadMs, sampleRate)
+    } else if (slot.params.type === "stereoMatrix") {
+      const rate = Math.min(384_000, Math.max(1, sampleRate))
+      // Match the native f32 multiplication order before sample rounding.
+      const delay = (ms: number) =>
+        Math.round(
+          Math.fround(
+            Math.fround(Math.fround(ms) * Math.fround(0.001)) *
+              Math.fround(rate)
+          )
+        )
+      frames += Math.min(
+        delay(slot.params.leftDelayMs),
+        delay(slot.params.rightDelayMs)
+      )
+    } else if (slot.params.type === "distortion") {
+      frames += 32
     }
   }
   return frames

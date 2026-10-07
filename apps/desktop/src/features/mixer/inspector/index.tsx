@@ -49,17 +49,22 @@ function useTrackFace(id: TrackId | null) {
 
 /** Frames the track's own effects delay it by, at the engine's rate. */
 function useChainLatency(id: TrackId | null, sampleRate: number): number {
-  return useProjectStore((state) =>
-    chainLatencyFrames(
-      state.project.mixer.tracks.find((track) => track.id === id)?.effects ??
-        [],
-      sampleRate
+  return useProjectStore((state) => {
+    const effects =
+      state.project.mixer.tracks.find((track) => track.id === id)?.effects ?? []
+    const builtins = effects.filter(
+      (slot) =>
+        !state.project.plugins?.some(
+          (plugin) =>
+            plugin.target.type === "effect" && plugin.target.effect === slot.id
+        )
     )
-  )
+    return chainLatencyFrames(builtins, sampleRate)
+  })
 }
 
 /**
- * How far the track's limiters delay it, shown only when they do. It sits
+ * The track's shared built-in effect latency, shown when nonzero. It sits
  * in the header where there is room beside the name, and on a line of its
  * own under it in a narrow panel.
  */
@@ -67,7 +72,7 @@ function Latency({ track }: { track: TrackId }) {
   const sampleRate = useSampleRate()
   const frames = useChainLatency(track, sampleRate)
   const hint = useHint(
-    "The limiters on this track delay it by this much. The engine delays every other track to match, so nothing drifts apart"
+    "Built-in effects on this track add this shared delay. The engine compensates other paths to keep them aligned; extra stereo delay is intentional"
   )
   if (frames === 0) return null
   return (

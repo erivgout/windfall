@@ -66,7 +66,13 @@ mute gains, and polarity gains ramp in signal space over exactly 5 ms.
 Changes before the first processed sample, and reset, take their target
 settings immediately. Delay changes crossfade between whole-sample taps
 over the existing 5 ms latency-transition interval, without pitching the
-signal. Rapid retargeting joins the active transition. Processing does not
+signal. Rapid retargeting preserves the currently audible tap mixture and
+starts another 5 ms fade to the latest target. The final target is fully
+applied 5 ms after the last edit; intermediate requested taps are retained
+at their audible weights, without queuing settings. Prepared storage holds
+at most one contribution per whole-sample delay in the 0–50 ms range.
+The slot's dry signal and engine compensation use the same transition.
+Processing does not
 depend on block divisions, including irregular one-sample blocks.
 
 ## Matrix delay and host accounting
@@ -84,6 +90,10 @@ with the later intentional stereo echo. Tail and gap report the maximum
 channel delay, including the old taps while a transition is active. The
 slot's bypass and dry mix use the shared delay, preserving host alignment.
 Zero-delay slots keep their dry history primed for the first delayed mix.
+After bypass or zero mix makes the processor dormant, waking runs unheard
+until **both** matrix outputs are primed, using the maximum channel delay.
+Increasing a delay during priming extends that wait. This wait is separate
+from the shared minimum used for PDC and the dry signal.
 
 Drive distortion reports **32 samples of linear-phase group delay** and
 64 samples of finite FIR tail/gap at every rate. Its impulse can have
@@ -102,6 +112,12 @@ No plugin runtime or new host contract is introduced here. A future host
 contract for latency-changing automation remains separate work. Browser
 latency display simulation now includes shared matrix delay and distortion
 latency; it still does not implement audio DSP or send-path simulation.
+The mixer inspector also totals limiter, shared matrix and distortion
+latency, including bypassed and dry slots. A 2/5 ms matrix followed by
+distortion at 48 kHz displays 128 compensated samples. Its hint distinguishes
+shared latency from intentional stereo delay. Hosted plugin placeholders
+are excluded from this built-in total; runtime plugin latency is not stored
+in the project binding and is not part of this badge.
 
 ## Data and realtime ownership
 
@@ -234,3 +250,10 @@ all-kind test chains now respect the ten-slot limit. No project format
 change, plugin binding/runtime change, or new dependency is required.
 Root README/parity accounting and shared generated outputs remain with
 the parent. `v0.1.0-alpha.1` is unchanged.
+
+## Review repairs
+
+[UTILITY-REPAIRS.md](UTILITY-REPAIRS.md) records the three review regressions,
+the bounded retargeting policy, reproduction results and focused checks on
+the repair branch. The measurements and original verification above retain
+their original provenance; they are not new repair-branch benchmarks.

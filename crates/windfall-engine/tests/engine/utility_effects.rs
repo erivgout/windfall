@@ -128,6 +128,68 @@ fn utility_effects_matrix_latency_edits_keep_opposite_tracks_cancelling() {
 }
 
 #[test]
+fn utility_effects_rapid_matrix_latency_edits_keep_dry_wet_and_pdc_in_step() {
+    for mix in [0.0, 0.5, 1.0] {
+        let mut rig = Rig::new();
+        let first = rig.track();
+        let second = rig.track();
+        let tone = sine(RATE, 1000.0, 1.0);
+        let other = crate::support::inverted(&tone);
+        let up = rig.channel_on(tone, first);
+        let down = rig.channel_on(other, second);
+        rig.steps(up, &[0]);
+        rig.steps(down, &[0]);
+        let effect = rig.effect(first, matrix(2.0, 2.0));
+        rig.effect_mut(effect).mix = mix;
+        let (mut processor, controller) = rig.processor(RATE);
+        controller.play();
+        let mut audio = run(&mut processor, 4092, 137);
+        for (ms, frames, block) in [
+            (0.5, 120, 29),
+            (1.0, 37, 1),
+            (0.25, 17, 7),
+            (1.5, 61, 3),
+            (0.75, 1000, 137),
+        ] {
+            rig.effect_mut(effect).params = matrix(ms, ms);
+            controller.set_project(&rig.project, &rig.pool);
+            assert_eq!(controller.latency_frames(), (ms * 48.0).round() as u32);
+            audio.extend(run(&mut processor, frames, block));
+        }
+        assert!(
+            peak(&audio) < 1e-6,
+            "rapid matrix PDC diverged at mix {mix}: {}",
+            peak(&audio)
+        );
+    }
+}
+
+#[test]
+fn utility_effects_matrix_and_distortion_report_128_samples_even_when_bypassed() {
+    for enabled in [false, true] {
+        let mut rig = Rig::new();
+        let track = rig.track();
+        let channel = rig.channel_on(impulse(RATE), track);
+        rig.steps(channel, &[1]);
+        for params in [
+            matrix(2.0, 5.0),
+            EffectParams::Distortion(DistortionParams::default()),
+        ] {
+            let effect = rig.effect(track, params);
+            rig.effect_mut(effect).enabled = enabled;
+        }
+        let (_, controller) = rig.processor(RATE);
+        assert_eq!(controller.latency_frames(), 128);
+        if !enabled {
+            let audio = rig.play(RATE, 7000, 137);
+            assert_eq!(left(&audio)[6128], 1.0);
+            assert_eq!(right(&audio)[6128], 1.0);
+            assert_eq!(audio.iter().filter(|sample| **sample != 0.0).count(), 2);
+        }
+    }
+}
+
+#[test]
 fn utility_effects_moves_preserve_processor_state_and_removal_retires_tails() {
     for kind in KINDS {
         let mut rig = Rig::new();

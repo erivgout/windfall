@@ -13,6 +13,7 @@ import {
   runAction,
 } from "@/lib/actions"
 import { dispatch, redo, undo } from "@/lib/store/project"
+import { useHintStore } from "@/lib/store/hint"
 import { usePromptStore } from "@/lib/store/prompts"
 import { useUiStore } from "@/lib/store/ui"
 import { startTestApp } from "@/test/harness"
@@ -978,6 +979,75 @@ describe("the effect inspector", () => {
 
     act(() => useUiStore.getState().selectTrack(trackNamed("Kick").id))
     expect(latency()).toBeUndefined()
+  })
+
+  it("shows compensated shared matrix and distortion latency while bypassed", async () => {
+    render(<MixerPanel />)
+    const [matrix, distortion] = await addEffects(
+      "Kick",
+      "stereoMatrix",
+      "distortion"
+    )
+    const track = trackNamed("Kick").id
+    await dispatch({
+      type: "setEffectParams",
+      track,
+      effect: matrix,
+      params: {
+        ...effectDescriptor("stereoMatrix").defaults,
+        leftDelayMs: 2,
+        rightDelayMs: 5,
+      },
+    })
+    await flush()
+    fireEvent.click(slotButton("Kick", matrix))
+    const badge = () => inspector().querySelector("[data-slot=chain-latency]")
+    expect(badge()?.textContent).toBe("2.7 ms (128 samples) compensated")
+    for (const effect of [matrix, distortion]) {
+      await dispatch({
+        type: "updateEffect",
+        track,
+        effect,
+        patch: { enabled: false, mix: 0 },
+      })
+    }
+    await flush()
+    expect(badge()?.textContent).toBe("2.7 ms (128 samples) compensated")
+    fireEvent.pointerEnter(badge()!)
+    expect(useHintStore.getState().text).toContain("shared delay")
+    expect(useHintStore.getState().text).not.toContain("limiters on this track")
+    await undo()
+    await flush()
+    expect(badge()?.textContent).toBe("2.7 ms (128 samples) compensated")
+    await dispatch({
+      type: "setEffectParam",
+      track,
+      effect: matrix,
+      param: 5,
+      value: 0,
+    })
+    await flush()
+    expect(badge()?.textContent).toBe("0.7 ms (32 samples) compensated")
+    await undo()
+    await flush()
+    expect(badge()?.textContent).toBe("2.7 ms (128 samples) compensated")
+    // Kick keeps its sampler channel, and a hosted effect shares this chain.
+    await dispatch({
+      type: "addPluginEffect",
+      track,
+      plugin: {
+        target: { type: "effect", effect: 0 },
+        format: "clap",
+        path: "/plugins/gain.clap",
+        id: "native.gain",
+        name: "Native Gain",
+        state: [1, 2],
+        parameters: [],
+      },
+    })
+    await flush()
+    expect(badge()?.textContent).toBe("2.7 ms (128 samples) compensated")
+    expect(inspector().textContent).toContain("Native Gain")
   })
 
   it("remembers that it is open, and not what is folded", async () => {
