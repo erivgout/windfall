@@ -206,8 +206,7 @@ function ProjectPane({ selection }: { selection: Selection }) {
         <PaneName selection={selection} />
       </div>
       <p className="flex-1 text-muted-foreground">
-        A Windfall project. Opening it replaces the project you have open; you
-        are asked first if that one has unsaved changes.
+        A Windfall project. Opening it replaces the project you have open.
       </p>
       <Button
         size="sm"

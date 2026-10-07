@@ -121,7 +121,7 @@ export class TimeGridView {
   private readonly parseColor: CssColorParser
   private readonly resizeObserver: ResizeObserver
   private readonly stopThemeObserver: () => void
-  private readonly timeGrid: TimeGridSpec
+  private timeGrid: TimeGridSpec
   private readonly autoRender: boolean
   private rows: RowStyle
   private viewportLimits: ViewportLimits
@@ -129,8 +129,12 @@ export class TimeGridView {
   private tokens: ThemeTokens
   private currentTheme: GridTheme
   private currentItems: IndexedBatch | null = null
+  private currentUnderlay: IndexedBatch | null = null
   private dragTicks = 0
   private dragRows = 0
+  private resizeStart = 0
+  private resizeEnd = 0
+  private resizeMinLength = 0
   private marquee: Marquee | null = null
   private playheadTick: number | null = null
   private overlayPainters: OverlayPainter[] = []
@@ -277,6 +281,20 @@ export class TimeGridView {
     this.invalidate("base")
   }
 
+  /** Changes which time lines are drawn: the snap, or the time signature. */
+  setTimeGrid(spec: TimeGridSpec): void {
+    const current = this.timeGrid
+    if (
+      spec.ticksPerStep === current.ticksPerStep &&
+      spec.stepsPerBeat === current.stepsPerBeat &&
+      spec.beatsPerBar === current.beatsPerBar
+    ) {
+      return
+    }
+    this.timeGrid = spec
+    this.invalidate("base")
+  }
+
   panBy(dxPx: number, dyPx: number): void {
     this.setViewport(
       scrollByPx(this.currentViewport, dxPx, dyPx, this.viewportLimits)
@@ -309,6 +327,20 @@ export class TimeGridView {
   }
 
   /**
+   * A second batch drawn behind the items, such as the notes of other
+   * channels in a piano roll. It is never selected, dragged or hit-tested.
+   * The previous underlay's GPU buffers are freed.
+   */
+  setUnderlay(items: IndexedBatch | null): void {
+    const previous = this.currentUnderlay
+    if (previous && previous.batch !== items?.batch) {
+      this.renderer.release(previous.batch)
+    }
+    this.currentUnderlay = items
+    this.invalidate("base")
+  }
+
+  /**
    * Shows selected items moved by this much without changing the batch.
    * Commit the move to the project when the drag ends, then pass (0, 0).
    */
@@ -316,6 +348,25 @@ export class TimeGridView {
     if (ticks === this.dragTicks && rows === this.dragRows) return
     this.dragTicks = ticks
     this.dragRows = rows
+    this.invalidate("base")
+  }
+
+  /**
+   * Shows selected items with an edge moved by this many ticks without
+   * changing the batch. Each item becomes what `resizedSpan` returns for
+   * it. Commit the resize when the drag ends, then pass (0, 0).
+   */
+  setDragResize(startTicks: number, endTicks: number, minLength = 1): void {
+    if (
+      startTicks === this.resizeStart &&
+      endTicks === this.resizeEnd &&
+      minLength === this.resizeMinLength
+    ) {
+      return
+    }
+    this.resizeStart = startTicks
+    this.resizeEnd = endTicks
+    this.resizeMinLength = minLength
     this.invalidate("base")
   }
 
@@ -487,18 +538,26 @@ export class TimeGridView {
     )
     renderer.beginFrame(transform)
     renderer.drawBatch(this.gridBatch)
+    const ticks = visibleTicks(viewport)
+    const underlay = this.currentUnderlay
+    if (underlay && underlay.batch.count > 0) {
+      const range = visibleRange(underlay, ticks.start, ticks.end)
+      renderer.drawBatch(underlay.batch, range)
+    }
     let itemsInRange = 0
     const items = this.currentItems
     if (items && items.batch.count > 0) {
-      const ticks = visibleTicks(viewport)
       const dragging = items.batch.selectedCount > 0
       const dragTicks = dragging ? this.dragTicks : 0
-      // A dragged item is drawn at start + dragTicks, so the range has to
-      // reach the items that are being dragged into view.
+      const resizeStart = dragging ? this.resizeStart : 0
+      const resizeEnd = dragging ? this.resizeEnd : 0
+      // A dragged item is drawn at start + dragTicks, and a resized one
+      // reaches further than it is stored, so the range has to take in the
+      // items that are being dragged or stretched into view.
       const range = visibleRange(
         items,
-        Math.min(ticks.start, ticks.start - dragTicks),
-        Math.max(ticks.end, ticks.end - dragTicks)
+        Math.min(ticks.start, ticks.start - dragTicks - Math.max(0, resizeEnd)),
+        Math.max(ticks.end, ticks.end - dragTicks - Math.min(0, resizeStart))
       )
       itemsInRange = range.last - range.first
       renderer.drawBatch(items.batch, {
@@ -506,6 +565,9 @@ export class TimeGridView {
         last: range.last,
         dragTicks,
         dragRows: dragging ? this.dragRows : 0,
+        resizeStart,
+        resizeEnd,
+        minLength: this.resizeMinLength,
       })
     }
     renderer.endFrame()

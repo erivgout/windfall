@@ -106,9 +106,9 @@ describe("loading folders", () => {
     render(<BrowserPanel />)
 
     await user.click(await findItem("Loops"))
-    expect(
-      await screen.findByText(/Could not read this folder\. Access is denied\./)
-    ).toBeInTheDocument()
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not read this folder. Access is denied."
+    )
     // The rest of the tree is untouched by one bad folder.
     expect(item("Drums")).toBeInTheDocument()
 
@@ -120,7 +120,7 @@ describe("loading folders", () => {
     ).toHaveLength(2)
   })
 
-  it("retries a failed folder with Enter", async () => {
+  it("reads a failed folder again when it is reopened", async () => {
     let fail = true
     await start((mock) => ({
       browserList: (path) =>
@@ -134,7 +134,12 @@ describe("loading folders", () => {
     press("End")
     press("Enter")
     expect(await screen.findByText(/Access is denied/)).toBeInTheDocument()
+    expect(item("Loops")).toHaveAttribute("aria-expanded", "true")
+
+    // Closing and opening it again is a retry.
     fail = false
+    press("Enter")
+    expect(item("Loops")).toHaveAttribute("aria-expanded", "false")
     press("Enter")
     expect(await findItem("Drum loop 128.wav")).toBeInTheDocument()
   })

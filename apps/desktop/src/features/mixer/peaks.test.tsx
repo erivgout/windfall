@@ -40,6 +40,10 @@ const peak = (name: string) =>
 const clipLight = (name: string) =>
   within(strip(name)).getByRole("button", { name: /^Clip light/, hidden: true })
 
+// The mock plays in real time, so these wait on its clock. The first hit
+// lands at once; the margin is for a busy machine.
+const SOON = { timeout: 3000 }
+
 /** Stops playback and waits for the meters to fall back to rest. */
 async function stopAndSettle() {
   await backend.transportStop()
@@ -70,8 +74,9 @@ describe("peak readout", () => {
     const user = userEvent.setup()
     render(<MixerPanel />)
     await backend.transportPlay()
-    await waitFor(() =>
-      expect(peakOf(trackNamed("Kick").id)).toBeGreaterThan(0)
+    await waitFor(
+      () => expect(peakOf(trackNamed("Kick").id)).toBeGreaterThan(0),
+      SOON
     )
     await stopAndSettle()
 
@@ -93,7 +98,10 @@ describe("peak readout", () => {
       patch: { volume: 2 },
     })
     await backend.transportPlay()
-    await waitFor(() => expect(peak("Kick")).toHaveAttribute("data-clipped"))
+    await waitFor(
+      () => expect(peak("Kick")).toHaveAttribute("data-clipped"),
+      SOON
+    )
     await stopAndSettle()
 
     expect(clipLight("Kick")).toHaveAttribute("data-clipped")
@@ -109,7 +117,10 @@ describe("peak readout", () => {
   it("resets every readout from the command palette action", async () => {
     render(<MixerPanel />)
     await backend.transportPlay()
-    await waitFor(() => expect(peakOf(trackNamed("Hat").id)).toBeGreaterThan(0))
+    await waitFor(
+      () => expect(peakOf(trackNamed("Hat").id)).toBeGreaterThan(0),
+      SOON
+    )
     await stopAndSettle()
 
     resetAllPeaks()

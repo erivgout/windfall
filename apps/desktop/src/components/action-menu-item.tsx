@@ -32,7 +32,7 @@ export function ActionMenuItem({ action, state, inset }: ActionMenuItemProps) {
 
   return (
     <DropdownMenuItem
-      role={checkable ? "menuitemcheckbox" : undefined}
+      role={checkable ? "menuitemcheckbox" : "menuitem"}
       aria-checked={checkable ? checked : undefined}
       disabled={!isEnabled(action, state)}
       onClick={() => void runAction(action.id)}

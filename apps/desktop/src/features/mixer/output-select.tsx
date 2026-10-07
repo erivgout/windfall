@@ -70,12 +70,16 @@ function OutputChoices({
         }
       >
         {open.map((track) => (
-          <DropdownMenuRadioItem key={track.id} value={String(track.id)}>
+          <DropdownMenuRadioItem
+            key={track.id}
+            value={String(track.id)}
+            closeOnClick
+          >
             <TrackLabel track={track} number={tracks.indexOf(track)} />
           </DropdownMenuRadioItem>
         ))}
         <DropdownMenuSeparator />
-        <DropdownMenuRadioItem value={NONE}>
+        <DropdownMenuRadioItem value={NONE} closeOnClick>
           None (sends only)
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>

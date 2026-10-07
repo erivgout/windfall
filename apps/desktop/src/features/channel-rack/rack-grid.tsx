@@ -35,7 +35,7 @@ import {
   STEPS_TRAIL,
 } from "./layout"
 import { StepRuler } from "./step-ruler"
-import { moveIndex, stepsPerBeat } from "./steps"
+import { moveIndex, rulerMarks, stepsPerBeat } from "./steps"
 
 /** MIME type of a rack row being dragged to a new position. */
 export const CHANNEL_DRAG_TYPE = "application/x-windfall-channel"
@@ -199,6 +199,9 @@ export function RackGrid() {
   }
 
   const groupSize = stepsPerBeat(signature)
+  const barLines = rulerMarks(lengthSteps, signature)
+    .filter((mark) => mark.bar && mark.step > 0)
+    .map((mark) => mark.step)
   const replacing = drop?.kind === "replace" ? drop.channel : null
 
   return (
@@ -265,6 +268,18 @@ export function RackGrid() {
                 />
               ))}
           </div>
+          {barLines.map((step) => (
+            <div
+              key={step}
+              aria-hidden
+              data-slot="rack-bar-line"
+              className="pointer-events-none absolute inset-y-0 w-px bg-(--wf-grid-line-strong)"
+              // In the middle of the gap before the bar's first step.
+              style={{
+                left: pitches(step, LEFT_WIDTH + STEPS_INSET - 1.5),
+              }}
+            />
+          ))}
           {drop?.kind === "insert" && (
             <div
               aria-hidden

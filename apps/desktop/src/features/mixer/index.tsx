@@ -4,7 +4,7 @@ import { useEffect, useRef, type KeyboardEvent, type WheelEvent } from "react"
 
 import type { TrackId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
-import { runAction } from "@/lib/actions"
+import { currentKeymap, runAction } from "@/lib/actions"
 import { useMixerTrackIds, useProjectStore, useUiStore } from "@/lib/store"
 import { MASTER_TRACK } from "@/lib/units"
 
@@ -24,6 +24,30 @@ import { useStripView } from "./strip-view"
 
 /** Assumed until the panel has been measured. */
 const DEFAULT_VIEW_WIDTH = 1280
+
+function isPlainSpace(event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+    return false
+  }
+  return event.key === " " || event.code === "Space"
+}
+
+/**
+ * Space plays and stops whatever in the mixer has the focus, and Enter
+ * presses the focused button. Without this, Space after a click on Mute
+ * would unmute again, and after a fader move it would do nothing, because
+ * the keymap leaves the key to the focused control. Returns the action to
+ * run, or undefined when the key is not ours to take.
+ */
+function spaceAction(event: KeyboardEvent<HTMLElement>): string | undefined {
+  if (!isPlainSpace(event)) return undefined
+  const target = event.target
+  if (!(target instanceof Element)) return undefined
+  // Menus and popovers send their keys here too, through React.
+  if (!event.currentTarget.contains(target)) return undefined
+  if (target.closest("input, textarea")) return undefined
+  return currentKeymap().byChord.get("Space")
+}
 
 /** The mixer track the channel selected in the rack plays into. */
 function useLinkedTrack(): TrackId | null {
@@ -191,6 +215,19 @@ export default function MixerPanel() {
       data-mode={mode}
       className="flex h-full min-h-0 min-w-0"
       onKeyDown={onKeyDown}
+      onKeyDownCapture={(event) => {
+        const action = spaceAction(event)
+        if (action === undefined) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (!event.repeat) void runAction(action)
+      }}
+      // A button clicks itself when Space comes back up.
+      onKeyUpCapture={(event) => {
+        if (spaceAction(event) === undefined) return
+        event.preventDefault()
+        event.stopPropagation()
+      }}
     >
       <div
         data-slot="mixer-master"

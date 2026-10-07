@@ -132,7 +132,7 @@ function EntryLine({
           segment.marked ? (
             <mark
               key={part}
-              className="rounded-[2px] bg-brand/30 text-foreground"
+              className="rounded-[2px] bg-brand/40 text-foreground"
             >
               {segment.text}
             </mark>
@@ -174,8 +174,11 @@ function StatusLine({ row, index }: { row: StatusRow; index: number }) {
       )}
       {row.status === "error" && (
         <>
+          {/* The folder's warning icon says it failed; the room here goes
+              to the reason. */}
           <span data-name role="alert" className="min-w-0 truncate">
-            Could not read this folder. {row.message}
+            <span className="sr-only">Could not read this folder. </span>
+            {row.message || "Could not read this folder."}
           </span>
           <button
             type="button"

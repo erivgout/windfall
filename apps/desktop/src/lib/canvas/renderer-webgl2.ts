@@ -24,6 +24,7 @@ layout(location = 2) in uint a_flags;
 uniform vec2 u_resolution;
 uniform vec4 u_transform;
 uniform ivec3 u_ticks;
+uniform ivec3 u_resize;
 uniform float u_lineWidth;
 uniform int u_pass;
 uniform vec4 u_selectionFill;
@@ -47,14 +48,20 @@ void main() {
   }
   bool isFlat = (a_flags & 2u) != 0u;
   int start = a_geometry.x - u_ticks.x;
+  int len = a_geometry.y;
   int row = a_geometry.z;
   if (selected) {
-    start += u_ticks.y;
+    // resizedSpan in renderer.ts.
+    int keep = min(len, u_resize.z);
+    int shift = min(u_resize.x, len - keep);
+    len -= shift;
+    len = max(len + u_resize.y, min(len, u_resize.z));
+    start += shift + u_ticks.y;
     row += u_ticks.z;
   }
   float lw = u_lineWidth;
   float x0 = snap(float(start) * u_transform.x - u_transform.y);
-  float x1 = snap(float(start + a_geometry.y) * u_transform.x - u_transform.y);
+  float x1 = snap(float(start + len) * u_transform.x - u_transform.y);
   float y0 = snap(float(row) * u_transform.z - u_transform.w);
   float y1 = snap(float(row + a_geometry.w) * u_transform.z - u_transform.w);
   if (!isFlat) y0 += lw;
@@ -127,6 +134,7 @@ interface Uniforms {
   resolution: WebGLUniformLocation | null
   transform: WebGLUniformLocation | null
   ticks: WebGLUniformLocation | null
+  resize: WebGLUniformLocation | null
   lineWidth: WebGLUniformLocation | null
   pass: WebGLUniformLocation | null
   selectionFill: WebGLUniformLocation | null
@@ -289,6 +297,7 @@ class WebGL2Renderer implements RectRenderer {
     const instances = last - first
     if (batch.selectedCount === 0) {
       gl.uniform3i(uniforms.ticks, transform.scrollTick, 0, 0)
+      gl.uniform3i(uniforms.resize, 0, 0, 0)
       gl.uniform1i(uniforms.pass, PASS_ALL)
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, instances)
     } else {
@@ -297,6 +306,12 @@ class WebGL2Renderer implements RectRenderer {
         transform.scrollTick,
         options.dragTicks ?? 0,
         options.dragRows ?? 0
+      )
+      gl.uniform3i(
+        uniforms.resize,
+        options.resizeStart ?? 0,
+        options.resizeEnd ?? 0,
+        options.minLength ?? 0
       )
       gl.uniform1i(uniforms.pass, PASS_UNSELECTED)
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, instances)
@@ -393,6 +408,7 @@ class WebGL2Renderer implements RectRenderer {
       resolution: gl.getUniformLocation(program, "u_resolution"),
       transform: gl.getUniformLocation(program, "u_transform"),
       ticks: gl.getUniformLocation(program, "u_ticks"),
+      resize: gl.getUniformLocation(program, "u_resize"),
       lineWidth: gl.getUniformLocation(program, "u_lineWidth"),
       pass: gl.getUniformLocation(program, "u_pass"),
       selectionFill: gl.getUniformLocation(program, "u_selectionFill"),

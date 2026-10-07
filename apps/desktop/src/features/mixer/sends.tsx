@@ -36,7 +36,7 @@ function SendRow({ from, send }: { from: TrackId; send: Send }) {
   return (
     <li
       data-slot="track-send"
-      className="flex h-[26px] shrink-0 items-center gap-1"
+      className="group/send relative flex h-[26px] shrink-0 items-center gap-1"
     >
       <Knob
         size="sm"
@@ -55,10 +55,13 @@ function SendRow({ from, send }: { from: TrackId; send: Send }) {
       >
         {target}
       </span>
+      {/* A strip is too narrow for the name and the button side by side,
+          so the button lies over the end of the name while the row is
+          pointed at or focused. */}
       <button
         type="button"
         aria-label={`Remove the send to ${target}`}
-        className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className="absolute top-1/2 right-0 flex size-4 -translate-y-1/2 items-center justify-center rounded-sm bg-muted text-muted-foreground opacity-0 outline-none group-hover/send:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:opacity-100"
         onClick={() => void removeSend(from, send.target)}
       >
         <HugeiconsIcon

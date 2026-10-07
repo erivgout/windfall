@@ -56,7 +56,7 @@ export const StepRuler = memo(function StepRuler({
           key={mark.step}
           aria-hidden
           className={cn(
-            "absolute bottom-0 flex h-full items-end border-l pb-[3px] pl-1 font-readout text-[0.625rem] leading-none",
+            "absolute bottom-0 flex h-full items-end border-l pb-[5px] pl-1 font-readout text-[0.625rem] leading-none",
             mark.bar
               ? "border-(--wf-grid-line-strong) text-foreground"
               : "h-1/2 border-(--wf-grid-line) text-muted-foreground/80"
@@ -70,7 +70,7 @@ export const StepRuler = memo(function StepRuler({
         ref={caretRef}
         aria-hidden
         data-slot="rack-playhead"
-        className="pointer-events-none invisible absolute bottom-0 left-0 h-1 rounded-t-[1px] bg-(--wf-playhead)"
+        className="pointer-events-none invisible absolute bottom-0 left-0 h-[3px] rounded-t-[1px] bg-(--wf-playhead)"
         style={{ width: pitches(1, -STEP_GAP) }}
       />
     </div>

@@ -20,6 +20,7 @@ struct Uniforms {
   ticks: vec4i,
   selectionFill: vec4f,
   selectionBorder: vec4f,
+  resize: vec4i,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -52,14 +53,20 @@ fn vertexMain(
   }
   let isFlat = (flags & 2u) != 0u;
   var start = geometry.x - u.ticks.x;
+  var len = geometry.y;
   var row = geometry.z;
   if (selected) {
-    start += u.ticks.y;
+    // resizedSpan in renderer.ts.
+    let keep = min(len, u.resize.z);
+    let shift = min(u.resize.x, len - keep);
+    len -= shift;
+    len = max(len + u.resize.y, min(len, u.resize.z));
+    start += shift + u.ticks.y;
     row += u.ticks.z;
   }
   let lw = u.lineWidth;
   var x0 = snap(f32(start) * u.transform.x - u.transform.y);
-  var x1 = snap(f32(start + geometry.y) * u.transform.x - u.transform.y);
+  var x1 = snap(f32(start + len) * u.transform.x - u.transform.y);
   var y0 = snap(f32(row) * u.transform.z - u.transform.w);
   var y1 = snap(f32(row + geometry.w) * u.transform.z - u.transform.w);
   if (!isFlat) { y0 += lw; }
@@ -114,10 +121,11 @@ const BUFFER_QUERY_RESOLVE = 0x0200
 const SHADER_STAGE_VERTEX = 0x1
 const MAP_MODE_READ = 0x1
 
-const UNIFORM_BYTES = 80
+const UNIFORM_BYTES = 96
 // Dynamic uniform offsets must be multiples of 256 bytes.
 const SLOT_BYTES = 256
 const MAX_SLOTS = 128
+const NO_RESIZE: DrawOptions = {}
 
 const PASS_ALL = 0
 const PASS_UNSELECTED = 1
@@ -326,15 +334,15 @@ class WebGPURenderer implements RectRenderer {
     pass.setVertexBuffer(2, gpu.flags)
     const instances = last - first
     if (batch.selectedCount === 0) {
-      this.bindUniforms(frame, PASS_ALL, 0, 0)
+      this.bindUniforms(frame, PASS_ALL, 0, 0, NO_RESIZE)
       pass.draw(4, instances, 0, first)
       return
     }
     const dragTicks = options.dragTicks ?? 0
     const dragRows = options.dragRows ?? 0
-    this.bindUniforms(frame, PASS_UNSELECTED, dragTicks, dragRows)
+    this.bindUniforms(frame, PASS_UNSELECTED, dragTicks, dragRows, options)
     pass.draw(4, instances, 0, first)
-    this.bindUniforms(frame, PASS_SELECTED, dragTicks, dragRows)
+    this.bindUniforms(frame, PASS_SELECTED, dragTicks, dragRows, options)
     pass.draw(4, instances, 0, first)
   }
 
@@ -407,7 +415,8 @@ class WebGPURenderer implements RectRenderer {
     frame: Frame,
     drawPass: number,
     dragTicks: number,
-    dragRows: number
+    dragRows: number,
+    resize: DrawOptions
   ): void {
     if (frame.slot >= MAX_SLOTS) {
       throw new Error(`more than ${MAX_SLOTS} draws in one frame`)
@@ -428,6 +437,10 @@ class WebGPURenderer implements RectRenderer {
     ints[base + 9] = dragTicks
     ints[base + 10] = dragRows
     ints[base + 11] = 0
+    ints[base + 20] = resize.resizeStart ?? 0
+    ints[base + 21] = resize.resizeEnd ?? 0
+    ints[base + 22] = resize.minLength ?? 0
+    ints[base + 23] = 0
     const theme = this.theme
     if (theme) {
       floats[base + 12] = theme.selectionFill.r / 255

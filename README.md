@@ -2,4 +2,60 @@
 
 # Windfall
 
-Created in [T3 Code](https://t3.codes).
+Windfall is a free, open-source digital audio workstation in the style of FL Studio. It is a native desktop app: the audio engine is Rust, the window is Tauri 2, and the interface is React with shadcn.
+
+It is early. `WINDFALL_PLAN.md` describes the whole plan, and `docs/parity/PARITY.md` tracks every FL Studio feature and whether Windfall has it yet.
+
+Windfall is not affiliated with Image-Line. It contains no FL Studio code, samples, presets or artwork.
+
+## Run it
+
+You need Rust, Node 24 or newer, and pnpm. On Windows you also need the Visual Studio C++ build tools, and on Linux the WebKitGTK and ALSA development packages that the CI workflow installs.
+
+```bash
+# Windows, in Git Bash: load a Visual Studio environment that can link
+source scripts/msvc-env.sh
+
+cd apps/desktop
+pnpm install
+pnpm tauri dev
+```
+
+To work on the interface without building the engine, `pnpm dev` runs it in a browser against a simulated backend at http://localhost:1420.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `crates/windfall-core` | Audio buffer and unit helpers shared by everything |
+| `crates/windfall-project` | Project model, edit commands, undo history, `.windfall` file format |
+| `crates/windfall-engine` | Realtime audio engine and offline renderer |
+| `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV |
+| `crates/windfall-dsp` | Effects and synth DSP |
+| `crates/windfall-ipc` | Types the engine, shell and interface exchange |
+| `crates/windfall-factory` | Generates the factory sounds |
+| `content/factory` | Factory sounds, CC0 |
+| `apps/desktop` | The app: `src-tauri` is the shell, `src` is the interface |
+| `apps/desktop/src/components/audio` | Knob, fader, meter, step grid and other audio controls, MIT licensed and installable as a shadcn registry |
+| `docs` | Architecture, parity matrix, performance measurements |
+
+`docs/ARCHITECTURE.md` explains how the parts talk to each other.
+
+## Checks
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+pnpm --dir apps/desktop typecheck
+pnpm --dir apps/desktop lint
+pnpm --dir apps/desktop test
+node scripts/parity.mjs --check
+```
+
+After changing a Rust type that the interface uses, run `scripts/gen-bindings.sh`.
+
+## License
+
+Windfall is licensed under the GNU General Public License, version 3 or later. See `LICENSE`.
+
+Two parts carry their own, more permissive terms so other projects can reuse them: the audio control kit in `apps/desktop/src/components/audio` is MIT, and the factory sounds in `content/factory` are CC0.

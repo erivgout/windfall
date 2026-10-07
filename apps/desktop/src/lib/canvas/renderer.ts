@@ -28,6 +28,36 @@ export interface DrawOptions {
   /** Offset applied to selected rects while they are being dragged. */
   readonly dragTicks?: number
   readonly dragRows?: number
+  /**
+   * Ticks added to the start edge of selected rects while they are being
+   * resized. The end edge stays where it is. See `resizedSpan`.
+   */
+  readonly resizeStart?: number
+  /** Ticks added to the end edge of selected rects. */
+  readonly resizeEnd?: number
+  /** A resize never leaves a rect shorter than this, or than it was. */
+  readonly minLength?: number
+}
+
+/**
+ * Start and length of a rect after a resize drag. Every renderer applies
+ * exactly this to selected rects, so commit a resize with it and the drop
+ * lands where the preview was. With both deltas 0 it changes nothing.
+ */
+export function resizedSpan(
+  start: number,
+  length: number,
+  resizeStart: number,
+  resizeEnd: number,
+  minLength: number
+): { start: number; length: number } {
+  const keep = Math.min(length, minLength)
+  const shift = Math.min(resizeStart, length - keep)
+  const shrunk = length - shift
+  return {
+    start: start + shift,
+    length: Math.max(shrunk + resizeEnd, Math.min(shrunk, minLength)),
+  }
 }
 
 /**

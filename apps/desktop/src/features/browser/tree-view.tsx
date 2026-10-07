@@ -14,7 +14,7 @@ import { useHint } from "@/lib/store/hint"
 import { useChannel } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 
-import { activateRow, openOrRetry, refresh, selectRow } from "./commands"
+import { activateRow, refresh, selectRow } from "./commands"
 import { TreeFooter } from "./empty-states"
 import { rowMenu } from "./row-menu"
 import {
@@ -23,6 +23,7 @@ import {
   rememberScrollTop,
   requestDone,
   savedScrollTop,
+  toggleFolder,
   useBrowserStore,
 } from "./store"
 import {
@@ -254,7 +255,7 @@ export function TreeView() {
       if (retry) refresh(row.path)
       return
     }
-    if (row.kind === "folder") openOrRetry(row)
+    if (row.kind === "folder") toggleFolder(row)
   }
 
   function onDoubleClick(event: React.MouseEvent) {
@@ -321,7 +322,7 @@ export function TreeView() {
   // row that scrolls out hands its elements to the one scrolling in, so
   // scrolling changes text and positions and builds almost nothing.
   for (let index = start; index < end; index += 1) {
-    pushLine(index, (globalThis as { __byId?: boolean }).__byId ? rows[index].id : index % virtual.capacity)
+    pushLine(index, index % virtual.capacity)
   }
   // The selected row stays in the document when it scrolls out of the
   // window, so the tree's active row always exists for screen readers.

@@ -12,6 +12,7 @@ import {
 import {
   BORDER_SHADE,
   RendererUnavailableError,
+  resizedSpan,
   type DrawOptions,
   type RectRenderer,
   type RendererInfo,
@@ -90,10 +91,10 @@ class Canvas2DRenderer implements RectRenderer {
     const dragTicks = options.dragTicks ?? 0
     const dragRows = options.dragRows ?? 0
     if (batch.selectedCount === 0) {
-      this.drawPass(batch, palette, first, last, PASS_ALL, 0, 0)
+      this.drawPass(batch, palette, first, last, PASS_ALL, 0, 0, options)
       return
     }
-    this.drawPass(batch, palette, first, last, PASS_UNSELECTED, 0, 0)
+    this.drawPass(batch, palette, first, last, PASS_UNSELECTED, 0, 0, options)
     this.drawPass(
       batch,
       palette,
@@ -101,7 +102,8 @@ class Canvas2DRenderer implements RectRenderer {
       last,
       PASS_SELECTED,
       dragTicks,
-      dragRows
+      dragRows,
+      options
     )
   }
 
@@ -209,7 +211,8 @@ class Canvas2DRenderer implements RectRenderer {
     last: number,
     pass: number,
     dragTicks: number,
-    dragRows: number
+    dragRows: number,
+    resize: DrawOptions
   ): void {
     const t = this.transform
     const theme = this.theme
@@ -224,6 +227,10 @@ class Canvas2DRenderer implements RectRenderer {
     const height = this.canvas.height
     const lw = t.lineWidth
     const { scrollTick, scaleX, offsetX, scaleY, offsetY } = t
+    const resizeStart = resize.resizeStart ?? 0
+    const resizeEnd = resize.resizeEnd ?? 0
+    const minLength = resize.minLength ?? 0
+    const resizing = resizeStart !== 0 || resizeEnd !== 0
 
     counts.fill(0, 0, slotCount + 1)
     let n = 0
@@ -234,8 +241,20 @@ class Canvas2DRenderer implements RectRenderer {
       if (pass === PASS_SELECTED && !selected) continue
       const g = i * GEOMETRY_STRIDE
       let start = geometry[g]
+      let length = geometry[g + 1]
       let row = geometry[g + 2]
       if (selected) {
+        if (resizing) {
+          const span = resizedSpan(
+            start,
+            length,
+            resizeStart,
+            resizeEnd,
+            minLength
+          )
+          start = span.start
+          length = span.length
+        }
         start += dragTicks
         row += dragRows
       }
@@ -245,7 +264,7 @@ class Canvas2DRenderer implements RectRenderer {
       // rect on the same pixels.
       let x0 = Math.floor((start - scrollTick) * scaleX - offsetX + 0.5)
       let x1 = Math.floor(
-        (start + geometry[g + 1] - scrollTick) * scaleX - offsetX + 0.5
+        (start + length - scrollTick) * scaleX - offsetX + 0.5
       )
       let y0 = Math.floor(row * scaleY - offsetY + 0.5)
       let y1 = Math.floor((row + geometry[g + 3]) * scaleY - offsetY + 0.5)

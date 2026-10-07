@@ -54,6 +54,7 @@ export {
   RENDERER_KINDS,
   RendererUnavailableError,
   isSoftwareGpu,
+  resizedSpan,
   type DrawOptions,
   type RectRenderer,
   type RendererInfo,

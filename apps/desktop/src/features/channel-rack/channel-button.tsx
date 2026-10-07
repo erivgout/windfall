@@ -74,6 +74,9 @@ function ColorChip({
         render={
           <button
             type="button"
+            // Kept out of the tab order, which is long enough with one stop
+            // per control per row. "Change channel color" reaches it too.
+            tabIndex={-1}
             aria-label={`${name} color`}
             className="h-full w-2 shrink-0 rounded-l-[3px] outline-none hover:brightness-125 focus-visible:ring-2 focus-visible:ring-ring"
             style={{ backgroundColor: colorToCss(color) }}

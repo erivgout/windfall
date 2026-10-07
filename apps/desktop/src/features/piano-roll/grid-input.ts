@@ -1,0 +1,247 @@
+import type { TimeGridView } from "@/lib/canvas"
+
+import type { PointerInput } from "./editor"
+import { cursorFor } from "./intents"
+import type { PianoRollSession } from "./session"
+import { usePianoRollStore } from "./store"
+
+const WHEEL_ZOOM = 0.0015
+/** Dragging this close to an edge, or past it, scrolls the view along. */
+const EDGE_PX = 10
+/** A press that has not travelled this far does not scroll the view. */
+const SCROLL_AFTER_PX = 6
+const MAX_SCROLL_PX_PER_FRAME = 28
+
+function toInput(
+  view: TimeGridView,
+  event: MouseEvent,
+  modifiers?: Partial<PointerInput>
+): PointerInput {
+  const point = view.localPoint(event)
+  return {
+    x: point.x,
+    y: point.y,
+    shift: event.shiftKey,
+    ctrl: event.ctrlKey || event.metaKey,
+    alt: event.altKey,
+    ...modifiers,
+  }
+}
+
+/**
+ * Wheel navigation shared by the grid and the strips around it. `axes`
+ * says which directions the strip under the pointer can scroll.
+ */
+export function handleWheel(
+  session: PianoRollSession,
+  event: WheelEvent,
+  point: { x: number; y: number },
+  axes: { time: boolean; rows: boolean }
+): void {
+  const view = session.view
+  if (!view) return
+  event.preventDefault()
+  // Shift turns a vertical wheel into a horizontal one on some systems.
+  const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX
+  const zoom = event.ctrlKey || event.metaKey
+  if (event.altKey || (zoom && event.shiftKey)) {
+    if (axes.rows) session.zoomRows(point.y, delta < 0 ? 1.15 : 1 / 1.15)
+    return
+  }
+  if (zoom) {
+    if (axes.time) view.zoomTime(point.x, Math.exp(-delta * WHEEL_ZOOM))
+    return
+  }
+  if (event.shiftKey || !axes.rows) {
+    if (axes.time) view.panBy(delta, 0)
+    return
+  }
+  view.panBy(axes.time ? event.deltaX : 0, event.deltaY)
+}
+
+function edgeSpeed(position: number, size: number): number {
+  let over = 0
+  if (position < EDGE_PX) over = position - EDGE_PX
+  else if (position > size - EDGE_PX) over = position - (size - EDGE_PX)
+  return Math.max(
+    -MAX_SCROLL_PX_PER_FRAME,
+    Math.min(MAX_SCROLL_PX_PER_FRAME, over * 0.4)
+  )
+}
+
+/**
+ * Turns mouse input on the grid canvas into editor gestures and view
+ * navigation: left and right button for the tools, middle-drag to pan, the
+ * wheel to scroll and zoom. Returns a function that detaches everything.
+ */
+export function attachGridInput(
+  session: PianoRollSession,
+  view: TimeGridView
+): () => void {
+  const { editor } = session
+  const element = view.element
+  let last: PointerInput | null = null
+  let pressed: PointerInput | null = null
+  let travelled = false
+  let pan: { x: number; y: number } | null = null
+  let scrollFrame = 0
+
+  const showCursor = () => {
+    element.style.cursor = pan
+      ? "grabbing"
+      : cursorFor(editor.hover?.intent ?? null)
+  }
+  const stopCursor = editor.subscribe((event) => {
+    if (event === "hover") showCursor()
+  })
+
+  const stopAutoScroll = () => {
+    if (scrollFrame !== 0) cancelAnimationFrame(scrollFrame)
+    scrollFrame = 0
+  }
+
+  // While a drag is held at an edge the view keeps scrolling and the
+  // gesture is fed the same pointer position, which now means a new place.
+  const autoScroll = () => {
+    scrollFrame = 0
+    if (!editor.busy || !last) return
+    const { width, height } = view.viewport
+    const dx = edgeSpeed(last.x, width)
+    const dy = edgeSpeed(last.y, height)
+    if (travelled && (dx !== 0 || dy !== 0)) {
+      const before = view.viewport
+      view.panBy(dx, dy)
+      if (view.viewport !== before) editor.pointerMove(last)
+    }
+    scrollFrame = requestAnimationFrame(autoScroll)
+  }
+
+  const endGesture = (event: PointerEvent, commit: boolean) => {
+    stopAutoScroll()
+    if (pan) {
+      pan = null
+      showCursor()
+    } else if (editor.busy) {
+      if (commit) editor.pointerUp(toInput(view, event))
+      else editor.cancel()
+    }
+    if (element.hasPointerCapture(event.pointerId)) {
+      element.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.pointerType === "touch") return
+    session.focusGrid()
+    if (event.button === 1) {
+      // Stops the browser's own middle-button scrolling.
+      event.preventDefault()
+      editor.cancel()
+      pan = { x: event.clientX, y: event.clientY }
+      element.setPointerCapture(event.pointerId)
+      showCursor()
+      return
+    }
+    if (event.button !== 0 && event.button !== 2) return
+    last = toInput(view, event)
+    pressed = last
+    travelled = false
+    const intent = editor.pointerDown(
+      last,
+      event.button === 0 ? "left" : "right"
+    )
+    if (!editor.busy || intent?.kind === "menu") return
+    element.setPointerCapture(event.pointerId)
+    if (scrollFrame === 0) scrollFrame = requestAnimationFrame(autoScroll)
+  }
+
+  const onPointerMove = (event: PointerEvent) => {
+    if (pan) {
+      view.panBy(pan.x - event.clientX, pan.y - event.clientY)
+      pan = { x: event.clientX, y: event.clientY }
+      return
+    }
+    last = toInput(view, event)
+    if (
+      pressed &&
+      Math.hypot(last.x - pressed.x, last.y - pressed.y) > SCROLL_AFTER_PX
+    ) {
+      travelled = true
+    }
+    editor.pointerMove(last)
+  }
+
+  const onPointerUp = (event: PointerEvent) => endGesture(event, true)
+  const onPointerCancel = (event: PointerEvent) => endGesture(event, false)
+
+  const onPointerLeave = () => {
+    if (!editor.busy) editor.pointerLeave()
+  }
+
+  // Right-click deletes in every tool but Select, where it opens the menu.
+  const onContextMenu = (event: MouseEvent) => {
+    if (usePianoRollStore.getState().tool === "select") return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const onMouseDown = (event: MouseEvent) => {
+    if (event.button === 1) event.preventDefault()
+  }
+
+  const onWheel = (event: WheelEvent) => {
+    handleWheel(session, event, view.localPoint(event), {
+      time: true,
+      rows: true,
+    })
+    if (last) editor.pointerMove(last)
+  }
+
+  // Ctrl and Shift change what a drag does, also while the mouse is still.
+  const onModifier = (event: KeyboardEvent) => {
+    if (!last || !editor.busy) return
+    if (!["Control", "Shift", "Alt", "Meta"].includes(event.key)) return
+    last = {
+      ...last,
+      shift: event.shiftKey,
+      ctrl: event.ctrlKey || event.metaKey,
+      alt: event.altKey,
+    }
+    editor.pointerMove(last)
+  }
+
+  const onBlur = () => {
+    stopAutoScroll()
+    pan = null
+    editor.cancel()
+  }
+
+  element.addEventListener("pointerdown", onPointerDown)
+  element.addEventListener("pointermove", onPointerMove)
+  element.addEventListener("pointerup", onPointerUp)
+  element.addEventListener("pointercancel", onPointerCancel)
+  element.addEventListener("pointerleave", onPointerLeave)
+  element.addEventListener("contextmenu", onContextMenu)
+  element.addEventListener("mousedown", onMouseDown)
+  // Wheel must not be passive, or Ctrl+wheel would zoom the whole window.
+  element.addEventListener("wheel", onWheel, { passive: false })
+  window.addEventListener("keydown", onModifier)
+  window.addEventListener("keyup", onModifier)
+  window.addEventListener("blur", onBlur)
+
+  return () => {
+    stopAutoScroll()
+    stopCursor()
+    element.removeEventListener("pointerdown", onPointerDown)
+    element.removeEventListener("pointermove", onPointerMove)
+    element.removeEventListener("pointerup", onPointerUp)
+    element.removeEventListener("pointercancel", onPointerCancel)
+    element.removeEventListener("pointerleave", onPointerLeave)
+    element.removeEventListener("contextmenu", onContextMenu)
+    element.removeEventListener("mousedown", onMouseDown)
+    element.removeEventListener("wheel", onWheel)
+    window.removeEventListener("keydown", onModifier)
+    window.removeEventListener("keyup", onModifier)
+    window.removeEventListener("blur", onBlur)
+  }
+}

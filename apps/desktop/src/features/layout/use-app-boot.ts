@@ -3,6 +3,8 @@ import { useEffect } from "react"
 import { registerBrowserActions } from "@/features/browser/actions"
 import { registerChannelRackActions } from "@/features/channel-rack/actions"
 import { registerMixerActions } from "@/features/mixer/actions"
+import { registerPianoRollActions } from "@/features/piano-roll/actions"
+import { registerPlaylistActions } from "@/features/playlist/actions"
 import { installKeymap } from "@/lib/actions"
 import {
   registerBuiltinActions,
@@ -35,6 +37,8 @@ export function useAppBoot({ guardClose }: BootOptions) {
       registerBrowserActions(),
       registerChannelRackActions(),
       registerMixerActions(),
+      registerPianoRollActions(),
+      registerPlaylistActions(),
       installKeymap(),
       useRecentStore.subscribe((state) => syncRecentActions(state.paths)),
     ]

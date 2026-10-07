@@ -3,9 +3,9 @@ import type { ComponentType } from "react"
 import BrowserPanel from "@/features/browser"
 import ChannelRackPanel from "@/features/channel-rack"
 import MixerPanel from "@/features/mixer"
+import PianoRollPanel from "@/features/piano-roll"
+import PlaylistPanel from "@/features/playlist"
 import type { CenterTab, SidePanel } from "@/lib/store/ui"
-
-import { PianoRollPlaceholder, PlaylistPlaceholder } from "./empty-states"
 
 export type PanelId = SidePanel | CenterTab
 
@@ -33,12 +33,12 @@ export const PANELS: Record<PanelId, PanelInfo> = {
   playlist: {
     title: "Playlist",
     action: "view.playlist",
-    component: PlaylistPlaceholder,
+    component: PlaylistPanel,
   },
   pianoRoll: {
     title: "Piano roll",
     action: "view.pianoRoll",
-    component: PianoRollPlaceholder,
+    component: PianoRollPanel,
   },
 }
 

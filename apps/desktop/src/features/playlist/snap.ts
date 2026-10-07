@@ -1,0 +1,74 @@
+import type { TimeSignature } from "@/bindings"
+import type { TimeGridSpec } from "@/lib/canvas"
+import { ticksPerBar, ticksPerBeat } from "@/lib/time"
+import { TICKS_PER_STEP } from "@/lib/units"
+
+export type SnapMode = "none" | "step" | "beat" | "bar"
+
+export const SNAP_MODES: { mode: SnapMode; label: string; about: string }[] = [
+  { mode: "bar", label: "Bar", about: "Clips land on bar lines" },
+  { mode: "beat", label: "Beat", about: "Clips land on beats" },
+  { mode: "step", label: "Step", about: "Clips land on sixteenth notes" },
+  { mode: "none", label: "None", about: "Clips land exactly where dropped" },
+]
+
+/** Grid size in ticks, or 0 when snapping is off. */
+export function snapTicks(mode: SnapMode, signature: TimeSignature): number {
+  switch (mode) {
+    case "none":
+      return 0
+    case "step":
+      return TICKS_PER_STEP
+    case "beat":
+      return ticksPerBeat(signature)
+    case "bar":
+      return ticksPerBar(signature)
+    default: {
+      const _exhaustive: never = mode
+      return _exhaustive
+    }
+  }
+}
+
+/** What an arrow key moves a clip by: the snap, or a step when snap is off. */
+export function nudgeTicks(mode: SnapMode, signature: TimeSignature): number {
+  return snapTicks(mode, signature) || TICKS_PER_STEP
+}
+
+/**
+ * The lines the grid draws for a snap setting. The finest line is the snap
+ * itself, so what is drawn is what clips land on. Zooming out drops the
+ * finest lines by itself.
+ */
+export function gridSpecFor(
+  mode: SnapMode,
+  signature: TimeSignature
+): TimeGridSpec {
+  const beat = ticksPerBeat(signature)
+  switch (mode) {
+    case "bar":
+      // Bars, with every fourth one stronger.
+      return {
+        ticksPerStep: ticksPerBar(signature),
+        stepsPerBeat: 1,
+        beatsPerBar: 4,
+      }
+    case "beat":
+      return {
+        ticksPerStep: beat,
+        stepsPerBeat: signature.numerator,
+        beatsPerBar: 4,
+      }
+    case "step":
+    case "none":
+      return {
+        ticksPerStep: TICKS_PER_STEP,
+        stepsPerBeat: Math.max(1, beat / TICKS_PER_STEP),
+        beatsPerBar: signature.numerator,
+      }
+    default: {
+      const _exhaustive: never = mode
+      return _exhaustive
+    }
+  }
+}

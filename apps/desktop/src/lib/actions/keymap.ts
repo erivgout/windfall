@@ -36,6 +36,14 @@ export const FL_KEYMAP: Record<string, string[] | null> = {
   "options.settings": ["F10"],
 }
 
+/**
+ * Adds FL Studio shortcuts for a panel's own actions, in the same form as
+ * `FL_KEYMAP`. Call it before the panel registers those actions.
+ */
+export function addFlShortcuts(shortcuts: Record<string, string[] | null>) {
+  Object.assign(FL_KEYMAP, shortcuts)
+}
+
 export const KEYMAP_PRESETS: {
   id: KeymapPreset
   name: string

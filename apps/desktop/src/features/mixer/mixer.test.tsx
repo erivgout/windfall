@@ -6,6 +6,7 @@ import { dbToGain } from "@/components/audio"
 import { getAppState, isEnabled, registry, runAction } from "@/lib/actions"
 import { dispatch, redo, undo } from "@/lib/store/project"
 import { usePromptStore } from "@/lib/store/prompts"
+import { useTransportStore } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
 import { MASTER_TRACK } from "@/lib/units"
 import { startTestApp } from "@/test/harness"
@@ -824,6 +825,62 @@ describe("the master", () => {
     expect(tracks()[0].muted).toBe(true)
     expect(tracks()[0].volume).toBeCloseTo(dbToGain(-6), 4)
     expect(strip("Master")).toHaveAttribute("data-audible", "muted")
+  })
+})
+
+describe("keys and wheel", () => {
+  const playing = () => useTransportStore.getState().playing
+
+  it("plays with Space instead of pressing the focused button", async () => {
+    const user = userEvent.setup()
+    render(<MixerPanel />)
+    await user.click(button("Kick", "Mute"))
+    await flush()
+    expect(trackNamed("Kick").muted).toBe(true)
+    expect(button("Kick", "Mute")).toHaveFocus()
+
+    await user.keyboard(" ")
+    await flush()
+    expect(playing()).toBe(true)
+    expect(trackNamed("Kick").muted).toBe(true)
+
+    // Enter still presses the button.
+    await user.keyboard("{Enter}")
+    await flush()
+    expect(trackNamed("Kick").muted).toBe(false)
+  })
+
+  it("plays with Space while a fader has the focus", async () => {
+    const user = userEvent.setup()
+    render(<MixerPanel />)
+    focus(fader("Hat"))
+    await user.keyboard(" ")
+    await flush()
+    expect(playing()).toBe(true)
+    expect(trackNamed("Hat").volume).toBe(1)
+  })
+
+  it("leaves Space to the name field", async () => {
+    const user = userEvent.setup()
+    render(<MixerPanel />)
+    await user.dblClick(nameOf("Kick"))
+    const field = screen.getByRole("textbox", { name: "Track name" })
+    await user.clear(field)
+    await user.type(field, "Big kick{Enter}")
+    await flush()
+    expect(tracks()[1].name).toBe("Big kick")
+    expect(playing()).toBe(false)
+  })
+
+  it("moves along the strips with the mouse wheel", () => {
+    render(<MixerPanel />)
+    const scroller = document.querySelector("[data-slot=mixer-inserts]")
+    if (!scroller) throw new Error("The mixer is not mounted")
+    fireEvent.wheel(strip("Kick"), { deltaY: 240 })
+    expect(scroller.scrollLeft).toBe(240)
+    // A sideways wheel already scrolls sideways by itself.
+    fireEvent.wheel(strip("Kick"), { deltaX: 100, deltaY: 10 })
+    expect(scroller.scrollLeft).toBe(240)
   })
 })
 

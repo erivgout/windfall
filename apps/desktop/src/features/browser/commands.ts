@@ -106,13 +106,7 @@ export async function replaceChannelSample(path: string): Promise<void> {
 export function activateRow(row: EntryRow) {
   if (row.kind === "audio") void addToRack(row.path)
   else if (row.kind === "project") void openProjectPath(row.path)
-  else if (row.kind === "folder") openOrRetry(row)
-}
-
-/** Opens or closes a folder. One that could not be read is read again. */
-export function openOrRetry(row: EntryRow) {
-  if (row.failed) refreshFolder(row.path)
-  else toggleFolder(row)
+  else if (row.kind === "folder") toggleFolder(row)
 }
 
 export function refresh(path: string) {

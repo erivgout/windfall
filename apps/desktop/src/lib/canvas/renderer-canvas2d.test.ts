@@ -8,6 +8,7 @@ import {
   RECT_VLINE,
   RectBatch,
 } from "./rect-batch"
+import type { DrawOptions } from "./renderer"
 import { createCanvas2DRenderer } from "./renderer-canvas2d"
 import { visibleRange, indexBatch } from "./spatial-index"
 import { deriveGridTheme } from "./theme"
@@ -63,12 +64,7 @@ function viewportAt(dpr: number): Viewport {
 function draw(
   batch: RectBatch,
   viewport: Viewport,
-  options: {
-    first?: number
-    last?: number
-    dragTicks?: number
-    dragRows?: number
-  } = {}
+  options: DrawOptions = {}
 ): Fill[] {
   const transform = deviceTransform(viewport)
   const { canvas, fills } = recordingCanvas(
@@ -182,5 +178,47 @@ describe("Canvas 2D renderer", () => {
       { style: rgbaToCss(theme.selectionBorder), rect: [75, 81, 60, 15] },
       { style: "rgb(220,160,130)", rect: [76, 82, 58, 13] },
     ])
+  })
+
+  it("stretches the end of selected rects and leaves the others alone", () => {
+    const batch = new RectBatch()
+    batch.push(1, 960, 960, 3, 1, NOTE, RECT_SELECTED)
+    batch.push(2, 1920, 960, 5, 1, NOTE)
+    const fills = draw(batch, viewportAt(1), { resizeEnd: 480, minLength: 1 })
+    expect(fills.map((fill) => fill.rect)).toEqual([
+      [120, 81, 60, 15],
+      [121, 82, 58, 13],
+      // One beat grew by half a beat: 60 px to 90 px, same left edge.
+      [60, 49, 90, 15],
+      [61, 50, 88, 13],
+    ])
+  })
+
+  it("moves the start of selected rects and keeps their end", () => {
+    const batch = new RectBatch()
+    batch.push(1, 960, 960, 3, 1, NOTE, RECT_SELECTED)
+    const later = draw(batch, viewportAt(1), { resizeStart: 480, minLength: 1 })
+    expect(later[0].rect).toEqual([90, 49, 30, 15])
+    const earlier = draw(batch, viewportAt(1), {
+      resizeStart: -480,
+      minLength: 1,
+    })
+    expect(earlier[0].rect).toEqual([30, 49, 90, 15])
+  })
+
+  it("stops a shrinking rect at the minimum length", () => {
+    const batch = new RectBatch()
+    batch.push(1, 960, 960, 3, 1, NOTE, RECT_SELECTED)
+    const fromEnd = draw(batch, viewportAt(1), {
+      resizeEnd: -5000,
+      minLength: 240,
+    })
+    expect(fromEnd[0].rect).toEqual([60, 49, 15, 15])
+    const fromStart = draw(batch, viewportAt(1), {
+      resizeStart: 5000,
+      minLength: 240,
+    })
+    // The end stays at 120 px; the start stops one step before it.
+    expect(fromStart[0].rect).toEqual([105, 49, 15, 15])
   })
 })
