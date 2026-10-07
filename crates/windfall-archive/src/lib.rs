@@ -1,0 +1,568 @@
+//! Native-only project packaging. No audio or document locks are used here.
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tempfile::{NamedTempFile, TempDir};
+use thiserror::Error;
+use windfall_project::{Project, ProjectSession, SampleId, SamplePath, file};
+use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
+
+pub const SCHEMA: u32 = 1;
+const MANIFEST: &str = "manifest.json";
+const PROJECT: &str = "project.windfall";
+const CHUNK: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub entries: usize,
+    pub expanded_bytes: u64,
+    pub entry_bytes: u64,
+    pub json_bytes: u64,
+    pub archive_bytes: u64,
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            entries: 4096,
+            expanded_bytes: 2 * 1024 * 1024 * 1024,
+            entry_bytes: 1024 * 1024 * 1024,
+            json_bytes: 8 * 1024 * 1024,
+            archive_bytes: 2 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+/// Called between bounded IO chunks and immediately before publication/install.
+/// A caller can cancel or inject an IO error without affecting other files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    Source,
+    Write,
+    Publish,
+    Read,
+    Extract,
+    Ready,
+}
+pub type Check<'a> = dyn FnMut(Stage) -> Result<(), Error> + 'a;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Project archive cancelled.")]
+    Cancelled,
+    #[error("{0}")]
+    Invalid(String),
+    #[error("These audio sources are missing; no portable archive was created:\n{0}")]
+    Missing(String),
+    #[error("Archive IO failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("Invalid ZIP archive: {0}")]
+    Zip(#[from] zip::result::ZipError),
+    #[error("Invalid archive JSON: {0}")]
+    Json(#[from] serde_json::Error),
+}
+fn invalid(message: impl Into<String>) -> Error {
+    Error::Invalid(message.into())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Manifest {
+    pub schema: u32,
+    pub project: String,
+    pub audio: Vec<Audio>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Audio {
+    pub sample: SampleId,
+    pub member: String,
+    pub path: String,
+    pub bytes: u64,
+    pub original_name: String,
+    pub original_path: SamplePath,
+}
+
+fn bounded(value: u64, limit: u64) -> Result<(), Error> {
+    if value > limit {
+        Err(invalid("Project archive exceeds its size limit."))
+    } else {
+        Ok(())
+    }
+}
+fn copy<R: Read, W: Write>(
+    from: &mut R,
+    to: &mut W,
+    limit: u64,
+    stage: Stage,
+    check: &mut Check<'_>,
+) -> Result<(u64, u32), Error> {
+    let mut buffer = [0; CHUNK];
+    let mut bytes = 0u64;
+    let mut hash = crc32fast::Hasher::new();
+    loop {
+        check(stage)?;
+        let n = from.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(n as u64)
+            .ok_or_else(|| invalid("Archive size overflow."))?;
+        bounded(bytes, limit)?;
+        hash.update(&buffer[..n]);
+        to.write_all(&buffer[..n])?;
+    }
+    Ok((bytes, hash.finalize()))
+}
+fn equal(a: &Path, b: &Path, check: &mut Check<'_>) -> Result<bool, Error> {
+    let mut a = File::open(a)?;
+    let mut b = File::open(b)?;
+    let mut x = [0; CHUNK];
+    let mut y = [0; CHUNK];
+    loop {
+        check(Stage::Source)?;
+        let n = a.read(&mut x)?;
+        b.read_exact(&mut y[..n])?;
+        if x[..n] != y[..n] {
+            return Ok(false);
+        }
+        if n == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+/// Packages a private snapshot, deduplicating exact audio bytes (CRC is only a
+/// candidate index). Publication uses a no-clobber atomic persist. Existing
+/// targets are never replaced, including a competitor arriving during work.
+pub fn create(
+    project: &Project,
+    session: Option<&ProjectSession>,
+    project_dir: Option<&Path>,
+    factory_dir: &Path,
+    target: &Path,
+    limits: Limits,
+    check: &mut Check<'_>,
+) -> Result<(), Error> {
+    project.check().map_err(invalid)?;
+    if project.samples.len().saturating_add(2) > limits.entries {
+        return Err(invalid("Too many archive audio sources."));
+    }
+    let sources: Vec<_> = project
+        .samples
+        .iter()
+        .map(|sample| file::resolve_sample_path(&sample.path, project_dir, factory_dir))
+        .collect();
+    let missing: Vec<_> = project
+        .samples
+        .iter()
+        .zip(&sources)
+        .filter(|(_, path)| path.as_ref().is_none_or(|path| !path.is_file()))
+        .map(|(sample, _)| format!("{} ({:?})", sample.name, sample.path))
+        .collect();
+    if !missing.is_empty() {
+        return Err(Error::Missing(missing.join("\n")));
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| invalid("Archive target has no folder."))?;
+    // Caller chooses an existing destination. Only this request's temporary
+    // directory and file are owned; failures never delete destination files.
+    let staging = tempfile::tempdir_in(parent)?;
+    let mut snapshot = project.clone();
+    let mut manifest = Manifest {
+        schema: SCHEMA,
+        project: PROJECT.into(),
+        audio: Vec::new(),
+    };
+    let mut unique: Vec<(String, PathBuf, u64)> = Vec::new();
+    let mut candidates: HashMap<(u64, u32), Vec<usize>> = HashMap::new();
+    let mut expanded = 0u64;
+    let mut staged_bytes = 0u64;
+    for (index, (sample, source)) in snapshot.samples.iter_mut().zip(sources).enumerate() {
+        let source = source.ok_or_else(|| invalid("Missing source."))?;
+        let staged = staging.path().join(index.to_string());
+        let remaining = limits
+            .expanded_bytes
+            .saturating_sub(staged_bytes)
+            .min(limits.entry_bytes);
+        let mut input = File::open(&source)?;
+        let before = input.metadata()?;
+        bounded(before.len(), remaining)?;
+        let (bytes, crc) = copy(
+            &mut input,
+            &mut File::create(&staged)?,
+            remaining,
+            Stage::Source,
+            check,
+        )?;
+        let after = input.metadata()?;
+        if bytes != before.len()
+            || before.len() != after.len()
+            || before.modified().ok() != after.modified().ok()
+        {
+            return Err(invalid(format!(
+                "Audio source changed while packaging: {}",
+                source.display()
+            )));
+        }
+        staged_bytes += bytes;
+        let mut found = None;
+        for &candidate in candidates.get(&(bytes, crc)).into_iter().flatten() {
+            if equal(&staged, &unique[candidate].1, check)? {
+                found = Some(candidate);
+                break;
+            }
+        }
+        let member = if let Some(found) = found {
+            unique[found].0.clone()
+        } else {
+            expanded = expanded
+                .checked_add(bytes)
+                .ok_or_else(|| invalid("Archive size overflow."))?;
+            bounded(expanded, limits.expanded_bytes)?;
+            let extension = source
+                .extension()
+                .and_then(|s| s.to_str())
+                .filter(|s| s.len() <= 12 && s.bytes().all(|c| c.is_ascii_alphanumeric()))
+                .unwrap_or("audio")
+                .to_ascii_lowercase();
+            let member = format!("audio/{:04}.{extension}", unique.len() + 1);
+            candidates
+                .entry((bytes, crc))
+                .or_default()
+                .push(unique.len());
+            unique.push((member.clone(), staged, bytes));
+            member
+        };
+        let extension = member.rsplit('.').next().unwrap_or("audio");
+        let path = format!("samples/{:04}.{extension}", sample.id.0);
+        manifest.audio.push(Audio {
+            sample: sample.id,
+            member,
+            path: path.clone(),
+            bytes,
+            original_name: sample.name.clone(),
+            original_path: sample.path.clone(),
+        });
+        sample.path = SamplePath::Project(path);
+    }
+    let json = file::to_json_with(&snapshot, session)?;
+    let manifest_json = serde_json::to_vec_pretty(&manifest)?;
+    bounded(json.len() as u64, limits.json_bytes)?;
+    bounded(manifest_json.len() as u64, limits.json_bytes)?;
+    // Extraction holds unique members plus one regular sample file per ID.
+    bounded(
+        expanded + staged_bytes + json.len() as u64 + manifest_json.len() as u64,
+        limits.expanded_bytes,
+    )?;
+    let mut temp = NamedTempFile::new_in(parent)?;
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    {
+        let mut writer = ZipWriter::new(temp.as_file_mut());
+        for (name, bytes) in [
+            (MANIFEST, manifest_json.as_slice()),
+            (PROJECT, json.as_bytes()),
+        ] {
+            check(Stage::Write)?;
+            writer.start_file(name, options)?;
+            writer.write_all(bytes)?;
+        }
+        for (member, source, bytes) in unique {
+            writer.start_file(member, options)?;
+            copy(
+                &mut File::open(source)?,
+                &mut writer,
+                bytes,
+                Stage::Write,
+                check,
+            )?;
+        }
+        writer.finish()?;
+    }
+    bounded(temp.as_file().metadata()?.len(), limits.archive_bytes)?;
+    temp.as_file().sync_all()?;
+    check(Stage::Publish)?;
+    temp.persist_noclobber(target)
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// An extraction remains request-owned until installation succeeds. Keeping
+/// this guard cleans rejected/stale/cancelled requests, never an unrelated path.
+pub struct Extracted {
+    root: TempDir,
+    pub project: Project,
+    pub session: Option<ProjectSession>,
+}
+impl Extracted {
+    pub fn root(&self) -> &Path {
+        self.root.path()
+    }
+    pub fn retain(self) -> PathBuf {
+        self.root.keep()
+    }
+}
+
+fn member_name(name: &str) -> Result<(), Error> {
+    // Format members use ASCII generated names; Unicode source names are
+    // metadata. This avoids filesystem normalization/case ambiguity on all OSes.
+    if name.len() > 240
+        || !name.is_ascii()
+        || name.is_empty()
+        || name.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.ends_with(['.', ' '])
+                || part.bytes().any(|c| c < 32 || b"\\:<>\"|?*".contains(&c))
+                || matches!(
+                    part.split('.')
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_uppercase()
+                        .as_str(),
+                    "CON"
+                        | "PRN"
+                        | "AUX"
+                        | "NUL"
+                        | "COM1"
+                        | "COM2"
+                        | "COM3"
+                        | "COM4"
+                        | "COM5"
+                        | "COM6"
+                        | "COM7"
+                        | "COM8"
+                        | "COM9"
+                        | "LPT1"
+                        | "LPT2"
+                        | "LPT3"
+                        | "LPT4"
+                        | "LPT5"
+                        | "LPT6"
+                        | "LPT7"
+                        | "LPT8"
+                        | "LPT9"
+                )
+        })
+    {
+        return Err(invalid(format!("Unsafe archive member: {name:?}")));
+    }
+    Ok(())
+}
+fn u16le(bytes: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([bytes[at], bytes[at + 1]])
+}
+fn u32le(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+}
+
+/// Bounds the central directory BEFORE ZIP's parser allocates its index, and
+/// detects duplicates before any parser can coalesce them. ZIP64/multidisk,
+/// encrypted members, directories and non-regular UNIX types are unsupported.
+fn preflight(
+    input: &mut File,
+    limits: Limits,
+    check: &mut Check<'_>,
+) -> Result<HashMap<String, u64>, Error> {
+    let length = input.metadata()?.len();
+    bounded(length, limits.archive_bytes)?;
+    let tail_size = length.min(65557) as usize;
+    input.seek(SeekFrom::End(-(tail_size as i64)))?;
+    let mut tail = vec![0; tail_size];
+    input.read_exact(&mut tail)?;
+    let end = (0..tail.len().saturating_sub(21))
+        .rev()
+        .find(|&at| {
+            tail[at..at + 4] == *b"PK\x05\x06"
+                && at + 22 + u16le(&tail, at + 20) as usize == tail.len()
+        })
+        .ok_or_else(|| invalid("Missing ZIP directory."))?;
+    let count = u16le(&tail, end + 10) as usize;
+    let size = u32le(&tail, end + 12) as u64;
+    let offset = u32le(&tail, end + 16) as u64;
+    if u16le(&tail, end + 4) != 0
+        || u16le(&tail, end + 6) != 0
+        || u16le(&tail, end + 8) as usize != count
+        || count == 65535
+        || count > limits.entries
+        || size > 4 * 1024 * 1024
+        || offset + size != length - tail_size as u64 + end as u64
+    {
+        return Err(invalid("Unsupported or oversized ZIP directory."));
+    }
+    input.seek(SeekFrom::Start(offset))?;
+    let mut directory = vec![0; size as usize];
+    input.read_exact(&mut directory)?;
+    let mut at = 0;
+    let mut names = HashMap::new();
+    let mut expanded = 0u64;
+    for _ in 0..count {
+        check(Stage::Read)?;
+        if at + 46 > directory.len() || directory[at..at + 4] != *b"PK\x01\x02" {
+            return Err(invalid("Damaged ZIP directory."));
+        }
+        let name_length = u16le(&directory, at + 28) as usize;
+        let next = at
+            + 46
+            + name_length
+            + u16le(&directory, at + 30) as usize
+            + u16le(&directory, at + 32) as usize;
+        if next > directory.len() {
+            return Err(invalid("Truncated ZIP directory."));
+        }
+        let name = std::str::from_utf8(&directory[at + 46..at + 46 + name_length])
+            .map_err(|_| invalid("Invalid archive path encoding."))?;
+        member_name(name)?;
+        let mode = u32le(&directory, at + 38) >> 16;
+        let bytes = u32le(&directory, at + 24) as u64;
+        if u16le(&directory, at + 8) & 1 != 0
+            || !matches!(u16le(&directory, at + 10), 0 | 8)
+            || u16le(&directory, at + 34) != 0
+            || !matches!(mode & 0o170000, 0 | 0o100000)
+            || u32le(&directory, at + 38) & 0x10 != 0
+        {
+            return Err(invalid(
+                "Unsupported encrypted, linked or special ZIP member.",
+            ));
+        }
+        bounded(bytes, limits.entry_bytes)?;
+        expanded = expanded
+            .checked_add(bytes)
+            .ok_or_else(|| invalid("Archive size overflow."))?;
+        bounded(expanded, limits.expanded_bytes)?;
+        if names.insert(name.to_ascii_lowercase(), bytes).is_some() {
+            return Err(invalid("Duplicate or case-colliding ZIP members."));
+        }
+        at = next;
+    }
+    if at != directory.len() {
+        return Err(invalid("Extra ZIP directory data."));
+    }
+    Ok(names)
+}
+fn json_member(
+    zip: &mut ZipArchive<File>,
+    name: &str,
+    limits: Limits,
+    check: &mut Check<'_>,
+) -> Result<String, Error> {
+    let mut member = zip.by_name(name)?;
+    bounded(member.size(), limits.json_bytes)?;
+    let mut bytes = Vec::new();
+    copy(
+        &mut member,
+        &mut bytes,
+        limits.json_bytes,
+        Stage::Read,
+        check,
+    )?;
+    String::from_utf8(bytes).map_err(|_| invalid("Invalid JSON encoding."))
+}
+
+pub fn extract(
+    source: &Path,
+    managed: &Path,
+    limits: Limits,
+    check: &mut Check<'_>,
+) -> Result<Extracted, Error> {
+    let mut input = File::open(source)?;
+    let members = preflight(&mut input, limits, check)?;
+    let mut zip = ZipArchive::new(input)?;
+    if zip.len() != members.len() {
+        return Err(invalid("Ambiguous ZIP directory."));
+    }
+    let manifest: Manifest =
+        serde_json::from_str(&json_member(&mut zip, MANIFEST, limits, check)?)?;
+    if manifest.schema != SCHEMA || manifest.project != PROJECT {
+        return Err(invalid("Unsupported project archive schema."));
+    }
+    let json = json_member(&mut zip, PROJECT, limits, check)?;
+    let project = file::from_json(&json).map_err(|error| invalid(error.to_string()))?;
+    let session = file::session_from_json(&json);
+    if manifest.audio.len() != project.samples.len() {
+        return Err(invalid("Archive audio manifest does not match project."));
+    }
+    let mut expected = HashSet::from([MANIFEST.to_owned(), PROJECT.to_owned()]);
+    let mut samples = HashSet::new();
+    let mut audio_paths = HashSet::new();
+    let mut extracted_bytes: u64 = members.values().sum();
+    for audio in &manifest.audio {
+        member_name(&audio.member)?;
+        member_name(&audio.path)?;
+        extracted_bytes = extracted_bytes
+            .checked_add(audio.bytes)
+            .ok_or_else(|| invalid("Archive size overflow."))?;
+        bounded(extracted_bytes, limits.expanded_bytes)?;
+        if !audio.member.starts_with("audio/")
+            || audio.member.matches('/').count() != 1
+            || !audio.path.starts_with("samples/")
+            || audio.path.matches('/').count() != 1
+            || !audio_paths.insert(audio.path.to_ascii_lowercase())
+            || !samples.insert(audio.sample)
+            || members.get(&audio.member) != Some(&audio.bytes)
+            || project
+                .samples
+                .iter()
+                .find(|sample| sample.id == audio.sample)
+                .is_none_or(|sample| sample.path != SamplePath::Project(audio.path.clone()))
+        {
+            return Err(invalid("Archive audio is missing or mismatched."));
+        }
+        expected.insert(audio.member.clone());
+    }
+    if expected.len() != members.len() || members.keys().any(|name| !expected.contains(name)) {
+        return Err(invalid("Archive contains unlisted members."));
+    }
+    // Validate all metadata before creating any extraction destination.
+    fs::create_dir_all(managed)?;
+    let root = tempfile::Builder::new()
+        .prefix("project-")
+        .tempdir_in(managed)?;
+    fs::create_dir(root.path().join("audio"))?;
+    fs::create_dir(root.path().join("samples"))?;
+    for name in expected {
+        let mut entry = zip.by_name(&name)?;
+        if entry.name() != name || entry.is_symlink() || entry.is_dir() {
+            return Err(invalid("Ambiguous ZIP member."));
+        }
+        let mut target = File::options()
+            .write(true)
+            .create_new(true)
+            .open(root.path().join(&name))?;
+        let (bytes, _) = copy(
+            &mut entry,
+            &mut target,
+            *members
+                .get(&name)
+                .ok_or_else(|| invalid("Missing ZIP member."))?,
+            Stage::Extract,
+            check,
+        )?;
+        if bytes != members[&name] {
+            return Err(invalid("Truncated archive member."));
+        }
+        target.sync_all()?;
+    }
+    for audio in &manifest.audio {
+        let mut from = File::open(root.path().join(&audio.member))?;
+        let mut to = File::options()
+            .write(true)
+            .create_new(true)
+            .open(root.path().join(&audio.path))?;
+        copy(&mut from, &mut to, audio.bytes, Stage::Extract, check)?;
+        to.sync_all()?;
+    }
+    check(Stage::Ready)?;
+    Ok(Extracted {
+        root,
+        project,
+        session,
+    })
+}

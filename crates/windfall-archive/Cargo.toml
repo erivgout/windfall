@@ -1,0 +1,23 @@
+[package]
+name = "windfall-archive"
+description = "Bounded native Windfall project archives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-project.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# MIT. Only stored/deflate ZIP; no encryption or other compression runtimes.
+zip = { version = "=6.0.0", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+crc32fast = "1.5"
+tempfile = "3"
+
+[lints]
+workspace = true
