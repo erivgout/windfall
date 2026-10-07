@@ -232,6 +232,10 @@ fn render_and_speculative_instances_cannot_take_editor_or_state_ownership() {
     let first_state = manager.runtime.capture(project.clone()).unwrap().plugins[0]
         .state
         .clone();
+    assert_ne!(
+        first_state, binding.state,
+        "state capture must contain the processed native parameter change, not the discovery preset"
+    );
     let mut changed = binding.clone();
     changed
         .parameters
