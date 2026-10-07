@@ -2,7 +2,7 @@ use super::*;
 use crate::{Processor, SamplePool};
 use windfall_core::AudioBuffer;
 use windfall_project::{
-    Channel, ChannelId, ChannelSource, Project, SampleId, SamplerSettings, TrackId,
+    Channel, ChannelId, ChannelSource, Project, SampleId, SamplerLoopMode, SamplerSettings, TrackId,
 };
 
 #[derive(Default)]
@@ -69,6 +69,9 @@ impl Audition for Target {
     }
 }
 fn engine() -> (Processor, Controller) {
+    engine_with_loop(SamplerLoopMode::Off)
+}
+fn engine_with_loop(loop_mode: SamplerLoopMode) -> (Processor, Controller) {
     let (processor, controller) = Processor::new(48_000);
     let mut project = Project::new("MIDI");
     project.channels.push(Channel {
@@ -82,6 +85,7 @@ fn engine() -> (Processor, Controller) {
         mixer_track: TrackId::MASTER,
         source: ChannelSource::Sampler(SamplerSettings {
             sample: Some(SampleId(900)),
+            loop_mode,
             ..Default::default()
         }),
     });
@@ -94,7 +98,10 @@ fn engine() -> (Processor, Controller) {
     (processor, controller)
 }
 fn rig() -> (Processor, Controller, Worker, Arc<Mutex<FakeState>>) {
-    let (mut processor, controller) = engine();
+    rig_with_loop(SamplerLoopMode::Off)
+}
+fn rig_with_loop(mode: SamplerLoopMode) -> (Processor, Controller, Worker, Arc<Mutex<FakeState>>) {
+    let (mut processor, controller) = engine_with_loop(mode);
     processor.process(&mut [0.0; 128]);
     let state = Arc::new(Mutex::new(FakeState {
         present: true,
@@ -121,6 +128,52 @@ fn input(state: &Mutex<FakeState>, bytes: &[u8]) {
         .as_mut()
         .unwrap()
         .receive(bytes);
+}
+
+#[test]
+fn hardware_loop_sustain_release_and_panic_preserve_callback_allocation_contract() {
+    for mode in [SamplerLoopMode::Forward, SamplerLoopMode::PingPong] {
+        let (mut processor, controller, mut worker, state) = rig_with_loop(mode);
+        let mut out = [0.0; 2048];
+        input(&state, &[0x90, 60, 100]);
+        worker.service();
+        // Both modes must keep playing beyond the source's one-second length.
+        for _ in 0..64 {
+            assert_eq!(
+                crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+                0
+            );
+        }
+        assert_eq!(controller.frame().voices, 1);
+        assert!(out.iter().any(|sample| *sample != 0.0));
+
+        input(&state, &[0xb0, 64, 127]);
+        input(&state, &[0x80, 60, 0]);
+        worker.service();
+        processor.process(&mut out);
+        assert_eq!(controller.frame().voices, 1);
+
+        input(&state, &[0xb0, 64, 0]);
+        worker.service();
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert_eq!(controller.frame().voices, 0);
+        assert_eq!(state.lock().unwrap().messages.last(), Some(&[0x82, 60, 0]));
+
+        input(&state, &[0x90, 60, 100]);
+        worker.service();
+        processor.process(&mut out);
+        assert_eq!(controller.frame().voices, 1);
+        controller.panic_hardware();
+        worker.service();
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert_eq!(controller.frame().voices, 0);
+    }
 }
 
 #[test]

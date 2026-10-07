@@ -3,6 +3,8 @@ import type {
   Command,
   DispatchResult,
   Note,
+  NoteInit,
+  NoteTransform,
   NoteUpdate,
 } from "@/bindings"
 import {
@@ -41,8 +43,6 @@ import {
   paintSpacing,
   pasteInits,
   pasteStart,
-  quantizeEnds,
-  quantizeStarts,
   resizeDelta,
   resizeUpdates,
   rowsAlongSegment,
@@ -63,6 +63,8 @@ import {
   type Scene,
 } from "./scene"
 import { snapFloor } from "./snap"
+import { nearestScaleKey, scaleMoveKeys, type PitchScale } from "./scales"
+import { placeStamp, type Stamp, type StampPlacement } from "./stamps"
 import type { Tool } from "./store"
 
 /** A pointer position in CSS pixels inside the grid, with the modifiers held. */
@@ -97,10 +99,13 @@ export type EditorSettings = {
   snap: number
   lastLength: number
   lastVelocity: number
+  /** Opt-in pitch policy, independent of the time grid. */
+  pitchScale?: PitchScale | null
 }
 
 /** Everything the editor needs from outside, so tests can stand in for it. */
 export type EditorHost = {
+  generation?(): number
   dispatch(command: Command): Promise<DispatchResult | null>
   /** What is being edited, read from the project right now. */
   context(): EditorContext | null
@@ -132,13 +137,17 @@ export type Hover = {
  * - "selection": which notes are selected changed.
  * - "drag": the preview of a drag in progress changed.
  * - "hover": what is under the pointer changed.
+ * - "stamp": the armed pattern or its validation message changed.
  */
-export type EditorEvent = "scene" | "selection" | "drag" | "hover"
+export type EditorEvent = "scene" | "selection" | "drag" | "hover" | "stamp"
+
+export type StampState = { stamp: Stamp; error: string | null }
 
 type Press = { x: number; y: number }
 
 type Gesture =
   | { kind: "idle" }
+  | { kind: "stamp" }
   | {
       kind: "marquee"
       press: Press
@@ -218,6 +227,10 @@ export class Editor {
   private preview: DragPreview | null = null
   private sounding: number | null = null
   private listeners = new Set<(event: EditorEvent) => void>()
+  private armedStamp: StampState | null = null
+  private stampLane: EditorContext | null = null
+  private stampGeneration: number | undefined
+  private disposed = false
 
   constructor(host: EditorHost) {
     this.host = host
@@ -231,6 +244,8 @@ export class Editor {
   }
 
   attach(surface: EditorSurface | null): void {
+    // React Strict Mode cleans up then reattaches the same session on mount.
+    if (surface) this.disposed = false
     this.surface = surface
     surface?.setItems(this.scene.items)
   }
@@ -263,7 +278,21 @@ export class Editor {
   }
 
   get busy(): boolean {
-    return this.gesture.kind !== "idle"
+    return this.gesture.kind !== "idle" || this.armedStamp !== null
+  }
+
+  get stampState(): StampState | null {
+    return this.armedStamp
+  }
+
+  /** Arm a one-shot placement. No project edit happens until the click ends. */
+  armStamp(stamp: Stamp): void {
+    if (!this.ctx || this.disposed) return
+    this.cancel()
+    this.armedStamp = { stamp, error: null }
+    this.stampLane = this.ctx
+    this.stampGeneration = this.host.generation?.()
+    this.emit("stamp")
   }
 
   selectedNotes(): Note[] {
@@ -297,6 +326,17 @@ export class Editor {
     const sameLane =
       previous?.channel === next.channel &&
       previous.pattern.id === next.pattern.id
+    if (
+      this.armedStamp &&
+      (!sameLane ||
+        previous?.pattern.lengthSteps !== next.pattern.lengthSteps ||
+        previous.pattern.signature.numerator !==
+          next.pattern.signature.numerator ||
+        previous.pattern.signature.denominator !==
+          next.pattern.signature.denominator)
+    ) {
+      this.cancel()
+    }
     if (sameLane && previous.notes === next.notes && !force) return
     this.abandon()
     if (!sameLane) {
@@ -319,6 +359,10 @@ export class Editor {
   pointerHover(input: PointerInput): void {
     const surface = this.surface
     if (!surface || this.gesture.kind !== "idle") return
+    if (this.armedStamp) {
+      this.previewStamp(input)
+      return
+    }
     const hit = this.hitAt(input)
     const { tool } = this.host.settings()
     this.setHover(
@@ -331,6 +375,10 @@ export class Editor {
   pointerLeave(): void {
     if (this.gesture.kind !== "idle" || this.hover === null) return
     this.hover = null
+    if (this.armedStamp) {
+      this.provisional = []
+      this.rebuild()
+    }
     this.emit("hover")
   }
 
@@ -339,6 +387,20 @@ export class Editor {
     const surface = this.surface
     const ctx = this.ctx
     if (!surface || !ctx) return null
+    if (this.armedStamp) {
+      if (button === "right") {
+        this.cancel()
+        return null
+      }
+      const placement = this.previewStamp(input)
+      if (!placement) return null
+      if (placement.error) {
+        this.host.refuse("Stamp was not placed", placement.error)
+        return null
+      }
+      this.gesture = { kind: "stamp" }
+      return { kind: "draw" }
+    }
     if (this.gesture.kind !== "idle") this.cancel()
     const settings = this.host.settings()
     const hit = this.hitAt(input)
@@ -397,6 +459,9 @@ export class Editor {
     const row = yToRow(viewport, input.y)
 
     switch (gesture.kind) {
+      case "stamp":
+        this.previewStamp(input)
+        return
       case "idle":
         this.pointerHover(input)
         return
@@ -432,6 +497,15 @@ export class Editor {
           Math.floor(gesture.row) - Math.floor(row),
           snap,
           gesture.limits
+        )
+        const rawKeys = gesture.provisional
+          ? rowToKey(Math.floor(row)) - gesture.grabbed.key
+          : Math.floor(gesture.row) - Math.floor(row)
+        delta.keys = scaleMoveKeys(
+          gesture.grabbed.key,
+          rawKeys,
+          gesture.limits,
+          noSnap(input) ? null : (this.host.settings().pitchScale ?? null)
         )
         gesture.delta = delta
         surface.setDragOffset(delta.ticks, -delta.keys)
@@ -469,7 +543,7 @@ export class Editor {
         const cell = Math.floor((tick - gesture.origin) / gesture.spacing)
         const cells = cellsBetween(gesture.lastCell, cell)
         gesture.lastCell = cell
-        this.paintCells(gesture, cells, row)
+        this.paintCells(gesture, cells, row, input)
         this.setHover(tick, this.keyAt(input.y), { kind: "paint" })
         return
       }
@@ -501,6 +575,36 @@ export class Editor {
     }
 
     switch (gesture.kind) {
+      case "stamp": {
+        const stamp = this.armedStamp
+        if (!stamp || stamp.error) break
+        const notes: NoteInit[] = this.provisional.map(
+          ({ start, length, key, velocity, pan }) => ({
+            start,
+            length,
+            key,
+            velocity,
+            pan,
+          })
+        )
+        this.cancel()
+        if (notes.length === 0) break
+        this.commitDrag(
+          withExtension(
+            {
+              type: "addNotes",
+              pattern: ctx.pattern.id,
+              channel: ctx.channel,
+              notes,
+            },
+            `Stamp ${stamp.stamp.label}`,
+            ctx.pattern,
+            endOfInits(notes)
+          ),
+          true
+        )
+        break
+      }
       case "marquee":
         if (gesture.moved) break
         if (gesture.hitId === null) {
@@ -592,7 +696,7 @@ export class Editor {
   /** Drops the gesture in progress and puts everything back. */
   cancel(): void {
     const gesture = this.gesture
-    if (gesture.kind === "idle") return
+    if (gesture.kind === "idle" && !this.armedStamp) return
     if (gesture.kind === "marquee") this.selected = new Set(gesture.base)
     this.abandon()
     this.rebuild()
@@ -601,6 +705,7 @@ export class Editor {
 
   /** Stops any note that is sounding and lets go of the canvas. */
   dispose(): void {
+    this.disposed = true
     this.abandon()
     this.surface = null
   }
@@ -661,7 +766,24 @@ export class Editor {
       this.host.settings().snap,
       ctx.pattern.signature
     )
-    const notes = pasteInits(contents, start)
+    let notes = pasteInits(contents, start)
+    const scale = this.host.settings().pitchScale
+    if (scale && notes.length > 0) {
+      const anchor = notes.reduce((key, note) => Math.min(key, note.key), 127)
+      const high = notes.reduce((key, note) => Math.max(key, note.key), 0)
+      const snapped = nearestScaleKey(anchor, scale, 0, 127 - high + anchor)
+      if (snapped === null) {
+        this.host.refuse(
+          "Notes were not pasted",
+          "No scale root fits without changing the group's intervals."
+        )
+        return
+      }
+      notes = notes.map((note) => ({
+        ...note,
+        key: note.key + snapped - anchor,
+      }))
+    }
     if (!initsFit(notes)) return this.refusePastEnd()
     await this.commit(
       withExtension(
@@ -705,13 +827,41 @@ export class Editor {
     )
   }
 
-  /** Quantizes the selection, or every note when nothing is selected. */
+  get snapInterval(): number {
+    return this.host.settings().snap
+  }
+
+  /** Shared Rust tools validate captured notes and commit once, without previews. */
+  async transformNotes(
+    notes: readonly Note[],
+    transform: NoteTransform
+  ): Promise<boolean> {
+    const ctx = this.ctx
+    if (!ctx || this.busy || notes.length === 0) return false
+    const result = await this.host.dispatch({
+      type: "transformNotes",
+      pattern: ctx.pattern.id,
+      channel: ctx.channel,
+      notes: [...notes],
+      transform,
+    })
+    // Keep surviving selected ids and include newly chopped segments.
+    if (result) this.selected = new Set([...this.selected, ...result.created])
+    this.follow(this.host.context(), true)
+    return result !== null
+  }
+
+  /** Quick straight quantize, selection only; the action opens the options dialog. */
   async quantize(edge: ResizeEdge): Promise<void> {
     const { snap } = this.host.settings()
-    const notes = this.targets()
-    const updates =
-      edge === "start" ? quantizeStarts(notes, snap) : quantizeEnds(notes, snap)
-    await this.update(notes, updates, "Quantize notes")
+    if (snap <= 0) return
+    await this.transformNotes(this.selectedNotes(), {
+      type: "quantize",
+      grid: snap,
+      strength: 1,
+      edge,
+      groove: "straight",
+    })
   }
 
   /** Moves the selection by snap intervals and semitones. */
@@ -725,21 +875,30 @@ export class Editor {
       0,
       moveLimits(notes)
     )
+    if (notes.length > 0)
+      delta.keys = scaleMoveKeys(
+        notes.reduce((key, note) => Math.min(key, note.key), 127),
+        keys,
+        moveLimits(notes),
+        this.host.settings().pitchScale ?? null,
+        true
+      )
     await this.update(notes, moveUpdates(notes, delta), "Move notes")
   }
 
-  /** Transposes the selection, or every note when nothing is selected. */
+  /** Transposes the selection, preserving its shape within the keyboard. */
   async transpose(semitones: number): Promise<void> {
-    const notes = this.targets()
+    const notes = this.selectedNotes()
     const delta = moveDelta(0, semitones, 0, moveLimits(notes))
+    if (notes.length > 0)
+      delta.keys = scaleMoveKeys(
+        notes.reduce((key, note) => Math.min(key, note.key), 127),
+        semitones,
+        moveLimits(notes),
+        this.host.settings().pitchScale ?? null,
+        true
+      )
     await this.update(notes, moveUpdates(notes, delta), "Transpose notes")
-  }
-
-  /** The selected notes, or all of them when nothing is selected. */
-  targets(): Note[] {
-    return this.selected.size > 0
-      ? this.selectedNotes()
-      : this.scene.notes.filter((note) => note.id >= 0)
   }
 
   /** Dispatches note updates as one command and follows the result. */
@@ -770,6 +929,71 @@ export class Editor {
 
   private emit(event: EditorEvent): void {
     for (const listener of [...this.listeners]) listener(event)
+  }
+
+  private previewStamp(input: PointerInput): StampPlacement | null {
+    const armed = this.armedStamp
+    const lane = this.stampLane
+    const live = this.host.context()
+    const surface = this.surface
+    if (!armed || !lane || !surface) return null
+    if (
+      this.stampGeneration !== this.host.generation?.() ||
+      live?.channel !== lane.channel ||
+      live?.pattern.id !== lane.pattern.id ||
+      live?.notes !== lane.notes ||
+      live?.pattern.lengthSteps !== lane.pattern.lengthSteps ||
+      live?.pattern.signature.numerator !== lane.pattern.signature.numerator ||
+      live?.pattern.signature.denominator !== lane.pattern.signature.denominator
+    ) {
+      this.cancel()
+      return null
+    }
+    const settings = this.host.settings()
+    const tick = Math.round(
+      snapFloor(
+        xToTick(surface.viewport, input.x),
+        noSnap(input) ? 0 : settings.snap
+      )
+    )
+    const rawKey = rowToKey(Math.floor(yToRow(surface.viewport, input.y)))
+    const key =
+      !noSnap(input) && settings.pitchScale && rawKey >= 0 && rawKey <= 127
+        ? (nearestScaleKey(rawKey, settings.pitchScale) ?? rawKey)
+        : rawKey
+    const placement = placeStamp(
+      armed.stamp,
+      tick,
+      key,
+      settings.lastLength,
+      settings.lastVelocity
+    )
+    if (armed.error !== placement.error) {
+      this.armedStamp = { ...armed, error: placement.error }
+      this.emit("stamp")
+    }
+    const changed =
+      placement.notes.length !== this.provisional.length ||
+      placement.notes.some((note, index) => {
+        const shown = this.provisional[index]
+        return (
+          note.start !== shown.start ||
+          note.key !== shown.key ||
+          note.length !== shown.length ||
+          note.velocity !== shown.velocity
+        )
+      })
+    if (changed) {
+      this.provisional = placement.notes.map((note, index) => ({
+        ...note,
+        id: PROVISIONAL_ID - index,
+        velocity: note.velocity ?? settings.lastVelocity,
+        pan: note.pan ?? 0,
+      }))
+      this.rebuild()
+    }
+    this.setHover(tick, key, { kind: "draw" })
+    return placement
   }
 
   private hitAt(input: PointerInput): Hit | null {
@@ -804,7 +1028,12 @@ export class Editor {
       this.ctx?.notes ?? [],
       this.provisional,
       this.palette,
-      this.selected
+      this.armedStamp
+        ? new Set([
+            ...this.selected,
+            ...this.provisional.map((note) => note.id),
+          ])
+        : this.selected
     )
     this.surface?.setItems(this.scene.items)
     this.emit("scene")
@@ -859,6 +1088,11 @@ export class Editor {
   private abandon(): void {
     this.sound(null)
     this.gesture = IDLE
+    if (this.armedStamp) {
+      this.armedStamp = null
+      this.stampLane = null
+      this.emit("stamp")
+    }
     if (this.provisional.length > 0) {
       for (const note of this.provisional) this.selected.delete(note.id)
       this.provisional = []
@@ -881,7 +1115,16 @@ export class Editor {
    * `selectCreated` the notes it made become the selection.
    */
   private async commit(command: Command, selectCreated = false): Promise<void> {
+    const ctx = this.ctx
+    const generation = this.host.generation?.()
     const result = await this.host.dispatch(command)
+    if (
+      this.disposed ||
+      generation !== this.host.generation?.() ||
+      ctx?.channel !== this.ctx?.channel ||
+      ctx?.pattern.id !== this.ctx?.pattern.id
+    )
+      return
     if (result && selectCreated) this.selected = new Set(result.created)
     // Forced, because a command that failed leaves the lane as it was and
     // the preview still has to go.
@@ -1020,8 +1263,12 @@ export class Editor {
     row: number,
     settings: EditorSettings
   ): void {
-    const key = rowToKey(Math.floor(row))
-    if (key < 0 || key > MAX_KEY) return
+    const rawKey = rowToKey(Math.floor(row))
+    if (rawKey < 0 || rawKey > MAX_KEY) return
+    const key =
+      !noSnap(input) && settings.pitchScale
+        ? (nearestScaleKey(rawKey, settings.pitchScale) ?? rawKey)
+        : rawKey
     const snap = noSnap(input) ? 0 : settings.snap
     const note: Note = {
       id: PROVISIONAL_ID,
@@ -1071,16 +1318,22 @@ export class Editor {
     }
     this.gesture = gesture
     if (this.selected.size > 0) this.setSelection([])
-    this.paintCells(gesture, [0], row)
+    this.paintCells(gesture, [0], row, input)
   }
 
   private paintCells(
     gesture: Extract<Gesture, { kind: "paint" }>,
     cells: readonly number[],
-    row: number
+    row: number,
+    input: PointerInput
   ): void {
-    const key = rowToKey(Math.floor(row))
-    if (key < 0 || key > MAX_KEY) return
+    const rawKey = rowToKey(Math.floor(row))
+    if (rawKey < 0 || rawKey > MAX_KEY) return
+    const scale = this.host.settings().pitchScale
+    const key =
+      !noSnap(input) && scale
+        ? (nearestScaleKey(rawKey, scale) ?? rawKey)
+        : rawKey
     const keyRow = keyToRow(key)
     let added = false
     for (const cell of cells) {

@@ -23,16 +23,49 @@ import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { backend, errorMessage } from "@/lib/ipc"
 import { receivePatch, useProjectStore } from "@/lib/store/project"
+import {
+  getProjectGeneration,
+  onProjectReplaced,
+  useProjectGeneration,
+} from "@/lib/store/replaced"
 import { PPQ } from "@/lib/units"
 import { usePlaylistStore } from "@/features/playlist/store"
 import type { SliceOptions, SliceReview } from "./types"
 
 /** Entry point for one selected playlist clip; markers remain review-only. */
 export function SliceControls({ clips }: { clips: Clip[] }) {
-  const [open, setOpen] = useState(false)
+  const [session, setSession] = useState<{
+    clip: Clip
+    selection: ReadonlySet<number>
+    generation: number
+    ticket: number
+  } | null>(null)
+  const nextTicket = useRef(0)
   const single = clips.length === 1 && clips[0].content.type === "audio"
+  useEffect(
+    () =>
+      usePlaylistStore.subscribe((state, previous) => {
+        if (state.selection !== previous.selection)
+          setSession((current) =>
+            current?.generation === getProjectGeneration() ? null : current
+          )
+      }),
+    []
+  )
   return (
-    <Dialog open={open && single} onOpenChange={setOpen}>
+    <Dialog
+      open={session !== null}
+      onOpenChange={(open) => {
+        if (!open) setSession(null)
+        else if (single)
+          setSession({
+            clip: clips[0],
+            selection: usePlaylistStore.getState().selection,
+            generation: getProjectGeneration(),
+            ticket: ++nextTicket.current,
+          })
+      }}
+    >
       <DialogTrigger
         disabled={!single}
         render={<Button size="sm" variant="outline" />}
@@ -47,11 +80,17 @@ export function SliceControls({ clips }: { clips: Clip[] }) {
             file. Apply is one undo step.
           </DialogDescription>
         </DialogHeader>
-        {open && single && (
+        {session && (
           <SliceForm
-            key={clips[0].id}
-            clip={clips[0]}
-            onApplied={() => setOpen(false)}
+            key={session.ticket}
+            clip={session.clip}
+            selectionAtOpen={session.selection}
+            generationAtOpen={session.generation}
+            onApplied={() =>
+              setSession((current) =>
+                current?.ticket === session.ticket ? null : current
+              )
+            }
           />
         )}
       </DialogContent>
@@ -59,28 +98,51 @@ export function SliceControls({ clips }: { clips: Clip[] }) {
   )
 }
 
-function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
+function SliceForm({
+  clip,
+  selectionAtOpen,
+  generationAtOpen,
+  onApplied,
+}: {
+  clip: Clip
+  selectionAtOpen: ReadonlySet<number>
+  generationAtOpen: number
+  onApplied: () => void
+}) {
   const id = useId()
   const [mode, setMode] = useState<"grid" | "transients">("grid")
   const [grid, setGrid] = useState(PPQ)
   const [sensitivity, setSensitivity] = useState("50")
   const [review, setReview] = useState<SliceReview | null>(null)
   const [reviewRevision, setReviewRevision] = useState(-1)
+  const [reviewGeneration, setReviewGeneration] = useState(-1)
   const [selected, setSelected] = useState<number[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const revision = useProjectStore((s) => s.revision)
+  const generation = useProjectGeneration()
   const alive = useRef(false)
   const retained = useRef<SliceReview | null>(null)
   useEffect(() => {
     alive.current = true
-    return () => {
-      alive.current = false
+    const offProject = onProjectReplaced(() => {
       if (retained.current)
         void backend.sliceDiscard(retained.current.token).catch(() => {})
+      retained.current = null
+      setBusy(false)
+      setError("The project changed. Analyze the clip again.")
+    })
+    return () => {
+      alive.current = false
+      offProject()
+      if (retained.current) {
+        void backend.sliceDiscard(retained.current.token).catch(() => {})
+        retained.current = null
+      }
     }
   }, [])
-  const stale = review !== null && reviewRevision !== revision
+  const replaced = generationAtOpen !== generation
+  const stale = replaced || (review !== null && reviewRevision !== revision)
   const invalidSensitivity =
     sensitivity.trim() === "" ||
     !Number.isFinite(Number(sensitivity)) ||
@@ -95,8 +157,15 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
     setError("")
   }
   async function analyze() {
+    if (
+      busy ||
+      generationAtOpen !== getProjectGeneration() ||
+      selectionAtOpen !== usePlaylistStore.getState().selection
+    )
+      return
     reset()
     const atRevision = useProjectStore.getState().revision
+    const atGeneration = getProjectGeneration()
     const options: SliceOptions =
       mode === "grid"
         ? { mode, gridTicks: grid }
@@ -106,6 +175,8 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
       const result = await backend.sliceAnalyze(clip.id, options)
       if (
         !alive.current ||
+        selectionAtOpen !== usePlaylistStore.getState().selection ||
+        atGeneration !== getProjectGeneration() ||
         atRevision !== useProjectStore.getState().revision
       ) {
         void backend.sliceDiscard(result.token).catch(() => {})
@@ -116,25 +187,51 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
       retained.current = result
       setReview(result)
       setReviewRevision(atRevision)
+      setReviewGeneration(atGeneration)
       setSelected(result.analysis.markers.map((m) => m.tick))
     } catch (failure) {
-      if (alive.current) setError(errorMessage(failure))
+      if (
+        alive.current &&
+        atGeneration === getProjectGeneration() &&
+        selectionAtOpen === usePlaylistStore.getState().selection
+      )
+        setError(errorMessage(failure))
     } finally {
       if (alive.current) setBusy(false)
     }
   }
   async function apply() {
-    if (!review || stale) return
+    if (
+      !review ||
+      stale ||
+      reviewGeneration !== getProjectGeneration() ||
+      reviewRevision !== useProjectStore.getState().revision ||
+      selectionAtOpen !== usePlaylistStore.getState().selection ||
+      busy
+    )
+      return
+    const atGeneration = getProjectGeneration()
     setBusy(true)
     setError("")
     try {
       const result = await backend.sliceApply(review.token, selected)
+      if (
+        !alive.current ||
+        atGeneration !== getProjectGeneration() ||
+        selectionAtOpen !== usePlaylistStore.getState().selection
+      )
+        return
       receivePatch(result.patch)
-      usePlaylistStore.getState().select(result.created)
       retained.current = null
-      if (alive.current) onApplied()
+      usePlaylistStore.getState().select(result.created)
+      onApplied()
     } catch (failure) {
-      if (alive.current) setError(errorMessage(failure))
+      if (
+        alive.current &&
+        atGeneration === getProjectGeneration() &&
+        selectionAtOpen === usePlaylistStore.getState().selection
+      )
+        setError(errorMessage(failure))
     } finally {
       if (alive.current) setBusy(false)
     }
@@ -220,7 +317,9 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
       )}
       <Button
         variant="outline"
-        disabled={busy || (mode === "transients" && invalidSensitivity)}
+        disabled={
+          busy || replaced || (mode === "transients" && invalidSensitivity)
+        }
         onClick={() => void analyze()}
       >
         {busy ? "Working…" : "Analyze markers"}
@@ -288,10 +387,15 @@ function SliceForm({ clip, onApplied }: { clip: Clip; onApplied: () => void }) {
           </p>
         </>
       )}
-      {stale && (
-        <FieldError>The project changed. Analyze the clip again.</FieldError>
+      {(stale || error) && (
+        <FieldError>
+          {replaced
+            ? "The project changed. Close and reopen slicing."
+            : stale
+              ? "The project changed. Analyze the clip again."
+              : error}
+        </FieldError>
       )}
-      {error && <FieldError>{error}</FieldError>}
       <Button
         disabled={busy || stale || !review || !selected.length}
         onClick={() => void apply()}

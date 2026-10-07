@@ -13,6 +13,7 @@ import { useUiStore } from "@/lib/store/ui"
 import { settle } from "@/test/harness"
 
 import { readClipboard } from "./clipboard"
+import { applyNoteTool, closeNoteTools, useNoteTools } from "./note-tools"
 import { MAX_PATTERN_TICKS } from "./edit-math"
 import PianoRollPanel from "./index"
 import { laneUpdates, paintValues } from "./lane-math"
@@ -62,7 +63,10 @@ const selectedBrief = () => brief(roll.editor.selectedNotes())
 beforeEach(async () => {
   roll = await startRoll()
 })
-afterEach(() => roll.stop())
+afterEach(() => {
+  closeNoteTools()
+  roll.stop()
+})
 
 describe("draw tool", () => {
   beforeEach(() => openLead())
@@ -529,10 +533,31 @@ describe("clipboard and keyboard edits", () => {
       notes: [n(250, 50, 200), n(490, 52, 500)],
     })
     const before = undoSteps()
+    roll.editor.setSelection(
+      notesOf("Lead")
+        .slice(0, 2)
+        .map((note) => note.id)
+    )
     await runAction("pianoRoll.quantize")
+    const starts = useNoteTools.getState().request!
+    await applyNoteTool(starts, {
+      type: "quantize",
+      grid: 240,
+      strength: 1,
+      edge: "start",
+      groove: "straight",
+    })
     await settle()
     expect(lead().slice(0, 2)).toEqual(["240:50:200", "480:52:500"])
     await runAction("pianoRoll.quantizeEnds")
+    const ends = useNoteTools.getState().request!
+    await applyNoteTool(ends, {
+      type: "quantize",
+      grid: 240,
+      strength: 1,
+      edge: "end",
+      groove: "straight",
+    })
     await settle()
     expect(lead().slice(0, 2)).toEqual(["240:50:240", "480:52:480"])
     expect(undoSteps()).toBe(before + 2)

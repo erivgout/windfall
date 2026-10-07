@@ -14,34 +14,34 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**61 of 342 rows accounted for (17.8%).** A row is accounted for when it is done or won't do.
+**65 of 342 rows accounted for (19.0%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 253 |
-| In progress | 28 |
-| Done | 59 |
+| Todo | 229 |
+| In progress | 48 |
+| Done | 63 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
-| Core features | 23 | 15 | 5 | 2 | 1 |
-| Main windows | 113 | 66 | 13 | 33 | 1 |
-| Instruments | 41 | 39 | 1 | 1 | 0 |
-| Effects | 80 | 75 | 0 | 5 | 0 |
+| Core features | 23 | 13 | 7 | 2 | 1 |
+| Main windows | 113 | 56 | 17 | 39 | 1 |
+| Instruments | 41 | 38 | 2 | 1 | 0 |
+| Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
-| Audio editors | 3 | 3 | 0 | 0 | 0 |
-| File formats and plugin hosting | 36 | 18 | 4 | 14 | 0 |
-| Workflow, MIDI and settings | 39 | 30 | 5 | 4 | 0 |
+| Audio editors | 3 | 2 | 1 | 0 | 0 |
+| File formats and plugin hosting | 36 | 16 | 6 | 14 | 0 |
+| Workflow, MIDI and settings | 39 | 29 | 5 | 5 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 9 | 7 | 21 | 2 |
-| 2. Write a song | 99 | 60 | 13 | 26 | 0 |
-| 3. Record and edit audio | 34 | 21 | 2 | 11 | 0 |
+| 1. Make a beat | 39 | 7 | 8 | 22 | 2 |
+| 2. Write a song | 99 | 50 | 20 | 29 | 0 |
+| 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
-| 5. The long tail | 129 | 129 | 0 | 0 | 0 |
+| 5. The long tail | 129 | 122 | 7 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -65,9 +65,9 @@ As of 2026-10-07. Sources:
 | Full Song Arrangement | Playlist | 2 | done | Pattern, audio and automation clips on the playlist, with song mode. |
 | Automation Clips | Automation clips | 2 | in-progress | Curves with bends and holds for volume, pan, sends, effect and instrument settings, effect mix and tempo. No LFO or step drawing modes yet. |
 | Time signature changes | Time signature changes | 2 | todo |  |
-| MIDI Support | MIDI input | 3 | todo |  |
-| MIDI Out | MIDI output | 3 | todo |  |
-| VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and state persistence are integrated. VST3 audio hosting and Windows editors exist in the backend; desktop addition awaits safe active state capture. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md. |
+| MIDI Support | MIDI input | 3 | in-progress | Native MIDI input auditions one explicit channel with note-on/off, sustain, channel filtering and bounded queue cleanup. Note recording, controller mapping, timestamp/sample-clock alignment and physical hardware verification remain pending. See docs/MIDI-HARDWARE.md. |
+| MIDI Out | MIDI output | 3 | in-progress | Optional single-port live-note forwarding balances retriggers/releases and clears held hardware notes on route/device changes and panic. Pattern/playlist output, controller messages, clock and a dedicated MIDI-out channel remain pending; no physical output verification is claimed. See docs/MIDI-HARDWARE.md. |
+| VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and saved state are integrated. VST3 processor-return/capture foundation is tested, while production desktop additions await remaining lifecycle/event safeguards. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md. |
 | FL Studio Remote | Phone remote | 6 | todo | The plan's phase-6 phone remote. |
 | Fruity Envelope Controller | TBD | 5 | todo |  |
 | Fruity Keyboard Controller | TBD | 5 | todo |  |
@@ -117,18 +117,18 @@ As of 2026-10-07. Sources:
 | Piano roll: snap to grid | Piano roll snap | 2 | done |  |
 | Piano roll: time markers and per-pattern time signatures | Pattern markers | 2 | todo |  |
 | Piano roll: waveform helper view | Waveform helper | 2 | todo |  |
-| Piano roll: Quantizer tool | Quantize | 2 | in-progress | Quantize starts and ends to the snap. No quantizer dialog with strength or groove templates yet. |
-| Piano roll: Articulator tool and Quick legato | Articulate | 2 | todo |  |
-| Piano roll: Chopper tool and Quick chop | Chop | 2 | todo |  |
-| Piano roll: Glue | Glue | 2 | todo |  |
+| Piano roll: Quantizer tool | Quantize | 2 | done | Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
+| Piano roll: Articulator tool and Quick legato | Articulate | 2 | in-progress | Selected-note legato and staccato length transformations are implemented with atomic undo and stale-review guards. Portamento phrasing remains pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Chopper tool and Quick chop | Chop | 2 | in-progress | Selected notes split at absolute grid boundaries with bounded output, one undo entry, and recovered selection after missed events. Independent review of this workflow is closed; user-authored slicing patterns remain unfinished. See docs/PIANO-TOOLS.md and docs/DOCUMENT-REPLIES.md. |
+| Piano roll: Glue | Glue | 2 | done | Touching/overlapping selected notes with matching pitch, velocity and pan union deterministically; incompatible and unselected notes remain separate. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Arpeggiator tool | Arpeggiate | 2 | todo |  |
-| Piano roll: Strum tool | Strum | 2 | todo |  |
+| Piano roll: Strum tool | Strum | 2 | done | Selected simultaneous chords stagger timing and velocity in either pitch order, preserving lengths and unrelated properties in one undo step. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Flam tool | Flam | 2 | todo |  |
 | Piano roll: Claw machine tool | Rhythm reshaper | 2 | todo |  |
-| Piano roll: Key limiter tool | Key limiter | 2 | todo |  |
-| Piano roll: Flip tool | Flip | 2 | todo |  |
+| Piano roll: Key limiter tool | Key limiter | 2 | done | Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
+| Piano roll: Flip tool | Flip | 2 | done | Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Randomizer tool | Randomize | 2 | todo |  |
-| Piano roll: Scale levels tool | Scale levels | 2 | todo |  |
+| Piano roll: Scale levels tool | Scale levels | 2 | done | Selected velocities scale while retaining relative differences until clipping at full velocity. Other note properties are preserved. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: LFO tool | LFO tool | 2 | todo |  |
 | Piano roll: Riff machine | Riff generator | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | Piano roll scripting (Python) | Piano roll scripting | 6 | todo | Part of the plan's phase-6 scripting. |
@@ -139,7 +139,7 @@ As of 2026-10-07. Sources:
 | Playlist: Delete tool | Playlist delete tool | 2 | done |  |
 | Playlist: Mute tool | Playlist mute tool | 2 | done |  |
 | Playlist: Slip edit tool | Slip edit | 2 | todo |  |
-| Playlist: Slice tool | Playlist slice tool | 2 | todo |  |
+| Playlist: Slice tool | Playlist slice tool | 2 | in-progress | One selected audio clip can be split at reviewed grid/transient markers into source-linked clips in one undo step, retaining trim/reverse/tape pitch/routing. Drawn-line slicing across clip types remains pending. See docs/SLICER.md. |
 | Playlist: Select tool | Playlist select tool | 2 | done |  |
 | Playlist: Zoom tool | Playlist zoom tool | 2 | todo |  |
 | Playlist: Playback tool | Playlist scrub tool | 2 | todo |  |
@@ -154,7 +154,7 @@ As of 2026-10-07. Sources:
 | Playlist: snap | Playlist snap | 2 | done |  |
 | Playlist: timeline selection and loop region | Loop region | 2 | todo |  |
 | Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | in-progress | Fade in, fade out and gain handles. No automatic crossfades yet. |
-| Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Gain, pan, pitch and reverse. No normalize or independent time-stretch yet. |
+| Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Per-instance gain, pan, tape/spectral pitch, reverse, fades and independent playlist stretch are implemented. Native audio-editor normalization creates a unique derived WAV with undo; a direct non-destructive normalize property remains pending. See docs/AUDIO-EDITOR.md and docs/ARCHITECTURE.md. |
 | Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
 | Event editor | Event automation editor | 2 | todo |  |
 | Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | done | Playlist inspector offers independent spectral duration/pitch, quality and approximate formants alongside default tape playback. DSP prepares off session/audio threads, with bounded cached immutable buffers, trim/fade/reverse handling and undo/save support. Playback/export match exactly; callback allocation tests cover loops, seeks and plan changes. Sampler integration remains separate. See crates/windfall-stretch/VALIDATION.md. |
@@ -180,11 +180,11 @@ As of 2026-10-07. Sources:
 | Browser: folder tree | Browser | 1 | done |  |
 | Browser: sample preview | Sample preview | 1 | done |  |
 | Browser: waveform preview | Waveform preview | 1 | done | Inline waveforms were added in FL Studio 2026. |
-| Browser: search | Browser search | 1 | in-progress | Filters folders that have been opened. No recursive index yet. |
+| Browser: search | Browser search | 1 | in-progress | Recursive native indexing and shared Rust filename/path wildcard/Boolean queries are integrated with bounded scans, cancellation and checked imports. Independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
 | Browser: drag and drop | Drag and drop | 1 | done |  |
 | Browser: project backups folder | Backups list | 1 | todo |  |
-| Browser: tags | Tags | 2 | todo |  |
-| Browser: starred items | Favorites | 2 | todo |  |
+| Browser: tags | Tags | 2 | in-progress | Normalized per-file tags persist atomically in separate local metadata and combine with query/favorite filters. Corrupt metadata is preserved and reported. Independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
+| Browser: starred items | Favorites | 2 | in-progress | Per-file favorites persist across restart and root removal; the Starred filtered view combines with queries and tags. Native/mock/UI checks pass; independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
 | Browser: current project tab | Project tab | 2 | todo |  |
 | Project picker | Project overview | 2 | todo |  |
 | Browser: plugin database | Plugin database | 4 | todo |  |
@@ -226,7 +226,7 @@ As of 2026-10-07. Sources:
 | Fruity Kick | TBD | 5 | todo | The manual calls it Fruit Kick. |
 | Fruity Pad Controller (FPC) | TBD | 5 | todo | Its bundled kits are Image-Line content; needs own. |
 | Fruity Slicer | TBD | 5 | todo | May share one Windfall plugin with the phase-3 slicer. |
-| Fruity Slicer 2 | TBD | 3 | todo | The plan's phase-3 slicer. |
+| Fruity Slicer 2 | TBD | 3 | in-progress | Shared Rust grid/transient analysis and reviewed linked-source playlist slices provide the detector foundation. Independent note triggering, playable slice mapping and a slicer instrument remain pending. Fades, spectral stretch, swing and tempo-automated projects are explicitly refused. See docs/SLICER.md. |
 | GMS | TBD | 5 | todo | The manual names it Groove Machine Synth. |
 | MiniSynth | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
 | Plucked! | TBD | 5 | todo |  |
@@ -264,21 +264,21 @@ As of 2026-10-07. Sources:
 | Effector (12 FX) | TBD | 5 | todo |  |
 | EQUO | TBD | 5 | todo |  |
 | Frequency Splitter | TBD | 5 | todo |  |
-| Fruity Balance | TBD | 5 | todo |  |
+| Fruity Balance | Balance | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Blood Overdrive | TBD | 5 | todo |  |
 | Fruity Chorus | TBD | 5 | todo |  |
 | Fruity Compressor | Compressor | 2 | done | Phase-2 core compressor per the plan. |
 | Fruity Convolver | TBD | 5 | todo | Impulse responses shipped with FL are Image-Line content; needs own. |
 | Fruity Delay 2 | TBD | 5 | todo |  |
-| Fruity Delay 3 | Delay | 2 | done | Phase-2 core delay per the plan. |
+| Fruity Delay 3 | Delay | 2 | in-progress | Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row. |
 | Fruity Delay Bank | TBD | 5 | todo |  |
-| Fruity Fast Dist | TBD | 5 | todo |  |
+| Fruity Fast Dist | Drive distortion | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Filter | TBD | 5 | todo |  |
 | Fruity Flanger | TBD | 5 | todo |  |
 | Fruity Flangus | TBD | 5 | todo |  |
 | Fruity Formula Controller | TBD | 5 | todo |  |
 | Fruity HTML NoteBook | TBD | 5 | todo |  |
-| Fruity Limiter | Limiter | 2 | done | Phase-2 core limiter per the plan. |
+| Fruity Limiter | Limiter | 2 | in-progress | Lookahead peak limiting, latency compensation and gain-reduction readout are implemented. The row still requires compression/gate modes and scrolling level history; those are pending dynamics/analyzer work. |
 | Fruity Love Philter | TBD | 5 | todo |  |
 | Fruity LSD | TBD | 5 | todo | Windows only in FL (built on Microsoft DirectX). |
 | Fruity Multiband Compressor | TBD | 5 | todo |  |
@@ -286,15 +286,15 @@ As of 2026-10-07. Sources:
 | Fruity NoteBook 2 | TBD | 5 | todo |  |
 | Fruity PanOMatic | TBD | 5 | todo |  |
 | Fruity Parametric EQ | TBD | 5 | todo |  |
-| Fruity Parametric EQ2 | Parametric EQ | 2 | done | Phase-2 core EQ per the plan. |
+| Fruity Parametric EQ2 | Parametric EQ | 2 | in-progress | Seven-band EQ processing and interactive filter-response editing are implemented. The displayed response is calculated from parameters; a live audio spectrum is still pending. See roadmap T8. |
 | Fruity Phaser | TBD | 5 | todo |  |
 | Fruity Reeverb 2 | Reverb | 2 | done | Phase-2 core reverb per the plan. |
 | Fruity Scratcher | TBD | 5 | todo |  |
 | Fruity Send | TBD | 5 | todo |  |
-| Fruity Soft Clipper | TBD | 5 | todo |  |
+| Fruity Soft Clipper | Soft clipper | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Squeeze | TBD | 5 | todo |  |
 | Fruity Stereo Enhancer | TBD | 5 | todo |  |
-| Fruity Stereo Shaper | TBD | 5 | todo |  |
+| Fruity Stereo Shaper | Stereo matrix | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Vocoder | TBD | 5 | todo |  |
 | Fruity WaveShaper | TBD | 5 | todo |  |
 | Fruity X-Y Controller | TBD | 5 | todo |  |
@@ -314,12 +314,12 @@ As of 2026-10-07. Sources:
 | VFX Script | TBD | 6 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. Grouped with the plan's phase-6 scripting. |
 | Fruity 7 Band EQ | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
 | Fruity Bass Boost | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Center | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
+| Fruity Center | DC blocker | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Delay | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
 | Fruity Fast LP | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
 | Fruity Free Filter | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Mute 2 | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Phase Inverter | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
+| Fruity Mute 2 | Channel mute | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Phase Inverter | Polarity | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Reeverb | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. |
 
 ## Visual and video
@@ -339,7 +339,7 @@ As of 2026-10-07. Sources:
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Newtone | TBD | 5 | todo | Needs pitch detection (the plan lists it under machine-learning features) and time-stretch. Candidate basis: Signalsmith Stretch (MIT). |
-| Edison | TBD | 3 | todo | The plan's phase-3 audio editor. FL's version includes noise removal, time-stretch, EQ, convolution reverb and script tools. |
+| Edison | TBD | 3 | in-progress | Native selected-clip waveform/range editor supports trim, extract, normalize, reverse, fades, silence and cut. Immutable derived WAVs, one-step undo, stale/source/recording guards and save/reopen are covered. Effect-slot recording/editor integration, cleanup DSP and advanced tools remain pending. Browser mode explicitly refuses native file edits. See docs/AUDIO-EDITOR.md. |
 | Newtime | TBD | 5 | todo | Candidate basis: Signalsmith Stretch (MIT). |
 
 ## File formats and plugin hosting
@@ -347,8 +347,8 @@ As of 2026-10-07. Sources:
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Project file save and open (.flp) | Windfall project format | 1 | done | Windfall uses its own open format: readable JSON plus audio in a folder or zip, with a version number. Windfall saves its own readable JSON format, .windfall. Reading .flp files is a separate row. |
-| Zipped project (.zip) | Project archive | 1 | todo |  |
-| Save new version | Save new version | 1 | todo |  |
+| Zipped project (.zip) | Project archive | 1 | in-progress | Native bounded schema-1 ZIP export/open includes captured project/session/plugin state and exact-deduplicated audio. Validated staged extraction, missing-source reports, cancellation and no-overwrite publication are implemented. Independent combined review is pending. See docs/PORTABLE-PROJECTS.md. |
+| Save new version | Save new version | 1 | in-progress | Native numbered saves atomically publish the next unused filename through existing plugin capture/sample-carry flow. Earlier versions stay intact and concurrent edits remain dirty. Focused native/UI checks pass; independent integration review is pending. See docs/PORTABLE-PROJECTS.md. |
 | Autosave and backups | Autosave and backups | 1 | done | The plan builds autosave and timestamped backups into the project format. |
 | New from template and Save as template | Project templates | 2 | todo | FL's bundled templates reference Image-Line content; needs own. |
 | FL Studio project (.flp) as an import source | FL project import | 4 | in-progress | Desktop picker prepares a reviewed conversion with category reports, bounded sample searches, missing-audio warnings, unsaved-project confirmation and stale-request guards. Unsupported plugin bytes and metadata persist in .windfall files and an Imported sounds report. Two real FL 20.8.4 reader projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate; proprietary restoration and identical playback remain unavailable. See docs/flp/coverage.md. |
@@ -374,7 +374,7 @@ As of 2026-10-07. Sources:
 | Export: M4A (AAC) | M4A export | 6 | todo | Not in the plan's export list. AAC encoder licensing must be checked against GPL-3.0. |
 | Export: loop, slice and note markers in WAV files | WAV marker export | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | WavPack compressed audio | WavPack support | 6 | todo | Not in the plan. |
-| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. Surge XT/Effects and OB-Xf produced verified audio, and Surge XT/OB-Xf editors were exercised. Desktop addition remains unavailable until safe active-instance state capture is integrated. Linux paths are untested; macOS loading and non-Windows embedded editors are unsupported. In-process crashes remain uncontained. See docs/plugins/vst3-hosting.md. |
+| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. A bounded owner-thread processor-return path now exercises desktop capture/save/export with native fixtures. Production desktop additions remain disabled pending dirty-state scheduling, events during capture and fallible native deactivation. Native macOS/Linux hosting and audio crash containment remain pending. See docs/plugins/vst3-desktop.md and docs/plugins/vst3-hosting.md. |
 | Plugin hosting: CLAP | CLAP hosting | 4 | in-progress | Windows desktop CLAP instruments/effects now integrate project persistence, native-range automation, playback/export, mixer latency compensation, parameter inspectors and native editors. Real CLAP fixtures verify session audio, state round-trip and current-instance ownership. The host backend was also exercised with Surge XT/Effects and OB-Xf. Native macOS/Linux desktop hosting and audio crash containment remain unfinished. See docs/plugins/desktop-integration.md and docs/plugins/host-evaluation.md. |
 | Plugin hosting: Audio Unit | AU hosting | 4 | todo | macOS only. |
 | Plugin hosting: VST2 | VST2 hosting | 4 | todo | unverified: licensing path. Not in the plan; Steinberg no longer issues VST2 SDK licenses, so this needs a decision and may become wont-do. |
@@ -389,7 +389,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- |
 | Audio settings (driver, device, sample rate, buffer length) | Audio settings | 0 | in-progress | The plan uses cpal: WASAPI and ASIO on Windows, CoreAudio on macOS, ALSA, JACK and PipeWire on Linux. Device, sample rate and buffer through WASAPI, CoreAudio, ALSA and JACK. ASIO is behind a build feature that is off. |
 | Transport (play, stop, record, pattern/song mode, song position) | Transport | 1 | in-progress | Play, stop, pattern/song mode and song position are available. Record opens native input/channel selection and explicit start/stop/discard controls. Initial capture uses manual playlist placement without hardware latency/clock compensation; monitoring, count-in and multitrack takes remain. |
-| Tempo and tempo tapper | Tempo | 1 | in-progress | Tempo field. No tap tempo yet. |
+| Tempo and tempo tapper | Tempo | 1 | done | Transport typing/dragging and review-and-Apply tap tempo are implemented. Bounded estimator, keyboard repeat guards, reset/cancel, one-step undo/redo/save/open and stale-project reply tests pass. Existing tempo automation retains playback control. See docs/TAP-TEMPO.md. |
 | Metronome | Metronome | 1 | todo |  |
 | Typing keyboard to piano keyboard | Typing keyboard | 1 | todo |  |
 | Themes | Light and dark themes | 1 | done | Light and dark themes. |
@@ -404,7 +404,7 @@ As of 2026-10-07. Sources:
 | Tools menu macros | Utility commands | 2 | todo | Maps to named commands in Windfall's command palette. |
 | Project info (title, author, genre, comments) | Project info | 2 | todo |  |
 | Project settings (time signature, timebase, panning law) | Project settings | 2 | in-progress | Tempo, time signature and swing. |
-| MIDI settings (input and output devices, ports, controller type) | MIDI settings | 3 | todo |  |
+| MIDI settings (input and output devices, ports, controller type) | MIDI settings | 3 | in-progress | Persisted native input/output device and MIDI-channel settings, port refresh/reconnect, unavailable saved-device handling, runtime audition destination and Panic MIDI controls are implemented. Controller profiles, MIDI learn and physical hardware verification remain pending. Browser simulation reports native-only capability. See docs/MIDI-HARDWARE.md. |
 | Note recording from MIDI input | Note recording | 3 | todo |  |
 | Step editing (step entry) | Step entry | 3 | todo |  |
 | Score logger (dump score log to pattern) | Note logger | 3 | todo |  |

@@ -17,8 +17,10 @@ import type { Envelope } from "./Envelope";
 import type { InstrumentKind } from "./InstrumentKind";
 import type { InstrumentParams } from "./InstrumentParams";
 import type { MixerTrackPatch } from "./MixerTrackPatch";
+import type { Note } from "./Note";
 import type { NoteId } from "./NoteId";
 import type { NoteInit } from "./NoteInit";
+import type { NoteTransform } from "./NoteTransform";
 import type { NoteUpdate } from "./NoteUpdate";
 import type { PatternId } from "./PatternId";
 import type { PatternPatch } from "./PatternPatch";
@@ -48,7 +50,7 @@ index?: number, mixerTrack?: TrackId, } | { "type": "removeChannel", id: Channel
 /**
  * Defaults to "Pattern N".
  */
-name?: string, } | { "type": "removePattern", id: PatternId, } | { "type": "duplicatePattern", id: PatternId, } | { "type": "movePattern", id: PatternId, index: number, } | { "type": "updatePattern", id: PatternId, patch: PatternPatch, } | { "type": "toggleStep", pattern: PatternId, channel: ChannelId, step: number, } | { "type": "addNotes", pattern: PatternId, channel: ChannelId, notes: Array<NoteInit>, } | { "type": "removeNotes", pattern: PatternId, channel: ChannelId, notes: Array<NoteId>, } | { "type": "updateNotes", pattern: PatternId, channel: ChannelId, updates: Array<NoteUpdate>, } | { "type": "clearLane", pattern: PatternId, channel: ChannelId, } | { "type": "addMixerTrack", 
+name?: string, } | { "type": "removePattern", id: PatternId, } | { "type": "duplicatePattern", id: PatternId, } | { "type": "movePattern", id: PatternId, index: number, } | { "type": "updatePattern", id: PatternId, patch: PatternPatch, } | { "type": "toggleStep", pattern: PatternId, channel: ChannelId, step: number, } | { "type": "addNotes", pattern: PatternId, channel: ChannelId, notes: Array<NoteInit>, } | { "type": "removeNotes", pattern: PatternId, channel: ChannelId, notes: Array<NoteId>, } | { "type": "updateNotes", pattern: PatternId, channel: ChannelId, updates: Array<NoteUpdate>, } | { "type": "clearLane", pattern: PatternId, channel: ChannelId, } | { "type": "transformNotes", pattern: PatternId, channel: ChannelId, notes: Array<Note>, transform: NoteTransform, } | { "type": "addMixerTrack", 
 /**
  * Defaults to "Insert N".
  */

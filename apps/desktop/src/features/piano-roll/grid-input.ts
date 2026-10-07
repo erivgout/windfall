@@ -92,6 +92,7 @@ export function attachGridInput(
   let travelled = false
   let pan: { x: number; y: number } | null = null
   let scrollFrame = 0
+  let stampCanceledByRightClick = false
 
   const showCursor = () => {
     element.style.cursor = pan
@@ -140,6 +141,7 @@ export function attachGridInput(
 
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === "touch") return
+    stampCanceledByRightClick = event.button === 2 && editor.stampState !== null
     session.focusGrid()
     if (event.button === 1) {
       // Stops the browser's own middle-button scrolling.
@@ -187,11 +189,18 @@ export function attachGridInput(
   const onPointerCancel = (event: PointerEvent) => endGesture(event, false)
 
   const onPointerLeave = () => {
-    if (!editor.busy) editor.pointerLeave()
+    editor.pointerLeave()
   }
 
   // Right-click deletes in every tool but Select, where it opens the menu.
   const onContextMenu = (event: MouseEvent) => {
+    if (stampCanceledByRightClick || editor.stampState) {
+      stampCanceledByRightClick = false
+      editor.cancel()
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (usePianoRollStore.getState().tool === "select") return
     event.preventDefault()
     event.stopPropagation()

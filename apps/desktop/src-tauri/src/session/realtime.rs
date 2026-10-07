@@ -15,6 +15,16 @@ pub const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// Frames between two looks at the audio device's status: about a second.
 const STATUS_EVERY: u32 = 60;
 
+fn next_wait(deadline: &mut Instant, now: Instant) -> Option<Duration> {
+    *deadline += FRAME_INTERVAL;
+    let wait = deadline.checked_duration_since(now);
+    if wait.is_none() && now.duration_since(*deadline) > FRAME_INTERVAL * 4 {
+        // Resume from now after a long suspension; skip the stale backlog.
+        *deadline = now;
+    }
+    wait
+}
+
 /// Delivers a frame to one window. Returns false once the window is gone,
 /// and is then dropped.
 pub type FrameSender = Box<dyn FnMut(&RealtimeFrame) -> bool + Send>;
@@ -72,16 +82,8 @@ impl Session {
                     // Frames are timed from a running deadline and not from
                     // the end of the last one, so the rate does not drift
                     // with how long a frame takes to send.
-                    deadline += FRAME_INTERVAL;
-                    let now = Instant::now();
-                    match deadline.checked_duration_since(now) {
-                        Some(wait) => thread::sleep(wait),
-                        // After the machine slept, carry on from now rather
-                        // than sending the missed frames in a burst.
-                        None if now.duration_since(deadline) > FRAME_INTERVAL * 4 => {
-                            deadline = now;
-                        }
-                        None => {}
+                    if let Some(wait) = next_wait(&mut deadline, Instant::now()) {
+                        thread::sleep(wait);
                     }
                     let Some(session) = session.upgrade() else {
                         break;
@@ -93,5 +95,40 @@ impl Session {
                     }
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feed_deadlines_keep_sixty_hz_without_drifting_with_frame_work() {
+        let start = Instant::now();
+        let mut deadline = start;
+        for frame in 1..=600 {
+            let work = Duration::from_millis(frame % 9);
+            let now = deadline + work;
+            let wait = next_wait(&mut deadline, now).unwrap();
+            assert_eq!(wait, FRAME_INTERVAL - work);
+            assert_eq!(now + wait, start + FRAME_INTERVAL * frame as u32);
+        }
+        let nominal_second = FRAME_INTERVAL * 60;
+        assert!(Duration::from_secs(1).abs_diff(nominal_second) < Duration::from_nanos(60));
+    }
+
+    #[test]
+    fn suspended_feed_skips_backlog_and_resumes_with_one_interval() {
+        let start = Instant::now();
+        let mut deadline = start;
+        let resumed = start + FRAME_INTERVAL * 100;
+        assert_eq!(next_wait(&mut deadline, resumed), None);
+        assert_eq!(deadline, resumed);
+        assert_eq!(next_wait(&mut deadline, resumed), Some(FRAME_INTERVAL));
+
+        // Short delays retain the running schedule rather than causing drift.
+        let late = deadline + FRAME_INTERVAL * 2;
+        assert_eq!(next_wait(&mut deadline, late), None);
+        assert_eq!(deadline, resumed + FRAME_INTERVAL * 2);
     }
 }

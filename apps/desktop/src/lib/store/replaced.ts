@@ -33,10 +33,15 @@ export function announceProjectReplaced() {
   for (const listener of [...listeners]) listener()
 }
 
+/** Captures the current document identity for asynchronous UI work. */
+export function getProjectGeneration(): number {
+  return generation
+}
+
 /**
  * Counts the projects that have been loaded. Use it as a `key` to start a
  * panel over with nothing left from the project before.
  */
 export function useProjectGeneration(): number {
-  return useSyncExternalStore(onProjectReplaced, () => generation)
+  return useSyncExternalStore(onProjectReplaced, getProjectGeneration)
 }

@@ -14,6 +14,7 @@ authors = ["The Windfall contributors"]
 windfall-core = { path = "crates/windfall-core" }
 windfall-dsp = { path = "crates/windfall-dsp" }
 windfall-project = { path = "crates/windfall-project" }
+windfall-archive = { path = "crates/windfall-archive" }
 windfall-ipc = { path = "crates/windfall-ipc" }
 windfall-codec = { path = "crates/windfall-codec" }
 windfall-engine = { path = "crates/windfall-engine" }

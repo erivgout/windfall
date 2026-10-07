@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { getAppState, isEnabled, registry, runAction } from "@/lib/actions"
 import { deviceInfo } from "@/lib/actions/builtin"
 import { dispatch, useProjectStore } from "@/lib/store/project"
+import { useUiStore } from "@/lib/store/ui"
 import { settle, startTestApp } from "@/test/harness"
 
-import { canScaleTempo, forgetTaps, tapInterval } from "./tempo"
+import { canScaleTempo } from "./tempo"
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
@@ -15,7 +16,6 @@ vi.mock("sonner", () => ({
 let stop: () => void
 
 beforeEach(async () => {
-  forgetTaps()
   ;({ stop } = await startTestApp())
 })
 afterEach(() => {
@@ -60,26 +60,11 @@ describe("the tempo actions", () => {
     expect(enabled("tempo.reset")).toBe(false)
   })
 
-  it("take the tempo from the beat that is tapped", async () => {
-    // Two taps half a second apart are 120 beats a minute.
-    expect(tapInterval(1000)).toBeNull()
-    expect(tapInterval(1500)).toBe(120)
-    // More taps are averaged, so an uneven one does not throw it far.
-    expect(tapInterval(2000)).toBe(120)
-    expect(tapInterval(2440)).toBeCloseTo(125, 0)
-    // A long pause starts the count over.
-    expect(tapInterval(9000)).toBeNull()
-    expect(tapInterval(9750)).toBe(80)
-
-    forgetTaps()
-    const now = vi.spyOn(performance, "now")
-    now.mockReturnValue(100)
+  it("opens the reviewed tapper without changing tempo or history", async () => {
     await runAction("tempo.tap")
     expect(tempo()).toBe(128)
-    now.mockReturnValue(700)
-    await runAction("tempo.tap")
-    await settle()
-    expect(tempo()).toBe(100)
+    expect(labels()).toEqual([])
+    expect(useUiStore.getState().dialog).toBe("tempoTap")
   })
 })
 

@@ -193,6 +193,12 @@ impl Transaction<'_> {
                 updates,
             } => self.update_notes(pattern, channel, &updates)?,
             Command::ClearLane { pattern, channel } => self.clear_lane(pattern, channel)?,
+            Command::TransformNotes {
+                pattern,
+                channel,
+                notes,
+                transform,
+            } => self.transform_notes(pattern, channel, &notes, transform)?,
             Command::AddMixerTrack { name } => self.add_mixer_track(name)?,
             Command::RemoveMixerTrack { id } => self.remove_mixer_track(id)?,
             Command::UpdateMixerTrack { id, patch } => self.update_mixer_track(id, patch)?,
@@ -1053,6 +1059,65 @@ impl Transaction<'_> {
             insert,
         });
         Ok(label)
+    }
+
+    fn transform_notes(
+        &mut self,
+        pattern: PatternId,
+        channel: ChannelId,
+        expected: &[Note],
+        transform: crate::NoteTransform,
+    ) -> Result<Label, CommandError> {
+        let selected = crate::piano_tools::selection(expected)?;
+        let lane = self.lane(pattern, channel)?;
+        let wanted: HashSet<_> = selected.iter().map(|n| n.id).collect();
+        let current: HashMap<_, _> = lane
+            .into_iter()
+            .flat_map(|l| &l.notes)
+            .filter(|n| wanted.contains(&n.id))
+            .map(|n| (n.id, n))
+            .collect();
+        for note in &selected {
+            if current.get(&note.id).copied() != Some(note) {
+                return Err(CommandError::invalid(
+                    "the selected notes changed; reopen the tool",
+                ));
+            }
+        }
+        let mut insert = crate::piano_tools::transform_selected_notes(&selected, transform)?;
+        // Identity transformations preserve history, dirty state and redo.
+        if selected == insert {
+            return Ok(transform.label());
+        }
+        for note in &mut insert {
+            if note.id.0 == 0 {
+                note.id = NoteId(self.allocate()?);
+                self.created.push(note.id.0);
+            }
+        }
+        let end = insert.iter().map(|n| n.start + n.length).max().unwrap_or(0);
+        self.push(Edit::Notes {
+            pattern,
+            channel,
+            remove: selected,
+            insert,
+        });
+        let index = self.pattern_index(pattern)?;
+        let old = PatternInfo::of(&self.project.patterns[index]);
+        let steps = end.div_ceil(TICKS_PER_STEP);
+        if steps > old.length_steps {
+            self.push(Edit::PatternInfo {
+                id: pattern,
+                change: Change {
+                    new: PatternInfo {
+                        length_steps: steps,
+                        ..old.clone()
+                    },
+                    old,
+                },
+            });
+        }
+        Ok(transform.label())
     }
 
     fn clear_lane(

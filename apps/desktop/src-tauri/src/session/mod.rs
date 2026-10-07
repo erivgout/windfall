@@ -57,6 +57,7 @@
 //! lock held and then touches the document or the sample pool compares it
 //! first and gives up if another document has taken its place.
 
+mod archive;
 mod audio;
 mod audio_editor;
 mod autosave;
@@ -75,6 +76,7 @@ mod slicer;
 #[cfg(test)]
 mod tests;
 mod transport;
+mod versions;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -150,10 +152,12 @@ impl WeakSession {
 }
 
 struct Inner {
+    archive_job: Mutex<Option<Arc<AtomicBool>>>,
     midi_hardware: Mutex<Option<Arc<windfall_engine::midi_hardware::Runtime>>>,
     midi_configuring: Mutex<()>,
     /// Serializes editor workers and retains at most one bounded clip view.
     audio_editor: Mutex<audio_editor::Editor>,
+    library: crate::library::Library,
     plugins: Mutex<Option<Arc<crate::plugins::PluginManager>>>,
     /// Held by a save or a backup from before it copies the project until
     /// its file is written. Taken before `state`, never under it.
@@ -304,6 +308,16 @@ impl Session {
         } = config;
         let factory_dir = crate::paths::clean(&factory_dir);
         let cache = SampleCache::new();
+        let roots = std::iter::once(crate::browser::factory_root(&factory_dir))
+            .chain(
+                settings
+                    .settings()
+                    .browser_roots
+                    .iter()
+                    .map(|root| crate::browser::user_root(Path::new(root))),
+            )
+            .collect();
+        let library = crate::library::Library::new(settings.library_file(), roots);
 
         let project = default_project();
         let decoded = samples::decode_all(&cache, &project, None, &factory_dir);
@@ -314,9 +328,11 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                archive_job: Mutex::new(None),
                 midi_hardware: Mutex::new(None),
                 midi_configuring: Mutex::new(()),
                 audio_editor: Mutex::new(audio_editor::Editor::default()),
+                library,
                 plugins: Mutex::new(None),
                 save: Mutex::new(()),
                 flp_import: Mutex::new(None),

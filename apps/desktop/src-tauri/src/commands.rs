@@ -20,6 +20,7 @@ use windfall_project::{
 };
 
 use crate::session::{ClipPlace, Session};
+use windfall_ipc::{LibraryFileToken, LibraryMetadata, LibraryResults, LibrarySearch};
 use windfall_ipc::{MidiExportOptions, MidiImportOptions, MidiImportPreview};
 
 #[tauri::command]
@@ -146,6 +147,13 @@ async fn project_open(
     path: String,
 ) -> Result<DocumentSnapshot, String> {
     let session = session.inner().clone();
+    if std::path::Path::new(&path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+    {
+        let job = session.archive_job()?;
+        return blocking(move || session.project_archive_open_with(&path, job)).await;
+    }
     blocking(move || session.project_open(&path)).await
 }
 
@@ -172,6 +180,27 @@ fn flp_cancel(session: State<'_, Session>, token: u64) {
 async fn project_save(session: State<'_, Session>, path: Option<String>) -> Result<String, String> {
     let session = session.inner().clone();
     blocking(move || session.project_save(path.as_deref())).await
+}
+
+#[tauri::command]
+async fn project_save_new_version(
+    session: State<'_, Session>,
+    path: Option<String>,
+) -> Result<String, String> {
+    let session = session.inner().clone();
+    blocking(move || session.project_save_new_version(path.as_deref())).await
+}
+
+#[tauri::command]
+async fn project_archive_save(session: State<'_, Session>, path: String) -> Result<String, String> {
+    let session = session.inner().clone();
+    let job = session.archive_job()?;
+    blocking(move || session.project_archive_save_with(&path, job)).await
+}
+
+#[tauri::command]
+fn project_archive_cancel(session: State<'_, Session>) {
+    session.project_archive_cancel();
 }
 
 #[tauri::command]
@@ -262,9 +291,17 @@ fn audition_note_off(session: State<'_, Session>, channel: ChannelId, key: u8) {
 }
 
 #[tauri::command]
-async fn preview_play(session: State<'_, Session>, path: String) -> Result<(), String> {
+async fn preview_play(
+    session: State<'_, Session>,
+    path: String,
+    browser: Option<LibraryFileToken>,
+) -> Result<(), String> {
     let session = session.inner().clone();
-    blocking(move || session.preview_play(&path)).await
+    blocking(move || match browser {
+        Some(token) => session.browser_preview(&path, &token),
+        None => session.preview_play(&path),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -276,6 +313,53 @@ fn preview_stop(session: State<'_, Session>) {
 async fn browser_roots(session: State<'_, Session>) -> Result<Vec<BrowserRoot>, String> {
     let session = session.inner().clone();
     blocking(move || Ok(session.browser_roots())).await
+}
+
+#[tauri::command]
+async fn library_search(
+    session: State<'_, Session>,
+    search: LibrarySearch,
+) -> Result<LibraryResults, String> {
+    let session = session.inner().clone();
+    blocking(move || session.library_search(&search)).await
+}
+
+#[tauri::command]
+fn library_refresh(session: State<'_, Session>) {
+    session.library_refresh();
+}
+
+#[tauri::command]
+fn library_cancel(session: State<'_, Session>, generation: u32) {
+    session.library_cancel(generation);
+}
+
+#[tauri::command]
+async fn library_file(
+    session: State<'_, Session>,
+    path: String,
+) -> Result<LibraryFileToken, String> {
+    let session = session.inner().clone();
+    blocking(move || session.library_file(&path)).await
+}
+
+#[tauri::command]
+async fn library_metadata(
+    session: State<'_, Session>,
+    path: String,
+) -> Result<LibraryMetadata, String> {
+    let session = session.inner().clone();
+    blocking(move || session.library_metadata(&path)).await
+}
+
+#[tauri::command]
+async fn library_set_metadata(
+    session: State<'_, Session>,
+    path: String,
+    metadata: LibraryMetadata,
+) -> Result<LibraryMetadata, String> {
+    let session = session.inner().clone();
+    blocking(move || session.library_set_metadata(&path, metadata)).await
 }
 
 #[tauri::command]
@@ -306,9 +390,17 @@ async fn browser_list(
 }
 
 #[tauri::command]
-async fn sample_info(session: State<'_, Session>, path: String) -> Result<SampleInfo, String> {
+async fn sample_info(
+    session: State<'_, Session>,
+    path: String,
+    browser: Option<LibraryFileToken>,
+) -> Result<SampleInfo, String> {
     let session = session.inner().clone();
-    blocking(move || session.sample_info(&path)).await
+    blocking(move || match browser {
+        Some(token) => session.browser_sample_info(&path, &token),
+        None => session.sample_info(&path),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -331,9 +423,14 @@ async fn add_channel_from_file(
     session: State<'_, Session>,
     path: String,
     index: Option<u32>,
+    browser: Option<LibraryFileToken>,
 ) -> Result<DispatchResult, String> {
     let session = session.inner().clone();
-    blocking(move || session.add_channel_from_file(&path, index)).await
+    blocking(move || match browser {
+        Some(token) => session.browser_add_channel(&path, index, token),
+        None => session.add_channel_from_file(&path, index),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -341,9 +438,14 @@ async fn set_channel_sample_from_file(
     session: State<'_, Session>,
     channel: ChannelId,
     path: String,
+    browser: Option<LibraryFileToken>,
 ) -> Result<DispatchResult, String> {
     let session = session.inner().clone();
-    blocking(move || session.set_channel_sample_from_file(channel, &path)).await
+    blocking(move || match browser {
+        Some(token) => session.browser_replace_sample(channel, &path, token),
+        None => session.set_channel_sample_from_file(channel, &path),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -353,6 +455,7 @@ async fn add_audio_clip_from_file(
     track: Option<PlaylistTrackId>,
     start: u32,
     mixer_track: Option<TrackId>,
+    browser: Option<LibraryFileToken>,
 ) -> Result<DispatchResult, String> {
     let session = session.inner().clone();
     let place = ClipPlace {
@@ -360,7 +463,11 @@ async fn add_audio_clip_from_file(
         start,
         mixer_track,
     };
-    blocking(move || session.add_audio_clip_from_file(&path, place)).await
+    blocking(move || match browser {
+        Some(token) => session.browser_add_clip(&path, place, token),
+        None => session.add_audio_clip_from_file(&path, place),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -523,6 +630,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         flp_open,
         flp_cancel,
         project_save,
+        project_save_new_version,
+        project_archive_save,
+        project_archive_cancel,
         recent_projects,
         transport_play,
         transport_stop,
@@ -540,6 +650,12 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         preview_play,
         preview_stop,
         browser_roots,
+        library_search,
+        library_refresh,
+        library_cancel,
+        library_file,
+        library_metadata,
+        library_set_metadata,
         browser_add_root,
         browser_remove_root,
         browser_list,

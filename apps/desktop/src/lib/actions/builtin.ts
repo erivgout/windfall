@@ -6,6 +6,14 @@ import {
   useRecordingStore,
 } from "@/features/transport/recording-store"
 import { toast } from "sonner"
+import {
+  canArchive,
+  portableUnavailable,
+  saveNewVersion,
+  saveArchive,
+  cancelArchive,
+  useArchiveStore,
+} from "@/lib/flows/portable"
 
 import {
   addChannel,
@@ -221,6 +229,33 @@ export const BUILTIN_ACTIONS: Action[] = [
     run: async () => {
       await saveProjectAs()
     },
+  },
+  {
+    id: "file.saveNewVersion",
+    title: "Save new version",
+    section: "File",
+    keywords: "numbered snapshot incremental",
+    enabled: canArchive,
+    whyDisabled: portableUnavailable,
+    run: async () => {
+      await saveNewVersion()
+    },
+  },
+  {
+    id: "file.archive",
+    title: "Export portable project archive…",
+    section: "File",
+    keywords: "zip package samples backup share",
+    enabled: canArchive,
+    whyDisabled: portableUnavailable,
+    run: saveArchive,
+  },
+  {
+    id: "file.cancelArchive",
+    title: "Cancel project archive",
+    section: "File",
+    enabled: () => useArchiveStore.getState().cancellable,
+    run: cancelArchive,
   },
   {
     id: "file.reloadSamples",

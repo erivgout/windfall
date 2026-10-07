@@ -13,6 +13,11 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { backend, errorMessage } from "@/lib/ipc"
 import { receivePatch } from "@/lib/store/project"
+import {
+  getProjectGeneration,
+  onProjectReplaced,
+  useProjectGeneration,
+} from "@/lib/store/replaced"
 import { usePlaylistStore } from "@/features/playlist/store"
 import { validSelection, type Selection } from "./selection"
 import type { AudioEditOperation, AudioEditPreview } from "./types"
@@ -69,20 +74,64 @@ export function AudioEditorButton({
   clip,
   disabled,
 }: {
-  clip: number
+  clip: number | null
   disabled?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  // Capture the source at Open. The inspector may stop resolving that source
+  // after Apply publishes its replacement, before the IPC reply arrives.
+  const [session, setSession] = useState<{
+    clip: number
+    selection: ReadonlySet<number>
+    generation: number
+    ticket: number
+    busy: boolean
+  } | null>(null)
+  const nextTicket = useRef(0)
+  const busy = session?.busy ?? false
+  useEffect(() => {
+    const offSelection = usePlaylistStore.subscribe((state, previous) => {
+      if (state.selection !== previous.selection)
+        setSession((current) =>
+          current?.generation === getProjectGeneration() ? null : current
+        )
+    })
+    const offProject = onProjectReplaced(() =>
+      setSession((current) => current && { ...current, busy: false })
+    )
+    return () => {
+      offSelection()
+      offProject()
+    }
+  }, [])
+  function close() {
+    setSession((current) =>
+      current?.ticket === session?.ticket ? null : current
+    )
+  }
   return (
     <Dialog
-      open={open}
+      open={session !== null}
       onOpenChange={(value) => {
-        if (!busy) setOpen(value)
+        if (busy) return
+        if (!value) close()
+        else if (clip !== null)
+          setSession({
+            clip,
+            selection: usePlaylistStore.getState().selection,
+            generation: getProjectGeneration(),
+            ticket: ++nextTicket.current,
+            busy: false,
+          })
       }}
     >
       <DialogTrigger
-        render={<Button variant="outline" size="sm" disabled={disabled} />}
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={disabled || clip === null}
+          />
+        }
       >
         Audio editor
       </DialogTrigger>
@@ -97,12 +146,19 @@ export function AudioEditorButton({
             one undo step. Original sources stay intact.
           </DialogDescription>
         </DialogHeader>
-        {open && (
+        {session && (
           <Editor
-            key={clip}
-            clip={clip}
-            onBusy={setBusy}
-            onDone={() => setOpen(false)}
+            key={session.ticket}
+            clip={session.clip}
+            selectionAtOpen={session.selection}
+            onBusy={(busy) =>
+              setSession((current) =>
+                current?.ticket === session.ticket
+                  ? { ...current, busy }
+                  : current
+              )
+            }
+            onDone={close}
           />
         )}
       </DialogContent>
@@ -112,43 +168,84 @@ export function AudioEditorButton({
 
 function Editor({
   clip,
+  selectionAtOpen,
   onBusy,
   onDone,
 }: {
   clip: number
+  selectionAtOpen: ReadonlySet<number>
   onBusy(value: boolean): void
   onDone(): void
 }) {
   const [preview, setPreview] = useState<AudioEditPreview | null>(null)
+  const [previewGeneration, setPreviewGeneration] = useState(-1)
   const [selection, setSelection] = useState<Selection>({ start: 0, end: 0 })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const token = useRef<number | null>(null)
+  const alive = useRef(false)
+  const generation = useProjectGeneration()
   useEffect(() => {
     let cancelled = false
+    alive.current = true
+    const atGeneration = getProjectGeneration()
+    const offProject = onProjectReplaced(() => {
+      if (token.current !== null) {
+        void backend.audioEditorDiscard(token.current).catch(() => {})
+        token.current = null
+      }
+      setBusy(false)
+      setError("The project changed. Close and reopen the audio editor.")
+    })
     void backend
       .audioEditorOpen(clip)
       .then((value) => {
-        if (cancelled) {
+        if (
+          cancelled ||
+          atGeneration !== getProjectGeneration() ||
+          selectionAtOpen !== usePlaylistStore.getState().selection
+        ) {
           void backend.audioEditorDiscard(value.token).catch(() => {})
+          if (!cancelled)
+            setError("The project changed. Close and reopen the audio editor.")
           return
         }
         token.current = value.token
         setPreview(value)
+        setPreviewGeneration(atGeneration)
         setSelection({ start: 0, end: value.frames })
       })
       .catch((error: unknown) => {
-        if (!cancelled) setError(errorMessage(error))
+        if (
+          !cancelled &&
+          atGeneration === getProjectGeneration() &&
+          selectionAtOpen === usePlaylistStore.getState().selection
+        )
+          setError(errorMessage(error))
       })
     return () => {
       cancelled = true
-      if (token.current !== null)
+      alive.current = false
+      offProject()
+      if (token.current !== null) {
         void backend.audioEditorDiscard(token.current).catch(() => {})
+        token.current = null
+      }
     }
-  }, [clip])
+  }, [clip, selectionAtOpen])
 
+  const stale = preview !== null && previewGeneration !== generation
   async function apply(operation: AudioEditOperation) {
-    if (!preview || !validSelection(selection, preview.frames) || busy) return
+    if (
+      !preview ||
+      stale ||
+      previewGeneration !== getProjectGeneration() ||
+      selectionAtOpen !== usePlaylistStore.getState().selection ||
+      !validSelection(selection, preview.frames) ||
+      busy
+    )
+      return
+    const atGeneration = getProjectGeneration()
     setBusy(true)
     onBusy(true)
     setError(null)
@@ -159,23 +256,40 @@ function Editor({
         startFrame: selection.start,
         endFrame: selection.end,
       })
+      if (
+        !alive.current ||
+        atGeneration !== getProjectGeneration() ||
+        selectionAtOpen !== usePlaylistStore.getState().selection
+      )
+        return
       receivePatch(result.patch)
       const id = result.created.at(-1)
       if (id !== undefined) usePlaylistStore.getState().select([id])
       onDone()
     } catch (error) {
-      setError(errorMessage(error))
+      if (
+        alive.current &&
+        atGeneration === getProjectGeneration() &&
+        selectionAtOpen === usePlaylistStore.getState().selection
+      )
+        setError(errorMessage(error))
     } finally {
-      setBusy(false)
-      onBusy(false)
+      if (alive.current) {
+        setBusy(false)
+        onBusy(false)
+      }
     }
   }
-  const valid = preview && validSelection(selection, preview.frames)
+  const valid = preview && !stale && validSelection(selection, preview.frames)
   return (
     <div className="flex flex-col gap-3">
-      {error && (
+      {(error || stale) && (
         <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>
+            {stale
+              ? "The project changed. Close and reopen the audio editor."
+              : error}
+          </AlertDescription>
         </Alert>
       )}
       {!preview && !error && <p role="status">Preparing clip waveform…</p>}

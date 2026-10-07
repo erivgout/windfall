@@ -63,7 +63,9 @@ describe("previewing", () => {
 
     // The press alone does it; there is no waiting for the release.
     fireEvent.mouseDown(item("Kick 02.wav"))
-    expect(play.mock.calls).toEqual([[`${KICKS}/Kick 02.wav`]])
+    expect(play.mock.calls.map(([path]) => [path])).toEqual([
+      [`${KICKS}/Kick 02.wav`],
+    ])
     expect(item("Kick 02.wav")).toHaveAttribute("aria-selected", "true")
 
     await act(async () => {})
@@ -235,7 +237,9 @@ describe("auto-preview", () => {
     // The pane still shows the sound, and can play it on request.
     expect(await screen.findByText("0.55 s")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Play preview" }))
-    expect(play.mock.calls).toEqual([[`${KICKS}/Kick 02.wav`]])
+    expect(play.mock.calls.map(([path]) => [path])).toEqual([
+      [`${KICKS}/Kick 02.wav`],
+    ])
   })
 
   it("stops what is playing when it is turned off", async () => {
@@ -310,13 +314,14 @@ describe("the preview pane", () => {
     expect(pane()).toHaveTextContent("48 kHz")
     expect(pane()).toHaveTextContent("Stereo")
 
-    // Going back shows the first sound at once, from what was kept.
+    // Going back rechecks the file through the native loader; a deleted or changed file cannot reuse stale UI facts.
     press("Home")
     press("k")
     press("ArrowDown")
     expect(pane()).toHaveTextContent("Kick 01.wav")
+    expect(asked).toHaveLength(3)
+    await act(async () => asked[2].answer(infoFor("Kick 01.wav", 1.11)))
     expect(pane()).toHaveTextContent("1.11 s")
-    expect(asked).toHaveLength(2)
   })
 
   it("says so when a sound cannot be read", async () => {

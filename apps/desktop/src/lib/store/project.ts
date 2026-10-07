@@ -12,6 +12,7 @@ import { backend } from "@/lib/ipc"
 import { FORMAT_VERSION, MASTER_TRACK } from "@/lib/units"
 
 import { applyPatch, type DocumentState } from "./patch"
+import { getProjectGeneration, onProjectReplaced } from "./replaced"
 
 /** Shown for the instant before the first snapshot arrives. */
 const BLANK_PROJECT: Project = {
@@ -81,24 +82,32 @@ let refetching: Promise<void> | null = null
 let newestMissed = 0
 
 /**
- * Replaces the whole copy. Used at startup and after a missed patch. A
- * patch that arrives while the snapshot is on its way cannot be applied,
- * so when one was newer than the snapshot, the snapshot is fetched again.
+ * Replaces the whole copy at startup or after a missed patch. A newer
+ * patch can overtake the in-flight snapshot; never roll it back, and fetch
+ * again when that snapshot does not include the newest observed revision.
  */
 export function refetchSnapshot(): Promise<void> {
-  refetching ??= backend
+  if (refetching) return refetching
+  const generation = getProjectGeneration()
+  refetching = backend
     .documentSnapshot()
     .then((snapshot) => {
-      loadSnapshot(snapshot)
+      if (
+        generation === getProjectGeneration() &&
+        snapshot.revision >= useProjectStore.getState().revision
+      )
+        loadSnapshot(snapshot)
       return snapshot.revision
     })
     .catch((error: unknown) => {
-      reportError(error, "Could not load the project")
+      if (generation === getProjectGeneration())
+        reportError(error, "Could not load the project")
       return Infinity
     })
     .then((revision) => {
       refetching = null
-      const behind = newestMissed > revision
+      const behind =
+        generation !== getProjectGeneration() || newestMissed > revision
       newestMissed = 0
       if (behind) return refetchSnapshot()
     })
@@ -111,6 +120,7 @@ export function refetchSnapshot(): Promise<void> {
  * fetched again.
  */
 export function receivePatch(patch: ProjectPatch) {
+  if (refetching) newestMissed = Math.max(newestMissed, patch.revision)
   const outcome = applyPatch(useProjectStore.getState(), patch)
   if (outcome.status === "applied") {
     useProjectStore.setState(outcome.state)
@@ -120,31 +130,74 @@ export function receivePatch(patch: ProjectPatch) {
   }
 }
 
+/** Waits for this edit, while recovery of later edits continues independently. */
+async function waitForRevision(
+  generation: number,
+  revision: number
+): Promise<boolean> {
+  let unsubscribeProject = () => {}
+  let unsubscribeGeneration = () => {}
+  try {
+    const mirrored = new Promise<boolean>((resolve) => {
+      const check = () => {
+        if (generation !== getProjectGeneration()) resolve(false)
+        else if (useProjectStore.getState().revision >= revision) resolve(true)
+      }
+      unsubscribeProject = useProjectStore.subscribe(check)
+      unsubscribeGeneration = onProjectReplaced(check)
+      check()
+    })
+    return await Promise.race([
+      mirrored,
+      refetchSnapshot().then(
+        () =>
+          generation === getProjectGeneration() &&
+          useProjectStore.getState().revision >= revision
+      ),
+    ])
+  } finally {
+    unsubscribeProject()
+    unsubscribeGeneration()
+  }
+}
+
 /**
  * Sends an edit to the backend. Pass the same `gesture` id for every edit of
  * one drag so they become a single undo step. Resolves to `null` when the
- * command fails; the failure has already been shown to the user.
+ * command fails, its document was replaced, or snapshot recovery fails.
+ * A successful reply waits until the mirror includes its patch, so callers
+ * can safely follow created ids even after a missed event.
  */
 export async function dispatch(
   command: Command,
   gesture?: number
 ): Promise<DispatchResult | null> {
+  const generation = getProjectGeneration()
   try {
     const result = await backend.dispatch(command, gesture)
+    if (generation !== getProjectGeneration()) return null
     receivePatch(result.patch)
+    if (useProjectStore.getState().revision < result.patch.revision) {
+      if (!(await waitForRevision(generation, result.patch.revision)))
+        return null
+    }
+    // A replacement loads its snapshot before announcing the new generation.
+    // Recheck after any store notification or awaited recovery.
+    if (generation !== getProjectGeneration()) return null
     return result
   } catch (error) {
-    reportError(error)
+    if (generation === getProjectGeneration()) reportError(error)
     return null
   }
 }
 
 async function runHistory(work: Promise<ProjectPatch | null>) {
+  const generation = getProjectGeneration()
   try {
     const patch = await work
-    if (patch) receivePatch(patch)
+    if (patch && generation === getProjectGeneration()) receivePatch(patch)
   } catch (error) {
-    reportError(error)
+    if (generation === getProjectGeneration()) reportError(error)
   }
 }
 

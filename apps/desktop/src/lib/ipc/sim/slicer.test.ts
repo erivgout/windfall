@@ -24,6 +24,19 @@ async function setup(slicerAudio?: Record<number, SliceAudio>) {
   return id
 }
 describe("shared WASM slicer backend", () => {
+  it("refuses tempo automation without altering the document or history", async () => {
+    const id = await setup()
+    await backend.dispatch({ type: "addAutomation", target: { type: "tempo" } })
+    const before = await backend.documentSnapshot()
+    for (const options of [
+      grid,
+      { mode: "transients", sensitivity: 0.5 } as const,
+    ])
+      await expect(backend.sliceAnalyze(id, options)).rejects.toThrow(
+        "tempo automation"
+      )
+    expect(await backend.documentSnapshot()).toEqual(before)
+  })
   it("reviews then creates linked slices as one undo step, saves, and reopens", async () => {
     const id = await setup()
     const before = await backend.documentSnapshot()

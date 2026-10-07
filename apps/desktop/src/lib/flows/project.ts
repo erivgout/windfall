@@ -3,16 +3,13 @@ import { toast } from "sonner"
 import { create } from "zustand"
 
 import { reportError } from "@/lib/errors"
-import { backend } from "@/lib/ipc"
-import {
-  loadSnapshot,
-  setProjectPath,
-  useProjectStore,
-} from "@/lib/store/project"
+import { backend, errorMessage } from "@/lib/ipc"
+import { setProjectPath, useProjectStore } from "@/lib/store/project"
 import { askConfirm } from "@/lib/store/prompts"
 import { projectDisplayName } from "@/lib/store/selectors"
 import { clearWarnings, samplesReloaded } from "@/lib/store/warnings"
 import { fileName } from "@/lib/time"
+import { archiveBusy, archiveReport, useArchiveStore } from "./portable"
 
 /** Recently saved or opened project files, newest first. */
 export const useRecentStore = create<{ paths: string[] }>(() => ({ paths: [] }))
@@ -88,7 +85,9 @@ export async function confirmDiscardChanges(): Promise<boolean> {
 export async function newProject(): Promise<void> {
   if (!(await confirmDiscardChanges())) return
   try {
-    loadSnapshot(await backend.projectNew())
+    // project:loaded owns replacement. Its event can precede this reply;
+    // loading the returned snapshot again could erase intervening edits.
+    await backend.projectNew()
   } catch (error) {
     reportError(error, "Could not start a new project")
   }
@@ -97,7 +96,7 @@ export async function newProject(): Promise<void> {
 export async function openProjectPath(path: string): Promise<void> {
   if (!(await confirmDiscardChanges())) return
   try {
-    loadSnapshot(await backend.projectOpen(path))
+    await openDocument(path)
     void refreshRecentProjects()
   } catch (error) {
     reportError(error, "Could not open the project")
@@ -109,10 +108,29 @@ export async function openProject(): Promise<void> {
   try {
     const path = await backend.pickProjectToOpen()
     if (path === null) return
-    loadSnapshot(await backend.projectOpen(path))
+    await openDocument(path)
     void refreshRecentProjects()
   } catch (error) {
     reportError(error, "Could not open the project")
+  }
+}
+
+async function openDocument(path: string): Promise<void> {
+  const archive = /\.zip$/i.test(path)
+  if (archive && useArchiveStore.getState().busy)
+    throw new Error("Another project archive operation is running.")
+  if (archive) {
+    archiveReport(null)
+    archiveBusy(true)
+  }
+  try {
+    // The loaded event owns ordinary and archive replacement alike.
+    await backend.projectOpen(path)
+  } catch (error) {
+    if (archive) archiveReport(errorMessage(error))
+    throw error
+  } finally {
+    if (archive) archiveBusy(false)
   }
 }
 

@@ -1,6 +1,11 @@
 import { toast } from "sonner"
 
-import type { BrowserRoot, Channel, DispatchResult } from "@/bindings"
+import type {
+  BrowserRoot,
+  Channel,
+  DispatchResult,
+  LibraryFileToken,
+} from "@/bindings"
 import { addAudioFile } from "@/features/playlist/audio/ops"
 import { songTick } from "@/features/playlist/ops"
 import { revealClip } from "@/features/playlist/reveal"
@@ -15,6 +20,7 @@ import {
   forgetInfoUnder,
   requestInfo,
   requestPreview,
+  stopPreview,
 } from "./preview"
 import {
   applyRoots,
@@ -29,6 +35,7 @@ import {
   type Selection,
 } from "./store"
 import { rowId, type EntryRow } from "./tree-model"
+import { refreshLibrary, useLibraryStore } from "./library-store"
 
 const get = useBrowserStore.getState
 const set = useBrowserStore.setState
@@ -45,14 +52,18 @@ type SelectOptions = {
  * a sound shows it in the pane and, with auto-preview on, plays it.
  */
 export function selectRow(row: EntryRow, options: SelectOptions = {}) {
-  set({ selected: selectionOf(row) })
+  const selected = selectionOf(row)
+  set({ selected })
   if (row.kind !== "audio") {
     clearInfo()
     return
   }
-  requestInfo(row.path, { settle: options.settle })
+  requestInfo(row.path, { settle: options.settle, browser: selected.library })
   if (options.preview && get().autoPreview) {
-    requestPreview(row.path, { settle: options.settle })
+    requestPreview(row.path, {
+      settle: options.settle,
+      browser: selected.library,
+    })
   }
 }
 
@@ -77,10 +88,27 @@ function applyResult(result: DispatchResult) {
   receivePatch(result.patch)
 }
 
+async function libraryToken(path: string, browser?: LibraryFileToken) {
+  const selected = get().selected
+  return (
+    browser ??
+    (selected?.path === path ? selected.library : undefined) ??
+    backend.libraryFile(path)
+  )
+}
+
 /** Adds a new channel that plays the file, and selects it in the rack. */
-export async function addToRack(path: string): Promise<void> {
+export async function addToRack(
+  path: string,
+  browser?: LibraryFileToken
+): Promise<void> {
+  const token = await attempt(
+    libraryToken(path, browser),
+    "Could not find the library file"
+  )
+  if (!token) return
   const result = await attempt(
-    backend.addChannelFromFile(path),
+    backend.addChannelFromFile(path, undefined, token),
     "Could not add the sound"
   )
   if (!result) return
@@ -99,17 +127,33 @@ export async function addToRack(path: string): Promise<void> {
  * a new track of its own, playing into a new mixer track. Shows the
  * playlist with the clip selected.
  */
-export async function addToPlaylist(path: string): Promise<void> {
-  const clip = await addAudioFile(path, { start: songTick() })
+export async function addToPlaylist(
+  path: string,
+  browser?: LibraryFileToken
+): Promise<void> {
+  const token = await attempt(
+    libraryToken(path, browser),
+    "Could not find the library file"
+  )
+  if (!token) return
+  const clip = await addAudioFile(path, { start: songTick() }, token)
   if (clip !== null) revealClip(clip)
 }
 
 /** Makes the channel selected in the rack play the file instead. */
-export async function replaceChannelSample(path: string): Promise<void> {
+export async function replaceChannelSample(
+  path: string,
+  browser?: LibraryFileToken
+): Promise<void> {
   const channel = selectedChannel()
   if (!channel) return
+  const token = await attempt(
+    libraryToken(path, browser),
+    "Could not find the library file"
+  )
+  if (!token) return
   const result = await attempt(
-    backend.setChannelSampleFromFile(channel.id, path),
+    backend.setChannelSampleFromFile(channel.id, path, token),
     `Could not replace the sample of ${channel.name}`
   )
   if (result) applyResult(result)
@@ -117,7 +161,7 @@ export async function replaceChannelSample(path: string): Promise<void> {
 
 /** What Enter and a double-click do. Folders open on a single click instead. */
 export function activateRow(row: EntryRow) {
-  if (row.kind === "audio") void addToRack(row.path)
+  if (row.kind === "audio") void addToRack(row.path, row.library)
   else if (row.kind === "project") void openProjectPath(row.path)
   else if (row.kind === "folder") toggleFolder(row)
 }
@@ -132,6 +176,7 @@ export function refresh(path: string) {
  * nothing selected it reads the roots and every open root again.
  */
 export function refreshSelection() {
+  void attempt(refreshLibrary(), "Could not refresh the library")
   const selected = get().selected
   if (selected === null) {
     void loadRoots().then(() => {
@@ -172,6 +217,7 @@ export async function addFolder(): Promise<void> {
 
   const id = rowId(added.path, added.path)
   // A filter would hide the folder that was just added.
+  useLibraryStore.setState({ favoritesOnly: false, tags: [] })
   setFilter("")
   expandFolder(id, added.path)
   // It may have been in the browser before, with a listing that is now old.
@@ -195,7 +241,10 @@ export async function removeRoot(root: BrowserRoot): Promise<void> {
   if (root.kind === "factory") return
   try {
     applyRoots(await backend.browserRemoveRoot(root.path))
-    if (get().selected === null) clearInfo()
+    if (get().selected === null) {
+      clearInfo()
+      stopPreview()
+    }
   } catch (error) {
     reportError(error, `Could not remove ${root.name}`)
   }

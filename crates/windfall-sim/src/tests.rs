@@ -34,6 +34,37 @@ fn project_of(handle: u32) -> Project {
 }
 
 #[test]
+fn library_query_and_tags_use_the_shared_grammar_without_a_document() {
+    let input = json!({
+        "query": "(DRUMS\\K?CKS AND *.WAV) OR \"vocal chop\"",
+        "paths": ["/factory/Drums/Kicks/Kick 01.wav", "/samples/Vocal Chop.flac", "/samples/Snare.wav"]
+    });
+    assert_eq!(run(ops::browser_query, 0, &input).unwrap(), json!([0, 1]));
+    assert!(
+        run(
+            ops::browser_query,
+            0,
+            &json!({ "query": "kick OR", "paths": [] })
+        )
+        .unwrap_err()
+        .contains("term")
+    );
+    assert!(
+        run(
+            ops::browser_query,
+            0,
+            &json!({ "query": "", "paths": ["x".repeat(4097)] })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        run(ops::browser_tags, 0, &json!([" Warm ", "WARM", "drums"])).unwrap(),
+        json!(["drums", "warm"])
+    );
+    assert!(run(ops::browser_tags, 0, &json!(["x".repeat(33)])).is_err());
+}
+
+#[test]
 fn a_new_project_is_the_models_own() {
     let project = run(ops::project_new, 0, &json!("Song")).unwrap();
     assert_eq!(

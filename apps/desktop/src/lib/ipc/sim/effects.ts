@@ -5,15 +5,24 @@ import { gainToDb, MASTER_TRACK } from "@/lib/units"
 const INSTRUMENT_LATENCY_FRAMES = 12
 
 function slotLatency(slot: EffectSlot, sampleRate: number): number {
-  return slot.params.type === "limiter"
-    ? Math.round((slot.params.lookaheadMs * sampleRate) / 1000)
-    : 0
+  const params = slot.params
+  if (params.type === "limiter") {
+    return Math.round((params.lookaheadMs * sampleRate) / 1000)
+  }
+  if (params.type === "stereoMatrix") {
+    return Math.min(
+      Math.round((params.leftDelayMs * sampleRate) / 1000),
+      Math.round((params.rightDelayMs * sampleRate) / 1000)
+    )
+  }
+  if (params.type === "distortion") return 32
+  return 0
 }
 
 /**
  * A stand-in for the engine's latency figure: the slowest way from a
- * channel to the master, counting each limiter's look-ahead and the
- * synth's own delay. Sends are left out.
+ * channel to the master, counting built-in effect latency and the synth's
+ * own delay. Sends are left out. This is UI simulation, not browser DSP.
  */
 export function simulatedLatencyFrames(
   project: Project,

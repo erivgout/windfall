@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { SliceControls } from "."
 import { startTestApp } from "@/test/harness"
-import { dispatch, useProjectStore } from "@/lib/store/project"
+import { dispatch, loadSnapshot, useProjectStore } from "@/lib/store/project"
+import { usePlaylistStore } from "@/features/playlist/store"
 import type { Clip } from "@/bindings"
 
 let stop: (() => void) | undefined
@@ -20,12 +21,51 @@ async function setup() {
   const clip = useProjectStore
     .getState()
     .project.playlist.clips.find((c) => c.id === result.created.at(-1))!
-  render(<SliceControls clips={[clip]} />)
+  const view = render(<SliceControls clips={[clip]} />)
   fireEvent.click(screen.getByRole("button", { name: "Slice clip" }))
   await screen.findByRole("dialog", { name: "Slice audio clip" })
-  return { ...app, clip }
+  return { ...app, clip, view }
 }
 describe("slicer marker review", () => {
+  it.each(["project replacement", "unmount"])(
+    "ignores an Apply reply after %s, even with reused revisions",
+    async (change) => {
+      const { backend, clip, view } = await setup()
+      const original = await backend.documentSnapshot()
+      const review = await backend.sliceAnalyze(clip.id, {
+        mode: "grid",
+        gridTicks: 960,
+      })
+      const applied = await backend.sliceApply(
+        review.token,
+        review.analysis.markers.map((marker) => marker.tick)
+      )
+      // Native reply fixture at revision 1, following a clip-bearing snapshot
+      // at revision 0. New documents can reuse both revisions and clip IDs.
+      const result = { ...applied, patch: { ...applied.patch, revision: 1 } }
+      await act(async () => loadSnapshot({ ...original, revision: 0 }))
+      vi.spyOn(backend, "sliceAnalyze").mockResolvedValue(review)
+      let resolve!: (value: typeof result) => void
+      vi.spyOn(backend, "sliceApply").mockImplementation(
+        () =>
+          new Promise((done) => {
+            resolve = done
+          })
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Analyze markers" }))
+      await screen.findByRole("img", { name: /Slice marker preview/ })
+      fireEvent.click(screen.getByRole("button", { name: "Apply slices" }))
+      if (change === "project replacement")
+        await act(() => backend.projectNew())
+      else view.unmount()
+      const before = useProjectStore.getState()
+      const selection = new Set(usePlaylistStore.getState().selection)
+      expect(before.revision).toBe(0)
+      await act(async () => resolve(result))
+      expect(useProjectStore.getState()).toBe(before)
+      expect(usePlaylistStore.getState().selection).toEqual(selection)
+    }
+  )
   it("previews markers, deselects a cut and applies once with the resulting slices selected", async () => {
     const { clip } = await setup()
     const before = useProjectStore.getState().history.cursor
@@ -119,6 +159,35 @@ describe("slicer marker review", () => {
       resolve(result)
     })
     expect(discard).toHaveBeenCalledWith(result.token)
+  })
+  it("discards analysis after project replacement even when the revision repeats", async () => {
+    const { backend, clip } = await setup()
+    const result = await backend.sliceAnalyze(clip.id, {
+      mode: "grid",
+      gridTicks: 960,
+    })
+    const revision = useProjectStore.getState().revision
+    let resolve!: (value: typeof result) => void
+    vi.spyOn(backend, "sliceAnalyze").mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    const discard = vi.spyOn(backend, "sliceDiscard")
+    fireEvent.click(screen.getByRole("button", { name: "Analyze markers" }))
+    await act(async () => {
+      const snapshot = await backend.projectNew()
+      loadSnapshot({ ...snapshot, revision })
+    })
+    const before = useProjectStore.getState()
+    await act(async () => resolve(result))
+    expect(discard).toHaveBeenCalledWith(result.token)
+    expect(
+      screen.queryByRole("img", { name: /Slice marker preview/ })
+    ).toBeNull()
+    expect(screen.getByRole("alert")).toHaveTextContent("The project changed")
+    expect(useProjectStore.getState()).toBe(before)
   })
   it("requires one selected audio clip", () => {
     const clip: Clip = {

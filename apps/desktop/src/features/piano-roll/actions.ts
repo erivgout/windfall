@@ -7,6 +7,7 @@ import {
 } from "@/lib/actions"
 
 import { LANE_KINDS } from "./lane-math"
+import { NOTE_TOOLS, openNoteTools } from "./note-tools"
 import { currentSession } from "./session"
 import { SNAP_OPTIONS } from "./snap"
 import { usePianoRollStore, type Tool } from "./store"
@@ -53,6 +54,7 @@ const ACTIONS: Action[] = [
     enabled: inRoll,
     checked: () => roll().tool === tool,
     run: () => {
+      editor()?.cancel()
       roll().setTool(tool)
       currentSession()?.focusGrid()
     },
@@ -139,22 +141,35 @@ const ACTIONS: Action[] = [
 
   {
     id: "pianoRoll.quantize",
-    title: "Quantize note starts to the snap",
+    title: "Quantize selected note starts…",
     section: SECTION,
     defaultShortcut: "Mod+Q",
     keywords: "align grid timing",
-    enabled: (state) => hasNotes(state) && roll().snap !== "none",
-    run: () => editor()?.quantize("start"),
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes first",
+    run: () => openNoteTools("quantize", "start"),
   },
   {
     id: "pianoRoll.quantizeEnds",
-    title: "Quantize note ends to the snap",
+    title: "Quantize selected note ends…",
     section: SECTION,
     defaultShortcut: "Alt+Q",
     keywords: "align grid length",
-    enabled: (state) => hasNotes(state) && roll().snap !== "none",
-    run: () => editor()?.quantize("end"),
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes first",
+    run: () => openNoteTools("quantize", "end"),
   },
+  ...NOTE_TOOLS.filter((tool) => tool.value !== "quantize").map(
+    (tool): Action => ({
+      id: `pianoRoll.${tool.value}`,
+      title: `${tool.label} selected notes…`,
+      section: SECTION,
+      keywords: tool.description,
+      enabled: hasSelection,
+      whyDisabled: () => "Select notes first",
+      run: () => openNoteTools(tool.value),
+    })
+  ),
 
   {
     id: "pianoRoll.nudgeLeft",
@@ -203,7 +218,8 @@ const ACTIONS: Action[] = [
     defaultShortcut: "Shift+ArrowUp",
     repeats: true,
     keywords: "pitch 12 semitones",
-    enabled: hasNotes,
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes first",
     run: () => editor()?.transpose(12),
   },
   {
@@ -213,7 +229,8 @@ const ACTIONS: Action[] = [
     defaultShortcut: "Shift+ArrowDown",
     repeats: true,
     keywords: "pitch 12 semitones",
-    enabled: hasNotes,
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes first",
     run: () => editor()?.transpose(-12),
   },
 

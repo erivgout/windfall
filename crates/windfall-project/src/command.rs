@@ -232,6 +232,16 @@ pub enum Command {
         pattern: PatternId,
         channel: ChannelId,
     },
+    /// Transform only these captured selected notes. Every id must still be
+    /// in this pattern/channel with exactly these properties, otherwise the
+    /// whole command fails. Empty selections fail. Pattern extension and all
+    /// changed/added/removed notes form one undo entry; no-ops add no history.
+    TransformNotes {
+        pattern: PatternId,
+        channel: ChannelId,
+        notes: Vec<crate::Note>,
+        transform: crate::NoteTransform,
+    },
 
     // Mixer
     /// Adds a track routed to the master. Creates a [`TrackId`]. Fails when

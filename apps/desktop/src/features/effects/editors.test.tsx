@@ -21,8 +21,10 @@ import {
   type ParamDescriptor,
 } from "@/features/params"
 import type { MockBackend } from "@/lib/ipc/mock"
+import { automationBlocked } from "@/lib/automation/targets"
 import { dispatch, undo, useProjectStore } from "@/lib/store/project"
 import { settle, startTestApp } from "@/test/harness"
+import { ValueContextMenus } from "@/components/value-context-menu"
 
 import { customEditor, EffectEditor } from "./effect-editor"
 import { EQ_BANDS } from "./eq/bands"
@@ -80,7 +82,11 @@ async function open(kind: EffectKind): Promise<EffectId> {
   const result = await dispatch({ type: "addEffect", track, kind })
   if (!result) throw new Error(`Could not add a ${kind}`)
   const effect = result.created[0]
-  render(<Editor effect={effect} />)
+  render(
+    <ValueContextMenus>
+      <Editor effect={effect} />
+    </ValueContextMenus>
+  )
   await flush()
   return effect
 }
@@ -177,12 +183,154 @@ async function expectControls(
 const allIds = (kind: EffectKind) =>
   effectDescriptor(kind).params.map((info) => info.id)
 
+const utilities = [
+  "balance",
+  "dcBlock",
+  "channelMute",
+  "polarity",
+  "stereoMatrix",
+  "softClipper",
+  "distortion",
+] as const
+
+describe("measured utility editors", () => {
+  beforeEach(() => {
+    vi.spyOn(backend, "dispatch")
+  })
+
+  it.each(["ll", "lr", "rl", "rr"] as const)(
+    "types and displays a negative matrix %s coefficient as one gesture",
+    async (id) => {
+      const effect = await open("stereoMatrix")
+      const info = effectDescriptor("stereoMatrix").params.find(
+        (info) => info.id === id
+      )!
+      const slider = screen.getByRole("slider", { name: info.name })
+      const original = slotOf(effect).params
+      const before = history().cursor
+      fireEvent.keyDown(slider, { key: "Enter" })
+      const input = screen.getByRole("textbox", { name: info.name })
+      fireEvent.change(input, { target: { value: "-1" } })
+      fireEvent.keyDown(input, { key: "Enter" })
+      await flush()
+      const params = slotOf(effect).params
+      if (params.type !== "stereoMatrix") throw new Error("wrong effect")
+      expect(params[id]).toBe(-1)
+      expect(slider).toHaveAttribute("aria-valuetext", "−1.00")
+      expect(history().cursor).toBe(before + 1)
+      await undo()
+      await flush()
+      expect(slotOf(effect).params).toEqual(original)
+    }
+  )
+
+  it("shows the existing host boundary for matrix delay automation", async () => {
+    const effect = await open("stereoMatrix")
+    const project = useProjectStore.getState().project
+    const descriptor = effectDescriptor("stereoMatrix")
+    for (const info of descriptor.params) {
+      const target = {
+        type: "effectParam",
+        track,
+        effect,
+        param: paramIndex(descriptor, info.id),
+      } as const
+      expect(automationBlocked(project, target)).toBe(
+        info.id.endsWith("DelayMs") ? "Changes the latency" : null
+      )
+    }
+    const slider = screen.getByRole("slider", { name: "Left delay" })
+    fireEvent.contextMenu(slider, { clientX: 20, clientY: 20 })
+    const item = await screen.findByRole("menuitem", {
+      name: /Create automation clip/,
+    })
+    expect(item).toHaveAttribute("aria-disabled", "true")
+    expect(item).toHaveTextContent("Changes the latency")
+  })
+
+  it.each(utilities)(
+    "maps every %s descriptor to a real document control",
+    async (kind) => {
+      const effect = await open(kind)
+      expect(customEditor(kind)).toBeUndefined()
+      expect(
+        screen.getByRole("group", {
+          name: `${effectDescriptor(kind).name} settings`,
+        })
+      ).toBeVisible()
+      await expectControls(kind, effect, allIds(kind))
+    }
+  )
+
+  it.each(utilities)(
+    "makes a %s control gesture one undo step",
+    async (kind) => {
+      const effect = await open(kind)
+      const descriptor = effectDescriptor(kind)
+      const index = descriptor.params.findIndex((info) => info.kind === "float")
+      const info = descriptor.params[Math.max(0, index)]
+      const original = slotOf(effect).params
+      const before = history().cursor
+      if (info.kind === "float") {
+        const slider =
+          within(control(info.id)).queryByRole("slider") ?? control(info.id)
+        act(() => slider.focus())
+        for (let step = 0; step < 3; step += 1) {
+          fireEvent.keyDown(slider, {
+            key: info.default === info.max ? "ArrowDown" : "ArrowUp",
+          })
+          await flush()
+        }
+        fireEvent.keyUp(slider, {
+          key: info.default === info.max ? "ArrowDown" : "ArrowUp",
+        })
+        await flush()
+      } else {
+        await operate(info, 0)
+      }
+      expect(slotOf(effect).params).not.toEqual(original)
+      expect(history().cursor).toBe(before + 1)
+      await undo()
+      await flush()
+      expect(slotOf(effect).params).toEqual(original)
+    }
+  )
+
+  it.each(utilities)(
+    "creates %s automation from its generic control menu",
+    async (kind) => {
+      const effect = await open(kind)
+      const info = effectDescriptor(kind).params[0]
+      const root = control(info.id)
+      const target = root.matches("[role=slider]")
+        ? root
+        : (root.querySelector<HTMLElement>(
+            "[role=slider], [role=switch], button"
+          ) ?? root)
+      const before = history().cursor
+      fireEvent.contextMenu(target, { clientX: 20, clientY: 20 })
+      const item = await screen.findByRole("menuitem", {
+        name: "Create automation clip",
+      })
+      await userEvent.setup().click(item)
+      await flush()
+      expect(
+        useProjectStore.getState().project.automations.at(-1)?.target
+      ).toEqual({ type: "effectParam", track, effect, param: 0 })
+      expect(history().cursor).toBe(before + 1)
+      await undo()
+      await flush()
+      expect(useProjectStore.getState().project.automations).toEqual([])
+    }
+  )
+})
+
 describe("the editor of each kind", () => {
   beforeEach(() => {
     vi.spyOn(backend, "dispatch")
   })
 
-  it("has a purpose-built editor for every kind the core has today", () => {
+  it("has a purpose-built editor for the original five kinds", () => {
     for (const kind of ["eq", "compressor", "limiter", "reverb", "delay"]) {
       expect(customEditor(kind), kind).toBeDefined()
     }

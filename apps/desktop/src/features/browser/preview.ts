@@ -1,4 +1,4 @@
-import type { SampleInfo } from "@/bindings"
+import type { LibraryFileToken } from "@/bindings"
 import { reportError } from "@/lib/errors"
 import { backend, errorMessage } from "@/lib/ipc"
 
@@ -13,11 +13,11 @@ import { isUnder } from "./tree-model"
  */
 export const REPEAT_SETTLE_MS = 70
 
-const INFO_CACHE_SIZE = 200
-
-type PreviewJob = { type: "play"; path: string } | { type: "stop" }
+type PreviewJob =
+  { type: "play"; path: string; browser?: LibraryFileToken } | { type: "stop" }
 
 type Timing = {
+  browser?: LibraryFileToken
   /** True for a selection made by a repeating key. */
   settle?: boolean
 }
@@ -25,21 +25,11 @@ type Timing = {
 const get = useBrowserStore.getState
 const set = useBrowserStore.setState
 
-const infoCache = new Map<string, SampleInfo>()
 let previewTimer: ReturnType<typeof setTimeout> | null = null
 let infoTimer: ReturnType<typeof setTimeout> | null = null
 let previewRunner: LatestRunner<PreviewJob>
-let infoRunner: LatestRunner<string>
+let infoRunner: LatestRunner<{ path: string; browser?: LibraryFileToken }>
 let generation = 0
-
-function rememberInfo(path: string, info: SampleInfo) {
-  infoCache.delete(path)
-  infoCache.set(path, info)
-  if (infoCache.size > INFO_CACHE_SIZE) {
-    const oldest = infoCache.keys().next().value
-    if (oldest !== undefined) infoCache.delete(oldest)
-  }
-}
 
 function createRunners() {
   generation += 1
@@ -56,7 +46,9 @@ function createRunners() {
       return
     }
     try {
-      await backend.previewPlay(job.path)
+      const token = job.browser ?? (await backend.libraryFile(job.path))
+      if (!current() || superseded()) return
+      await backend.previewPlay(job.path, token)
       // With a newer request waiting, this sound is about to be replaced.
       if (current() && !superseded()) {
         set({
@@ -74,22 +66,24 @@ function createRunners() {
     }
   })
 
-  infoRunner = createLatestRunner<string>(async (path) => {
-    try {
-      const info = await backend.sampleInfo(path)
-      if (!current()) return
-      rememberInfo(path, info)
-      // An answer for a sound the selection has left is kept for later, but
-      // it never reaches the pane.
-      if (get().info?.path === path) {
-        set({ info: { path, status: "ready", info } })
-      }
-    } catch (error) {
-      if (current() && get().info?.path === path) {
-        set({ info: { path, status: "error", message: errorMessage(error) } })
+  infoRunner = createLatestRunner<{ path: string; browser?: LibraryFileToken }>(
+    async ({ path, browser }) => {
+      try {
+        const token = browser ?? (await backend.libraryFile(path))
+        if (!current()) return
+        const info = await backend.sampleInfo(path, token)
+        if (!current()) return
+        // An answer for a sound the selection has left never reaches the pane.
+        if (get().info?.path === path) {
+          set({ info: { path, status: "ready", info } })
+        }
+      } catch (error) {
+        if (current() && get().info?.path === path) {
+          set({ info: { path, status: "error", message: errorMessage(error) } })
+        }
       }
     }
-  })
+  )
 }
 
 createRunners()
@@ -106,15 +100,18 @@ function clearInfoTimer() {
 
 /** Plays a sound through the engine's preview voice, replacing the last one. */
 export function requestPreview(path: string, timing: Timing = {}) {
+  const browser =
+    timing.browser ??
+    (get().selected?.path === path ? get().selected?.library : undefined)
   clearPreviewTimer()
   if (!timing.settle) {
-    previewRunner.request({ type: "play", path })
+    previewRunner.request({ type: "play", path, browser })
     return
   }
   previewRunner.cancel()
   previewTimer = setTimeout(() => {
     previewTimer = null
-    previewRunner.request({ type: "play", path })
+    previewRunner.request({ type: "play", path, browser })
   }, REPEAT_SETTLE_MS)
 }
 
@@ -131,22 +128,19 @@ export function previewEnded(path: string) {
 
 /** Makes the pane show a sound's facts and waveform, reading them if needed. */
 export function requestInfo(path: string, timing: Timing = {}) {
+  const browser =
+    timing.browser ??
+    (get().selected?.path === path ? get().selected?.library : undefined)
   clearInfoTimer()
   infoRunner.cancel()
-  const cached = infoCache.get(path)
-  if (cached) {
-    rememberInfo(path, cached)
-    set({ info: { path, status: "ready", info: cached } })
-    return
-  }
   set({ info: { path, status: "loading" } })
   if (!timing.settle) {
-    infoRunner.request(path)
+    infoRunner.request({ path, browser })
     return
   }
   infoTimer = setTimeout(() => {
     infoTimer = null
-    infoRunner.request(path)
+    infoRunner.request({ path, browser })
   }, REPEAT_SETTLE_MS)
 }
 
@@ -156,17 +150,14 @@ export function clearInfo() {
   if (get().info !== null) set({ info: null })
 }
 
-/** Drops cached facts for files in a folder that is being read again. */
+/** Clears displayed facts for files in a folder that is being read again. */
 export function forgetInfoUnder(folder: string) {
-  for (const path of [...infoCache.keys()]) {
-    if (isUnder(path, folder)) infoCache.delete(path)
-  }
+  if (get().info && isUnder(get().info!.path, folder)) clearInfo()
 }
 
-/** Starts over with nothing cached or under way. For tests. */
+/** Starts over with no requests under way. For tests. */
 export function resetPreview() {
   clearPreviewTimer()
   clearInfoTimer()
-  infoCache.clear()
   createRunners()
 }

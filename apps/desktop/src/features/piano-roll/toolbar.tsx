@@ -12,6 +12,7 @@ import {
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 
 import type { ChannelId } from "@/bindings"
+import { ActionButton } from "@/components/action-button"
 import { ContextActions } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -46,6 +47,8 @@ import { useSession } from "./context"
 import { VIEW_MENU } from "./menu"
 import { isSnapId, SNAP_OPTIONS, type SnapOption } from "./snap"
 import { usePianoRollStore } from "./store"
+import { ScaleControls } from "./scale-controls"
+import { StampMenu } from "./stamp-menu"
 
 type RollButtonProps = {
   action: string
@@ -157,7 +160,7 @@ function SnapPicker() {
   const snap = usePianoRollStore((state) => state.snap)
   const setSnap = usePianoRollStore((state) => state.setSnap)
   const hint = useHint(
-    "Snap: the grid that drawing, moving and resizing notes stick to. Hold Shift while dragging to ignore it"
+    "Snap: the grid that drawing, moving and resizing notes stick to. Hold Alt while dragging to ignore it"
   )
   const items = SNAP_OPTIONS.map((option) => ({
     value: option.id,
@@ -224,6 +227,11 @@ export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
           <RollButton action="pianoRoll.toolErase" icon={Eraser01Icon} />
         </Group>
         <SnapPicker />
+        <ScaleControls />
+        <StampMenu />
+        <ActionButton action="pianoRoll.quantize" variant="outline" size="sm">
+          Note tools
+        </ActionButton>
         <Group label="View">
           <RollButton action="pianoRoll.ghosts" icon={GhostIcon} />
           <RollButton action="pianoRoll.follow" icon={ArrowRightDoubleIcon} />

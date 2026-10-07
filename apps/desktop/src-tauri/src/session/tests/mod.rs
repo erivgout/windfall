@@ -1,6 +1,7 @@
 //! Headless tests of the session: no window, no audio device. The engine is
 //! a [`Processor`] the tests run by hand.
 
+mod archive;
 mod audio_editor;
 mod beat;
 mod clip_recording;
@@ -24,6 +25,7 @@ mod plugins;
 mod recording;
 mod slicer;
 mod song;
+mod versions;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

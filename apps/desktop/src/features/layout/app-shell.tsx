@@ -15,6 +15,7 @@ import { resolveTheme, useUiStore } from "@/lib/store/ui"
 import { PanelFrame } from "./panel-frame"
 import { PANELS, type PanelId } from "./panels"
 import { PromptHost } from "./prompt-host"
+import { ArchiveReport } from "./archive-report"
 import { StatusBar } from "./status-bar"
 import { TitleBar } from "./title-bar"
 import { useToastOffset } from "./toast-place"
@@ -49,6 +50,7 @@ export function Overlays() {
   return (
     <>
       <PromptHost />
+      <ArchiveReport />
       <PluginManager />
       <Toaster
         theme={theme}

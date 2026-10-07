@@ -29,6 +29,7 @@ const MAX_INFOS: usize = 512;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FileKey {
     path: PathBuf,
+    identity: u64,
     modified: Option<SystemTime>,
     len: u64,
 }
@@ -44,6 +45,7 @@ impl FileKey {
         }
         Ok(Self {
             path: path.to_path_buf(),
+            identity: crate::library::file_identity(path).map_err(|e| unreadable(path, &e))?,
             modified: metadata.modified().ok(),
             len: metadata.len(),
         })
@@ -199,6 +201,30 @@ mod tests {
         let third = cache.decode(&file).unwrap();
         assert_eq!(third.frames(), 200);
         assert_eq!(cache.peek(&file).unwrap().frames(), 200);
+    }
+
+    #[test]
+    fn replacing_a_file_with_the_same_size_and_timestamp_invalidates_decoded_audio() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("tone.wav");
+        let replacement = folder.path().join("replacement.wav");
+        write_tone(&file, 100, 0.25);
+        let cache = SampleCache::new();
+        let first = cache.decode(&file).unwrap();
+        let modified = fs::metadata(&file).unwrap().modified().unwrap();
+        write_tone(&replacement, 100, 0.75);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        fs::remove_file(&file).unwrap();
+        fs::rename(&replacement, &file).unwrap();
+        let second = cache.decode(&file).unwrap();
+        assert_eq!(first.samples()[0], 0.25);
+        assert_eq!(second.samples()[0], 0.75);
+        assert!(!std::ptr::eq(first.samples(), second.samples()));
     }
 
     #[test]

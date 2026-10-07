@@ -103,6 +103,15 @@ export function createTauriBackend(): Backend {
     projectNew: () => call("project_new"),
     projectOpen: (path) => call("project_open", { path }),
     projectSave: (path) => call("project_save", { path }),
+    projectSaveNewVersion: (path) => call("project_save_new_version", { path }),
+    projectArchiveSave: (path) => call("project_archive_save", { path }),
+    projectArchiveCancel: () => call("project_archive_cancel"),
+    pickProjectArchivePath: (suggestedName) =>
+      save({
+        title: "Export portable project archive (choose a new filename)",
+        defaultPath: `${suggestedName}.zip`,
+        filters: [{ name: "Windfall project archive", extensions: ["zip"] }],
+      }),
     recentProjects: () => call("recent_projects"),
     midiPreview: (path, options) => call("midi_preview", { path, options }),
     importMidi: (token) => call("import_midi", { token }),
@@ -145,23 +154,30 @@ export function createTauriBackend(): Backend {
       call("audition_note_on", { channel, key, velocity }),
     auditionNoteOff: (channel, key) =>
       call("audition_note_off", { channel, key }),
-    previewPlay: (path) => call("preview_play", { path }),
+    previewPlay: (path, browser) => call("preview_play", { path, browser }),
     previewStop: () => call("preview_stop"),
 
     browserRoots: () => call("browser_roots"),
+    librarySearch: (search) => call("library_search", { search }),
+    libraryRefresh: () => call("library_refresh"),
+    libraryCancel: (generation) => call("library_cancel", { generation }),
+    libraryFile: (path) => call("library_file", { path }),
+    libraryMetadata: (path) => call("library_metadata", { path }),
+    librarySetMetadata: (path, metadata) =>
+      call("library_set_metadata", { path, metadata }),
     browserAddRoot: (path) => call("browser_add_root", { path }),
     browserRemoveRoot: (path) => call("browser_remove_root", { path }),
     browserList: (path) => call("browser_list", { path }),
-    sampleInfo: (path) => call("sample_info", { path }),
+    sampleInfo: (path, browser) => call("sample_info", { path, browser }),
     prepareClipCommand: (command) => call("prepare_clip_command", { command }),
     detectClipTempo: (sample) => call("detect_clip_tempo", { sample }),
     sampleInfoById: (sample) => call("sample_info_by_id", { sample }),
-    addChannelFromFile: (path, index) =>
-      call("add_channel_from_file", { path, index }),
-    setChannelSampleFromFile: (channel, path) =>
-      call("set_channel_sample_from_file", { channel, path }),
-    addAudioClipFromFile: (path, place) =>
-      call("add_audio_clip_from_file", { path, ...place }),
+    addChannelFromFile: (path, index, browser) =>
+      call("add_channel_from_file", { path, index, browser }),
+    setChannelSampleFromFile: (channel, path, browser) =>
+      call("set_channel_sample_from_file", { channel, path, browser }),
+    addAudioClipFromFile: (path, place, browser) =>
+      call("add_audio_clip_from_file", { path, ...place, browser }),
     addAudioClipFromSample: (sample, place) =>
       call("add_audio_clip_from_sample", { sample, ...place }),
     automate: (target) => call("automate", { target }),
@@ -190,7 +206,12 @@ export function createTauriBackend(): Backend {
         title: "Open project",
         multiple: false,
         directory: false,
-        filters: PROJECT_FILTER,
+        filters: [
+          {
+            name: "Windfall project or archive",
+            extensions: ["windfall", "zip"],
+          },
+        ],
       })
       return typeof picked === "string" ? picked : null
     },

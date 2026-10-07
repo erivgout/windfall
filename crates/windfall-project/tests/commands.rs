@@ -9,6 +9,64 @@ use windfall_project::*;
 
 const PATTERN: PatternId = PatternId(1);
 
+#[test]
+fn utility_effects_add_edit_gesture_undo_and_v1_save_reopen() {
+    for kind in [
+        EffectKind::Balance,
+        EffectKind::DcBlock,
+        EffectKind::ChannelMute,
+        EffectKind::Polarity,
+        EffectKind::StereoMatrix,
+        EffectKind::SoftClipper,
+        EffectKind::Distortion,
+    ] {
+        let mut doc = document();
+        let effect = add_effect(&mut doc, TrackId::MASTER, kind);
+        let original = slot(&doc, TrackId::MASTER, effect).params;
+        let cursor = doc.history().cursor;
+        let info = &kind.descriptors()[0];
+        for value in [
+            info.min,
+            if info.default == info.max {
+                info.min + (info.max - info.min) * 0.25
+            } else {
+                info.max
+            },
+        ] {
+            doc.dispatch(set_param(TrackId::MASTER, effect, 0, value), Some(37))
+                .unwrap();
+        }
+        assert_eq!(doc.history().cursor, cursor + 1);
+        let edited = slot(&doc, TrackId::MASTER, effect).params;
+        assert_ne!(edited, original);
+        doc.undo().unwrap();
+        assert_eq!(slot(&doc, TrackId::MASTER, effect).params, original);
+        doc.redo().unwrap();
+        assert_eq!(slot(&doc, TrackId::MASTER, effect).params, edited);
+        let json = windfall_project::file::to_json(doc.project()).unwrap();
+        let reopened = windfall_project::file::from_json(&json).unwrap();
+        assert_eq!(reopened, *doc.project());
+        assert_eq!(reopened.format_version, 1);
+        // Empty settings objects use serde defaults, including the new kinds.
+        let mut value = serde_json::to_value(&reopened).unwrap();
+        value["mixer"]["tracks"][0]["effects"][0]["params"] = serde_json::json!({"type": kind});
+        let legacy = windfall_project::file::from_json(&value.to_string()).unwrap();
+        assert_eq!(legacy.mixer.tracks[0].effects[0].params, original);
+        run(
+            &mut doc,
+            Command::RemoveEffect {
+                track: TrackId::MASTER,
+                effect,
+            },
+        );
+    }
+    let old = windfall_project::file::to_json(&Project::new("legacy v1")).unwrap();
+    assert_eq!(
+        windfall_project::file::from_json(&old).unwrap(),
+        Project::new("legacy v1")
+    );
+}
+
 fn document() -> Document {
     Document::new(Project::new("Test"))
 }
@@ -4413,6 +4471,13 @@ fn add_effect_puts_a_default_effect_on_the_track() {
             slot(&doc, TrackId::MASTER, id).params,
             kind.default_params()
         );
+        run(
+            &mut doc,
+            Command::RemoveEffect {
+                track: TrackId::MASTER,
+                effect: id,
+            },
+        );
     }
 
     let unknown = Command::AddEffect {
@@ -4764,6 +4829,7 @@ fn every_setting_of_every_effect_can_be_set_by_its_index() {
     let mut doc = document();
     let track_id = add_mixer_track(&mut doc);
     for kind in EffectKind::ALL {
+        let mut doc = Document::new(doc.project().clone());
         let effect = add_effect(&mut doc, track_id, kind);
         for (index, info) in kind.descriptors().iter().enumerate() {
             for value in [info.min, info.max, info.default] {
@@ -4907,6 +4973,7 @@ fn a_setting_is_named_in_the_history() {
     // Every setting of every effect and of the synth has a label made of
     // its own name.
     for kind in EffectKind::ALL {
+        let mut doc = Document::new(doc.project().clone());
         let effect = add_effect(&mut doc, track_id, kind);
         for (param, info) in kind.descriptors().iter().enumerate() {
             let other = if info.default == info.max {

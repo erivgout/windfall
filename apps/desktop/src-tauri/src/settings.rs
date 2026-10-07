@@ -42,6 +42,13 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    /// A separate per-user library file; library edits never rewrite device settings.
+    pub fn library_file(&self) -> PathBuf {
+        self.file
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(crate::library::METADATA_FILE)
+    }
     pub fn recordings_dir(&self) -> PathBuf {
         self.file
             .parent()

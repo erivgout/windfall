@@ -102,6 +102,31 @@ async function undoAll(count: number) {
 }
 
 describe("the effect rack on a strip", () => {
+  it.each([
+    "balance",
+    "dcBlock",
+    "channelMute",
+    "polarity",
+    "stereoMatrix",
+    "softClipper",
+    "distortion",
+  ] as const)("discovers and opens %s from the add menu", async (kind) => {
+    render(<MixerPanel />)
+    const user = userEvent.setup()
+    const name = effectDescriptor(kind).name
+    expect(registry.get(`mixer.addEffect.${kind}`)).toBeDefined()
+    expect(registry.get(`mixer.replaceEffect.${kind}`)).toBeDefined()
+    await user.click(
+      within(strip("Clap")).getByRole("button", { name: "Add effect" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name }))
+    await flush()
+    expect(kinds("Clap")).toEqual([kind])
+    expect(panels()).toEqual([name])
+    expect(history().cursor).toBe(1)
+    await undoAll(1)
+    expect(kinds("Clap")).toEqual([])
+  })
   it("lists a track's effects in chain order, with a row to add one", async () => {
     render(<MixerPanel />)
     expect(rackNames("Kick")).toEqual([])
@@ -209,15 +234,14 @@ describe("the effect rack on a strip", () => {
 
   it("shows a gain reduction bar only on a compressor and a limiter", async () => {
     render(<MixerPanel />)
-    const added = await addEffects("Kick", ...EFFECT_KINDS)
-    const withBar = added.filter(
-      (id) =>
-        slotRow("Kick", id).querySelector("[data-slot=gain-reduction-bar]") !==
-        null
-    )
-    expect(
-      withBar.map((id) => chain("Kick")[ids("Kick").indexOf(id)].params.type)
-    ).toEqual(["compressor", "limiter"])
+    const withBar: EffectKind[] = []
+    for (const kind of EFFECT_KINDS) {
+      const [id] = await addEffects("Kick", kind)
+      if (slotRow("Kick", id).querySelector("[data-slot=gain-reduction-bar]"))
+        withBar.push(kind)
+      await undoAll(1)
+    }
+    expect(withBar).toEqual(["compressor", "limiter"])
   })
 })
 

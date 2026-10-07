@@ -3,10 +3,13 @@
  * the channel rack and the playlist accept it, so they only share this file.
  */
 
+import type { LibraryFileToken } from "@/bindings"
+
 /** MIME type of an audio file dragged out of the browser. */
 export const SAMPLE_DRAG_TYPE = "application/x-windfall-sample"
 
 export type SampleDrag = {
+  browser?: LibraryFileToken
   /** Absolute path of the audio file. */
   path: string
   name: string
@@ -59,7 +62,26 @@ export function readSampleDrag(event: React.DragEvent): SampleDrag | null {
       typeof value.path === "string" &&
       typeof value.name === "string"
     ) {
-      return { path: value.path, name: value.name }
+      const browser = "browser" in value ? value.browser : undefined
+      if (
+        browser !== undefined &&
+        (!browser ||
+          typeof browser !== "object" ||
+          !("path" in browser) ||
+          browser.path !== value.path ||
+          !("rootPath" in browser) ||
+          typeof browser.rootPath !== "string" ||
+          !("generation" in browser) ||
+          typeof browser.generation !== "number" ||
+          !("fingerprint" in browser) ||
+          typeof browser.fingerprint !== "string")
+      )
+        return null
+      return {
+        path: value.path,
+        name: value.name,
+        browser: browser as LibraryFileToken | undefined,
+      }
     }
   } catch {
     return null

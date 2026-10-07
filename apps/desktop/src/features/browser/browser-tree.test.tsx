@@ -437,112 +437,57 @@ describe("filter", () => {
   const box = () =>
     screen.getByRole("searchbox", { name: "Filter the browser" })
 
-  it("keeps matches with their ancestors and marks the matching text", async () => {
+  it("searches recursive paths with case, wildcards and Boolean operators", async () => {
     const user = await openKicks()
-    await user.type(box(), "KICK 0")
-
-    expect(itemNames()).toEqual([
-      "Factory",
-      "Drums",
-      "Kicks",
-      "Kick 01.wav",
-      "Kick 02.wav",
-      "Kick 03.wav",
-    ])
-    const marks = [...item("Kick 02.wav").querySelectorAll("mark")]
-    expect(marks.map((mark) => mark.textContent)).toEqual(["Kick 0"])
-    expect(item("Kicks").querySelector("mark")).toBeNull()
+    await user.type(box(), 'DRUMS/K?CKS AND "KICK 0" NOT 03')
+    await findItem("Kick 02.wav")
+    expect(
+      screen
+        .getAllByRole("treeitem")
+        .map((r) => r.getAttribute("aria-description"))
+    ).toEqual(["Drums/Kicks/Kick 01.wav", "Drums/Kicks/Kick 02.wav"])
+    expect(item("Kick 02.wav")).toHaveAttribute("aria-level", "1")
   })
 
-  it("finds matches inside folders that are closed", async () => {
-    const user = await openKicks()
-    await user.click(item("Drums"))
-    expect(queryItem("Kick 02.wav")).not.toBeInTheDocument()
-
-    await user.type(box(), "kick 02")
-    expect(itemNames()).toEqual(["Factory", "Drums", "Kicks", "Kick 02.wav"])
-    expect(item("Drums")).toHaveAttribute("aria-expanded", "true")
-  })
-
-  it("finds factory sounds in folders that were never opened", async () => {
+  it("finds files in closed folders without reading the tree", async () => {
     const user = userEvent.setup()
     const backend = await start()
     const list = vi.spyOn(backend, "browserList")
     render(<BrowserPanel />)
     await findItem("Drums")
-    // Nothing below the factory's top folders has been read.
-    expect(list.mock.calls).toEqual([["/factory"]])
-
-    await user.type(box(), "snare 01")
+    await user.type(box(), '"snare 01"')
     expect(await findItem("Snare 01.wav")).toBeInTheDocument()
-    expect(itemNames()).toEqual(["Factory", "Drums", "Snares", "Snare 01.wav"])
-    // The whole library was read for it, each folder once, however many
-    // letters were typed.
-    const read = list.mock.calls.map(([path]) => path)
-    expect(read).toContain("/factory/Drums/Snares")
-    expect(read).toContain("/factory/Loops")
-    expect(new Set(read).size).toBe(read.length)
-
-    // Another search reads nothing more.
-    const calls = list.mock.calls.length
-    await user.clear(box())
-    await user.type(box(), "hat")
-    expect((await screen.findAllByRole("treeitem")).length).toBeGreaterThan(1)
-    expect(list.mock.calls).toHaveLength(calls)
-    // With only the factory in the browser there is nothing to explain.
-    expect(
-      screen.queryByText(/looks only in folders you have opened/)
-    ).toBeNull()
+    expect(list.mock.calls).toEqual([["/factory"]])
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1)
   })
 
-  it("says so when no factory sound matches", async () => {
+  it("searches every user folder before it is opened", async () => {
+    const user = userEvent.setup()
+    const backend = await start()
+    await backend.browserAddRoot("/samples/Mine")
+    const list = vi.spyOn(backend, "browserList")
+    render(<BrowserPanel />)
+    await findItem("Drums")
+    await user.type(box(), '"vocal chop" OR snare*')
+    expect(await findItem("Vocal chop.wav")).toBeInTheDocument()
+    expect(await findItem("Snare Tight.wav")).toBeInTheDocument()
+    expect(list.mock.calls).toEqual([["/factory"]])
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "requires the desktop app"
+    )
+  })
+
+  it("explains an empty result and clears every filter", async () => {
     const user = await openKicks()
     await user.type(box(), "zither")
     expect(
-      await screen.findByText("Nothing is named like “zither”")
+      await screen.findByText("No library files match these filters.")
     ).toBeInTheDocument()
     expect(screen.queryAllByRole("treeitem")).toHaveLength(0)
-    expect(
-      screen.getByText(/No factory sound has that in its name/)
-    ).toBeInTheDocument()
-
     await user.click(screen.getByRole("button", { name: "Show everything" }))
     expect(box()).toHaveValue("")
     expect(box()).toHaveFocus()
-    expect(item("Snares")).toBeInTheDocument()
-  })
-
-  it("searches a folder of the user's only where it was opened, and says so whenever it filters", async () => {
-    const user = userEvent.setup()
-    const backend = await start()
-    const list = vi.spyOn(backend, "browserList")
-    await backend.browserAddRoot("/samples/Mine")
-    render(<BrowserPanel />)
-    await findItem("Drums")
-    const note = () => document.querySelector("[data-slot=browser-search-note]")
-    expect(note()).toBeNull()
-
-    // With matches: the note is there, since a sound in a closed folder of
-    // the user's would not be among them.
-    await user.type(box(), "kick")
-    await waitFor(() => expect(itemNames()).toContain("Kick 01.wav"))
-    expect(note()).toHaveTextContent(/looks only in folders you have opened/)
-    expect(note()).toHaveTextContent("The factory sounds are all searched")
-    // The user's folder was not read for the search.
-    expect(
-      list.mock.calls.some(([path]) => path.startsWith("/samples/Mine"))
-    ).toBe(false)
-
-    // With none: the same note, in place of the factory's line.
-    await user.clear(box())
-    await user.type(box(), "zither")
-    expect(
-      await screen.findByText("Nothing is named like “zither”")
-    ).toBeInTheDocument()
-    expect(note()).toHaveTextContent(/looks only in folders you have opened/)
-
-    await user.clear(box())
-    expect(note()).toBeNull()
+    expect(item("Kicks")).toBeInTheDocument()
   })
 
   it("clears with its button and with Escape", async () => {

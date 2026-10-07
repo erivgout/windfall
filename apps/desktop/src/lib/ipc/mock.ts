@@ -47,6 +47,7 @@ import { TransportSim } from "./sim/transport"
 import { createMidiMock, type MockMidiOptions } from "./sim/midi"
 import { createMidiHardwareMock } from "./sim/midi-hardware"
 import { createSlicerMock, type SlicerMockOptions } from "./sim/slicer"
+import { createLibraryMock, storedBrowserRoots } from "./sim/library"
 
 /** Stand-ins for the native file dialogs. Each resolves to null on cancel. */
 export type MockDialogs = {
@@ -266,7 +267,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let transport = new TransportSim(doc.project().patterns[0].id)
   let audioSettings = storedSettings({})
   let engine = describeStatus(audioSettings)
-  let roots: BrowserRoot[] = defaultRoots()
+  let roots: BrowserRoot[] = [...defaultRoots(), ...storedBrowserRoots(storage)]
+  const library = createLibraryMock(storage, () => roots)
   const flpFiles = new Map(Object.entries(options.flpFiles ?? {}))
   let flpSequence = 0
   let flpPending: {
@@ -575,6 +577,18 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    projectSaveNewVersion: async () => {
+      throw new Error("Numbered saves require the desktop app.")
+    },
+    projectArchiveSave: async () => {
+      throw new Error("Portable project archives require the desktop app.")
+    },
+    projectArchiveCancel: async () => {
+      throw new Error("Portable project archives require the desktop app.")
+    },
+    pickProjectArchivePath: async () => {
+      throw new Error("Portable project archives require the desktop app.")
+    },
     ...createMidiHardwareMock(),
     ...createSlicerMock(
       options,
@@ -740,6 +754,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       ipc(() => load(SimDocument.create(starterProject()), null)),
     projectOpen: (openPath) =>
       ipc(() => {
+        if (/\.zip$/i.test(openPath))
+          throw new Error("Portable project archives require the desktop app.")
         const fileText = files()[openPath]
         if (typeof fileText !== "string") {
           throw new Error(
@@ -839,22 +855,39 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       ipc(() => transport.noteOn(channel, key, velocity)),
     auditionNoteOff: (channel, key) =>
       ipc(() => transport.noteOff(channel, key)),
-    previewPlay: (filePath) =>
+    previewPlay: (filePath, browser) =>
       ipc(() => {
+        library.check(filePath, browser)
         sampleInfoFor(roots, filePath)
       }),
     previewStop: () => ipc(() => undefined),
 
     browserRoots: () => ipc(() => roots),
+    librarySearch: (search) => ipc(() => library.search(search)),
+    libraryRefresh: () => ipc(() => library.refresh()),
+    libraryCancel: (generation) => ipc(() => library.cancel(generation)),
+    libraryFile: (path) => ipc(() => library.file(path)),
+    libraryMetadata: (path) => ipc(() => library.metadata(path)),
+    librarySetMetadata: (path, metadata) =>
+      ipc(() => library.setMetadata(path, metadata)),
     browserAddRoot: (rootPath) =>
       ipc(() => {
         const clean = rootPath.replace(/[\\/]+$/, "")
         if (!clean) throw new Error("Choose a folder to add.")
+        if (roots.length >= 128 || clean.length > 4096)
+          throw new Error(
+            "The browser supports at most 128 folders and paths up to 4096 bytes."
+          )
         if (roots.some((root) => root.path === clean)) {
           throw new Error(`"${clean}" is already in the browser.`)
         }
         const name = clean.split(/[\\/]/).pop() ?? clean
-        roots = [...roots, { name, path: clean, kind: "user" }]
+        const next: BrowserRoot[] = [
+          ...roots,
+          { name, path: clean, kind: "user" },
+        ]
+        library.changedRoots(next)
+        roots = next
         return roots
       }),
     browserRemoveRoot: (rootPath) =>
@@ -864,11 +897,17 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         if (root.kind === "factory") {
           throw new Error("The factory library cannot be removed.")
         }
-        roots = roots.filter((item) => item.path !== rootPath)
+        const next = roots.filter((item) => item.path !== rootPath)
+        library.changedRoots(next)
+        roots = next
         return roots
       }),
     browserList: (folderPath) => ipc(() => listFolder(roots, folderPath)),
-    sampleInfo: (filePath) => ipc(() => sampleInfoFor(roots, filePath)),
+    sampleInfo: (filePath, browser) =>
+      ipc(() => {
+        library.check(filePath, browser)
+        return sampleInfoFor(roots, filePath)
+      }),
     prepareClipCommand: (command) => ipc(() => dispatchNow(command)),
     audioEditorOpen: () =>
       Promise.reject(
@@ -896,8 +935,9 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         return sampleInfoFor(roots, sampleFile(asset))
       }),
 
-    addChannelFromFile: (filePath, index) =>
+    addChannelFromFile: (filePath, index, browser) =>
       ipc(() => {
+        library.check(filePath, browser)
         const { name, sampleId, addSample } = sampleCommands(filePath)
         return dispatchNow({
           type: "batch",
@@ -908,8 +948,9 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
           ],
         })
       }),
-    setChannelSampleFromFile: (channel, filePath) =>
+    setChannelSampleFromFile: (channel, filePath, browser) =>
       ipc(() => {
+        library.check(filePath, browser)
         const { sampleId, addSample } = sampleCommands(filePath)
         return dispatchNow({
           type: "batch",
@@ -921,8 +962,9 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         })
       }),
 
-    addAudioClipFromFile: (filePath, place) =>
+    addAudioClipFromFile: (filePath, place, browser) =>
       ipc(() => {
+        library.check(filePath, browser)
         const { name, sampleId, addSample } = sampleCommands(filePath)
         const info = sampleInfoFor(roots, filePath)
         const project = doc.project()
