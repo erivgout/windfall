@@ -241,6 +241,15 @@ impl Drop for WavWriter {
     }
 }
 
+/// Refuses what a WAV file cannot hold, without creating one.
+pub(crate) fn check_layout(
+    sample_rate: u32,
+    channels: u16,
+    format: WavSampleFormat,
+) -> Result<(), CodecError> {
+    Layout::new(sample_rate, channels, format).map(drop)
+}
+
 /// The parts of the header that are known before any audio is written.
 #[derive(Debug, Clone, Copy)]
 struct Layout {
@@ -368,12 +377,12 @@ impl Layout {
 /// Triangular dither from a SplitMix64 generator: no clock and no operating
 /// system randomness, so a given seed always gives the same noise.
 #[derive(Debug, Clone)]
-struct Dither {
+pub(crate) struct Dither {
     state: u64,
 }
 
 impl Dither {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self { state: seed }
     }
 
@@ -398,7 +407,7 @@ impl Dither {
     /// step and clips to the range `-full_scale..full_scale`. The work is
     /// done in 64-bit so that 24-bit output keeps its last bit. NaN becomes
     /// silence.
-    fn quantize(&mut self, sample: f32, full_scale: f64) -> i32 {
+    pub(crate) fn quantize(&mut self, sample: f32, full_scale: f64) -> i32 {
         let dithered = f64::from(sample) * full_scale + self.noise();
         (dithered + 0.5)
             .floor()
