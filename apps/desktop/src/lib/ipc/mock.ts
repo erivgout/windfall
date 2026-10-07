@@ -575,6 +575,18 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    projectSaveNewVersion: async () => {
+      throw new Error("Numbered saves require the desktop app.")
+    },
+    projectArchiveSave: async () => {
+      throw new Error("Portable project archives require the desktop app.")
+    },
+    projectArchiveCancel: async () => {
+      throw new Error("Portable project archives require the desktop app.")
+    },
+    pickProjectArchivePath: async () => {
+      throw new Error("Portable project archives require the desktop app.")
+    },
     ...createMidiHardwareMock(),
     ...createSlicerMock(
       options,
@@ -740,6 +752,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       ipc(() => load(SimDocument.create(starterProject()), null)),
     projectOpen: (openPath) =>
       ipc(() => {
+        if (/\.zip$/i.test(openPath))
+          throw new Error("Portable project archives require the desktop app.")
         const fileText = files()[openPath]
         if (typeof fileText !== "string") {
           throw new Error(

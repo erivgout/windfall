@@ -122,6 +122,12 @@ export interface Backend {
   projectOpen(path: string): Promise<DocumentSnapshot>
   /** Resolves to the saved path. Rejects when there is no path yet. */
   projectSave(path?: string): Promise<string>
+  /** Native atomic numbered save. An unsaved project supplies a base path. */
+  projectSaveNewVersion(path?: string): Promise<string>
+  /** Native portable ZIP; rejects all missing audio and existing targets. */
+  projectArchiveSave(path: string): Promise<string>
+  projectArchiveCancel(): Promise<void>
+  pickProjectArchivePath(suggestedName: string): Promise<string | null>
   recentProjects(): Promise<string[]>
   midiPreview(
     path: string,

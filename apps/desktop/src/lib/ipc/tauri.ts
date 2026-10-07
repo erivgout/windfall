@@ -103,6 +103,15 @@ export function createTauriBackend(): Backend {
     projectNew: () => call("project_new"),
     projectOpen: (path) => call("project_open", { path }),
     projectSave: (path) => call("project_save", { path }),
+    projectSaveNewVersion: (path) => call("project_save_new_version", { path }),
+    projectArchiveSave: (path) => call("project_archive_save", { path }),
+    projectArchiveCancel: () => call("project_archive_cancel"),
+    pickProjectArchivePath: (suggestedName) =>
+      save({
+        title: "Export portable project archive (choose a new filename)",
+        defaultPath: `${suggestedName}.zip`,
+        filters: [{ name: "Windfall project archive", extensions: ["zip"] }],
+      }),
     recentProjects: () => call("recent_projects"),
     midiPreview: (path, options) => call("midi_preview", { path, options }),
     importMidi: (token) => call("import_midi", { token }),
@@ -190,7 +199,12 @@ export function createTauriBackend(): Backend {
         title: "Open project",
         multiple: false,
         directory: false,
-        filters: PROJECT_FILTER,
+        filters: [
+          {
+            name: "Windfall project or archive",
+            extensions: ["windfall", "zip"],
+          },
+        ],
       })
       return typeof picked === "string" ? picked : null
     },

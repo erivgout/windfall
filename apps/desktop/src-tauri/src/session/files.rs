@@ -4,6 +4,10 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use windfall_ipc::{PlayMode, TransportPatch};
 use windfall_project::file::{self, DEFAULT_BACKUP_COUNT, FILE_EXTENSION};
@@ -44,6 +48,9 @@ pub(super) struct Replacement {
     generation: u64,
     /// How many edits that document had seen.
     edits: u64,
+    /// Archive cancellation is checked at the final installation boundary,
+    /// after slow sample/plugin preparation. Ordinary replacements omit it.
+    pub(super) cancelled: Option<Arc<AtomicBool>>,
 }
 
 /// Why a project that was ready was not swapped in after all.
@@ -55,6 +62,7 @@ pub(super) enum Refusal {
     Recording,
     /// The document was edited after the request was made.
     Edited,
+    Cancelled,
 }
 
 impl Refusal {
@@ -62,6 +70,7 @@ impl Refusal {
     /// `"song.windfall" was not opened`.
     pub(super) fn message(self, what: &str) -> String {
         match self {
+            Refusal::Cancelled => "Project archive cancelled.".into(),
             Refusal::Recording => "Stop or cancel recording before replacing the project.".into(),
             Refusal::Superseded => {
                 format!("{what} because another project was opened or started after it.")
@@ -110,6 +119,12 @@ impl Session {
     /// into the `Backup` folder and never replaces the project file unless
     /// the user picks it. A warning says so when the backup opens.
     pub fn project_open(&self, path: &str) -> Result<DocumentSnapshot, String> {
+        if Path::new(path)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+        {
+            return self.project_archive_open(path);
+        }
         drop(self.recording_idle()?);
         let file = paths::absolute(path)?;
         let ticket = self.begin_replacement();
@@ -197,6 +212,14 @@ impl Session {
     /// refused with [`EDITED_WHILE_MOVING`]: the edits rule out starting
     /// the history over.
     pub fn project_save(&self, path: Option<&str>) -> Result<String, String> {
+        self.project_save_mode(path, false)
+    }
+
+    pub(super) fn project_save_mode(
+        &self,
+        path: Option<&str>,
+        numbered: bool,
+    ) -> Result<String, String> {
         drop(self.recording_idle()?);
         let chosen = path
             .map(|path| paths::absolute(path).map(with_project_extension))
@@ -207,7 +230,7 @@ impl Session {
         // never land on top of a newer one.
         let saving = lock(&self.inner.save);
         drop(self.recording_idle()?);
-        let (mut project, played, target, previous_dir, edits, generation, plugin_revision) = {
+        let (mut project, played, mut target, previous_dir, edits, generation, plugin_revision) = {
             let state = self.state();
             let target = match chosen {
                 Some(target) => target,
@@ -238,7 +261,11 @@ impl Session {
             (Some(from), Some(to)) if moved => carry_samples(&mut project, from, to)?,
             _ => Vec::new(),
         };
-        file::save_with(&project, Some(&played), &target).map_err(sentence)?;
+        if numbered {
+            target = super::versions::write(&project, &played, &target)?;
+        } else {
+            file::save_with(&project, Some(&played), &target).map_err(sentence)?;
+        }
 
         let retry_samples = {
             let mut state = self.state();
@@ -329,7 +356,7 @@ impl Session {
     }
 
     /// How the project is being played right now, for its file to keep.
-    fn played(&self) -> ProjectSession {
+    pub(super) fn played(&self) -> ProjectSession {
         let transport = self.controller().transport();
         ProjectSession {
             mode: transport.mode,
@@ -347,6 +374,7 @@ impl Session {
             request: state.replacements,
             generation: state.generation,
             edits: state.edits,
+            cancelled: None,
         }
     }
 
@@ -378,8 +406,19 @@ impl Session {
         }
         let prepared =
             windfall_engine::Controller::prepare_project(document.project(), &decoded.pool);
+        #[cfg(test)]
+        if ticket.cancelled.is_some() {
+            self.pause("archive:install");
+        }
         let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
         let mut state = self.state();
+        if ticket
+            .cancelled
+            .as_ref()
+            .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+        {
+            return Err(Refusal::Cancelled);
+        }
         if state.replacements != ticket.request || state.generation != ticket.generation {
             return Err(Refusal::Superseded);
         }

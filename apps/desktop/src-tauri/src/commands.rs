@@ -146,6 +146,13 @@ async fn project_open(
     path: String,
 ) -> Result<DocumentSnapshot, String> {
     let session = session.inner().clone();
+    if std::path::Path::new(&path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+    {
+        let job = session.archive_job()?;
+        return blocking(move || session.project_archive_open_with(&path, job)).await;
+    }
     blocking(move || session.project_open(&path)).await
 }
 
@@ -172,6 +179,27 @@ fn flp_cancel(session: State<'_, Session>, token: u64) {
 async fn project_save(session: State<'_, Session>, path: Option<String>) -> Result<String, String> {
     let session = session.inner().clone();
     blocking(move || session.project_save(path.as_deref())).await
+}
+
+#[tauri::command]
+async fn project_save_new_version(
+    session: State<'_, Session>,
+    path: Option<String>,
+) -> Result<String, String> {
+    let session = session.inner().clone();
+    blocking(move || session.project_save_new_version(path.as_deref())).await
+}
+
+#[tauri::command]
+async fn project_archive_save(session: State<'_, Session>, path: String) -> Result<String, String> {
+    let session = session.inner().clone();
+    let job = session.archive_job()?;
+    blocking(move || session.project_archive_save_with(&path, job)).await
+}
+
+#[tauri::command]
+fn project_archive_cancel(session: State<'_, Session>) {
+    session.project_archive_cancel();
 }
 
 #[tauri::command]
@@ -523,6 +551,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         flp_open,
         flp_cancel,
         project_save,
+        project_save_new_version,
+        project_archive_save,
+        project_archive_cancel,
         recent_projects,
         transport_play,
         transport_stop,

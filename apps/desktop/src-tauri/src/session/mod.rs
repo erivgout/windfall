@@ -57,6 +57,7 @@
 //! lock held and then touches the document or the sample pool compares it
 //! first and gives up if another document has taken its place.
 
+mod archive;
 mod audio;
 mod audio_editor;
 mod autosave;
@@ -75,6 +76,7 @@ mod slicer;
 #[cfg(test)]
 mod tests;
 mod transport;
+mod versions;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -150,6 +152,7 @@ impl WeakSession {
 }
 
 struct Inner {
+    archive_job: Mutex<Option<Arc<AtomicBool>>>,
     midi_hardware: Mutex<Option<Arc<windfall_engine::midi_hardware::Runtime>>>,
     midi_configuring: Mutex<()>,
     /// Serializes editor workers and retains at most one bounded clip view.
@@ -314,6 +317,7 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                archive_job: Mutex::new(None),
                 midi_hardware: Mutex::new(None),
                 midi_configuring: Mutex::new(()),
                 audio_editor: Mutex::new(audio_editor::Editor::default()),
