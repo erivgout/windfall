@@ -2,6 +2,9 @@
 mod runtime;
 pub use runtime::Runtime;
 pub(crate) use runtime::binding_identity;
+#[cfg(all(test, windows))]
+pub(crate) use runtime::ownership_tests::fixture as vst3_fixture;
+pub(crate) use runtime::{PendingUpdate, Update};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -23,6 +26,12 @@ pub struct PluginManager {
     retry_requested: std::sync::atomic::AtomicBool,
 }
 impl PluginManager {
+    #[cfg(all(test, windows))]
+    pub(crate) fn fixture_runtime(folder: &Path, runtime: Arc<Runtime>) -> Arc<Self> {
+        let mut manager = Self::new(folder).unwrap();
+        Arc::get_mut(&mut manager).unwrap().runtime = runtime;
+        manager
+    }
     #[cfg(all(test, windows))]
     pub(crate) fn fixture(folder: &Path, file: &Path, scanner: &Path) -> Arc<Self> {
         let manager = Self::new(folder).unwrap();
@@ -90,6 +99,8 @@ impl PluginManager {
         std::thread::spawn(move || {
             let mut pending: Vec<(u64, u64, u64, windfall_project::Command, Option<u64>)> =
                 Vec::new();
+            let mut captures: Vec<runtime::PendingUpdate> = Vec::new();
+            let mut capture_retry = std::time::Instant::now();
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 let Some(manager) = manager.upgrade() else {
@@ -105,7 +116,7 @@ impl PluginManager {
                     break;
                 };
                 for update in manager.runtime.drain() {
-                    match update.update {
+                    match update.update.clone() {
                         runtime::Update::Parameter {
                             target,
                             id,
@@ -121,20 +132,9 @@ impl PluginManager {
                                 Some(gesture),
                             ));
                         }
-                        runtime::Update::State { target, state } => {
-                            pending.retain(|(_, _, _, command, _)| !matches!(command, windfall_project::Command::SetPluginState { target: before, .. } if *before == target));
-                            pending.push((
-                                update.revision,
-                                update.token,
-                                update.binding,
-                                windfall_project::Command::SetPluginState { target, state },
-                                None,
-                            ));
-                        }
-                        runtime::Update::Restart => {
-                            manager
-                                .retry_requested
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        runtime::Update::Capture { .. } => {
+                            captures.retain(|before| before.token != update.token);
+                            captures.push(update);
                         }
                     }
                 }
@@ -160,13 +160,53 @@ impl PluginManager {
                         }
                     }
                 });
+                // Parameters are reconciled before taking opaque state. A take
+                // retains these identity-bound requests for a later worker tick.
+                if pending.is_empty() && std::time::Instant::now() >= capture_retry {
+                    captures.retain(|request| {
+                        match session.capture_plugin_update(&manager.runtime, request.clone()) {
+                            Ok(restart) => {
+                                if restart {
+                                    manager
+                                        .retry_requested
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
+                                false
+                            }
+                            Err(error) => {
+                                manager
+                                    .status
+                                    .lock()
+                                    .unwrap_or_else(|error| error.into_inner())
+                                    .error =
+                                    Some(format!("Native plugin state is waiting: {error}"));
+                                capture_retry = std::time::Instant::now()
+                                    + std::time::Duration::from_millis(250);
+                                true
+                            }
+                        }
+                    });
+                }
                 if pending.len() > 4096 {
                     pending.drain(..pending.len() - 4096);
                     manager.status.lock().unwrap_or_else(|error| error.into_inner()).error = Some("Too many pending native plugin edits; reopen the plugin to reconcile its state".into());
                 }
+                if pending.is_empty() && captures.is_empty() {
+                    let mut status = manager
+                        .status
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if status.error.as_ref().is_some_and(|error| {
+                        error.starts_with("Native plugin edit is waiting:")
+                            || error.starts_with("Native plugin state is waiting:")
+                    }) {
+                        status.error = None;
+                    }
+                }
                 // Preserve native edits before replacing their current owner. A
                 // take can refuse refresh; one flag retains the request until idle.
                 if pending.is_empty()
+                    && captures.is_empty()
                     && manager
                         .retry_requested
                         .swap(false, std::sync::atomic::Ordering::Relaxed)
@@ -202,11 +242,11 @@ impl PluginManager {
                 name: plugin.descriptor.name.clone(),
                 vendor: plugin.descriptor.vendor.clone(),
                 instrument: plugin.descriptor.kind == PluginKind::Instrument,
-                usable: plugin.is_usable() && plugin.descriptor.format == PluginFormat::Clap,
-                error: plugin.failure.as_ref().map(|failure| failure.message.clone()).or_else(|| {
-                    (plugin.descriptor.format == PluginFormat::Vst3)
-                        .then(|| "VST3 loading is unavailable while safe desktop state saving is completed".into())
-                }),
+                usable: plugin.is_usable(),
+                error: plugin
+                    .failure
+                    .as_ref()
+                    .map(|failure| failure.message.clone()),
             })
             .collect();
         state.blocked = catalog
@@ -215,7 +255,11 @@ impl PluginManager {
             .take(4096)
             .map(|blocked| PluginEntry {
                 path: blocked.path.to_string_lossy().into_owned(),
-                format: "clap".into(),
+                format: match PluginFormat::of(&blocked.path) {
+                    Some(PluginFormat::Vst3) => "vst3",
+                    _ => "clap",
+                }
+                .into(),
                 id: blocked
                     .plugin
                     .as_ref()

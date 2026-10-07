@@ -21,6 +21,9 @@ pub enum PluginError {
     /// The plugin refused to be activated.
     #[error("the plugin could not be activated: {0}")]
     Activate(String),
+    /// Native lifecycle refused to establish an inactive processor.
+    #[error("the plugin could not be deactivated: {0}")]
+    Deactivate(String),
     /// The plugin is active already and has a processor out.
     #[error("the plugin is already active")]
     AlreadyActive,
@@ -33,4 +36,20 @@ pub enum PluginError {
     /// The host cannot run plugins of this format in this build.
     #[error("{0} plugins cannot be run by this build")]
     Unsupported(&'static str),
+}
+
+/// A refused lifecycle transition retains the exact audio half for recovery.
+pub struct DeactivationError<T> {
+    pub error: PluginError,
+    pub returned: T,
+}
+impl<T> std::fmt::Debug for DeactivationError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl<T> std::fmt::Display for DeactivationError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
 }

@@ -1,11 +1,10 @@
-//! Real VST3 fixtures through the desktop native owner. Production additions
-//! stay disabled: these tests exercise the ownership seam, not enablement.
+//! Real VST3 fixtures through the production desktop native owner.
 use super::*;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use windfall_project::{Command, Document, EffectId, TrackId};
 
-fn fixture(index: usize) -> (Arc<Runtime>, PluginBinding) {
+pub(crate) fn fixture(index: usize) -> (Arc<Runtime>, PluginBinding) {
     static FILE: OnceLock<PathBuf> = OnceLock::new();
     let path = FILE.get_or_init(|| {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -29,14 +28,6 @@ fn fixture(index: usize) -> (Arc<Runtime>, PluginBinding) {
     let module = PluginHost::windfall().load(path).unwrap();
     let descriptor = module.descriptors()[index].clone();
     let runtime = Arc::new(Runtime::new().unwrap());
-    // This capability exists only in cfg(test); it cannot be enabled through
-    // IPC, preferences, a scanned catalog, or a saved production project.
-    runtime
-        .call(|owner| {
-            owner.vst3_fixture = true;
-            Ok(())
-        })
-        .unwrap();
     runtime.approve(&[windfall_ipc::PluginEntry {
         path: path.to_string_lossy().into_owned(),
         id: descriptor.id.clone(),
@@ -49,8 +40,14 @@ fn fixture(index: usize) -> (Arc<Runtime>, PluginBinding) {
     }]);
     let binding = runtime
         .discover(PluginBinding {
-            target: PluginTarget::Effect {
-                effect: EffectId(900),
+            target: if index == 2 {
+                PluginTarget::Instrument {
+                    channel: windfall_project::ChannelId(900),
+                }
+            } else {
+                PluginTarget::Effect {
+                    effect: EffectId(900),
+                }
             },
             format: "vst3".into(),
             path: path.to_string_lossy().into_owned(),
@@ -93,6 +90,596 @@ fn capture(
     let result = task.join().unwrap();
     audio.control_boundary();
     result
+}
+
+/// Hold exclusive ownership off audio until the test has delivered its edits.
+fn pause_adapter(runtime: &Runtime, audio: &mut dyn HostedEffect) -> mpsc::Sender<()> {
+    let (ready, ready_rx) = mpsc::channel();
+    let (resume, resume_rx) = mpsc::channel();
+    let token = runtime
+        .selected_token(PluginTarget::Effect {
+            effect: EffectId(900),
+        })
+        .or_else(|| {
+            selected(
+                &runtime.selection,
+                PluginTarget::Instrument {
+                    channel: windfall_project::ChannelId(900),
+                },
+            )
+        })
+        .unwrap();
+    runtime
+        .jobs
+        .send(Box::new(move |owner| {
+            let record = owner.instances.get_mut(&token).unwrap();
+            record.ownership.request();
+            let adapter = loop {
+                if let Some(adapter) = record.ownership.take_returned() {
+                    break adapter;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            record.release(adapter).unwrap();
+            ready.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            record.restore().unwrap();
+        }))
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        audio.control_boundary();
+        if ready_rx.try_recv().is_ok() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    resume
+}
+
+#[test]
+fn paused_effect_retains_the_latest_parameter_without_an_engine_resend() {
+    let (runtime, binding) = fixture(0);
+    let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    let resume = pause_adapter(&runtime, audio.as_mut());
+    audio.set_param(7, 0.2);
+    audio.set_param(7, 0.8);
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| audio.process(&mut left, &mut right)),
+        0
+    );
+    assert_eq!(left, [1.0; 64], "paused effect is dry");
+    resume.send(()).unwrap();
+    runtime.call(|_| Ok(())).unwrap();
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.control_boundary();
+            audio.process(&mut left, &mut right);
+        }),
+        0
+    );
+    assert_eq!(left, [1.6; 64]);
+}
+
+#[test]
+fn paused_instrument_reconstructs_only_the_latest_held_keys() {
+    let (runtime, mut binding) = fixture(2);
+    binding.target = PluginTarget::Instrument {
+        channel: windfall_project::ChannelId(900),
+    };
+    let mut audio = runtime.instrument(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    audio.note_on(60, 0.9);
+    let mut left = [0.0; 64];
+    let mut right = left;
+    audio.process(&mut left, &mut right);
+    for mode in 0..3 {
+        let resume = pause_adapter(&runtime, audio.as_mut());
+        audio.note_off(60);
+        audio.note_on(62, 0.4);
+        audio.note_on(65, 0.7);
+        audio.note_off(62);
+        if mode == 1 {
+            audio.all_notes_off();
+        }
+        audio.process(&mut left, &mut right);
+        assert_eq!(left, [0.0; 64], "paused instrument is silent");
+        resume.send(()).unwrap();
+        runtime.call(|_| Ok(())).unwrap();
+        audio.control_boundary();
+        if mode == 2 {
+            audio.note_off(65);
+        } // release after boundary, before sound
+        audio.process(&mut left, &mut right);
+        if mode == 0 {
+            assert_eq!(audio.voices(), 1);
+            assert!(left.iter().any(|sample| sample.abs() > 0.01));
+        } else {
+            assert_eq!(audio.voices(), 0);
+            assert_eq!(left, [0.0; 64], "release/panic cannot resurrect keys");
+        }
+    }
+}
+
+#[test]
+fn engine_cache_live_hardware_epochs_and_stop_are_reconciled_during_pause() {
+    let (runtime, binding) = fixture(2);
+    let mut document = Document::new(Project::new("Paused engine events"));
+    document
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    let channel = document.project().channels[0].id;
+    let target = PluginTarget::Instrument { channel };
+    let mut pool = windfall_engine::SamplePool::new();
+    pool.set_plugin_factory(runtime.clone());
+    let (mut processor, controller) = windfall_engine::Processor::new(48_000);
+    controller.set_project(document.project(), &pool);
+    let mut out = [0.0; 256];
+    controller.note_on(channel, 60, 0.8);
+    processor.process(&mut out);
+    for mode in 0..3 {
+        let token = runtime.selected_token(target).unwrap();
+        let (ready, ready_rx) = mpsc::channel();
+        let (resume, resume_rx) = mpsc::channel();
+        runtime
+            .jobs
+            .send(Box::new(move |owner| {
+                let record = owner.instances.get_mut(&token).unwrap();
+                record.ownership.request();
+                let adapter = loop {
+                    if let Some(adapter) = record.ownership.take_returned() {
+                        break adapter;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                record.release(adapter).unwrap();
+                ready.send(()).unwrap();
+                resume_rx.recv().unwrap();
+                record.restore().unwrap();
+            }))
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            assert_eq!(
+                crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+                0
+            );
+            if ready_rx.try_recv().is_ok() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        document
+            .dispatch(
+                Command::SetPluginParam {
+                    target,
+                    id: 7,
+                    value: 0.2 + mode as f32 * 0.1,
+                },
+                None,
+            )
+            .unwrap();
+        controller.set_project(document.project(), &pool);
+        controller.note_off(channel, 60);
+        let epoch = controller.hardware_epoch();
+        assert!(controller.hardware_note(epoch, channel, 62, 100));
+        controller.note_on(channel, 65, 0.7);
+        processor.process(&mut out);
+        assert!(out.iter().all(|sample| *sample == 0.0));
+        controller.panic_hardware();
+        assert!(!controller.hardware_note(epoch, channel, 62, 100));
+        if mode == 1 {
+            controller.note_off(channel, 65);
+        }
+        if mode == 2 {
+            controller.stop();
+        }
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        resume.send(()).unwrap();
+        runtime.call(|_| Ok(())).unwrap();
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        if mode == 0 {
+            assert!(out.iter().any(|sample| sample.abs() > 0.01));
+            assert_eq!(
+                controller.frame().voices,
+                1,
+                "hardware panic preserves UI ownership"
+            );
+            let captured = runtime
+                .call(move |owner| {
+                    Ok(owner
+                        .instances
+                        .get_mut(&token)
+                        .unwrap()
+                        .plugin
+                        .param_value(7))
+                })
+                .unwrap();
+            assert_eq!(
+                captured,
+                Some(0.2_f32 as f64),
+                "cached final parameter must reach native without resend"
+            );
+        } else {
+            // Drain only the fixed PDC buffers after release/stop.
+            for _ in 0..8 {
+                processor.process(&mut out);
+            }
+            assert_eq!(controller.frame().voices, 0);
+            assert!(out.iter().all(|sample| *sample == 0.0));
+        }
+    }
+}
+
+#[test]
+fn song_automation_and_sequenced_expiry_reconcile_before_resumed_processing() {
+    use windfall_project::{
+        AutomationId, AutomationPoint, AutomationTarget, ClipContent, ClipInit, NoteInit,
+    };
+    let (runtime, binding) = fixture(2);
+    let mut document = Document::new(Project::new("Paused song automation"));
+    document
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    let channel = document.project().channels[0].id;
+    let pattern = document.project().patterns[0].id;
+    let target = PluginTarget::Instrument { channel };
+    document
+        .dispatch(
+            Command::AddNotes {
+                pattern,
+                channel,
+                notes: vec![NoteInit {
+                    start: 0,
+                    length: 24,
+                    key: 60,
+                    velocity: Some(0.8),
+                    pan: None,
+                }],
+            },
+            None,
+        )
+        .unwrap();
+    document
+        .dispatch(
+            Command::AddPlaylistTrack {
+                name: None,
+                index: None,
+            },
+            None,
+        )
+        .unwrap();
+    let track = document.project().playlist.tracks[0].id;
+    let point = |tick, value| AutomationPoint {
+        tick,
+        value,
+        curve: 0.0,
+        hold: true,
+    };
+    let added = document
+        .dispatch(
+            Command::AddAutomation {
+                name: None,
+                target: AutomationTarget::InstrumentParam { channel, param: 0 },
+                points: Some(vec![point(0, 0.25), point(48, 0.8)]),
+            },
+            None,
+        )
+        .unwrap();
+    let automation = AutomationId(added.created[0]);
+    document
+        .dispatch(
+            Command::AddClips {
+                clips: vec![
+                    ClipInit {
+                        track,
+                        start: 0,
+                        length: Some(960),
+                        offset: None,
+                        muted: None,
+                        content: ClipContent::Pattern { pattern },
+                    },
+                    ClipInit {
+                        track,
+                        start: 0,
+                        length: Some(960),
+                        offset: None,
+                        muted: None,
+                        content: ClipContent::Automation { automation },
+                    },
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    let mut pool = windfall_engine::SamplePool::new();
+    pool.set_plugin_factory(runtime.clone());
+    let (mut processor, controller) = windfall_engine::Processor::new(48_000);
+    controller.set_project(document.project(), &pool);
+    controller.set_transport(windfall_ipc::TransportPatch {
+        mode: Some(windfall_ipc::PlayMode::Song),
+        ..Default::default()
+    });
+    controller.play();
+    let mut out = [0.0; 256];
+    processor.process(&mut out);
+    let token = runtime.selected_token(target).unwrap();
+    let (ready, ready_rx) = mpsc::channel();
+    let (resume, resume_rx) = mpsc::channel();
+    runtime
+        .jobs
+        .send(Box::new(move |owner| {
+            let record = owner.instances.get_mut(&token).unwrap();
+            record.ownership.request();
+            let adapter = loop {
+                if let Some(adapter) = record.ownership.take_returned() {
+                    break adapter;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            record.release(adapter).unwrap();
+            ready.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            record.restore().unwrap();
+        }))
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        if ready_rx.try_recv().is_ok() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Pass the sequenced note end and the automation corner while native
+    // ownership is absent. Engine caches will not send this held value again.
+    for _ in 0..20 {
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+    }
+    assert!(
+        controller
+            .frame()
+            .automated
+            .iter()
+            .any(|value| value.automation == automation && value.value == 0.8)
+    );
+    resume.send(()).unwrap();
+    runtime.call(|_| Ok(())).unwrap();
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+        0
+    );
+    for _ in 0..8 {
+        processor.process(&mut out);
+    }
+    assert_eq!(
+        controller.frame().voices,
+        0,
+        "expired sequencer notes must not be replayed"
+    );
+    assert!(out.iter().all(|sample| *sample == 0.0));
+    assert_eq!(
+        runtime
+            .call(move |owner| Ok(owner
+                .instances
+                .get_mut(&token)
+                .unwrap()
+                .plugin
+                .param_value(7)))
+            .unwrap(),
+        Some(0.8_f32 as f64)
+    );
+}
+
+#[test]
+fn state_replacement_preserves_current_key_owners_and_removal_silences_them() {
+    let (runtime, binding) = fixture(2);
+    let mut document = Document::new(Project::new("Native state replacement"));
+    document
+        .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+        .unwrap();
+    let channel = document.project().channels[0].id;
+    let target = PluginTarget::Instrument { channel };
+    let mut pool = windfall_engine::SamplePool::new();
+    pool.set_plugin_factory(runtime.clone());
+    let (mut processor, controller) = windfall_engine::Processor::new(48_000);
+    controller.set_project(document.project(), &pool);
+    controller.note_on(channel, 60, 0.7);
+    let epoch = controller.hardware_epoch();
+    assert!(controller.hardware_note(epoch, channel, 65, 100));
+    let mut out = [0.0; 256];
+    processor.process(&mut out);
+    let before = runtime.selected_token(target).unwrap();
+    // Force a native replacement as a dirty state/rescan refresh does.
+    runtime.retry();
+    controller.set_project(document.project(), &pool);
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+        0
+    );
+    assert_ne!(runtime.selected_token(target), Some(before));
+    assert_eq!(controller.frame().voices, 2);
+    controller.panic_hardware();
+    processor.process(&mut out);
+    assert_eq!(controller.frame().voices, 1);
+    controller.note_off(channel, 60);
+    processor.process(&mut out);
+    assert_eq!(controller.frame().voices, 0);
+    runtime.retry();
+    controller.set_project(document.project(), &pool);
+    processor.process(&mut out);
+    assert_eq!(
+        controller.frame().voices,
+        0,
+        "replacement must not revive released keys"
+    );
+    controller.note_on(channel, 67, 0.8);
+    processor.process(&mut out);
+    document
+        .dispatch(Command::RemoveChannel { id: channel }, None)
+        .unwrap();
+    controller.set_project(document.project(), &pool);
+    for _ in 0..40 {
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+    }
+    assert_eq!(controller.frame().voices, 0);
+    assert!(out.iter().all(|sample| *sample == 0.0));
+}
+
+#[test]
+fn capture_refusal_returns_the_exact_active_adapter_and_owner_retirement_cleans_up() {
+    for (gain, recover) in [(0.5, false), (0.5, true), (0.75, false), (0.75, true)] {
+        let (runtime, binding) = fixture(6);
+        let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+        audio.transport(transport());
+        audio.set_param(7, gain);
+        audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+        let token = runtime.selected_token(binding.target).unwrap();
+        let mut project = Project::new("Refusal");
+        project.plugins.push(binding.clone());
+        let error = capture(&runtime, project, audio.as_mut()).unwrap_err();
+        assert!(
+            error.contains(if gain == 0.75 {
+                "setProcessing(false) refused"
+            } else {
+                "setActive(false) refused"
+            }),
+            "{error}"
+        );
+        runtime
+            .call(move |owner| {
+                assert!(owner.instances[&token].plugin.is_active());
+                Ok(())
+            })
+            .unwrap();
+        if recover {
+            audio.set_param(7, 0.25);
+        }
+        let mut left = [1.0; 64];
+        let mut right = left;
+        audio.process(&mut left, &mut right);
+        assert_eq!(left, [if recover { 0.5 } else { gain * 2.0 }; 64]);
+        drop(audio);
+        runtime
+            .call(|owner| {
+                assert!(owner.instances.is_empty());
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn recovery_failure_stays_dry_and_can_be_retired_on_its_owner() {
+    let (runtime, binding) = fixture(8);
+    let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    let mut project = Project::new("Recovery failure");
+    project.plugins.push(binding);
+    let error = capture(&runtime, project, audio.as_mut()).unwrap_err();
+    assert!(error.contains("activated"), "{error}");
+    let mut left = [0.25; 64];
+    let mut right = left;
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.set_param(7, 0.1);
+            audio.control_boundary();
+            audio.process(&mut left, &mut right);
+        }),
+        0
+    );
+    assert_eq!(left, [0.25; 64]);
+    drop(audio);
+    runtime
+        .call(|owner| {
+            assert!(owner.instances.is_empty());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn queued_timeout_cancels_execution_and_running_timeout_joins_recovery() {
+    #[derive(Debug)]
+    struct OwnerResult(std::thread::ThreadId, mpsc::Sender<()>);
+    impl Drop for OwnerResult {
+        fn drop(&mut self) {
+            assert_eq!(
+                std::thread::current().id(),
+                self.0,
+                "cancelled results must stay on their creating owner"
+            );
+            self.1.send(()).unwrap();
+        }
+    }
+    let runtime = Runtime::new().unwrap();
+    let (release, blocked) = mpsc::channel();
+    let (started, wait_started) = mpsc::channel();
+    runtime
+        .jobs
+        .send(Box::new(move |_| {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+        }))
+        .unwrap();
+    wait_started.recv().unwrap();
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let check = ran.clone();
+    assert!(
+        runtime
+            .call_with_lifetime(Duration::from_millis(5), move |_, _| {
+                check.store(true, std::sync::atomic::Ordering::Release);
+                Ok(())
+            })
+            .is_err()
+    );
+    release.send(()).unwrap();
+    runtime.call(|_| Ok(())).unwrap();
+    assert!(!ran.load(std::sync::atomic::Ordering::Acquire));
+    let (started, wait_started) = mpsc::channel();
+    let (release, blocked) = mpsc::channel();
+    let handle = runtime.clone();
+    let (dropped, wait_dropped) = mpsc::channel();
+    let task = std::thread::spawn(move || {
+        handle.call_with_lifetime(Duration::from_millis(5), move |_, lifetime| {
+            started.send(()).unwrap();
+            while !lifetime.cancelled() {
+                std::thread::yield_now();
+            }
+            blocked.recv().unwrap(); // native work/recovery still owns the exclusion
+            Ok(OwnerResult(std::thread::current().id(), dropped))
+        })
+    });
+    wait_started.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(
+        !task.is_finished(),
+        "a running native job cannot outlive its caller's guard"
+    );
+    release.send(()).unwrap();
+    assert!(task.join().unwrap().unwrap_err().contains("cancelled"));
+    wait_dropped.recv_timeout(Duration::from_secs(1)).unwrap();
 }
 
 #[test]
@@ -358,9 +945,15 @@ fn vst3_speculation_revision_binding_and_failed_units_keep_their_roles() {
 }
 
 #[test]
-fn production_vst3_gate_survives_a_successful_scan_and_saved_binding() {
+fn production_vst3_requires_scanned_file_identity_format_id_and_role() {
     let (_, binding) = fixture(0);
     let runtime = Runtime::new().unwrap();
+    assert!(
+        runtime
+            .discover(binding.clone())
+            .unwrap_err()
+            .contains("unscanned")
+    );
     runtime.approve(&[windfall_ipc::PluginEntry {
         path: binding.path.clone(),
         id: binding.id.clone(),
@@ -371,10 +964,23 @@ fn production_vst3_gate_survives_a_successful_scan_and_saved_binding() {
         usable: true,
         error: None,
     }]);
+    assert!(runtime.discover(binding.clone()).is_ok());
+    let mut wrong = binding.clone();
+    wrong.format = "clap".into();
     assert!(
         runtime
-            .discover(binding)
+            .discover(wrong)
             .unwrap_err()
-            .contains("not enabled")
+            .contains("declared format")
     );
+    let mut wrong = binding.clone();
+    wrong.target = PluginTarget::Instrument {
+        channel: windfall_project::ChannelId(900),
+    };
+    assert!(runtime.discover(wrong).unwrap_err().contains("role"));
+    let mut wrong = binding.clone();
+    wrong.id = "ffffffffffffffffffffffffffffffff".into();
+    assert!(runtime.discover(wrong).unwrap_err().contains("unscanned"));
+    runtime.approve(&[]);
+    assert!(runtime.discover(binding).unwrap_err().contains("unscanned"));
 }

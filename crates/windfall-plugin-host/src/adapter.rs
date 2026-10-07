@@ -196,34 +196,39 @@ impl PluginInstrument {
     /// Starts a note on the first frame of the next block. `key` is a MIDI
     /// key number and `velocity` runs from 0 to 1. Zero or less is taken as
     /// a note-off.
-    pub fn note_on(&mut self, key: u8, velocity: f32) {
+    pub fn note_on(&mut self, key: u8, velocity: f32) -> bool {
         if velocity <= 0.0 {
             return self.note_off(key);
         }
         let key = key.min(127);
-        if self.processor.note_on(0, key, velocity) && !self.held[usize::from(key)] {
+        if !self.processor.note_on(0, key, velocity) {
+            return false;
+        }
+        if !self.held[usize::from(key)] {
             self.held[usize::from(key)] = true;
             self.held_count += 1;
         }
+        true
     }
 
     /// Lets go of a note on the first frame of the next block.
-    pub fn note_off(&mut self, key: u8) {
+    pub fn note_off(&mut self, key: u8) -> bool {
         let key = key.min(127);
-        // The processor reserves bounded space for this immediate release,
-        // so ownership can be cleared even when ordinary admission is full.
+        // Reserved immediate releases remain guaranteed under saturation.
         self.processor.release_note(key);
         if self.held[usize::from(key)] {
             self.held[usize::from(key)] = false;
             self.held_count -= 1;
         }
+        true
     }
 
     /// Stops every note without its release, as when the transport stops.
-    pub fn all_notes_off(&mut self) {
+    pub fn all_notes_off(&mut self) -> bool {
         self.processor.release_all_notes();
         self.held = [false; KEYS];
         self.held_count = 0;
+        true
     }
 
     /// Writes the next block of output, replacing whatever the two slices
@@ -307,13 +312,45 @@ impl PluginInstance {
 
     /// Takes an effect back from the audio thread and deactivates the
     /// plugin.
-    pub fn release_effect(&mut self, effect: PluginEffect) {
-        self.deactivate(effect.processor);
+    // Preserve the exact adapter on refusal, without boxing its ownership.
+    #[allow(clippy::result_large_err)]
+    pub fn release_effect(
+        &mut self,
+        effect: PluginEffect,
+    ) -> Result<(), crate::DeactivationError<PluginEffect>> {
+        let PluginEffect { processor, params } = effect;
+        self.deactivate(processor)
+            .map_err(|error| crate::DeactivationError {
+                error: error.error,
+                returned: PluginEffect {
+                    processor: error.returned,
+                    params,
+                },
+            })
     }
 
     /// Takes an instrument back from the audio thread and deactivates the
     /// plugin.
-    pub fn release_instrument(&mut self, instrument: PluginInstrument) {
-        self.deactivate(instrument.processor);
+    #[allow(clippy::result_large_err)]
+    pub fn release_instrument(
+        &mut self,
+        instrument: PluginInstrument,
+    ) -> Result<(), crate::DeactivationError<PluginInstrument>> {
+        let PluginInstrument {
+            processor,
+            params,
+            held,
+            held_count,
+        } = instrument;
+        self.deactivate(processor)
+            .map_err(|error| crate::DeactivationError {
+                error: error.error,
+                returned: PluginInstrument {
+                    processor: error.returned,
+                    params,
+                    held,
+                    held_count,
+                },
+            })
     }
 }

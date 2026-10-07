@@ -343,6 +343,7 @@ pub(crate) struct InstrumentUnit {
     /// The note on the key was played by hand.
     live: [bool; KEYS],
     hardware: [bool; KEYS],
+    velocities: [f32; KEYS],
     /// Keys held.
     held: usize,
     /// The output of the block being processed, a side each.
@@ -368,6 +369,7 @@ impl InstrumentUnit {
             ends: [f64::NAN; KEYS],
             live: [false; KEYS],
             hardware: [false; KEYS],
+            velocities: [0.0; KEYS],
             held: 0,
             left: vec![0.0; MAX_BLOCK].into_boxed_slice(),
             right: vec![0.0; MAX_BLOCK].into_boxed_slice(),
@@ -395,6 +397,23 @@ impl InstrumentUnit {
     pub fn plugin_control_boundary(&mut self) {
         if let Some(Some(unit)) = &mut self.external {
             unit.control_boundary();
+        }
+    }
+    /// An opaque-state snapshot/restart can replace the native unit without
+    /// changing its channel. Preserve the current engine note owners, not an
+    /// old event log. Removed channels and different plugins never call this.
+    pub fn inherit_plugin_notes(&mut self, before: &Self) {
+        self.ends = before.ends;
+        self.live = before.live;
+        self.hardware = before.hardware;
+        self.velocities = before.velocities;
+        self.held = before.held;
+        if let Some(Some(unit)) = &mut self.external {
+            for key in 0..KEYS {
+                if !self.ends[key].is_nan() && self.ends[key] != f64::NEG_INFINITY {
+                    unit.note_on(key as u8, self.velocities[key]);
+                }
+            }
         }
     }
     pub fn plugin_transport(&mut self, transport: crate::plugins::PluginTransport) {
@@ -485,6 +504,7 @@ impl InstrumentUnit {
         self.ends[index] = end;
         self.live[index] = live;
         self.hardware[index] = false;
+        self.velocities[index] = velocity;
         if let Some(external) = &mut self.external {
             if let Some(unit) = external {
                 unit.note_on(key, velocity);
@@ -544,6 +564,9 @@ impl InstrumentUnit {
             self.instrument.all_notes_off();
         }
         self.ends = [f64::NAN; KEYS];
+        self.live.fill(false);
+        self.hardware.fill(false);
+        self.velocities.fill(0.0);
         self.held = 0;
     }
 

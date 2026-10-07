@@ -289,6 +289,19 @@ impl VstInstance {
     }
 }
 impl InstanceBackend for VstInstance {
+    fn quiesce(&mut self, processor: &mut dyn ProcessorBackend) -> Result<(), PluginError> {
+        let processor = processor
+            .as_any_mut()
+            .downcast_mut::<VstProcessor>()
+            .ok_or_else(|| PluginError::Deactivate("incorrect processor backend".into()))?;
+        processor.quiesce()?;
+        // SAFETY: exclusive returned processor, creating owner thread.
+        if unsafe { self.objects.component.setActive(0) } != kResultOk {
+            return Err(PluginError::Deactivate("setActive(false) refused".into()));
+        }
+        self.active = false;
+        Ok(())
+    }
     fn layout(&self) -> &PluginLayout {
         &self.layout
     }
@@ -524,7 +537,7 @@ impl InstanceBackend for VstInstance {
         self.active = true;
         Ok(Box::new(processor))
     }
-    fn deactivate(&mut self, processor: Option<Box<dyn ProcessorBackend>>) {
+    fn finish_deactivation(&mut self, processor: Option<Box<dyn ProcessorBackend>>) {
         self.handler.set_queue(None);
         // The outer instance's Drop calls this with None while an audio
         // owner may still run. Leave active true: Drop deliberately keeps
@@ -538,15 +551,12 @@ impl InstanceBackend for VstInstance {
         processor.retain_pending_edits();
         processor.stop();
         drop(processor);
-        // SAFETY: audio ownership returned; component lifecycle on main thread.
-        unsafe {
-            self.objects.component.setActive(0);
-        }
-        self.active = false;
         if let Some(controller) = &self.objects.controller {
             for value in self.values.iter() {
-                unsafe {
-                    controller.setParamNormalized(value.id, value.normalized());
+                if value.pending.load(Ordering::Relaxed) {
+                    unsafe {
+                        controller.setParamNormalized(value.id, value.normalized());
+                    }
                 }
             }
         }
@@ -660,7 +670,7 @@ impl Drop for VstInstance {
         // Losing an outstanding processor cannot safely terminate a live
         // plugin, nor unload its DLL from the audio thread. Match CLAP's
         // deliberate leak for this API misuse.
-        if self.active {
+        if self.active && Arc::strong_count(&self.objects) > 1 {
             std::mem::forget(self.objects.clone());
         }
     }

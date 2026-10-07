@@ -13,6 +13,67 @@ fn create(
     let instance = module.create(&module.descriptors()[index].id).unwrap();
     (module, instance)
 }
+
+#[test]
+fn refusing_native_deactivation_never_proves_inactive_state() {
+    let (_module, mut instance) = create(6);
+    let processor = instance.activate(48_000.0, 64).unwrap();
+    let mut processor = instance.deactivate(processor).unwrap_err().returned;
+    assert!(instance.is_active(), "setActive(false) was refused");
+    assert!(
+        instance.save_state().is_err(),
+        "active capture must remain forbidden"
+    );
+    processor.set_param(0, 7, 0.25);
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        processor.process(&mut left, &mut right),
+        ProcessStatus::Continue
+    );
+    assert_eq!(
+        left, [0.5; 64],
+        "the same processor can recover after refusal"
+    );
+    instance.deactivate(processor).unwrap();
+    assert!(!instance.is_active());
+    instance.save_state().unwrap();
+}
+#[test]
+fn refusing_native_processing_stop_returns_the_running_processor() {
+    let (_module, mut instance) = create(6);
+    let mut processor = instance.activate(48_000.0, 64).unwrap();
+    assert!(processor.set_param(0, 7, 0.75));
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        processor.process(&mut left, &mut right),
+        ProcessStatus::Continue
+    );
+    assert_eq!(left, [1.5; 64]);
+
+    let refused = instance.deactivate(processor).unwrap_err();
+    assert!(
+        refused
+            .error
+            .to_string()
+            .contains("setProcessing(false) refused")
+    );
+    assert!(instance.is_active());
+    assert!(instance.save_state().is_err());
+    let mut processor = refused.returned;
+    assert!(processor.set_param(0, 7, 0.25));
+    left.fill(1.0);
+    right.fill(1.0);
+    assert_eq!(
+        processor.process(&mut left, &mut right),
+        ProcessStatus::Continue
+    );
+    assert_eq!(left, [0.5; 64]);
+    instance.deactivate(processor).unwrap();
+    assert!(!instance.is_active());
+    instance.save_state().unwrap();
+}
 #[test]
 fn lifecycle_gain_offsets_transport_state_and_restart() {
     let (module, mut instance) = create(0);
@@ -67,7 +128,7 @@ fn lifecycle_gain_offsets_transport_state_and_restart() {
     );
     processor.reset();
     processor.stop();
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
     assert_eq!(instance.param_value(7), Some(0.125));
     instance.load_state(&state).unwrap();
     let mut second = instance.activate(44_100.0, 64).unwrap();
@@ -76,7 +137,7 @@ fn lifecycle_gain_offsets_transport_state_and_restart() {
     right.fill(1.0);
     second.process(&mut left, &mut right);
     assert_eq!(left, [0.5; 64]);
-    instance.deactivate(second);
+    instance.deactivate(second).unwrap();
 }
 
 #[test]
@@ -87,7 +148,7 @@ fn returning_before_the_next_block_preserves_control_and_scheduled_parameter_edi
     // scheduled audio points at an equal frame, just as in normal processing.
     assert!(instance.set_param(7, 0.25));
     assert!(processor.set_param(3, 7, 0.75));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
     let state = instance.save_state().unwrap();
     assert_eq!(instance.param_value(7), Some(0.75));
     instance.set_param(7, 0.1);
@@ -97,7 +158,7 @@ fn returning_before_the_next_block_preserves_control_and_scheduled_parameter_edi
     let mut right = left;
     processor.process(&mut left, &mut right);
     assert_eq!(left, [1.5; 64]);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -136,11 +197,11 @@ fn independent_module_handles_keep_instances_alive_after_one_handle_drops() {
     let mut left = [0.25; 64];
     let mut right = [0.5; 64];
     pa.process(&mut left, &mut right);
-    a.deactivate(pa);
+    a.deactivate(pa).unwrap();
     drop(a);
     assert_eq!(pb.process(&mut left, &mut right), ProcessStatus::Continue);
     assert_eq!(left, [0.25; 64]);
-    b.deactivate(pb);
+    b.deactivate(pb).unwrap();
 }
 
 #[test]
@@ -185,7 +246,7 @@ fn vst3_process_failure_disables_further_calls_and_bypasses_the_effect() {
     assert_eq!(left, [1.0; 64]);
     assert_eq!(right, [1.0; 64]);
     assert_eq!(p.process(&mut left, &mut right), ProcessStatus::Failed);
-    instance.deactivate(p);
+    instance.deactivate(p).unwrap();
 }
 #[test]
 fn vst3_nonfinite_output_is_scrubbed_before_it_leaves_the_host() {
@@ -198,7 +259,7 @@ fn vst3_nonfinite_output_is_scrubbed_before_it_leaves_the_host() {
     assert_eq!(left, [0.0; 64]);
     assert_eq!(right, [0.0; 64]);
     assert_eq!(p.health().scrubbed_samples, 128);
-    instance.deactivate(p);
+    instance.deactivate(p).unwrap();
 }
 #[test]
 fn instrument_sample_offsets_all_notes_off_and_adapters() {
@@ -218,7 +279,7 @@ fn instrument_sample_offsets_all_notes_off_and_adapters() {
     p.all_notes_off(16);
     p.process(&mut left, &mut right);
     assert!(left[16..].iter().all(|x| *x == 0.0));
-    instance.deactivate(p);
+    instance.deactivate(p).unwrap();
     let mut adapter = instance.prepare_instrument(48_000.0, 64).unwrap();
     adapter.note_on(60, 0.8);
     adapter.process(&mut left, &mut right);
@@ -226,7 +287,7 @@ fn instrument_sample_offsets_all_notes_off_and_adapters() {
     adapter.all_notes_off();
     adapter.process(&mut left, &mut right);
     assert!(left.iter().all(|x| *x == 0.0));
-    instance.release_instrument(adapter);
+    instance.release_instrument(adapter).unwrap();
 }
 #[test]
 fn mono_mean_input_duplicates_output_and_effect_adapter() {
@@ -242,5 +303,5 @@ fn mono_mean_input_duplicates_output_and_effect_adapter() {
     right.fill(1.0);
     adapter.process(&mut left, &mut right);
     assert_eq!(left, [0.5; 64]);
-    instance.release_effect(adapter);
+    instance.release_effect(adapter).unwrap();
 }

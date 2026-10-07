@@ -171,7 +171,7 @@ it("adds an effect to the requested track and opens its actual inspector", async
   )
 })
 
-it("shows a scanned VST3 identity but refuses additions while state saving is gated", async () => {
+it("retains a failed VST3 scan and refuses additions", async () => {
   const state = catalog()
   state.entries = [
     {
@@ -179,8 +179,7 @@ it("shows a scanned VST3 identity but refuses additions while state saving is ga
       path: "/plugins/native.vst3",
       format: "vst3",
       usable: false,
-      error:
-        "VST3 loading is unavailable while safe desktop state saving is completed",
+      error: "Plugin rejected its initialized layout",
     },
   ]
   vi.mocked(app.backend.pluginsState).mockResolvedValue(state)
@@ -191,10 +190,27 @@ it("shows a scanned VST3 identity but refuses additions while state saving is ga
   await userEvent.click(screen.getByRole("button", { name: "Add instrument" }))
   expect(app.backend.pluginsAdd).not.toHaveBeenCalled()
   expect(
-    screen.getByText(
-      /VST3 loading is unavailable while safe desktop state saving/
-    )
+    screen.getByText(/Plugin rejected its initialized layout/)
   ).toBeVisible()
+})
+
+it("adds a usable scanned VST3 instrument through the desktop backend", async () => {
+  const state = catalog()
+  state.entries = [
+    { ...state.entries[0], path: "/plugins/native.vst3", format: "vst3" },
+  ]
+  vi.mocked(app.backend.pluginsState).mockResolvedValue(state)
+  act(() => openPluginManager())
+  render(<PluginManager />)
+  await screen.findByText("Native Synth · Fixture · VST3")
+  await userEvent.click(screen.getByRole("button", { name: "Add instrument" }))
+  await waitFor(() => expect(usePluginUi.getState().open).toBe(false))
+  expect(app.backend.pluginsAdd).toHaveBeenCalledWith(
+    "/plugins/native.vst3",
+    "native.synth",
+    undefined
+  )
+  expect(useRackStore.getState().inspectorOpen).toBe(true)
 })
 
 it("edits stable native IDs in their real range with undo and editor routing", async () => {
