@@ -31,6 +31,7 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 | `crates/windfall-project` | Project model, edit commands, undo history, `.windfall` file format |
 | `crates/windfall-engine` | Realtime audio engine and offline renderer |
 | `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV |
+| `crates/windfall-midi` | Reads and writes MIDI files; project import plans and playlist export |
 | `crates/windfall-dsp` | Effects and synth DSP |
 | `crates/windfall-ipc` | Types the engine, shell and interface exchange |
 | `crates/windfall-factory` | Generates the factory sounds |

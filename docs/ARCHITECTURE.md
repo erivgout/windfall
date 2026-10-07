@@ -11,6 +11,7 @@ crates/
   windfall-project/        Project model, Command, Document (undo history), .windfall file format.
   windfall-ipc/            Runtime types the engine, shell and UI exchange (transport, meters, devices, browser, export).
   windfall-codec/          Decode WAV, FLAC, MP3, OGG. Encode WAV. Waveform overviews.
+  windfall-midi/           Standard MIDI File reader/writer, import plans and playlist export.
   windfall-engine/         Realtime audio engine, offline renderer, soak-test CLI.
   windfall-dsp/            Effects and instruments: the internal plugin interface, shared DSP blocks,
                            EQ, compressor, limiter, reverb, delay and a subtractive synth.
