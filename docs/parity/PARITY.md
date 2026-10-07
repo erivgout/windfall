@@ -14,19 +14,19 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**57 of 342 rows accounted for (16.7%).** A row is accounted for when it is done or won't do.
+**60 of 342 rows accounted for (17.5%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 255 |
-| In progress | 30 |
-| Done | 55 |
+| Todo | 254 |
+| In progress | 28 |
+| Done | 58 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
-| Core features | 23 | 16 | 5 | 1 | 1 |
-| Main windows | 113 | 67 | 15 | 30 | 1 |
+| Core features | 23 | 15 | 5 | 2 | 1 |
+| Main windows | 113 | 67 | 13 | 32 | 1 |
 | Instruments | 41 | 39 | 1 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,8 +38,8 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
-| 2. Write a song | 99 | 60 | 14 | 25 | 0 |
-| 3. Record and edit audio | 34 | 22 | 3 | 9 | 0 |
+| 2. Write a song | 99 | 60 | 13 | 26 | 0 |
+| 3. Record and edit audio | 34 | 21 | 2 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
@@ -51,8 +51,8 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- |
 | Lifetime Free Updates | Free updates | 7 | todo | Windfall is free under GPL-3.0; this row closes when auto-update ships. |
 | Stem Separation | Stem separation | 5 | todo | unverified: lowest edition. The compare table ticks Producer, but the purchase box on the same page shows it locked below Signature. Candidate basis: Demucs (MIT). |
-| Audio Recording | Audio recording | 3 | todo |  |
-| Audio Clips | Audio clips | 2 | in-progress | Audio clips have gain, pan, fades, reverse and tape-style pitch. Independent spectral stretch is available in windfall-stretch; engine/model/desktop integration and recording remain. |
+| Audio Recording | Audio recording | 3 | in-progress | Native mono/stereo input capture streams to WAV and creates a normal playlist clip with undo/save support. Start/stop/discard, channel selection, overflow/error rejection and ownership guards are tested with synthetic capture. Placement uses a chosen start tick; input/output latency and separate device clocks are uncompensated. Hardware capture, monitoring, count-in and multitrack takes remain. See docs/RECORDING.md. |
+| Audio Clips | Audio clips | 2 | done | Playlist audio clips support gain, pan, fades, reverse, tape-style pitch and independent spectral stretch/pitch. Prepared immutable audio is shared by playback/export; source files remain unchanged. Completed input takes become ordinary clips with undo/save support. |
 | Loop Starter | Loop starter | 6 | todo | Needs Windfall's own CC0 loop content; FL's loops cannot be reused. |
 | FL Studio Mobile Rack + FX | TBD | 5 | todo | A Windfall equivalent would be a rack of Windfall's own modules. FL 2026 added a SoundFont player and a note arpeggiator module. |
 | Audio Logger | Audio logger | 3 | todo | unverified: edition availability (the compare page leaves every edition cell blank). New in FL Studio 2026. |
@@ -157,8 +157,8 @@ As of 2026-10-07. Sources:
 | Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Gain, pan, pitch and reverse. No normalize or independent time-stretch yet. |
 | Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
 | Event editor | Event automation editor | 2 | todo |  |
-| Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | in-progress | windfall-stretch supplies streaming/offline processing, latency and seek helpers with independent pitch and time controls. Clip model, engine scheduling, compensation, cached rendering and desktop controls remain. See crates/windfall-stretch/VALIDATION.md. |
-| Playlist: detect tempo and fit to tempo | Tempo detection | 3 | in-progress | windfall-stretch estimates loop tempo candidates and computes tempo/beat-length fitting ratios. Half/double-beat ambiguity is documented; candidate scores are not probabilities. Clip workflow and automatic stretching integration remain. |
+| Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | done | Playlist inspector offers independent spectral duration/pitch, quality and approximate formants alongside default tape playback. DSP prepares off session/audio threads, with bounded cached immutable buffers, trim/fade/reverse handling and undo/save support. Playback/export match exactly; callback allocation tests cover loops, seeks and plan changes. Sampler integration remains separate. See crates/windfall-stretch/VALIDATION.md. |
+| Playlist: detect tempo and fit to tempo | Tempo detection | 3 | done | Playlist inspector detects tempo candidates and fits clips using a chosen/manual source BPM or beat count. Half/double-beat ambiguity and empty results are reported; scores are not probabilities. Fit applies independent spectral stretch as one undo step, adjusting trims/length/fades. Fitting does not follow later project tempo changes automatically. |
 | Playlist: consolidate (freeze) tracks | Bounce in place | 3 | todo |  |
 | Playlist: Deverb | Reverb removal | 5 | todo | Machine-learning feature not named in the plan; no candidate basis identified. |
 | Mixer: insert tracks, master track and current track | Mixer tracks | 1 | done | FL has 500 insert tracks, one master and one current track. |
@@ -351,7 +351,7 @@ As of 2026-10-07. Sources:
 | Save new version | Save new version | 1 | todo |  |
 | Autosave and backups | Autosave and backups | 1 | done | The plan builds autosave and timestamped backups into the project format. |
 | New from template and Save as template | Project templates | 2 | todo | FL's bundled templates reference Image-Line content; needs own. |
-| FL Studio project (.flp) as an import source | FL project import | 4 | in-progress | windfall-flp parses and converts musical structure through checked project commands, retaining unsupported plugin states and an import report. Two real FL 20.8.4 projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate. Shell and desktop workflow remain. See docs/flp/coverage.md. |
+| FL Studio project (.flp) as an import source | FL project import | 4 | in-progress | Desktop picker prepares a reviewed conversion with category reports, bounded sample searches, missing-audio warnings, unsaved-project confirmation and stale-request guards. Unsupported plugin bytes and metadata persist in .windfall files and an Imported sounds report. Two real FL 20.8.4 reader projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate; proprietary restoration and identical playback remain unavailable. See docs/flp/coverage.md. |
 | Back up to FL Cloud | Cloud backup (optional) | 6 | todo | New in FL Studio 2026. The plan lists optional cloud backup in phase 6. |
 | State file (.fst) | Presets | 2 | todo | Windfall presets use its own format; FL's bundled presets cannot be shipped. |
 | Score file (.fsc) | Score files | 2 | todo | FL 2026 treats .mid and .fsc interchangeably for scores. |
@@ -374,7 +374,7 @@ As of 2026-10-07. Sources:
 | Export: M4A (AAC) | M4A export | 6 | todo | Not in the plan's export list. AAC encoder licensing must be checked against GPL-3.0. |
 | Export: loop, slice and note markers in WAV files | WAV marker export | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | WavPack compressed audio | WavPack support | 6 | todo | Not in the plan. |
-| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | Isolated VST3 discovery/scanning verifies factories, components, controllers, buses and editor availability on Windows. Audio hosting remains unsupported. Linux scanning is implemented but untested; macOS bundle entry is unsupported. See docs/plugins/host-evaluation.md. |
+| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. Surge XT/Effects and OB-Xf produced verified audio, and Surge XT/OB-Xf editors were exercised. Desktop addition remains unavailable until safe active-instance state capture is integrated. Linux paths are untested; macOS loading and non-Windows embedded editors are unsupported. In-process crashes remain uncontained. See docs/plugins/vst3-hosting.md. |
 | Plugin hosting: CLAP | CLAP hosting | 4 | in-progress | windfall-plugin-host implements CLAP audio lifecycle, events, parameters, transport, state, adapters and Win32 editors. Windows verified with Surge XT, Surge XT Effects and OB-Xf. Engine/model/shell integration remains; in-process audio plugin crashes are uncontained. See docs/plugins/host-evaluation.md. |
 | Plugin hosting: Audio Unit | AU hosting | 4 | todo | macOS only. |
 | Plugin hosting: VST2 | VST2 hosting | 4 | todo | unverified: licensing path. Not in the plan; Steinberg no longer issues VST2 SDK licenses, so this needs a decision and may become wont-do. |
@@ -388,7 +388,7 @@ As of 2026-10-07. Sources:
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Audio settings (driver, device, sample rate, buffer length) | Audio settings | 0 | in-progress | The plan uses cpal: WASAPI and ASIO on Windows, CoreAudio on macOS, ALSA, JACK and PipeWire on Linux. Device, sample rate and buffer through WASAPI, CoreAudio, ALSA and JACK. ASIO is behind a build feature that is off. |
-| Transport (play, stop, record, pattern/song mode, song position) | Transport | 1 | in-progress | Play, stop, pattern and song mode, song position. No recording yet. |
+| Transport (play, stop, record, pattern/song mode, song position) | Transport | 1 | in-progress | Play, stop, pattern/song mode and song position are available. Record opens native input/channel selection and explicit start/stop/discard controls. Initial capture uses manual playlist placement without hardware latency/clock compensation; monitoring, count-in and multitrack takes remain. |
 | Tempo and tempo tapper | Tempo | 1 | in-progress | Tempo field. No tap tempo yet. |
 | Metronome | Metronome | 1 | todo |  |
 | Typing keyboard to piano keyboard | Typing keyboard | 1 | todo |  |

@@ -37,10 +37,10 @@
       "summary": "Records microphone, line or internal audio onto the timeline as editable clips.",
       "windfall_name": "Audio recording",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "Native mono/stereo input capture streams to WAV and creates a normal playlist clip with undo/save support. Start/stop/discard, channel selection, overflow/error rejection and ownership guards are tested with synthetic capture. Placement uses a chosen start tick; input/output latency and separate device clocks are uncompensated. Hardware capture, monitoring, count-in and multitrack takes remain. See docs/RECORDING.md."
     },
     {
       "id": "core-audio-clips",
@@ -49,10 +49,10 @@
       "summary": "Places audio files or recordings on the timeline with per-clip gain, fades and stretch settings.",
       "windfall_name": "Audio clips",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Audio clips have gain, pan, fades, reverse and tape-style pitch. Independent spectral stretch is available in windfall-stretch; engine/model/desktop integration and recording remain."
+      "notes": "Playlist audio clips support gain, pan, fades, reverse, tape-style pitch and independent spectral stretch/pitch. Prepared immutable audio is shared by playback/export; source files remain unchanged. Completed input takes become ordinary clips with undo/save support."
     },
     {
       "id": "core-loop-starter",
@@ -1249,10 +1249,10 @@
       "summary": "Stretches a clip to a new length or pitch on the timeline.",
       "windfall_name": "Audio clip stretch",
       "phase": 3,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "windfall-stretch supplies streaming/offline processing, latency and seek helpers with independent pitch and time controls. Clip model, engine scheduling, compensation, cached rendering and desktop controls remain. See crates/windfall-stretch/VALIDATION.md."
+      "notes": "Playlist inspector offers independent spectral duration/pitch, quality and approximate formants alongside default tape playback. DSP prepares off session/audio threads, with bounded cached immutable buffers, trim/fade/reverse handling and undo/save support. Playback/export match exactly; callback allocation tests cover loops, seeks and plan changes. Sampler integration remains separate. See crates/windfall-stretch/VALIDATION.md."
     },
     {
       "id": "win-playlist-tempo-detect",
@@ -1261,10 +1261,10 @@
       "summary": "Estimates a sample's tempo and stretches it to match the project.",
       "windfall_name": "Tempo detection",
       "phase": 3,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "windfall-stretch estimates loop tempo candidates and computes tempo/beat-length fitting ratios. Half/double-beat ambiguity is documented; candidate scores are not probabilities. Clip workflow and automatic stretching integration remain."
+      "notes": "Playlist inspector detects tempo candidates and fits clips using a chosen/manual source BPM or beat count. Half/double-beat ambiguity and empty results are reported; scores are not probabilities. Fit applies independent spectral stretch as one undo step, adjusting trims/length/fades. Fitting does not follow later project tempo changes automatically."
     },
     {
       "id": "win-playlist-consolidate",
@@ -3280,7 +3280,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "windfall-flp parses and converts musical structure through checked project commands, retaining unsupported plugin states and an import report. Two real FL 20.8.4 projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate. Shell and desktop workflow remain. See docs/flp/coverage.md."
+      "notes": "Desktop picker prepares a reviewed conversion with category reports, bounded sample searches, missing-audio warnings, unsaved-project confirmation and stale-request guards. Unsupported plugin bytes and metadata persist in .windfall files and an Imported sounds report. Two real FL 20.8.4 reader projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate; proprietary restoration and identical playback remain unavailable. See docs/flp/coverage.md."
     },
     {
       "id": "fmt-cloud-backup",
@@ -3556,7 +3556,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Isolated VST3 discovery/scanning verifies factories, components, controllers, buses and editor availability on Windows. Audio hosting remains unsupported. Linux scanning is implemented but untested; macOS bundle entry is unsupported. See docs/plugins/host-evaluation.md."
+      "notes": "VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. Surge XT/Effects and OB-Xf produced verified audio, and Surge XT/OB-Xf editors were exercised. Desktop addition remains unavailable until safe active-instance state capture is integrated. Linux paths are untested; macOS loading and non-Windows embedded editors are unsupported. In-process crashes remain uncontained. See docs/plugins/vst3-hosting.md."
     },
     {
       "id": "fmt-host-clap",
@@ -3664,7 +3664,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Play, stop, pattern and song mode, song position. No recording yet."
+      "notes": "Play, stop, pattern/song mode and song position are available. Record opens native input/channel selection and explicit start/stop/discard controls. Initial capture uses manual playlist placement without hardware latency/clock compensation; monitoring, count-in and multitrack takes remain."
     },
     {
       "id": "wf-tempo",
