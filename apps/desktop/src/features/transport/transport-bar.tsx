@@ -1,3 +1,5 @@
+import { useRecordingStore } from "./recording-store"
+import { RecordingDialog } from "./recording-dialog"
 import {
   Add01Icon,
   PlayIcon,
@@ -79,6 +81,7 @@ function Display() {
  * all of its state from the stores, so it can be mounted anywhere.
  */
 export function TransportBar() {
+  const recording = useRecordingStore((state) => state.state.active)
   return (
     <ContextActions items={TRANSPORT_MENU}>
       <div
@@ -87,6 +90,13 @@ export function TransportBar() {
         className="flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b bg-chassis px-2"
       >
         <PlayControls />
+        <ActionButton
+          action="recording.open"
+          variant={recording ? "destructive" : "secondary"}
+        >
+          {recording ? "Recording..." : "Record"}
+        </ActionButton>
+        <RecordingDialog />
         <ModeSwitch />
         <Divider />
         <Display />

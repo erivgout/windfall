@@ -84,9 +84,16 @@ impl Session {
     /// written into it. A sample rate or buffer size the device cannot do
     /// is left out when opening and stays in the request; see [`openable`].
     pub fn engine_configure(&self, settings: AudioSettings) -> EngineStatus {
+        let _configuring = lock(&self.inner.configuring);
+        let _recording = lock(&self.inner.recording);
+        if _recording.is_some() {
+            let mut status = self.engine_status();
+            status.error = Some("Stop or cancel recording before changing audio settings.".into());
+            return status;
+        }
         // One at a time, so the request remembered last is also the one
         // opened last.
-        let _configuring = lock(&self.inner.configuring);
+        drop(_recording);
         self.store()
             .update(|stored| stored.audio = settings.clone());
         let open = openable(&settings, || self.inner.audio.devices());

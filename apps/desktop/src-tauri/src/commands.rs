@@ -309,6 +309,11 @@ fn export_cancel(session: State<'_, Session>) {
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        recording_inputs,
+        recording_state,
+        recording_start,
+        recording_stop,
+        recording_cancel,
         document_snapshot,
         dispatch,
         automate,
@@ -348,4 +353,40 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         export_audio,
         export_cancel,
     ]
+}
+
+#[tauri::command]
+async fn recording_inputs(
+    session: State<'_, Session>,
+) -> Result<Vec<windfall_ipc::RecordingInput>, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.recording_inputs())).await
+}
+#[tauri::command]
+fn recording_state(session: State<'_, Session>) -> windfall_ipc::RecordingState {
+    session.recording_state()
+}
+#[tauri::command]
+async fn recording_start(
+    session: State<'_, Session>,
+    source: windfall_ipc::RecordingSource,
+    start: u32,
+    track: Option<PlaylistTrackId>,
+) -> Result<windfall_ipc::RecordingState, String> {
+    let session = session.inner().clone();
+    blocking(move || session.recording_start(source, start, track)).await
+}
+#[tauri::command]
+async fn recording_stop(session: State<'_, Session>) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.recording_stop()).await
+}
+#[tauri::command]
+async fn recording_cancel(session: State<'_, Session>) -> Result<(), String> {
+    let session = session.inner().clone();
+    blocking(move || {
+        session.recording_cancel();
+        Ok(())
+    })
+    .await
 }

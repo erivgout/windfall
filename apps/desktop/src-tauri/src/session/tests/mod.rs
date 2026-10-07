@@ -9,6 +9,7 @@ mod export_formats;
 mod files;
 mod library;
 mod playback;
+mod recording;
 mod song;
 
 use std::collections::HashMap;

@@ -439,3 +439,35 @@ pub struct ExportProgress {
     #[ts(optional)]
     pub cancelled: Option<bool>,
 }
+
+/// An input's channel count and common rates, without opening capture.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingInput {
+    pub host: String,
+    pub device: String,
+    pub channels: u16,
+    pub sample_rates: Vec<u32>,
+}
+/// Zero-based hardware channels. Missing right duplicates left into stereo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingSource {
+    pub host: String,
+    pub device: String,
+    pub left: u16,
+    pub right: Option<u16>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingState {
+    pub active: bool,
+    #[ts(type = "number")]
+    pub frames: u64,
+    pub sample_rate: u32,
+    pub start_tick: u32,
+    pub error: Option<String>,
+}

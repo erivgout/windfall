@@ -41,6 +41,13 @@ pub struct SettingsStore {
 }
 
 impl SettingsStore {
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.file
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("recordings")
+    }
+
     /// Reads the settings file at `file`, which need not exist.
     pub fn load(file: PathBuf) -> Self {
         let settings = match fs::read_to_string(&file) {

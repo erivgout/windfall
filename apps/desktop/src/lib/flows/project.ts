@@ -1,3 +1,4 @@
+import { useRecordingStore } from "@/features/transport/recording-store"
 import { toast } from "sonner"
 import { create } from "zustand"
 
@@ -66,6 +67,10 @@ export function saveProject(): Promise<boolean> {
  * edits it asks what to do; it resolves to true when it is safe to go on.
  */
 export async function confirmDiscardChanges(): Promise<boolean> {
+  if (useRecordingStore.getState().state.active) {
+    toast.error("Stop or cancel recording first")
+    return false
+  }
   if (!useProjectStore.getState().dirty) return true
   const choice = await askConfirm({
     title: `Save changes to "${projectName()}"?`,

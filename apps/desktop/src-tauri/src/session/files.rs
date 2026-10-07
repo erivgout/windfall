@@ -52,6 +52,7 @@ enum Refusal {
     /// A later request to replace the document was made, or one got there
     /// first.
     Superseded,
+    Recording,
     /// The document was edited after the request was made.
     Edited,
 }
@@ -61,6 +62,7 @@ impl Refusal {
     /// `"song.windfall" was not opened`.
     fn message(self, what: &str) -> String {
         match self {
+            Refusal::Recording => "Stop or cancel recording before replacing the project.".into(),
             Refusal::Superseded => {
                 format!("{what} because another project was opened or started after it.")
             }
@@ -75,6 +77,7 @@ impl Session {
     /// Replaces the open project with the default one. Refused in the cases
     /// [`project_open`](Self::project_open) is.
     pub fn project_new(&self) -> Result<DocumentSnapshot, String> {
+        drop(self.recording_idle()?);
         let ticket = self.begin_replacement();
         let project = default_project();
         let decoded = decode_all(&self.inner.cache, &project, None, &self.inner.factory_dir);
@@ -107,6 +110,7 @@ impl Session {
     /// into the `Backup` folder and never replaces the project file unless
     /// the user picks it. A warning says so when the backup opens.
     pub fn project_open(&self, path: &str) -> Result<DocumentSnapshot, String> {
+        drop(self.recording_idle()?);
         let file = paths::absolute(path)?;
         let ticket = self.begin_replacement();
         let (project, played) = file::load_with_session(&file).map_err(sentence)?;
@@ -186,6 +190,7 @@ impl Session {
     /// refused with [`EDITED_WHILE_MOVING`]: the edits rule out starting
     /// the history over.
     pub fn project_save(&self, path: Option<&str>) -> Result<String, String> {
+        drop(self.recording_idle()?);
         let chosen = path
             .map(|path| paths::absolute(path).map(with_project_extension))
             .transpose()?;
@@ -194,6 +199,7 @@ impl Session {
         // copied the project first also writes first, so an older copy can
         // never land on top of a newer one.
         let saving = lock(&self.inner.save);
+        drop(self.recording_idle()?);
         let (mut project, played, target, previous_dir, edits, generation) = {
             let state = self.state();
             let target = match chosen {
@@ -351,6 +357,7 @@ impl Session {
         sample_dir: Option<PathBuf>,
         decoded: Decoded,
     ) -> Result<DocumentSnapshot, Refusal> {
+        let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
         let mut state = self.state();
         if state.replacements != ticket.request || state.generation != ticket.generation {
             return Err(Refusal::Superseded);

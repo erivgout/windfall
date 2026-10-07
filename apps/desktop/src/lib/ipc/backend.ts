@@ -53,6 +53,16 @@ export type AudioClipPlace = {
  * plain text that can be shown to the user.
  */
 export interface Backend {
+  recordingInputs(): Promise<import("@/bindings").RecordingInput[]>
+  recordingState(): Promise<import("@/bindings").RecordingState>
+  recordingStart(
+    source: import("@/bindings").RecordingSource,
+    start: number,
+    track: number | null
+  ): Promise<import("@/bindings").RecordingState>
+  recordingStop(): Promise<DispatchResult>
+  recordingCancel(): Promise<void>
+
   /** "tauri" inside the app, "mock" in a plain browser. */
   readonly kind: "tauri" | "mock"
 
