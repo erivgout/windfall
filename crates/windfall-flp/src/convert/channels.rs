@@ -54,6 +54,38 @@ impl Builder<'_> {
         id.map(SampleId)
     }
 
+    fn preserve_clip_channel_notes(
+        &mut self,
+        iid: u16,
+        name: &str,
+        track: windfall_project::TrackId,
+    ) -> bool {
+        if !self.flp.patterns.iter().any(|p| {
+            p.notes.iter().any(|n| n.channel == iid)
+                || p.legacy_steps.iter().any(|s| s.channel == iid)
+        }) {
+            return false;
+        }
+        let id = self.create(
+            ReportSection::Channels,
+            "A note placeholder for a clip channel",
+            Command::AddChannel {
+                name: Some(name.to_owned()),
+                sample: None,
+                instrument: None,
+                index: None,
+                mixer_track: Some(track),
+            },
+        );
+        if let Some(id) = id {
+            self.note_fallbacks.insert(iid, ChannelId(id));
+            self.report.say(ReportSection::Channels, Outcome::Placeholder, "Notes addressed to an audio or automation clip channel were retained on a silent sampler; playlist clips still use their original content.");
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn channels(&mut self) {
         for channel in &self.flp.channels {
             let name = name_or(channel.display_name(), || {
@@ -75,10 +107,21 @@ impl Builder<'_> {
                     continue;
                 }
                 ChannelKind::AutomationClip => {
+                    let notes = self.preserve_clip_channel_notes(channel.iid, &name, mixer_track);
+                    self.report.count(
+                        ReportSection::Channels,
+                        if notes {
+                            Outcome::Placeholder
+                        } else {
+                            Outcome::Exact
+                        },
+                        1,
+                    );
                     self.channels.insert(channel.iid, ChannelRole::Automation);
                     continue;
                 }
                 ChannelKind::AudioClip => {
+                    let notes = self.preserve_clip_channel_notes(channel.iid, &name, mixer_track);
                     let sample = self.sample(&name, channel.sample_path.as_deref());
                     let stretched = channel.params.is_some_and(|p| {
                         p.stretch_time.unwrap_or(0) != 0 || p.stretch_multiplier.unwrap_or(0) != 0
@@ -94,10 +137,18 @@ impl Builder<'_> {
                             reverse: channel.reversed(),
                             pitch,
                             stretched,
+                            muted: !channel.enabled.unwrap_or(true),
                         }),
                     );
-                    self.report
-                        .count(ReportSection::Channels, Outcome::Exact, 1);
+                    self.report.count(
+                        ReportSection::Channels,
+                        if notes {
+                            Outcome::Placeholder
+                        } else {
+                            Outcome::Exact
+                        },
+                        1,
+                    );
                     continue;
                 }
                 _ => {}
@@ -172,6 +223,18 @@ impl Builder<'_> {
                     .unwrap_or(1.0);
                 let end =
                     (f64::from(start) + length).clamp(f64::from(start) + 0.0000001, 1.0) as f32;
+                if channel.params.is_some_and(|p| {
+                    p.stretch_time.unwrap_or(0) != 0
+                        || p.stretch_pitch.unwrap_or(0) != 0
+                        || p.stretch_multiplier.unwrap_or(0) != 0
+                }) || channel.sampler_flags.is_some_and(|f| f & 8 != 0)
+                    || channel.fx_flags.is_some_and(|f| f & !2 != 0)
+                    || channel.root_note.is_some_and(|k| k > 127)
+                    || pitch.abs() > 48.0
+                {
+                    outcome = Outcome::Approximated;
+                    self.report.say(ReportSection::Channels, outcome, "Sampler stretching, looping, extra sample effects or out-of-range tuning cannot be reproduced exactly.");
+                }
                 let cut = channel.cut.unwrap_or_default();
                 self.apply(
                     ReportSection::Channels,

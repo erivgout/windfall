@@ -182,6 +182,7 @@ struct AudioSource {
     /// The channel is time-stretched in FL Studio, which Windfall does not
     /// do.
     stretched: bool,
+    muted: bool,
 }
 
 /// What a channel of the FL Studio project became.
@@ -214,6 +215,7 @@ struct Builder<'a> {
     /// Sends that exist, by the inserts they connect.
     sends: BTreeSet<(u16, u16)>,
     channels: BTreeMap<u16, ChannelRole>,
+    note_fallbacks: BTreeMap<u16, ChannelId>,
     /// Patterns by their FL Studio number, with their length in ticks.
     patterns: BTreeMap<u16, (PatternId, u32)>,
 }
@@ -254,6 +256,7 @@ impl<'a> Builder<'a> {
             effects: BTreeMap::new(),
             sends: BTreeSet::new(),
             channels: BTreeMap::new(),
+            note_fallbacks: BTreeMap::new(),
             patterns: BTreeMap::new(),
         }
     }
@@ -424,7 +427,18 @@ impl<'a> Builder<'a> {
             );
         }
         // The name is already the project's.
-        self.report.count(section, Outcome::Exact, 1);
+        self.report.count(
+            section,
+            if filled(&settings.title) {
+                Outcome::Exact
+            } else {
+                Outcome::Approximated
+            },
+            1,
+        );
+        if !filled(&settings.title) {
+            self.report.say(section, Outcome::Approximated, "The project had no title; its name comes from the supplied fallback or Imported project.");
+        }
 
         if self
             .apply(
@@ -445,6 +459,16 @@ impl<'a> Builder<'a> {
     fn leftovers(&mut self) {
         let section = ReportSection::Other;
         let flp = self.flp;
+        for (&id, &count) in &flp.uninterpreted_counts {
+            self.report.count(section, Outcome::Dropped, count);
+            let what = crate::names::event_name(id).unwrap_or("unknown event");
+            self.report.say_times(
+                section,
+                Outcome::Dropped,
+                count,
+                format!("Event {id} ({what}) was not interpreted or converted."),
+            );
+        }
         let main = flp.main_arrangement().map(|arrangement| arrangement.index);
         let others = flp
             .arrangements
@@ -535,6 +559,12 @@ impl<'a> Builder<'a> {
                 report.read_problems.push(format!(
                     "The converted project did not pass Windfall's own checks ({problem}), so an empty project is given instead. Please report this file."
                 ));
+                for category in &mut report.categories {
+                    category.dropped = category.total();
+                    category.exact = 0;
+                    category.approximated = 0;
+                    category.placeholders = 0;
+                }
                 Conversion {
                     project: Project::new(name),
                     report,

@@ -127,7 +127,10 @@ impl ReportCategory {
 
     /// How many things the category counted.
     pub fn total(&self) -> u32 {
-        self.exact + self.approximated + self.placeholders + self.dropped
+        self.exact
+            .saturating_add(self.approximated)
+            .saturating_add(self.placeholders)
+            .saturating_add(self.dropped)
     }
 }
 
@@ -244,10 +247,9 @@ impl ImportReport {
     pub fn is_clean(&self) -> bool {
         self.read_problems.is_empty()
             && self.unknown_event_ids.is_empty()
-            && self
-                .categories
-                .iter()
-                .all(|c| c.approximated + c.placeholders + c.dropped == 0 && c.lines.is_empty())
+            && self.categories.iter().all(|c| {
+                c.approximated == 0 && c.placeholders == 0 && c.dropped == 0 && c.lines.is_empty()
+            })
     }
 
     /// The whole report in one line: for each section with anything in

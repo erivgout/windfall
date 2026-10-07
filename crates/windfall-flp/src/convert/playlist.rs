@@ -150,6 +150,18 @@ impl Builder<'_> {
                     continue;
                 }
                 position += point.offset * 960.0;
+                approximated |= matches!(
+                    source,
+                    ControlTarget::Channel {
+                        param: ChannelParam::Volume,
+                        ..
+                    } | ControlTarget::Insert {
+                        param: InsertParam::Volume,
+                        ..
+                    } | ControlTarget::Route { .. }
+                        | ControlTarget::Main(MainParam::Volume)
+                        | ControlTarget::SlotPlugin { .. }
+                );
                 if !position.is_finite() || position > f64::from(MAX_SONG_TICKS) {
                     approximated = true;
                     break;
@@ -251,6 +263,7 @@ impl Builder<'_> {
             };
             let id = PlaylistTrackId(id);
             tracks.insert(index, id);
+            let mut track_outcome = Outcome::Exact;
             if let Some(source) = source {
                 self.apply(
                     ReportSection::Playlist,
@@ -264,6 +277,7 @@ impl Builder<'_> {
                     },
                 );
                 if source.color.is_some() || source.height != 1.0 {
+                    track_outcome = Outcome::Approximated;
                     self.report.say(
                         ReportSection::Playlist,
                         Outcome::Dropped,
@@ -271,8 +285,7 @@ impl Builder<'_> {
                     );
                 }
             }
-            self.report
-                .count(ReportSection::Playlist, Outcome::Exact, 1);
+            self.report.count(ReportSection::Playlist, track_outcome, 1);
         }
         let mut automations = BTreeMap::new();
         for channel in &self.flp.channels {
@@ -295,6 +308,7 @@ impl Builder<'_> {
                 Outcome::Approximated
             };
             let mut contents = Vec::new();
+            let mut muted = item.muted();
             let offset = match item.source {
                 PlaylistSource::Pattern { pattern, start, .. } => {
                     if let Some(&(pattern, _)) = self.patterns.get(&pattern) {
@@ -305,6 +319,7 @@ impl Builder<'_> {
                 PlaylistSource::Channel { channel, start, .. } => {
                     match self.channels.get(&channel) {
                         Some(ChannelRole::Audio(source)) => {
+                            muted |= source.muted;
                             if let Some(sample) = source.sample {
                                 let milliseconds = |ms: f32| {
                                     (f64::from(ms.max(0.0)) * self.tempo_bpm * 960.0 / 60_000.0)
@@ -339,10 +354,14 @@ impl Builder<'_> {
                         }
                         _ => {}
                     }
+                    if start.unwrap_or(0.0) != 0.0 {
+                        outcome = Outcome::Approximated;
+                        self.report.say(ReportSection::Playlist, outcome, "Channel clip offsets use disputed source units and may need adjustment after import.");
+                    }
                     let amount = f64::from(start.unwrap_or(0.0));
                     let audio = matches!(self.channels.get(&channel), Some(ChannelRole::Audio(_)));
                     let ticks = if audio {
-                        amount * self.tempo_bpm * 960.0 / 60_000.0
+                        amount * 240.0
                     } else {
                         amount * 960.0
                     };
@@ -378,7 +397,7 @@ impl Builder<'_> {
                                 start: start.ticks as u32,
                                 length: Some(length.ticks as u32),
                                 offset: Some(offset as u32),
-                                muted: Some(item.muted()),
+                                muted: Some(muted),
                                 content,
                             }],
                         },

@@ -20,6 +20,9 @@ impl Builder<'_> {
             if !seen.insert(iid) {
                 continue;
             }
+            if let Some(&id) = self.note_fallbacks.get(&iid) {
+                result.insert(id);
+            }
             match self.channels.get(&iid) {
                 Some(ChannelRole::Plays(id)) => {
                     result.insert(*id);
@@ -111,7 +114,11 @@ impl Builder<'_> {
                     self.report.say(ReportSection::Notes, Outcome::Dropped, "A note has no playable channel, an unsupported key, or starts past the longest pattern.");
                     continue;
                 }
-                let mut outcome = if start.exact && length.exact {
+                let mut outcome = if start.exact
+                    && length.exact
+                    && length.ticks <= u64::from(MAX_PATTERN_TICKS)
+                    && targets.len() == 1
+                {
                     Outcome::Exact
                 } else {
                     Outcome::Approximated
@@ -120,9 +127,14 @@ impl Builder<'_> {
                     || note.flags & 8 != 0
                     || note.mod_x != 128
                     || note.mod_y != 128
+                    || note.release != 64
+                    || note.midi_channel != 0
+                    || note.group != 0
+                    || note.velocity > 128
+                    || note.pan > 128
                 {
                     outcome = Outcome::Approximated;
-                    self.report.say(ReportSection::Notes, outcome, "Per-note fine pitch, slide and modulation have no Windfall equivalent and were left out.");
+                    self.report.say(ReportSection::Notes, outcome, "Per-note fine pitch, slide, modulation, release, MIDI channels or grouping have no Windfall equivalent; out-of-range levels were clamped.");
                 }
                 for channel in targets {
                     let init = NoteInit {

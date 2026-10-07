@@ -761,8 +761,8 @@ pub enum PlaylistSource {
     /// A channel: an audio clip or an automation clip. The window is
     /// stored as 32-bit floats. For an automation clip they are quarter
     /// notes (DawVert, FLParser). For an audio clip DawVert takes them as
-    /// milliseconds of the sample at a tempo of 120, and FLParser as
-    /// quarter notes; DawVert's reading is the one converted.
+    /// four units per quarter note before stretching, and FLParser as
+    /// quarter notes; DawVert's reading is converted approximately and reported.
     Channel {
         channel: u16,
         start: Option<f32>,

@@ -39,6 +39,9 @@ impl Builder<'_> {
         let inserts = &flp.mixer.inserts;
         let current = current_insert(inserts.len());
         let used = self.inserts_in_use(current);
+        if inserts.is_empty() && self.main_volume() != FULL {
+            self.fader(&Insert::default(), 0);
+        }
 
         let mut left_out = 0_u32;
         for &index in &used {
@@ -227,6 +230,18 @@ impl Builder<'_> {
             return;
         };
         let name = self.track_name(track);
+        for route in &insert.routes {
+            if route.target == index {
+                self.loop_refused(&name, route.target);
+            } else if !self.tracks.contains_key(&route.target) || Some(route.target) == current {
+                self.report.count(section, Outcome::Dropped, 1);
+                self.report.say(
+                    section,
+                    Outcome::Dropped,
+                    "A mixer route points to an unavailable insert and was left out.",
+                );
+            }
+        }
         let routes: Vec<Route> = insert
             .routes
             .iter()
@@ -440,11 +455,8 @@ impl Builder<'_> {
             command,
         );
 
-        let outcome = if translated.notes.is_empty() {
-            Outcome::Exact
-        } else {
-            Outcome::Approximated
-        };
+        let outcome = Outcome::Approximated;
+        self.report.say(section, outcome, "Mapped effects use a different processor and may sound different even when their control values translate exactly.");
         self.report.count(section, outcome, 1);
         if !translated.notes.is_empty() {
             self.report.say(
