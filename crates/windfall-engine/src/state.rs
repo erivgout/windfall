@@ -415,6 +415,9 @@ pub(crate) struct PlanState {
     pub shaped: Vec<bool>,
     /// Frames by which the output lags the notes that make it.
     pub latency: u64,
+    /// The same for what leaves each track, past its effects and its
+    /// fader. The master's is `latency`.
+    pub behind: Vec<usize>,
     /// The level below which a tail counts as over, as a linear gain.
     pub silence: f32,
     /// What each automation lane of the plan is doing.
@@ -551,6 +554,7 @@ impl PlanState {
             activity: vec![Activity::default(); plan.tracks.len()],
             shaped,
             latency: u64::from(ledger.latency),
+            behind: layout.out,
             silence: db_to_gain(TAIL_SILENCE_DB),
             lanes: vec![LaneState::default(); plan.lanes.len()],
             engaged: 0,

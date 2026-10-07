@@ -5,22 +5,39 @@
 //! and channel count. Nothing is resampled here; the engine does that at
 //! playback.
 //!
-//! Writing: WAV, in one call or a block at a time.
+//! Writing: WAV, FLAC, Ogg Vorbis and MP3, a block at a time.
+//! [`Encoder`] writes any of them the same way.
 //!
 //! Drawing: [`peaks`] reduces a buffer to a waveform overview.
 
+mod atomic;
 mod decode;
+mod encoder;
 mod error;
+mod flac;
 mod guard;
+mod md5;
+mod mp3;
 mod peaks;
+mod vorbis;
 mod wav;
 
 pub use decode::{
     AudioInfo, DEFAULT_MAX_DECODED_BYTES, DecodeOptions, decode_bytes, decode_bytes_with,
     decode_file, decode_file_with, probe_bytes, probe_file,
 };
+pub use encoder::{AudioFormat, Encoder, EncoderSettings};
 pub use error::CodecError;
+pub use flac::{
+    DEFAULT_FLAC_LEVEL, FlacBitDepth, FlacWriter, MAX_FLAC_CHANNELS, MAX_FLAC_LEVEL,
+    MAX_FLAC_SAMPLE_RATE, write_flac,
+};
+pub use mp3::{MP3_SAMPLE_RATES, Mp3Channels, Mp3Rate, Mp3Settings, Mp3Writer};
 pub use peaks::peaks;
+pub use vorbis::{
+    DEFAULT_VORBIS_QUALITY, MAX_VORBIS_QUALITY, MIN_VORBIS_QUALITY, VORBIS_SAMPLE_RATES,
+    VorbisWriter, write_vorbis,
+};
 pub use wav::{DEFAULT_DITHER_SEED, WavSampleFormat, WavWriter, write_wav};
 
 /// File extensions Windfall can decode, lowercase and without the dot.

@@ -1,15 +1,22 @@
-//! Exporting the project to an audio file.
+//! Exporting the project to audio files: the mix as one file, or the mixer
+//! tracks apart as stems.
 
+use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use windfall_codec::{WavSampleFormat, WavWriter};
-use windfall_core::{AudioBuffer, samples_per_tick};
-use windfall_engine::{RenderOptions, SamplePool, render_reporting};
-use windfall_ipc::{BitDepth, ExportFormat, ExportOptions, ExportProgress, PlayMode};
-use windfall_project::{AutomationRange, AutomationTarget, PatternId, Project};
+use windfall_codec::{
+    AudioFormat, DEFAULT_FLAC_LEVEL, DEFAULT_VORBIS_QUALITY, Encoder, EncoderSettings,
+    FlacBitDepth, MAX_FLAC_LEVEL, Mp3Channels, Mp3Rate, Mp3Settings, WavSampleFormat,
+};
+use windfall_core::samples_per_tick;
+use windfall_engine::{
+    RenderOptions, SamplePool, StemOptions, Streamed, render_stems, render_streaming, stems,
+};
+use windfall_ipc::{BitDepth, ExportFormat, ExportOptions, ExportProgress, ExportedFile, PlayMode};
+use windfall_project::{AutomationRange, AutomationTarget, PatternId, Project, TrackId};
 
 use super::Session;
 use crate::events::Event;
@@ -18,29 +25,141 @@ use crate::paths;
 /// Sample rates an export may ask for.
 const SAMPLE_RATES: std::ops::RangeInclusive<u32> = 8_000..=384_000;
 
-/// Longest export, in frames. The render is held in memory as 32-bit float
-/// stereo before it is written, so this is 2 GB of it, and it also keeps a
-/// WAV file of any bit depth under the format's 4 GB limit.
-const MAX_FRAMES: f64 = (2_u64 * 1024 * 1024 * 1024 / 8) as f64;
+/// Channels of an export: the engine renders stereo.
+const CHANNELS: u16 = 2;
+
+/// Longest export of a format that has no limit of its own, in seconds: a
+/// day. Nothing is held in memory, so this only keeps a slip of the hand,
+/// a hundred thousand loops of a pattern, from filling the disk.
+const MAX_SECONDS: f64 = 24.0 * 60.0 * 60.0;
+
+/// The most audio a WAV file holds, in bytes. Past 4 GB its header cannot
+/// say how long it is; this leaves room for the header itself.
+const MAX_WAV_BYTES: f64 = 4_294_967_000.0;
 
 /// Shortest time between two progress events.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Share of the progress bar given to rendering. Writing the file takes the
-/// rest.
-const RENDER_SHARE: f32 = 0.9;
+static NEXT_TRANSACTION: AtomicU64 = AtomicU64::new(0);
 
-/// Samples handed to the file writer at a time.
-const WRITE_CHUNK: usize = 1 << 16;
+/// Holds finished files beside their destinations until every encoder succeeds.
+struct FileTransaction {
+    files: Vec<TransactionFile>,
+    committed: bool,
+}
+
+struct TransactionFile {
+    destination: PathBuf,
+    stage: PathBuf,
+    backup: PathBuf,
+    backed_up: bool,
+    placed: bool,
+}
+
+impl FileTransaction {
+    fn new(targets: &[Target]) -> Self {
+        let serial = NEXT_TRANSACTION.fetch_add(1, Ordering::Relaxed);
+        let files = targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| {
+                let name = target
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let prefix = format!(".{name}.{}-{serial}-{index}", std::process::id());
+                TransactionFile {
+                    destination: target.path.clone(),
+                    stage: target.path.with_file_name(format!("{prefix}.stage")),
+                    backup: target.path.with_file_name(format!("{prefix}.backup")),
+                    backed_up: false,
+                    placed: false,
+                }
+            })
+            .collect();
+        Self {
+            files,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) -> Result<(), String> {
+        for file in &mut self.files {
+            if file.destination.exists() {
+                if !file.destination.is_file() {
+                    return Err(format!(
+                        "\"{}\": the destination is not a file",
+                        paths::name(&file.destination)
+                    ));
+                }
+                fs::rename(&file.destination, &file.backup).map_err(|error| error.to_string())?;
+                file.backed_up = true;
+            }
+            fs::rename(&file.stage, &file.destination).map_err(|error| error.to_string())?;
+            file.placed = true;
+        }
+        self.committed = true;
+        for file in &self.files {
+            if file.backed_up {
+                let _ = fs::remove_file(&file.backup);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for FileTransaction {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for file in self.files.iter().rev() {
+            let _ = fs::remove_file(&file.stage);
+            if file.placed {
+                let _ = fs::remove_file(&file.destination);
+            }
+            if file.backed_up {
+                let _ = fs::rename(&file.backup, &file.destination);
+            }
+        }
+    }
+}
+
+/// One file an export writes.
+struct Target {
+    path: PathBuf,
+    /// The mixer track the file is the stem of. `None` for the mix.
+    track: Option<TrackId>,
+}
 
 /// Everything an export needs, copied out of the session so the project can
 /// be edited while the export runs.
 struct Job {
+    /// The path the export was asked for, as a place on the disk. Stems
+    /// are named after it.
     path: PathBuf,
+    /// The files to write: one, or one for each stream of a stem render in
+    /// the order the engine numbers them.
+    targets: Vec<Target>,
+    /// The folder the stems go in, when they get one of their own.
+    folder: Option<PathBuf>,
+    settings: EncoderSettings,
+    stems: Option<StemOptions>,
     project: Project,
     pool: SamplePool,
     pattern: PatternId,
     options: ExportOptions,
+}
+
+/// How an export that did not fail ended.
+enum Outcome {
+    Written {
+        files: Vec<ExportedFile>,
+        /// Audio clips the render had no room to play.
+        dropped_clips: u32,
+    },
+    Cancelled,
 }
 
 /// Sends progress events, no more often than [`PROGRESS_INTERVAL`].
@@ -61,36 +180,58 @@ impl Progress<'_> {
             return;
         }
         self.sent_at = Some(Instant::now());
-        self.send(false, None, 0);
+        self.send(false, None, None);
     }
 
-    /// `dropped_clips` is for the event that ends the export: the audio
-    /// clips the render had no room to play.
-    fn send(&self, done: bool, error: Option<String>, dropped_clips: u32) {
+    /// `outcome` is for the event that ends an export that did not fail.
+    fn send(&self, done: bool, error: Option<String>, outcome: Option<Outcome>) {
+        let (files, dropped_clips, cancelled) = match outcome {
+            Some(Outcome::Written {
+                files,
+                dropped_clips,
+            }) => (Some(files), dropped_clips, None),
+            Some(Outcome::Cancelled) => (None, 0, Some(true)),
+            None => (None, 0, None),
+        };
         self.session.emit(Event::ExportProgress(ExportProgress {
             path: self.path.clone(),
             fraction: self.fraction,
             done,
             error,
             dropped_clips,
+            files,
+            cancelled,
         }));
     }
 }
 
 impl Session {
-    /// Starts exporting the project to an audio file and returns at once.
-    /// The export works from a copy of the project as it is now. Progress
-    /// arrives as events, and the last one has `done` set and, if the
-    /// export failed, says why. It also says how many audio clips are not
-    /// in the file because more overlapped than the engine plays at once.
+    /// Starts exporting the project to audio and returns at once. The
+    /// export works from a copy of the project as it is now. Progress
+    /// arrives as events, and the last one has `done` set and says how it
+    /// ended: with the files that were written and how many audio clips
+    /// are not in them because more overlapped than the engine plays at
+    /// once, with the reason it failed, or cancelled.
     ///
     /// In pattern mode the pattern rendered is the one the transport has
     /// selected. Only one export runs at a time.
     ///
-    /// The file starts where the song starts: whatever time the project's
+    /// A file starts where the song starts: whatever time the project's
     /// effects and instruments take to put their output out is left off
     /// its front. It ends `tail_secs` after the end of the song, or, with
     /// `auto_tail`, as soon as everything has rung out, if that is sooner.
+    ///
+    /// The audio is encoded as it is rendered, so a long song is never
+    /// held in memory. Every file is written under another name beside
+    /// where it belongs and takes its own name only when the whole export
+    /// has gone through: an export that fails or is cancelled leaves no
+    /// file, and leaves the files it would have replaced as they were.
+    ///
+    /// With `stems` the export writes one file for each stem, and the mix
+    /// if it is asked for, all of the same length. For the path
+    /// `Song.flac` they are `Song - Mix.flac`, `Song - Bass.flac` and so
+    /// on, in the folder `Song` or beside it; `Song.flac` itself is not
+    /// written. [`windfall_ipc::StemMode`] says what a stem holds.
     ///
     /// A file name with no extension gets the one of the format, and a
     /// name that asks for another format is refused; see [`export_path`].
@@ -100,13 +241,15 @@ impl Session {
         if options.path.trim().is_empty() {
             return Err("Choose where to save the file.".to_owned());
         }
-        let path = export_path(paths::absolute(&options.path)?, options.format)?;
+        let format = audio_format(options.format);
+        let path = export_path(paths::absolute(&options.path)?, format)?;
         if !SAMPLE_RATES.contains(&options.sample_rate) {
             return Err(format!(
                 "{} Hz is not a sample rate Windfall can export.",
                 options.sample_rate
             ));
         }
+        let settings = encoder_settings(&options)?;
         if !options.tail_secs.is_finite() || options.tail_secs < 0.0 {
             return Err("The tail must be zero seconds or longer.".to_owned());
         }
@@ -128,21 +271,56 @@ impl Session {
             return Err("The playlist is empty, so there is no song to export.".to_owned());
         }
         let frames = expected_frames(&project, pattern, &options);
-        if frames > MAX_FRAMES {
+        let longest = longest_frames(&settings, options.sample_rate);
+        if frames > longest {
             let minutes = |frames: f64| frames / f64::from(options.sample_rate) / 60.0;
             return Err(format!(
-                "The export would be {:.0} minutes long. The longest Windfall can export at {} Hz is {:.0} minutes.",
+                "The export would be {:.0} minutes long. The longest {} file Windfall can write at {} Hz is {:.0} minutes.",
                 minutes(frames),
+                format.name(),
                 options.sample_rate,
-                minutes(MAX_FRAMES).floor(),
+                minutes(longest).floor(),
             ));
         }
+
+        let stem_options = options.stems.as_ref().map(|stems| StemOptions {
+            mode: stems.mode,
+            tracks: stems.tracks.clone(),
+            include_mix: stems.include_mix,
+            numbered: stems.numbered,
+        });
+        let (targets, folder) = match (&options.stems, &stem_options) {
+            (Some(asked), Some(stem_options)) => {
+                let list = stems(&project, stem_options).map_err(|error| error.to_string())?;
+                let folder = asked.folder.then(|| path.with_extension(""));
+                let targets = list
+                    .into_iter()
+                    .map(|stem| Target {
+                        path: stem_path(&path, folder.as_deref(), &stem.name),
+                        track: stem.track,
+                    })
+                    .collect();
+                (targets, folder)
+            }
+            _ => {
+                let mix = Target {
+                    path: path.clone(),
+                    track: None,
+                };
+                (vec![mix], None)
+            }
+        };
 
         if self.inner.exporting.swap(true, Ordering::SeqCst) {
             return Err("An export is already running.".to_owned());
         }
+        self.inner.export_cancelled.store(false, Ordering::SeqCst);
         let job = Job {
             path,
+            targets,
+            folder,
+            settings,
+            stems: stem_options,
             project,
             pool,
             pattern,
@@ -158,6 +336,17 @@ impl Session {
         })
     }
 
+    /// Stops the export that is running, if one is. It ends with a last
+    /// event that has `cancelled` set, and leaves no file: what it had
+    /// written so far is removed, and the files it would have replaced are
+    /// as they were. An export that is already putting its finished files
+    /// in place goes through.
+    pub fn export_cancel(&self) {
+        if self.inner.exporting.load(Ordering::SeqCst) {
+            self.inner.export_cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+
     fn run_export(&self, job: &Job) {
         let mut progress = Progress {
             session: self,
@@ -165,20 +354,26 @@ impl Session {
             sent_at: None,
             fraction: 0.0,
         };
+        let cancelled = || self.inner.export_cancelled.load(Ordering::SeqCst);
         // A panic must not leave the session refusing every later export.
-        let outcome = catch_unwind(AssertUnwindSafe(|| write_export(job, &mut progress)));
-        let mut dropped_clips = 0;
-        let error = match outcome {
-            Ok(Ok(dropped)) => {
-                progress.fraction = 1.0;
-                dropped_clips = dropped;
-                None
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            write_export(job, &mut progress, &cancelled)
+        }));
+        let (error, outcome) = match outcome {
+            Ok(Ok(outcome)) => {
+                if matches!(outcome, Outcome::Written { .. }) {
+                    progress.fraction = 1.0;
+                }
+                (None, Some(outcome))
             }
-            Ok(Err(reason)) => Some(format!(
-                "Could not export to \"{}\": {reason}",
-                paths::display(&job.path)
-            )),
-            Err(_) => Some("The export stopped unexpectedly.".to_owned()),
+            Ok(Err(reason)) => (
+                Some(format!(
+                    "Could not export to \"{}\": {reason}",
+                    paths::display(&job.path)
+                )),
+                None,
+            ),
+            Err(_) => (Some("The export stopped unexpectedly.".to_owned()), None),
         };
         if let Some(error) = &error {
             log::warn!("{error}");
@@ -186,7 +381,121 @@ impl Session {
         // Cleared first, so a UI that starts the next export on hearing
         // `done` is not refused.
         self.inner.exporting.store(false, Ordering::SeqCst);
-        progress.send(true, error, dropped_clips);
+        progress.send(true, error, outcome);
+    }
+}
+
+fn audio_format(format: ExportFormat) -> AudioFormat {
+    match format {
+        ExportFormat::Wav => AudioFormat::Wav,
+        ExportFormat::Flac => AudioFormat::Flac,
+        ExportFormat::Ogg => AudioFormat::Ogg,
+        ExportFormat::Mp3 => AudioFormat::Mp3,
+    }
+}
+
+/// How the files of an export are encoded, or why they cannot be the way
+/// the options ask. Settings of a format that is not the one chosen are
+/// not looked at.
+fn encoder_settings(options: &ExportOptions) -> Result<EncoderSettings, String> {
+    let settings = match options.format {
+        ExportFormat::Ogg => EncoderSettings::Vorbis {
+            quality: options.ogg_quality.unwrap_or(DEFAULT_VORBIS_QUALITY),
+        },
+        ExportFormat::Mp3 => EncoderSettings::Mp3 {
+            settings: options
+                .mp3
+                .map_or_else(Mp3Settings::default, |settings| Mp3Settings {
+                    rate: match settings.rate {
+                        windfall_ipc::Mp3Rate::Cbr { bitrate } => Mp3Rate::Cbr(bitrate),
+                        windfall_ipc::Mp3Rate::Vbr { quality } => Mp3Rate::Vbr(quality),
+                    },
+                    channels: match settings.channels {
+                        windfall_ipc::Mp3Channels::Mono => Mp3Channels::Mono,
+                        windfall_ipc::Mp3Channels::Stereo => Mp3Channels::Stereo,
+                        windfall_ipc::Mp3Channels::JointStereo => Mp3Channels::JointStereo,
+                    },
+                }),
+        },
+        ExportFormat::Wav => EncoderSettings::Wav {
+            format: match options.bit_depth {
+                BitDepth::Int16 => WavSampleFormat::Int16,
+                BitDepth::Int24 => WavSampleFormat::Int24,
+                BitDepth::Float32 => WavSampleFormat::Float32,
+            },
+        },
+        ExportFormat::Flac => {
+            let depth = match options.bit_depth {
+                BitDepth::Int16 => FlacBitDepth::Int16,
+                BitDepth::Int24 => FlacBitDepth::Int24,
+                BitDepth::Float32 => {
+                    return Err(
+                        "A FLAC file holds 16-bit or 24-bit audio. Choose one of the two, or export a WAV file to keep 32-bit float."
+                            .to_owned(),
+                    );
+                }
+            };
+            let level = options.flac_level.unwrap_or(DEFAULT_FLAC_LEVEL);
+            if level > MAX_FLAC_LEVEL {
+                return Err(format!(
+                    "FLAC compression levels go from 0 to {MAX_FLAC_LEVEL}, and {level} was asked for."
+                ));
+            }
+            EncoderSettings::Flac { depth, level }
+        }
+    };
+    // Whatever else the format cannot hold, in the encoder's own words.
+    settings
+        .check(options.sample_rate, encoder_channels(&settings))
+        .map_err(|error| sentence(&error.to_string()))?;
+    Ok(settings)
+}
+
+fn encoder_channels(settings: &EncoderSettings) -> u16 {
+    if matches!(
+        settings,
+        EncoderSettings::Mp3 {
+            settings: Mp3Settings {
+                channels: Mp3Channels::Mono,
+                ..
+            }
+        }
+    ) {
+        1
+    } else {
+        CHANNELS
+    }
+}
+
+/// A message as a sentence: with a capital and a full stop.
+fn sentence(message: &str) -> String {
+    let mut letters = message.chars();
+    let first = letters
+        .next()
+        .map(|letter| letter.to_uppercase().to_string());
+    let mut sentence = first.unwrap_or_default();
+    sentence.push_str(letters.as_str());
+    if !sentence.ends_with('.') {
+        sentence.push('.');
+    }
+    sentence
+}
+
+/// The most frames one file of an export can hold.
+fn longest_frames(settings: &EncoderSettings, sample_rate: u32) -> f64 {
+    let day = MAX_SECONDS * f64::from(sample_rate);
+    match settings {
+        EncoderSettings::Wav { format } => {
+            let bytes = match format {
+                WavSampleFormat::Int16 => 2.0,
+                WavSampleFormat::Int24 => 3.0,
+                WavSampleFormat::Float32 => 4.0,
+            };
+            day.min((MAX_WAV_BYTES / (bytes * f64::from(CHANNELS))).floor())
+        }
+        EncoderSettings::Flac { .. }
+        | EncoderSettings::Vorbis { .. }
+        | EncoderSettings::Mp3 { .. } => day,
     }
 }
 
@@ -198,10 +507,8 @@ impl Session {
 /// looks like an extension counts as one: up to five letters and digits
 /// with a letter among them. The `2` of `take.2` and the ` Intro` of
 /// `01. Intro` are part of the name, and the extension is added after them.
-fn export_path(path: PathBuf, format: ExportFormat) -> Result<PathBuf, String> {
-    let wanted = match format {
-        ExportFormat::Wav => "wav",
-    };
+fn export_path(path: PathBuf, format: AudioFormat) -> Result<PathBuf, String> {
+    let wanted = format.extension();
     let given = path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -213,8 +520,8 @@ fn export_path(path: PathBuf, format: ExportFormat) -> Result<PathBuf, String> {
     match given {
         Some(extension) if extension.eq_ignore_ascii_case(wanted) => Ok(path),
         Some(extension) => Err(format!(
-            "Windfall exports {} files, so the file name cannot end in .{extension}. End it in .{wanted}, or leave the ending off.",
-            wanted.to_uppercase()
+            "The export is a {} file, so its name cannot end in .{extension}. End it in .{wanted}, leave the ending off, or choose another format.",
+            format.name()
         )),
         None => {
             let mut name = path.into_os_string();
@@ -225,59 +532,177 @@ fn export_path(path: PathBuf, format: ExportFormat) -> Result<PathBuf, String> {
     }
 }
 
-/// Renders the job and writes it to its file. Returns how many audio clips
-/// the render left out for lack of room to play them.
-fn write_export(job: &Job, progress: &mut Progress) -> Result<u32, String> {
-    let options = &job.options;
-    let rendered = render_reporting(
-        &job.project,
-        &job.pool,
-        &RenderOptions {
-            sample_rate: options.sample_rate,
-            mode: options.mode,
-            pattern: Some(job.pattern),
-            pattern_loops: options.pattern_loops,
-            tail_secs: options.tail_secs,
-            auto_tail: options.auto_tail,
-            ..RenderOptions::default()
-        },
-        &mut |fraction| {
-            progress.report(fraction * RENDER_SHARE);
+/// The file of the stem called `stem` of an export to `path`: named after
+/// the export and the stem, with the export's ending, in `folder` or else
+/// where `path` is.
+fn stem_path(path: &Path, folder: Option<&Path>, stem: &str) -> PathBuf {
+    let mut name = path.file_stem().unwrap_or_default().to_os_string();
+    name.push(" - ");
+    name.push(stem);
+    if let Some(extension) = path.extension() {
+        name.push(".");
+        name.push(extension);
+    }
+    match folder {
+        Some(folder) => folder.join(name),
+        None => path.with_file_name(name),
+    }
+}
+
+/// Writes the files of an export. Whatever way it ends without all of them
+/// written, none is left, and a folder made for them is removed again.
+fn write_export(
+    job: &Job,
+    progress: &mut Progress,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Outcome, String> {
+    let made_folder = match &job.folder {
+        Some(folder) if !folder.is_dir() => {
+            fs::create_dir_all(folder).map_err(|error| {
+                format!(
+                    "the folder \"{}\" could not be made ({error})",
+                    paths::display(folder)
+                )
+            })?;
             true
-        },
-    );
-    let audio = &rendered.audio;
-    if audio.frames() == 0 {
+        }
+        _ => false,
+    };
+    let outcome = write_files(job, progress, cancelled);
+    if let (true, Some(folder), false) = (
+        made_folder,
+        &job.folder,
+        matches!(outcome, Ok(Outcome::Written { .. })),
+    ) {
+        // Only an empty folder goes: nothing but this export put it there.
+        let _ = fs::remove_dir(folder);
+    }
+    outcome
+}
+
+/// Renders the job straight into its encoders, one for each file.
+fn write_files(
+    job: &Job,
+    progress: &mut Progress,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Outcome, String> {
+    let options = &job.options;
+    let render = RenderOptions {
+        sample_rate: options.sample_rate,
+        mode: options.mode,
+        pattern: Some(job.pattern),
+        pattern_loops: options.pattern_loops,
+        tail_secs: options.tail_secs,
+        auto_tail: options.auto_tail,
+        ..RenderOptions::default()
+    };
+
+    // Dropping an encoder removes what it has written, so every way out of
+    // here before the files are in place leaves nothing behind.
+    let mut encoders = Vec::with_capacity(job.targets.len());
+    let mut transaction = FileTransaction::new(&job.targets);
+    for (target, file) in job.targets.iter().zip(&transaction.files) {
+        let encoder = Encoder::open(
+            &file.stage,
+            &job.settings,
+            options.sample_rate,
+            encoder_channels(&job.settings),
+        );
+        encoders.push(encoder.map_err(|error| named(&target.path, job, &error.to_string()))?);
+    }
+
+    let mut failure = None;
+    let mut mono = Vec::with_capacity(render.block_frames);
+    let mut write = |stream: usize, block: &[f32]| {
+        let samples = if encoder_channels(&job.settings) == 1 {
+            mono.clear();
+            mono.extend(
+                block
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| (pair[0] + pair[1]) * 0.5),
+            );
+            mono.as_slice()
+        } else {
+            block
+        };
+        match encoders[stream].write(samples) {
+            Ok(()) => true,
+            Err(error) => {
+                failure = Some(named(&job.targets[stream].path, job, &error.to_string()));
+                false
+            }
+        }
+    };
+    let mut report = |fraction: f32| {
+        progress.report(fraction);
+        !cancelled()
+    };
+    let streamed: Streamed = match &job.stems {
+        Some(stems) => render_stems(
+            &job.project,
+            &job.pool,
+            &render,
+            stems,
+            &mut write,
+            &mut report,
+        )
+        .map_err(|error| error.to_string())?,
+        None => render_streaming(
+            &job.project,
+            &job.pool,
+            &render,
+            &mut |block| write(0, block),
+            &mut report,
+        ),
+    };
+    if let Some(reason) = failure {
+        return Err(reason);
+    }
+    if !streamed.completed || cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
+    if streamed.frames == 0 {
         return Err("there is nothing to export".to_owned());
     }
 
-    match options.format {
-        ExportFormat::Wav => write_wav(job, audio, progress)?,
+    // Finalize under staging names so a later encoder failure cannot
+    // replace an earlier destination. The transaction restores backups
+    // if moving a completed set fails part way through.
+    for (encoder, target) in encoders.into_iter().zip(&job.targets) {
+        if let Err(error) = encoder.finalize() {
+            return Err(named(&target.path, job, &error.to_string()));
+        }
     }
-    Ok(rendered.dropped_clips)
+    if cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
+    transaction.commit()?;
+    let files = job.targets.iter().map(|target| ExportedFile {
+        path: paths::display(&target.path),
+        track: target.track,
+        frames: streamed.frames,
+        bytes: fs::metadata(&target.path).map_or(0, |file| file.len()),
+    });
+    Ok(Outcome::Written {
+        files: files.collect(),
+        dropped_clips: streamed.dropped_clips,
+    })
 }
 
-fn write_wav(job: &Job, audio: &AudioBuffer, progress: &mut Progress) -> Result<(), String> {
-    let format = match job.options.bit_depth {
-        BitDepth::Int16 => WavSampleFormat::Int16,
-        BitDepth::Int24 => WavSampleFormat::Int24,
-        BitDepth::Float32 => WavSampleFormat::Float32,
-    };
-    let mut writer = WavWriter::create(&job.path, audio.sample_rate(), audio.channels(), format)
-        .map_err(|error| error.to_string())?;
-    let samples = audio.samples();
-    let mut written = 0;
-    for chunk in samples.chunks(WRITE_CHUNK) {
-        writer.write(chunk).map_err(|error| error.to_string())?;
-        written += chunk.len();
-        let share = written as f32 / samples.len() as f32;
-        progress.report(RENDER_SHARE + (1.0 - RENDER_SHARE) * share);
+/// A reason with the name of the file it is about, when the export has
+/// more than the one file its message names anyway.
+fn named(path: &Path, job: &Job, reason: &str) -> String {
+    if job.targets.len() == 1 && path == job.path {
+        reason.to_owned()
+    } else {
+        format!("\"{}\": {reason}", paths::name(path))
     }
-    writer.finalize().map_err(|error| error.to_string())
 }
 
 /// How many frames an export will be at most, near enough to refuse one
-/// that is far too long before any memory is set aside for it.
+/// that is far too long before anything is rendered.
 fn expected_frames(project: &Project, pattern: PatternId, options: &ExportOptions) -> f64 {
     let ticks = match options.mode {
         PlayMode::Pattern => {
@@ -321,7 +746,7 @@ mod tests {
 
     #[test]
     fn the_extension_of_the_format_is_added_when_the_name_has_none() {
-        let named = |name: &str| export_path(PathBuf::from(name), ExportFormat::Wav);
+        let named = |name: &str| export_path(PathBuf::from(name), AudioFormat::Wav);
         assert_eq!(named("beat"), Ok(PathBuf::from("beat.wav")));
         assert_eq!(named("beat.wav"), Ok(PathBuf::from("beat.wav")));
         assert_eq!(named("Beat.WAV"), Ok(PathBuf::from("Beat.WAV")));
@@ -330,6 +755,10 @@ mod tests {
         assert_eq!(named("01. Intro"), Ok(PathBuf::from("01. Intro.wav")));
         assert_eq!(named("v1.final-mix"), Ok(PathBuf::from("v1.final-mix.wav")));
         assert_eq!(named(".hidden"), Ok(PathBuf::from(".hidden.wav")));
+
+        let flac = |name: &str| export_path(PathBuf::from(name), AudioFormat::Flac);
+        assert_eq!(flac("beat"), Ok(PathBuf::from("beat.flac")));
+        assert_eq!(flac("beat.FLAC"), Ok(PathBuf::from("beat.FLAC")));
     }
 
     #[test]
@@ -351,14 +780,9 @@ mod tests {
             content: ClipContent::Pattern { pattern },
         });
         let options = ExportOptions {
-            path: String::new(),
-            format: ExportFormat::Wav,
             bit_depth: BitDepth::Float32,
-            sample_rate: 48_000,
-            mode: PlayMode::Song,
-            pattern_loops: 1,
             tail_secs: 1.0,
-            auto_tail: false,
+            ..ExportOptions::default()
         };
         assert_eq!(expected_frames(&project, pattern, &options), 9.0 * 48_000.0);
 
@@ -398,13 +822,73 @@ mod tests {
             ("beat.wav.ogg", "ogg"),
             ("beat.txt", "txt"),
         ] {
-            let error = export_path(PathBuf::from(name), ExportFormat::Wav).unwrap_err();
+            let error = export_path(PathBuf::from(name), AudioFormat::Wav).unwrap_err();
             assert_eq!(
                 error,
                 format!(
-                    "Windfall exports WAV files, so the file name cannot end in .{extension}. End it in .wav, or leave the ending off."
+                    "The export is a WAV file, so its name cannot end in .{extension}. End it in .wav, leave the ending off, or choose another format."
                 )
             );
         }
+        assert_eq!(
+            export_path(PathBuf::from("beat.wav"), AudioFormat::Flac).unwrap_err(),
+            "The export is a FLAC file, so its name cannot end in .wav. End it in .flac, leave the ending off, or choose another format."
+        );
+    }
+
+    #[test]
+    fn stems_are_named_after_the_export_and_keep_its_ending() {
+        let path = Path::new("out").join("My Song.FLAC");
+        assert_eq!(
+            stem_path(&path, None, "03 Bass"),
+            Path::new("out").join("My Song - 03 Bass.FLAC")
+        );
+        let folder = path.with_extension("");
+        assert_eq!(folder, Path::new("out").join("My Song"));
+        assert_eq!(
+            stem_path(&path, Some(&folder), "Mix"),
+            Path::new("out").join("My Song").join("My Song - Mix.FLAC")
+        );
+        // A dot in the name is part of the name.
+        let dotted = Path::new("take.2.wav");
+        assert_eq!(
+            stem_path(dotted, None, "Mix"),
+            Path::new("take.2 - Mix.wav")
+        );
+    }
+
+    #[test]
+    fn a_wav_file_is_limited_by_its_header_and_the_others_by_the_day() {
+        let wav = |format| longest_frames(&EncoderSettings::Wav { format }, 48_000);
+        // 4 GB of 32-bit float stereo is a little over three hours.
+        assert_eq!(
+            (wav(WavSampleFormat::Float32) / 48_000.0 / 60.0).floor(),
+            186.0
+        );
+        assert_eq!(
+            (wav(WavSampleFormat::Int16) / 48_000.0 / 60.0).floor(),
+            372.0
+        );
+        let flac = EncoderSettings::Flac {
+            depth: FlacBitDepth::Int24,
+            level: 5,
+        };
+        assert_eq!(longest_frames(&flac, 48_000), 24.0 * 3_600.0 * 48_000.0);
+        // At a low rate a day is less than a WAV file holds.
+        assert_eq!(
+            longest_frames(
+                &EncoderSettings::Wav {
+                    format: WavSampleFormat::Int16
+                },
+                8_000
+            ),
+            24.0 * 3_600.0 * 8_000.0
+        );
+    }
+
+    #[test]
+    fn a_message_is_made_a_sentence() {
+        assert_eq!(sentence("cannot write"), "Cannot write.");
+        assert_eq!(sentence("Already one."), "Already one.");
     }
 }

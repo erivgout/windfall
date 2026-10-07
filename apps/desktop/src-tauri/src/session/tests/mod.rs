@@ -5,6 +5,7 @@ mod beat;
 mod document;
 mod effects;
 mod export;
+mod export_formats;
 mod files;
 mod library;
 mod playback;

@@ -163,6 +163,8 @@ struct Inner {
     cache: SampleCache,
     factory_dir: PathBuf,
     exporting: AtomicBool,
+    /// The export that is running has been asked to stop.
+    export_cancelled: AtomicBool,
     /// Counts preview requests, so a file that finishes decoding after a
     /// newer request was made is not played. Held while a preview is
     /// handed to the engine or stopped, so neither can slip in between
@@ -263,6 +265,7 @@ impl Session {
                 cache,
                 factory_dir,
                 exporting: AtomicBool::new(false),
+                export_cancelled: AtomicBool::new(false),
                 preview: Mutex::new(0),
                 #[cfg(test)]
                 pauses: tests::Pauses::default(),

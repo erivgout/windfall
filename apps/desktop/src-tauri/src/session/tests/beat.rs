@@ -184,6 +184,7 @@ fn a_beat_can_be_built_played_saved_reopened_and_exported() {
                 pattern_loops: LOOPS,
                 tail_secs: TAIL_SECS,
                 auto_tail: false,
+                ..ExportOptions::default()
             })
             .unwrap();
         let done = rig.events.wait_for_export();

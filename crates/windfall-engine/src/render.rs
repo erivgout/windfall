@@ -39,7 +39,7 @@ pub const TAIL_SILENCE_DB: f32 = -90.0;
 
 /// How long the output has to stay that quiet, once nothing can sound any
 /// more, before an automatic tail is taken to be over.
-const TAIL_HOLD_SECONDS: f64 = 0.1;
+pub(crate) const TAIL_HOLD_SECONDS: f64 = 0.1;
 
 impl Default for RenderOptions {
     fn default() -> Self {

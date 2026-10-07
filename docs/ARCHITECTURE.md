@@ -11,7 +11,7 @@ crates/
   windfall-project/        Project model, Command, Document (undo history), .windfall file format.
   windfall-ipc/            Runtime types the engine, shell and UI exchange (transport, meters, devices, browser, export).
   windfall-flp/            Bounded FL Studio project reader, checked conversion and import reports.
-  windfall-codec/          Decode WAV, FLAC, MP3, OGG. Encode WAV. Waveform overviews.
+  windfall-codec/          Decode and encode WAV, FLAC, MP3, OGG. Waveform overviews.
   windfall-midi/           Standard MIDI File reader/writer, import plans and playlist export.
   windfall-engine/         Realtime audio engine, offline renderer, soak-test CLI.
   windfall-dsp/            Effects and instruments: the internal plugin interface, shared DSP blocks,
@@ -203,6 +203,18 @@ pub fn render(project: &Project, pool: &SamplePool, options: &RenderOptions,
 pub fn render_reporting(project: &Project, pool: &SamplePool, options: &RenderOptions,
               progress: &mut dyn FnMut(f32) -> bool) -> Rendered;
 pub struct Rendered { pub audio: AudioBuffer, pub dropped_clips: u32 }
+/// The same audio handed on a block at a time, interleaved stereo, instead of returned.
+pub fn render_streaming(project: &Project, pool: &SamplePool, options: &RenderOptions,
+              sink: &mut dyn FnMut(&[f32]) -> bool, progress: &mut dyn FnMut(f32) -> bool) -> Streamed;
+/// The mix and the mixer tracks apart. `sink` gets the number of a stream and its next frames.
+pub fn render_stems(project: &Project, pool: &SamplePool, options: &RenderOptions, stems: &StemOptions,
+              sink: &mut dyn FnMut(usize, &[f32]) -> bool, progress: &mut dyn FnMut(f32) -> bool)
+              -> Result<Streamed, StemError>;
+/// The streams `render_stems` makes, in the order it numbers them, each with a name for a file.
+pub fn stems(project: &Project, options: &StemOptions) -> Result<Vec<Stem>, StemError>;
+pub struct StemOptions { pub mode: StemMode, pub tracks: Option<Vec<TrackId>>, pub include_mix: bool, pub numbered: bool }
+pub struct Stem { pub name: String, pub track: Option<TrackId> }   // track None is the mix
+pub struct Streamed { pub frames: u64, pub dropped_clips: u32, pub completed: bool }
 ```
 
 ### Effects and instruments
@@ -285,6 +297,19 @@ The playhead in `RealtimeFrame.tick` is taken back by the engine's latency, so i
 
 "Nothing is louder" is measured, not taken from an effect's settings: every voice, audio clip and instrument has ended, and every track is done. A track is done when what goes into its effects and what comes out of them has been below -90 dBFS for as long as something can still be on its way through them (`Effect::gap_samples`: a delay's echo time, a reverb's pre-delay and longest line, a compressor's or limiter's release), or, failing that, when its input has been quiet for as long as its effects say they can ring (`tail_samples`). Numbers that are not zero but far below hearing, which a reverb puts out for a minute after it has died away, do not keep a render going.
 
+### Streamed renders and stems
+
+`render_streaming` is `render` without the buffer: it hands the audio to a sink a block at a time, and the blocks put end to end are what `render` returns, bit for bit, for every block size. With an automatic tail it keeps back what may turn out to lie past the end, so the sink never gets a frame too many. Export uses it, so a long song is never held in memory.
+
+`render_stems` gives several streams at once: the mix if it is asked for, and one stream for each mixer track chosen. The master is never a stem; its sound is the mix. Every stream is stereo, starts where the song starts, and is exactly as long as the mix, automatic tail included. Voices and audio clips take their slots as they do in the mix, mute and solo are as the project has them, and automation, tempo and tails are those of a plain render: the mix stream is that render, bit for bit. There are two kinds of stem (`StemMode`):
+
+- **Track outputs.** What each track's meter shows: the signal that leaves the track after its effects, fader and pan, before its output and sends. A bus is a stem of its own, holding what was sent to it, processed. A track's stem knows nothing of what a bus or the master does to it later, so the stems add up to the mix only when every track plays straight into a master with no effects at unity; with a reverb on a bus they do not. One pass renders all of them: the processor copies each chosen track's buffer out of the mixer, into memory set aside before the pass, so the audio path allocates nothing.
+- **To master.** What each track adds to the mix: the song with only what plays straight into that track sounding (a channel's notes, an audio clip), followed to the output through the track's effects, its sends, its buses and the master's effects and fader. A vocal's stem then carries the vocal's share of the reverb bus. Where everything on the way is linear the stems of all tracks add up to the mix; a compressor or limiter on a bus or the master reacts to each stem alone, as it does when the track is soloed. Every stem needs every bus effect to itself, so no single pass can do this: the song is rendered once for each stem with every other channel and audio clip at no level, and once for the mix, which gives the stems their length. That is `stems + 1` renders, or `stems` when the mix is not wanted and the tail is not automatic.
+
+Lining up: what leaves a track is behind the notes by the track's own figure (`PlanState::behind`, the figure of Delay compensation), and the master by the latency of the engine. Each stream has what it is behind left off its front, so a note on the first tick is on the first frame of the mix and of its stem alike, whatever look-ahead lies on which path. A track that reaches nothing can be further behind than the master, and its stream is filled up with silence at the end.
+
+With no tracks listed, the stems are the tracks that have something to give: for track outputs every track a channel or an audio clip plays into, straight or by way of other tracks, and to the master every track one plays straight into. A channel that plays straight into the master is in the mix alone. `stems` names each stream for a file: the track's name without the characters a path cannot hold, at most 60 characters, "Track 4" for a track with no name, `_` in front of a name Windows keeps for a device, "03 Bass" with `numbered` (the track's place in the mixer), and a number after a name another stream already has, whatever the letter case: "Drums", "Drums 2". The mix is "Mix" and comes first; the tracks follow in mixer order.
+
 ## IPC between the shell and the UI
 
 The UI never touches Tauri directly. It calls the `Backend` interface in `src/lib/ipc`, which has a Tauri implementation and an in-browser mock. Types come from `src/bindings`.
@@ -328,7 +353,8 @@ Tauri commands. Arguments are camelCase. A failed call rejects with a plain stri
 | `automate` | `target: AutomationTarget` | `DispatchResult`. One undo step, "Create automation clip": an automation of the target with one point at the value it has now, a new playlist track at the end, and a clip of the automation on it from tick 0 for the length of the song, at least four bars. `created` holds the automation, the playlist track and the clip, in that order. Rejects a target the project does not have. |
 | `add_audio_clip_from_file` | `path: string`, `track?: PlaylistTrackId`, `start: number`, `mixerTrack?: TrackId` | `DispatchResult`. One undo step, "Add audio clip": adds the sample to the pool if the project does not have the file yet, a playlist track at the end if `track` is absent, and an audio clip at tick `start` that is as long as the file lasts at the current tempo. With `mixerTrack` absent the clip plays into the mixer track of the audio clip of the same sample that was made last (the one with the highest id), wherever that clip plays now, so a file dropped three times shares one track; only when no clip plays the sample is a mixer track made, named after the file (the master when the mixer is full). `created` holds, in this order: the sample (the existing one if the file was in the pool), the playlist track if one was made, the mixer track if one was made, and last the clip. A clip that joins an existing mixer track therefore reports no mixer track id: the clip is always the last id, and its `mixerTrack` is in the patch. Rejects an unreadable file, and like `add_channel_from_file` when another project was opened meanwhile. |
 | `add_audio_clip_from_sample` | `sample: SampleId`, `track?: PlaylistTrackId`, `start: number`, `mixerTrack?: TrackId` | `DispatchResult`. The same for a sample already in the pool, with the same rule for an absent `mixerTrack`. `created` holds the playlist track if one was made, the mixer track if one was made, and last the clip. Rejects a sample whose audio is not loaded. |
-| `export_audio` | `options: ExportOptions` | Returns at once. Progress arrives as events. Adds `.wav` to a path with no extension and rejects any other extension. `autoTail` ends the file when the sound has rung out, at most `tailSecs` after the end. |
+| `export_audio` | `options: ExportOptions` | Returns at once. Progress arrives as events. Writes one file, or with `stems` one file for each stem. Adds the format's extension to a path with none and rejects any other extension. `autoTail` ends the file when the sound has rung out, at most `tailSecs` after the end. Rejects what the format cannot be, with a message for each case; see Export below. |
+| `export_cancel` | | Stops the export that is running, if one is. It ends with a last `export:progress` event that has `cancelled` set, and leaves no file. |
 
 Events the shell emits to every window:
 
@@ -338,7 +364,7 @@ Events the shell emits to every window:
 | `project:loaded` | `DocumentSnapshot` | After new and open. A save that had to rename a clashing sample sends an ordinary `project:patch` with the samples instead and keeps the undo history. Only when the new name is one a sample in the undo history already has is the open document replaced by the one just written, with the same ids and a fresh history, and announced here. A "Save as" into another folder that was overtaken by an edit is finished all the same: the project moves to the new file, renamed samples are pointed at their new names, the edits are kept, and the patch says the project still has unsaved changes. A sample those edits brought in from the old project folder is pointed at its file where it is. The save is refused only when both happen at once: an edit during the save, and a new name that the history already has. |
 | `transport:state` | `TransportState` | When the transport changes. |
 | `engine:status` | `EngineStatus` | When the audio device changes or fails. |
-| `export:progress` | `ExportProgress` | While exporting. `path` is the path exactly as the UI sent it. The last event, with `done` set, has in `droppedClips` how many audio clips are not in the file because more than 128 would have played at once; it is 0 on every event before. |
+| `export:progress` | `ExportProgress` | While exporting. `path` is the path exactly as the UI sent it, also when stems are written under other names. `fraction` runs over the whole export, every pass of a stem export included. The last event, with `done` set, has in `droppedClips` how many audio clips are not in the file because more than 128 would have played at once; it is 0 on every event before. Only the last event has one of these: `error`, why the export failed; `cancelled: true`, after `export_cancel`; or `files`, what was written, as `{ path, track, frames, bytes }` with the mix first (`track: null`) and the stems after it in mixer order. |
 | `project:warnings` | `string[]` | After a project loads with problems, such as a missing sample file, and after `samples_reload`. |
 
 Runtime types that grew with effects, all in `windfall-ipc`:
@@ -359,6 +385,27 @@ Replies and events travel separately, so a reply can arrive after an event that 
 - Saving: the UI records only the path a save returned. Whether the project is clean comes from the patch the shell emits after every save, because the shell knows about an edit made while the file was being written. A project without a path (never saved, or an opened backup) is saved through Save As.
 
 The UI also has file dialogs on the `Backend`, which are not shell commands: `pickProjectToOpen`, `pickProjectSavePath`, `pickExportPath`, `pickFolder` and `pickAudioFile` (wav, wave, aif, aiff, aifc, flac, mp3, ogg, oga).
+
+### Export
+
+An export renders a copy of the project straight into its encoders: `render_streaming` or `render_stems` on one side, a `windfall_codec::Encoder` for each file on the other. Nothing but the block in hand is in memory.
+
+| `format` | Extension | `bitDepth` | Sample rates | Settings |
+|---|---|---|---|---|
+| `wav` | `.wav` | `int16`, `int24`, `float32` | 8,000 to 384,000 Hz | none |
+| `flac` | `.flac` | `int16`, `int24` | 8,000 to 384,000 Hz | `flacLevel`, 0 to 8, 5 if absent |
+| `ogg` | `.ogg` | ignored | 8,000 to 192,000 Hz | `oggQuality`, -1 to 10, 6 if absent |
+| `mp3` | `.mp3` | ignored | 8,000, 11,025, 12,000, 16,000, 22,050, 24,000, 32,000, 44,100, 48,000 Hz | `mp3: { rate, channels }`, 192 kbit/s joint stereo if absent |
+
+MP3 `rate` is `{ "mode": "cbr", "bitrate": 192 }` (128, 192, 256 or 320 kbit/s) or `{ "mode": "vbr", "quality": 2 }` (V0 best through V9 smallest). `channels` is `mono`, `stereo` or `jointStereo`; mono averages the engine's stereo pair. CBR 128 requires at least 16,000 Hz; higher CBR rates require 32,000, 44,100 or 48,000 Hz. Lower rates accept VBR. Unsupported combinations fail before rendering; the dialog should choose a supported render rate, as the encoder never silently resamples.
+
+Vorbis uses `vorbis_rs` 0.5.6 (BSD-3-Clause), whose vendored libogg and aoTuV/Lancer libvorbis sources build through `cc` without system codec packages. MP3 uses `mp3lame-encoder` 0.2.5 and `mp3lame-sys` 0.1.11 (both LGPL-3.0), with vendored LAME 3.100 (LGPL-2.0-or-later). Those licenses are compatible with GPL-3.0. LAME builds directly with `cc` on Windows/MSVC and uses its bundled configure scripts through `autotools` on Unix, which needs a C compiler, make and a POSIX shell. Neither format is feature gated. The Ogg stream serial is fixed; canonical input blocks keep Vorbis bytes independent of the renderer's block size. The final MP3 Xing/Info and LAME header is patched with frame counts, encoder delay and padding for gapless decoding. Determinism is verified within one build; floating point codec implementations on different architectures need not produce identical lossy bytes.
+
+- Integer files are dithered with triangular noise from a fixed seed, the same for WAV and FLAC, so a FLAC file holds exactly the numbers a WAV file of its bit depth holds and the same export gives the same bytes every time. The FLAC encoder is Windfall's own (`windfall_codec::FlacWriter`): fixed and fitted predictors, Rice coding, the MD5 sum of the audio in the header.
+- A setting of a format that is not the one chosen is not looked at. What the chosen format cannot be is refused before anything is rendered, each with its own message: a file name that ends in another format's extension, 32-bit float FLAC, a level out of range, and an export longer than its file can hold (4 GB for WAV, which is 186 minutes of 32-bit float stereo at 48 kHz; a day for the others).
+- Every encoder writes under a temporary name beside its destination (`.<name>.<pid>-e<serial>.tmp`). The shell finalizes all files under staging names before placing any destination. Existing destinations move to backups during placement; a failed placement removes new files and restores those backups. Failure or cancellation before placement leaves existing destinations untouched and removes temporary and staging files. A group of renames is not crash atomic: interruption of the process during placement can leave staging or backup files for recovery.
+- With `stems: { mode, tracks?, includeMix, numbered, folder }` the export writes the streams of `render_stems`, all in the one format. For the path `Song.flac` the files are `Song - Mix.flac`, `Song - Bass.flac` (`Song - 03 Bass.flac` with `numbered`) and so on, in the folder `Song` beside it with `folder`, and where `Song.flac` would have been without. `Song.flac` itself is not written. A folder the export made is removed again if the export does not go through. What cannot be a stem is refused up front: the master, a track the project does not have, and no track at all without the mix.
+- One export runs at a time. `export_cancel` takes effect at the next block rendered.
 
 ## UI rules
 

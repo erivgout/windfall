@@ -610,6 +610,7 @@ fn export_song(rig: &Rig, name: &str) -> (Vec<u8>, AudioBuffer) {
         pattern_loops: 1,
         tail_secs: 1.0,
         auto_tail: false,
+        ..ExportOptions::default()
     };
     rig.session.export_audio(options.clone()).unwrap();
     assert_eq!(rig.events.wait_for_export().error, None);

@@ -2,8 +2,11 @@
 //! the helpers in `common` are shared.
 
 mod common;
+mod encoder;
 mod fixtures;
+mod flac;
 mod heap;
+mod lossy;
 mod metadata;
 mod robustness;
 mod roundtrip;

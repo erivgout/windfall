@@ -21,6 +21,7 @@ fn options(rig: &Rig, name: &str) -> ExportOptions {
         pattern_loops: 1,
         tail_secs: 0.0,
         auto_tail: false,
+        ..ExportOptions::default()
     }
 }
 
@@ -283,7 +284,7 @@ fn an_export_named_without_an_extension_is_written_as_a_wav_file() {
     rig.events.take();
     assert_eq!(
         session.export_audio(options(&rig, "beat.mp3")).unwrap_err(),
-        "Windfall exports WAV files, so the file name cannot end in .mp3. End it in .wav, or leave the ending off."
+        "The export is a WAV file, so its name cannot end in .mp3. End it in .wav, leave the ending off, or choose another format."
     );
     assert!(rig.events.take().is_empty());
     assert!(!Path::new(&rig.file("beat.mp3")).exists());

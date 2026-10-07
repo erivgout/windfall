@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use rtrb::{Consumer, Producer};
 use windfall_core::AudioBuffer;
+use windfall_project::TrackId;
 
 use crate::automation::{self, GRID, Look};
 use crate::clips::ClipPlayer;
@@ -15,6 +16,7 @@ use crate::ramp::Ramp;
 use crate::sequencer::{Cursor, Fire, Sequencer, Triggers};
 use crate::shared::Shared;
 use crate::state::{Fades, PlanState};
+use crate::stems::Taps;
 use crate::voice::{Note, Origin, Stretch, VoicePool};
 
 /// Turns the current plan into audio: sequencer, sampler voices,
@@ -58,6 +60,9 @@ pub struct Processor {
     /// The offline renderer is what plays: nobody will use the transport
     /// again, so a hold lasts for good.
     hold_for_good: bool,
+    /// The tracks a stem render listens to, each on its own. `None`
+    /// whenever anything else runs the processor.
+    taps: Option<Taps>,
     messages: Consumer<Message>,
     garbage: Producer<Garbage>,
     shared: Arc<Shared>,
@@ -104,6 +109,7 @@ impl Processor {
             landed: false,
             hold: None,
             hold_for_good: false,
+            taps: None,
             messages,
             garbage,
             shared,
@@ -123,6 +129,9 @@ impl Processor {
         self.voices.sweep(&self.plan, &mut self.garbage);
         self.clips.sweep(&self.plan, &mut self.garbage);
         self.handle_messages();
+        if let Some(taps) = &mut self.taps {
+            taps.rewind();
+        }
         let (frames, stray) = out.as_chunks_mut::<2>();
         stray.fill(0.0);
         let mut rest = frames;
@@ -146,6 +155,25 @@ impl Processor {
         let missing = self.clips.missing(self.sequencer.clock(), self.frame);
         self.shared
             .publish_clips(self.clips.playing() as u32, missing as u32);
+    }
+
+    /// Has every `process` from now on copy what leaves each of these
+    /// tracks, past its fader, to where [`Processor::taps`] shows it. A
+    /// call may then ask for no more frames than the taps have room for.
+    pub(crate) fn listen(&mut self, taps: Taps) {
+        self.taps = Some(taps);
+    }
+
+    /// What the last `process` copied out of the tracks listened to.
+    pub(crate) fn taps(&self) -> Option<&Taps> {
+        self.taps.as_ref()
+    }
+
+    /// Where a track is in the plan, and by how many frames what leaves it
+    /// lags the notes that make it.
+    pub(crate) fn track_place(&self, id: TrackId) -> Option<(usize, usize)> {
+        let index = self.plan.track_ids.get(id.0)?;
+        Some((index, self.state.behind[index]))
     }
 
     /// Audio clips that were to start and did not, because as many as can
@@ -551,6 +579,9 @@ impl Processor {
 
         self.mixer
             .mix(&self.plan, &mut self.state, &self.shared, base, out);
+        if let Some(taps) = &mut self.taps {
+            taps.collect(&mut self.mixer, frames);
+        }
         self.finish_output(base, out);
         self.frame = end;
     }

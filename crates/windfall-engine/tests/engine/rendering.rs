@@ -15,7 +15,7 @@ const RATE: u32 = 48_000;
 
 /// A project with resampling, an envelope, swing and a cut in it, so a
 /// render has plenty of ways to differ if anything depended on block size.
-fn song() -> Rig {
+pub fn song() -> Rig {
     let mut rig = Rig::new();
     rig.project.settings.tempo_bpm = 128.0;
     rig.project.settings.swing = 0.3;
@@ -35,7 +35,7 @@ fn song() -> Rig {
 /// A project with more notes inside one buffer than the engine takes from
 /// the sequencer in one go, and far more than there are voices, so a render
 /// goes through several rounds of notes and steals voices all the time.
-fn crowd() -> Rig {
+pub fn crowd() -> Rig {
     let mut rig = Rig::new();
     rig.project.settings.tempo_bpm = 522.0;
     let pattern = rig.first_pattern();
@@ -73,7 +73,7 @@ fn crowd() -> Rig {
 
 /// A project with every kind of effect and a synth in it, on tracks that
 /// feed each other, so that latency is compensated on several paths.
-fn studio() -> Rig {
+pub fn studio() -> Rig {
     let mut rig = Rig::new();
     rig.project.settings.tempo_bpm = 200.0;
     rig.project.settings.swing = 0.2;
@@ -133,7 +133,7 @@ fn studio() -> Rig {
 /// The studio with audio clips on its playlist: pitched, reversed, faded,
 /// started part way in, overlapping, at other sample rates, and on tracks
 /// with effects and with latency.
-fn tape() -> Rig {
+pub fn tape() -> Rig {
     let mut rig = studio();
     let (drums, space) = (
         rig.project.mixer.tracks[1].id,
@@ -167,7 +167,7 @@ fn tape() -> Rig {
 
 /// The tape with an automation of every kind of target on its playlist,
 /// the tempo among them.
-fn scored() -> Rig {
+pub fn scored() -> Rig {
     let mut rig = tape();
     let synth = rig.project.channels[2].id;
     automate_everything(&mut rig, synth);
@@ -404,7 +404,7 @@ fn a_render_at_another_rate_takes_off_the_latency_of_that_rate() {
 }
 
 /// A click on the last step of the bar, frame 90000, into a reverb.
-fn echoing() -> Rig {
+pub fn echoing() -> Rig {
     let mut rig = Rig::new();
     let track = rig.track();
     let click = rig.channel_on(impulse(RATE), track);
