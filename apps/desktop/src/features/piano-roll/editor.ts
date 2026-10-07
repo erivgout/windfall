@@ -3,6 +3,7 @@ import type {
   Command,
   DispatchResult,
   Note,
+  NoteTransform,
   NoteUpdate,
 } from "@/bindings"
 import {
@@ -41,8 +42,6 @@ import {
   paintSpacing,
   pasteInits,
   pasteStart,
-  quantizeEnds,
-  quantizeStarts,
   resizeDelta,
   resizeUpdates,
   rowsAlongSegment,
@@ -705,13 +704,41 @@ export class Editor {
     )
   }
 
-  /** Quantizes the selection, or every note when nothing is selected. */
+  get snapInterval(): number {
+    return this.host.settings().snap
+  }
+
+  /** Shared Rust tools validate captured notes and commit once, without previews. */
+  async transformNotes(
+    notes: readonly Note[],
+    transform: NoteTransform
+  ): Promise<boolean> {
+    const ctx = this.ctx
+    if (!ctx || this.busy || notes.length === 0) return false
+    const result = await this.host.dispatch({
+      type: "transformNotes",
+      pattern: ctx.pattern.id,
+      channel: ctx.channel,
+      notes: [...notes],
+      transform,
+    })
+    // Keep surviving selected ids and include newly chopped segments.
+    if (result) this.selected = new Set([...this.selected, ...result.created])
+    this.follow(this.host.context(), true)
+    return result !== null
+  }
+
+  /** Quick straight quantize, selection only; the action opens the options dialog. */
   async quantize(edge: ResizeEdge): Promise<void> {
     const { snap } = this.host.settings()
-    const notes = this.targets()
-    const updates =
-      edge === "start" ? quantizeStarts(notes, snap) : quantizeEnds(notes, snap)
-    await this.update(notes, updates, "Quantize notes")
+    if (snap <= 0) return
+    await this.transformNotes(this.selectedNotes(), {
+      type: "quantize",
+      grid: snap,
+      strength: 1,
+      edge,
+      groove: "straight",
+    })
   }
 
   /** Moves the selection by snap intervals and semitones. */
@@ -728,18 +755,11 @@ export class Editor {
     await this.update(notes, moveUpdates(notes, delta), "Move notes")
   }
 
-  /** Transposes the selection, or every note when nothing is selected. */
+  /** Transposes the selection, preserving its shape within the keyboard. */
   async transpose(semitones: number): Promise<void> {
-    const notes = this.targets()
+    const notes = this.selectedNotes()
     const delta = moveDelta(0, semitones, 0, moveLimits(notes))
     await this.update(notes, moveUpdates(notes, delta), "Transpose notes")
-  }
-
-  /** The selected notes, or all of them when nothing is selected. */
-  targets(): Note[] {
-    return this.selected.size > 0
-      ? this.selectedNotes()
-      : this.scene.notes.filter((note) => note.id >= 0)
   }
 
   /** Dispatches note updates as one command and follows the result. */

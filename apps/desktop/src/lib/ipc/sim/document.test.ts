@@ -105,9 +105,12 @@ function fullProject() {
   const pattern = withPlugin.patterns[0]
   const note = pattern.lanes.find((lane) => lane.channel === ids.channel)!
     .notes[0].id
+  const selectedNote = pattern.lanes.find(
+    (lane) => lane.channel === ids.channel
+  )!.notes[0]
   return {
     project: withPlugin,
-    ids: { ...ids, pattern: pattern.id, note, pluginChannel },
+    ids: { ...ids, pattern: pattern.id, note, selectedNote, pluginChannel },
   }
 }
 
@@ -141,6 +144,13 @@ type Ids = ReturnType<typeof fullProject>["ids"]
  * for a new entry when the Rust `Command` gains a variant.
  */
 const EVERY_COMMAND: { [Type in Command["type"]]: (ids: Ids) => Command } = {
+  transformNotes: (ids) => ({
+    type: "transformNotes",
+    pattern: ids.pattern,
+    channel: ids.channel,
+    notes: [ids.selectedNote],
+    transform: { type: "staccato", factor: 0.5 },
+  }),
   addPluginInstrument: () => ({
     type: "addPluginInstrument",
     plugin: pluginBinding(),
