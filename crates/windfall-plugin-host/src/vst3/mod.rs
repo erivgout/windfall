@@ -124,10 +124,9 @@ impl Vst3Module {
                 unsafe {
                     if let Ok(entry) =
                         library.get::<unsafe extern "C" fn(*mut c_void) -> bool>(b"ModuleEntry\0")
+                        && !entry(raw)
                     {
-                        if !entry(raw) {
-                            return Err(PluginError::Load("ModuleEntry refused".into()));
-                        }
+                        return Err(PluginError::Load("ModuleEntry refused".into()));
                     }
                     exit = library
                         .get::<unsafe extern "system" fn() -> bool>(b"ModuleExit\0")
