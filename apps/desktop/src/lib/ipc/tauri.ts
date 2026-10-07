@@ -62,6 +62,9 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    sliceAnalyze: (clip, options) => call("slice_analyze", { clip, options }),
+    sliceApply: (token, markers) => call("slice_apply", { token, markers }),
+    sliceDiscard: (token) => call("slice_discard", { token }),
     pluginsState: () => call("plugins_state"),
     pluginsScan: (retry) => call("plugins_scan", { retry }),
     pluginsAddFolder: (folder) => call("plugins_add_folder", { folder }),

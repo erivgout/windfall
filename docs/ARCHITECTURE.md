@@ -38,6 +38,8 @@ scripts/                   msvc-env.sh, gen-bindings.sh, build-sim.sh, check-sim
 
 Dependency direction: `core` ← `dsp` ← `project` ← `ipc` ← `engine`; `core` ← `codec`; the shell depends on all of them. `dsp` owns the parameter structs of every effect and instrument, and `project` stores them. The engine never depends on the codec: it is handed decoded audio.
 
+`windfall-project::slicer` is the shared worker/control-side beat-grid and transient detector and linked-source slice command builder. The native `slice_analyze` / `slice_apply` / `slice_discard` IPC commands own one reviewed document/source snapshot. Browser analysis runs the same Rust detector in a dedicated WASM worker. `features/slicer` provides marker review from the playlist audio inspector. Apply is one undoable batch; generation/edit/source/token checks and recording exclusion guard publication after off-lock analysis and plan preparation. See `SLICER.md` for supported settings and scope.
+
 ## Building
 
 On Windows, run `source scripts/msvc-env.sh` in Git Bash before any `cargo` command. It loads a Visual Studio environment that has the x64 C++ libraries. Without it, linking can fail.

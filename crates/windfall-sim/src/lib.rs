@@ -40,6 +40,7 @@ use std::sync::{Mutex, MutexGuard, Once, PoisonError};
 use serde::{Deserialize, Serialize};
 use windfall_project::Document;
 mod midi;
+mod slicer;
 
 /// The JSON of the value a call produced, or the message of its failure.
 pub type Reply = Result<String, String>;
@@ -114,6 +115,7 @@ mod flp;
 /// The operations, as plain functions over JSON text.
 pub mod ops {
     pub use crate::midi::{doc_midi_export, doc_midi_import, midi_preview};
+    pub use crate::slicer::{slice_analyze, slice_command};
     use serde::Deserialize;
     use windfall_project::file;
     use windfall_project::{Command, DispatchResult, Document, Project, SaveError, Touched};
@@ -371,6 +373,8 @@ macro_rules! export_ops {
 }
 
 export_ops! {
+    slice_analyze
+    slice_command
     project_new
     flp_convert
     doc_new

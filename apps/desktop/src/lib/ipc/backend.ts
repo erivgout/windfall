@@ -60,6 +60,12 @@ export type AudioClipPlace = {
  * plain text that can be shown to the user.
  */
 export interface Backend {
+  sliceAnalyze(
+    clip: number,
+    options: import("@/features/slicer/types").SliceOptions
+  ): Promise<import("@/features/slicer/types").SliceReview>
+  sliceApply(token: number, markers: number[]): Promise<DispatchResult>
+  sliceDiscard(token: number): Promise<void>
   recordingInputs(): Promise<import("@/bindings").RecordingInput[]>
   recordingState(): Promise<import("@/bindings").RecordingState>
   recordingStart(

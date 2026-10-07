@@ -14,6 +14,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+windfall-core.workspace = true
 windfall-project.workspace = true
 windfall-midi.workspace = true
 windfall-ipc.workspace = true

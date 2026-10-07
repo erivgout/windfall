@@ -4976,6 +4976,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
+ "windfall-core",
  "windfall-flp",
  "windfall-ipc",
  "windfall-midi",

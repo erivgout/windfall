@@ -8,7 +8,9 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 mod midi;
+mod slicer;
 pub use midi::*;
+pub use slicer::{SliceOptions, SliceReview};
 mod plugins;
 pub use plugins::*;
 pub use windfall_project::PlayMode;

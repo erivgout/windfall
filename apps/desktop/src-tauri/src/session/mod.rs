@@ -69,6 +69,7 @@ mod midi;
 mod realtime;
 mod recording;
 mod samples;
+mod slicer;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -213,6 +214,8 @@ struct State {
     /// Only the latest MIDI review is retained, bounded by the reader's limits.
     midi_import: Option<midi::Prepared>,
     midi_ticket: u32,
+    slice_review: Option<slicer::Prepared>,
+    slice_ticket: u32,
 }
 
 impl State {
@@ -301,6 +304,8 @@ impl Session {
                     replacements: 0,
                     midi_import: None,
                     midi_ticket: 0,
+                    slice_review: None,
+                    slice_ticket: 0,
                 }),
                 transport: Mutex::new(controller.transport()),
                 configuring: Mutex::new(()),
