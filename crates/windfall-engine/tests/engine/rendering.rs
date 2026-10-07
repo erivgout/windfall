@@ -733,3 +733,51 @@ fn a_render_at_another_sample_rate_keeps_the_timing() {
     assert_eq!(audio.frames(), 88_200);
     assert_eq!(sounding_frames(audio.samples()), vec![22_050]);
 }
+
+#[test]
+fn spectral_clips_export_exactly_as_playback_with_trim_reverse_and_fades() {
+    let mut rig = Rig::new();
+    let lane = rig.playlist_track();
+    let id = rig.audio_clip(lane, sine(RATE, 440.0, 1.0), TrackId::MASTER, 100, 1920);
+    let clip = rig
+        .project
+        .playlist
+        .clips
+        .iter_mut()
+        .find(|c| c.id == id)
+        .unwrap();
+    clip.offset = 200;
+    if let windfall_project::ClipContent::Audio {
+        stretch,
+        pitch,
+        reverse,
+        fade_in,
+        fade_out,
+        ..
+    } = &mut clip.content
+    {
+        *stretch = windfall_project::ClipStretch::Spectral {
+            ratio: 1.5,
+            quality: windfall_project::ClipStretchQuality::Standard,
+            formants: true,
+        };
+        *pitch = 7.0;
+        *reverse = true;
+        *fade_in = 100;
+        *fade_out = 180;
+    }
+    let options = RenderOptions {
+        mode: PlayMode::Song,
+        tail_secs: 0.0,
+        ..Default::default()
+    };
+    let rendered = render_all(&rig, &options);
+    let again = render_all(&rig, &options);
+    assert_eq!(rendered.samples(), again.samples());
+    let (mut processor, controller) = rig.song_processor(RATE);
+    let latency = controller.latency_frames() as usize;
+    controller.play();
+    let played = run(&mut processor, rendered.frames() + latency, 127);
+    assert_eq!(rendered.samples(), &played[latency * 2..]);
+    assert!(peak(rendered.samples()) > 0.01);
+}

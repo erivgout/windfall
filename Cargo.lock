@@ -4868,6 +4868,7 @@ dependencies = [
  "windfall-factory",
  "windfall-ipc",
  "windfall-project",
+ "windfall-stretch",
 ]
 
 [[package]]
@@ -4890,6 +4891,7 @@ dependencies = [
  "windfall-dsp",
  "windfall-ipc",
  "windfall-project",
+ "windfall-stretch",
 ]
 
 [[package]]

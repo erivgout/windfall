@@ -49,6 +49,7 @@ function timingOf(sprite: ClipSprite, content: AudioContent): AudioTiming {
     length: sprite.span.length,
     offset: sprite.span.offset,
     pitch: content.pitch,
+    stretch: content.stretch,
     reverse: content.reverse,
   }
 }

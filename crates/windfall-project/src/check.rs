@@ -567,6 +567,7 @@ fn check_playlist(project: &Project) -> Result<(), String> {
                 fade_out,
                 reverse: _,
                 pitch,
+                stretch,
             } => {
                 if project.sample(*sample).is_none() {
                     return Err(format!(
@@ -590,6 +591,13 @@ fn check_playlist(project: &Project) -> Result<(), String> {
                     return Err(format!(
                         "{owner} is pitched by {pitch} semitones, outside -{MAX_TUNE_SEMITONES} to {MAX_TUNE_SEMITONES}"
                     ));
+                }
+                if let crate::ClipStretch::Spectral { ratio, .. } = stretch
+                    && (!ratio.is_finite()
+                        || !(0.25..=4.0).contains(ratio)
+                        || !within(*pitch, -24.0, 24.0))
+                {
+                    return Err(format!("{owner} has invalid spectral stretch settings"));
                 }
                 if *fade_in > MAX_SONG_TICKS || *fade_out > MAX_SONG_TICKS {
                     return Err(format!(

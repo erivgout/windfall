@@ -634,12 +634,15 @@ fn compile_audio_clips(
             fade_out,
             reverse,
             pitch,
+            stretch,
         } = clip.content
         else {
             continue;
         };
         let end = clip.start.saturating_add(clip.length);
-        let buffer = pool.get(sample).filter(|buffer| buffer.frames() > 0);
+        let buffer = pool
+            .clip_audio(sample, stretch, pitch)
+            .filter(|buffer| buffer.frames() > 0);
         let Some(buffer) = buffer.filter(|_| !clip.muted && end > clip.start) else {
             continue;
         };
@@ -651,7 +654,11 @@ fn compile_audio_clips(
         } else {
             0.0
         };
-        let speed = 2.0_f64.powf(f64::from(pitch) / 12.0);
+        let speed = if matches!(stretch, windfall_project::ClipStretch::Tape) {
+            2.0_f64.powf(f64::from(pitch) / 12.0)
+        } else {
+            1.0
+        };
         let offset_seconds = f64::from(clip.offset) * 60.0 / (tempo_bpm * f64::from(PPQ));
         let track = track_ids.get(mixer_track.0);
         clips.push(PlanAudioClip {

@@ -43,6 +43,7 @@ import { cn } from "@/lib/utils"
 
 import { usePlaylistStore } from "../store"
 import { describeFade, speedOf, ticksPerSecond } from "./geometry"
+import { ClipProcessingControls } from "./processing-controls"
 import { patchSelectedAudioClips, routeSelectionToNewTrack } from "./ops"
 
 type AudioContent = Extract<ClipContent, { type: "audio" }>
@@ -284,29 +285,32 @@ function Settings({ clips }: { clips: AudioClip[] }) {
           {...panHint}
         />
       </Labelled>
-      <Labelled label="Pitch">
-        <NumberField
-          size="sm"
-          aria-label="Clip pitch in semitones"
-          min={-MAX_TUNE_SEMITONES}
-          max={MAX_TUNE_SEMITONES}
-          step={0.01}
-          coarseStep={1}
-          splitDrag
-          defaultValue={0}
-          unit="st"
-          className="w-20"
-          {...pitch}
-          {...pitchHint}
-        />
-        <span
-          data-slot="clip-speed"
-          className="w-16 font-readout text-[0.625rem] whitespace-nowrap text-muted-foreground"
-          title="Pitch changes the speed too, like a tape"
-        >
-          {speed.toFixed(2)}× speed
-        </span>
-      </Labelled>
+      {clips.every((clip) => clip.content.stretch?.mode !== "spectral") && (
+        <Labelled label="Pitch">
+          <NumberField
+            size="sm"
+            aria-label="Clip pitch in semitones"
+            min={-MAX_TUNE_SEMITONES}
+            max={MAX_TUNE_SEMITONES}
+            step={0.01}
+            coarseStep={1}
+            splitDrag
+            defaultValue={0}
+            unit="st"
+            className="w-20"
+            {...pitch}
+            {...pitchHint}
+          />
+          <span
+            data-slot="clip-speed"
+            className="w-16 font-readout text-[0.625rem] whitespace-nowrap text-muted-foreground"
+            title="Pitch changes the speed too, like a tape"
+          >
+            {speed.toFixed(2)}× speed
+          </span>
+        </Labelled>
+      )}
+      <ClipProcessingControls clips={clips} />
       <ToggleLed
         size="sm"
         pressed={clips.every((clip) => clip.content.reverse)}

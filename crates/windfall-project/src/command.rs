@@ -655,6 +655,8 @@ pub struct AudioClipPatch {
     pub reverse: Option<bool>,
     #[ts(optional)]
     pub pitch: Option<f32>,
+    #[ts(optional)]
+    pub stretch: Option<crate::ClipStretch>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]

@@ -1013,6 +1013,8 @@ fn renaming_a_channel_leaves_a_track_that_is_not_its_own_alone() {
             fade_out: 0,
             reverse: false,
             pitch: 0.0,
+
+            stretch: Default::default(),
         },
     };
     let clip = ClipId(run(&mut doc, Command::AddClips { clips: vec![clip] }).created[0]);
@@ -2815,6 +2817,8 @@ fn audio(sample: SampleId, mixer_track: TrackId) -> ClipContent {
         fade_out: 0,
         reverse: false,
         pitch: 0.0,
+
+        stretch: Default::default(),
     }
 }
 
@@ -2855,6 +2859,8 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
         fade_out: 480,
         reverse: true,
         pitch: -3.5,
+
+        stretch: Default::default(),
     };
     let init = ClipInit {
         offset: Some(120),
@@ -2887,6 +2893,8 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
         fade_out: MAX_SONG_TICKS + 1,
         reverse: false,
         pitch: 100.0,
+
+        stretch: Default::default(),
     };
     let tamed = add_audio_clip(&mut doc, lane, wild);
     assert_eq!(
@@ -2900,6 +2908,8 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
             fade_out: MAX_SONG_TICKS,
             reverse: false,
             pitch: MAX_TUNE_SEMITONES,
+
+            stretch: Default::default(),
         }
     );
 
@@ -3026,6 +3036,8 @@ fn update_audio_clips_changes_what_is_particular_to_audio() {
             fade_out: 480,
             reverse: true,
             pitch: 7.0,
+
+            stretch: Default::default(),
         }
     );
     // The other clip, and where the clip sits, are as they were.
@@ -6900,5 +6912,70 @@ fn check_names_each_broken_rule_of_an_automation() {
                 "case {index}: \"{problem}\" lacks \"{words}\""
             ),
         }
+    }
+}
+
+#[test]
+fn spectral_settings_load_old_audio_and_round_trip_with_undo() {
+    let mut doc = Document::new(Project::new("spectral"));
+    let lane = add_playlist_track(&mut doc);
+    let sample = add_sample(&mut doc, "spectral");
+    let id = add_audio_clip(&mut doc, lane, audio(sample, TrackId::MASTER));
+    let before = doc.project().clone();
+    let mut old = serde_json::to_value(&before).unwrap();
+    old["playlist"]["clips"][0]["content"]
+        .as_object_mut()
+        .unwrap()
+        .remove("stretch");
+    let loaded: Project = serde_json::from_value(old).unwrap();
+    assert_eq!(loaded, before);
+    let settings = ClipStretch::Spectral {
+        ratio: 1.5,
+        quality: ClipStretchQuality::High,
+        formants: true,
+    };
+    run(
+        &mut doc,
+        Command::UpdateAudioClips {
+            updates: vec![AudioClipUpdate {
+                id,
+                patch: AudioClipPatch {
+                    stretch: Some(settings),
+                    pitch: Some(12.0),
+                    ..Default::default()
+                },
+            }],
+        },
+    );
+    doc.project().check().unwrap();
+    let encoded = serde_json::to_vec(doc.project()).unwrap();
+    let loaded: Project = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(&loaded, doc.project());
+    let after = doc.project().clone();
+    doc.undo().unwrap();
+    assert_eq!(doc.project(), &before);
+    doc.redo().unwrap();
+    assert_eq!(doc.project(), &after);
+    for ratio in [0.0, 0.249, 4.001, f64::NAN] {
+        assert!(
+            doc.dispatch(
+                Command::UpdateAudioClips {
+                    updates: vec![AudioClipUpdate {
+                        id,
+                        patch: AudioClipPatch {
+                            stretch: Some(ClipStretch::Spectral {
+                                ratio,
+                                quality: ClipStretchQuality::Fast,
+                                formants: false
+                            }),
+                            ..Default::default()
+                        }
+                    }]
+                },
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(doc.project(), &after);
     }
 }

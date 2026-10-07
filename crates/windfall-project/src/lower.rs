@@ -1471,6 +1471,7 @@ impl Transaction<'_> {
                 ),
                 (has(|p| p.reverse.is_some()), "Reverse clip"),
                 (has(|p| p.pitch.is_some()), "Change clip pitch"),
+                (has(|p| p.stretch.is_some()), "Change clip stretch"),
             ],
             plural(updates.len(), "Change audio clip", "Change audio clips"),
         );
@@ -1499,6 +1500,7 @@ impl Transaction<'_> {
                 fade_out,
                 reverse,
                 pitch,
+                stretch,
             } = clip.content
             else {
                 return Err(CommandError::invalid(format!(
@@ -1516,6 +1518,7 @@ impl Transaction<'_> {
                 fade_out: patch.fade_out.unwrap_or(fade_out),
                 reverse: patch.reverse.unwrap_or(reverse),
                 pitch: patch.pitch.unwrap_or(pitch),
+                stretch: patch.stretch.unwrap_or(stretch),
             };
             clip.content = self.checked_content(&patched)?.0;
         }
@@ -1551,10 +1554,22 @@ impl Transaction<'_> {
                 fade_out,
                 reverse,
                 pitch,
+                stretch,
             } => {
                 self.sample_index(sample)?;
                 self.mixer_track_index(mixer_track)?;
-                let range = MAX_TUNE_SEMITONES;
+                let range = if matches!(stretch, crate::ClipStretch::Spectral { .. }) {
+                    24.0
+                } else {
+                    MAX_TUNE_SEMITONES
+                };
+                if let crate::ClipStretch::Spectral { ratio, .. } = stretch
+                    && (!ratio.is_finite() || !(0.25..=4.0).contains(&ratio))
+                {
+                    return Err(CommandError::invalid(
+                        "Stretch ratio must be between 0.25 and 4",
+                    ));
+                }
                 let checked = ClipContent::Audio {
                     sample,
                     mixer_track,
@@ -1564,6 +1579,8 @@ impl Transaction<'_> {
                     fade_out: fade_out.min(MAX_SONG_TICKS),
                     reverse,
                     pitch: clamped("the pitch", pitch, -range, range)?,
+
+                    stretch,
                 };
                 Ok((checked, None))
             }

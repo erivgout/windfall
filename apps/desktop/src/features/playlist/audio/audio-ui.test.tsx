@@ -399,3 +399,81 @@ describe("the mode notice", () => {
     expect(mode()).not.toHaveAttribute("data-notice")
   })
 })
+
+describe("stretch and tempo controls", () => {
+  it("applies independent stretch and pitch as one reversible edit", async () => {
+    render(<PlaylistPanel />)
+    const id = await addLoop()
+    const before = project().playlist.clips.find((c) => c.id === id)!
+    const count = steps()
+    fireEvent.click(screen.getByRole("button", { name: "Stretch / tempo" }))
+    await flush()
+    fireEvent.click(screen.getByRole("button", { name: "Independent stretch" }))
+    await flush()
+    fireEvent.change(screen.getByLabelText("Duration multiplier"), {
+      target: { value: "1.5" },
+    })
+    fireEvent.change(screen.getByLabelText("Pitch (semitones)"), {
+      target: { value: "7" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Apply to 1 clip" }))
+    await flush()
+    expect(audio(id)).toMatchObject({
+      pitch: 7,
+      stretch: {
+        mode: "spectral",
+        ratio: 1.5,
+        quality: "standard",
+        formants: false,
+      },
+    })
+    expect(project().playlist.clips.find((c) => c.id === id)?.length).toBe(
+      Math.round(before.length * 1.5)
+    )
+    expect(steps()).toBe(count + 1)
+    await act(async () => {
+      await undo()
+      await settle()
+    })
+    expect(project().playlist.clips.find((c) => c.id === id)).toEqual(before)
+  })
+  it("shows invalid ratios and unavailable detection without editing", async () => {
+    render(<PlaylistPanel />)
+    const id = await addLoop()
+    const before = audio(id)
+    fireEvent.click(screen.getByRole("button", { name: "Stretch / tempo" }))
+    await flush()
+    fireEvent.click(screen.getByRole("button", { name: "Detect tempo" }))
+    await flush()
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "requires the desktop app"
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Independent stretch" }))
+    await flush()
+    fireEvent.change(screen.getByLabelText("Duration multiplier"), {
+      target: { value: "5" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Apply to 1 clip" }))
+    await flush()
+    expect(screen.getByRole("alert")).toHaveTextContent("between 0.25 and 4")
+    expect(audio(id)).toEqual(before)
+  })
+  it("fits explicit source BPM to project tempo before Apply", async () => {
+    render(<PlaylistPanel />)
+    await addLoop()
+    fireEvent.click(screen.getByRole("button", { name: "Stretch / tempo" }))
+    await flush()
+    fireEvent.change(screen.getByLabelText("Source BPM"), {
+      target: { value: "90" },
+    })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Fit to ${project().settings.tempoBpm} BPM`,
+      })
+    )
+    await flush()
+    expect(screen.getByLabelText("Duration multiplier")).toHaveValue(
+      90 / project().settings.tempoBpm
+    )
+  })
+})

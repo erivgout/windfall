@@ -467,6 +467,8 @@ fn add_song(project: &mut Project, pool: &mut SamplePool, bass: ChannelId, bass_
                 fade_out: bar / 4,
                 reverse: false,
                 pitch: 0.0,
+
+                stretch: Default::default(),
             },
         ),
         (

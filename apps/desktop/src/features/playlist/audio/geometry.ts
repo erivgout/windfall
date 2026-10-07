@@ -1,3 +1,4 @@
+import type { ClipStretch } from "@/bindings"
 import { dbToGain, gainToDb, MAX_GAIN, PPQ } from "@/lib/units"
 
 /*
@@ -16,10 +17,19 @@ export type AudioTiming = {
   readonly offset: number
   /** Semitones. Tape-style: it changes the speed too. */
   readonly pitch: number
+  readonly stretch?: ClipStretch
   readonly reverse: boolean
 }
 
 /** Seconds of the file that go by for every second of the song. */
+export function playbackSpeed(
+  timing: Pick<AudioTiming, "pitch" | "stretch">
+): number {
+  return timing.stretch?.mode === "spectral"
+    ? 1 / timing.stretch.ratio
+    : speedOf(timing.pitch)
+}
+
 export function speedOf(pitch: number): number {
   return 2 ** (pitch / 12)
 }
@@ -36,11 +46,11 @@ export function ticksPerSecond(tempoBpm: number): number {
  */
 export function naturalTicks(
   durationSecs: number,
-  timing: Pick<AudioTiming, "offset" | "pitch">,
+  timing: Pick<AudioTiming, "offset" | "pitch" | "stretch">,
   tempoBpm: number
 ): number {
   return (
-    (durationSecs / speedOf(timing.pitch)) * ticksPerSecond(tempoBpm) -
+    (durationSecs / playbackSpeed(timing)) * ticksPerSecond(tempoBpm) -
     timing.offset
   )
 }
@@ -77,7 +87,7 @@ export function filePosition(
   if (durationSecs <= 0) return -1
   const played =
     ((timing.offset + (tick - timing.start)) / ticksPerSecond(tempoBpm)) *
-    speedOf(timing.pitch)
+    playbackSpeed(timing)
   const forward = played / durationSecs
   return timing.reverse ? 1 - forward : forward
 }

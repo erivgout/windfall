@@ -318,6 +318,8 @@ impl Rig {
                 fade_out: 0,
                 reverse: false,
                 pitch: 0.0,
+
+                stretch: Default::default(),
             },
         });
         clips.sort_by_key(Clip::sort_key);
@@ -340,6 +342,7 @@ impl Rig {
             fade_out,
             reverse,
             pitch,
+            stretch,
         } = self.clip_mut(id).content
         else {
             panic!("the clip is not an audio clip");
@@ -363,6 +366,7 @@ impl Rig {
             fade_out: settings.fade_out,
             reverse: settings.reverse,
             pitch: settings.pitch,
+            stretch,
         };
     }
 

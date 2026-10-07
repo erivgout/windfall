@@ -47,6 +47,22 @@ fn dispatch(
 }
 
 #[tauri::command]
+async fn prepare_clip_command(
+    session: State<'_, Session>,
+    command: Command,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.prepare_clip_command(command)).await
+}
+#[tauri::command]
+async fn detect_clip_tempo(
+    session: State<'_, Session>,
+    sample: SampleId,
+) -> Result<Vec<windfall_ipc::ClipTempoCandidate>, String> {
+    let session = session.inner().clone();
+    blocking(move || session.detect_clip_tempo(sample)).await
+}
+#[tauri::command]
 fn automate(
     session: State<'_, Session>,
     target: AutomationTarget,
@@ -340,6 +356,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         browser_list,
         sample_info,
         sample_info_by_id,
+        prepare_clip_command,
+        detect_clip_tempo,
         samples_reload,
         add_channel_from_file,
         set_channel_sample_from_file,

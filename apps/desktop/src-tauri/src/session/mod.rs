@@ -59,6 +59,7 @@
 
 mod audio;
 mod autosave;
+mod clip_processing;
 mod edit;
 mod export;
 mod files;
@@ -163,6 +164,7 @@ struct Inner {
     cache: SampleCache,
     factory_dir: PathBuf,
     exporting: AtomicBool,
+    preparing_clips: AtomicBool,
     /// The export that is running has been asked to stop.
     export_cancelled: AtomicBool,
     /// Counts preview requests, so a file that finishes decoding after a
@@ -265,6 +267,7 @@ impl Session {
                 cache,
                 factory_dir,
                 exporting: AtomicBool::new(false),
+                preparing_clips: AtomicBool::new(false),
                 export_cancelled: AtomicBool::new(false),
                 preview: Mutex::new(0),
                 #[cfg(test)]

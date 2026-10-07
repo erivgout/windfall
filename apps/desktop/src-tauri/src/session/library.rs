@@ -433,6 +433,8 @@ fn audio_clip_commands(
                 fade_out: 0,
                 reverse: false,
                 pitch: 0.0,
+
+                stretch: Default::default(),
             },
         }],
     });

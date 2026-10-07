@@ -682,3 +682,45 @@ fn a_voice_that_outlives_every_other_owner_of_its_sample_frees_nothing() {
     // The audio went back to this side instead, and this call frees it.
     assert_eq!(controller.frame().voices, 0);
 }
+
+#[test]
+fn spectral_clip_playback_loop_seek_and_replacement_never_touch_allocator() {
+    let mut rig = Rig::new();
+    let lane = rig.playlist_track();
+    let id = rig.audio_clip(lane, sine(48_000, 440.0, 1.0), TrackId::MASTER, 0, 1920);
+    if let ClipContent::Audio { stretch, pitch, .. } = &mut rig
+        .project
+        .playlist
+        .clips
+        .iter_mut()
+        .find(|c| c.id == id)
+        .unwrap()
+        .content
+    {
+        *stretch = windfall_project::ClipStretch::Spectral {
+            ratio: 1.5,
+            quality: windfall_project::ClipStretchQuality::Standard,
+            formants: false,
+        };
+        *pitch = 12.0;
+    }
+    let (mut processor, controller) = rig.song_processor(48_000);
+    controller.set_transport(TransportPatch {
+        loop_song: Some(true),
+        ..Default::default()
+    });
+    controller.play();
+    let mut output = [0.0; 960];
+    assert_eq!(
+        allocator_calls(|| {
+            for _ in 0..300 {
+                processor.process(&mut output);
+            }
+        }),
+        0
+    );
+    controller.seek(500.0);
+    assert_eq!(allocator_calls(|| processor.process(&mut output)), 0);
+    controller.set_project(&rig.project, &rig.pool);
+    assert_eq!(allocator_calls(|| processor.process(&mut output)), 0);
+}

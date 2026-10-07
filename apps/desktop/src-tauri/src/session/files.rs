@@ -351,6 +351,7 @@ impl Session {
         sample_dir: Option<PathBuf>,
         decoded: Decoded,
     ) -> Result<DocumentSnapshot, Refusal> {
+        let prepared = windfall_engine::Controller::prepare_project(&project, &decoded.pool);
         let mut state = self.state();
         if state.replacements != ticket.request || state.generation != ticket.generation {
             return Err(Refusal::Superseded);
@@ -391,7 +392,7 @@ impl Session {
             edits: 0,
             replacements: state.replacements,
         };
-        controller.set_project(state.document.project(), &state.pool);
+        controller.set_prepared_project(state.document.project(), prepared);
         controller.set_transport(transport);
         controller.seek(0.0);
 
