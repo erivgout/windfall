@@ -13,6 +13,7 @@ pub mod file;
 mod lower;
 pub mod model;
 pub mod patch;
+pub mod piano_tools;
 pub mod plugin;
 pub use plugin::*;
 
@@ -23,3 +24,4 @@ pub use error::CommandError;
 pub use file::{LoadError, ProjectSession, SaveError};
 pub use model::*;
 pub use patch::*;
+pub use piano_tools::{NoteEdge, NoteGroove, NoteTransform};

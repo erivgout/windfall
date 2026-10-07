@@ -12,6 +12,7 @@ import {
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 
 import type { ChannelId } from "@/bindings"
+import { ActionButton } from "@/components/action-button"
 import { ContextActions } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -224,6 +225,9 @@ export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
           <RollButton action="pianoRoll.toolErase" icon={Eraser01Icon} />
         </Group>
         <SnapPicker />
+        <ActionButton action="pianoRoll.quantize" variant="outline" size="sm">
+          Note tools
+        </ActionButton>
         <Group label="View">
           <RollButton action="pianoRoll.ghosts" icon={GhostIcon} />
           <RollButton action="pianoRoll.follow" icon={ArrowRightDoubleIcon} />

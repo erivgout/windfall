@@ -47,6 +47,8 @@ import { KeyGutter } from "./key-gutter"
 import { KeyLights } from "./key-lights"
 import { LaneHeader, LaneResizer } from "./lane-header"
 import { NOTE_MENU, PANEL_MENU } from "./menu"
+import { NoteToolsDialog } from "./note-tools-dialog"
+import { closeNoteTools } from "./note-tools"
 import {
   duplicateOutlinePainter,
   noteLabelPainter,
@@ -178,6 +180,7 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
     setCurrentSession(session)
     return () => {
       setCurrentSession(null)
+      closeNoteTools()
       showHint(null)
       session.editor.dispose()
       session.dispose()
@@ -336,6 +339,7 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
 
   return (
     <SessionContext value={session}>
+      <NoteToolsDialog />
       <ContextActions items={PANEL_MENU}>
         <div
           className="flex h-full min-h-0 min-w-0 flex-col bg-background"
