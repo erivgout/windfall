@@ -14,13 +14,13 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**55 of 342 rows accounted for (16.1%).** A row is accounted for when it is done or won't do.
+**57 of 342 rows accounted for (16.7%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
 | Todo | 255 |
-| In progress | 32 |
-| Done | 53 |
+| In progress | 30 |
+| Done | 55 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
@@ -31,7 +31,7 @@ As of 2026-10-07. Sources:
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 3 | 0 | 0 | 0 |
-| File formats and plugin hosting | 36 | 18 | 6 | 12 | 0 |
+| File formats and plugin hosting | 36 | 18 | 4 | 14 | 0 |
 | Workflow, MIDI and settings | 39 | 30 | 5 | 4 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
@@ -39,8 +39,8 @@ As of 2026-10-07. Sources:
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
 | 2. Write a song | 99 | 60 | 14 | 25 | 0 |
-| 3. Record and edit audio | 34 | 22 | 4 | 8 | 0 |
-| 4. Plugins and files | 13 | 7 | 6 | 0 | 0 |
+| 3. Record and edit audio | 34 | 22 | 3 | 9 | 0 |
+| 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
@@ -359,7 +359,7 @@ As of 2026-10-07. Sources:
 | Sample import: MP3 | MP3 import | 3 | done | Native picker and browser support MP3; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection. |
 | Sample import: OGG | OGG import | 3 | done | Native picker and browser support OGG; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection. |
 | Sample import: FLAC | FLAC import | 3 | done | Native picker and browser support FLAC; the shared sample loader supplies preview, sampler channels and playlist clips. Headless session tests verify exact gapless duration, playback, one-step undo, save/reopen and corrupt-file rejection. |
-| MIDI file import | MIDI import | 4 | in-progress | windfall-midi reads SMF formats 0/1/2, PPQ/SMPTE and creates checked project command batches with optional GM drums, tempo automation, bar splits and shared sections. Unsupported events are reported. Shell and desktop import workflow remain. |
+| MIDI file import | MIDI import | 4 | done | Desktop file picker, review/options and adjustment report append SMF formats 0/1/2 with PPQ/SMPTE as one checked undo step. Optional factory drums, tempo automation, bar splits and shared sections are supported. Unsupported events are reported. Native session and browser tests verify errors, cancellation, stale reviews and undo; the browser uses the same Rust MIDI converter. |
 | Sample import: ReCycle loops (.rex, .rx2, .rcy) | REX loop import | 6 | todo | Not in the plan. REX decoding normally relies on a proprietary SDK; check its license against GPL-3.0 (may become wont-do). |
 | Sampler sources: DrumSynth (.ds), SimSynth (.syn) and speech (.speech) presets | Synth-preset sample sources | 6 | todo | Not in the plan; legacy formats. |
 | BeatCreator/BeatSlicer grid file (.zgr) | ZGR import | 6 | todo | Not in the plan; legacy format. |
@@ -367,7 +367,7 @@ As of 2026-10-07. Sources:
 | Export: MP3 | MP3 export | 3 | done | Bundled LAME encoder with CBR 128/192/256/320 or VBR quality 0-9, mono/stereo/joint stereo, gapless length and independent ffmpeg verification. Desktop export controls are wired. |
 | Export: OGG | OGG export | 3 | done | Bundled Vorbis encoder with quality -1 to 10, gapless length and independent ffmpeg verification. Desktop export controls are wired. |
 | Export: FLAC | FLAC export | 3 | done | Native Rust encoder, 16/24-bit, compression levels 0-8 and deterministic dither. Desktop controls offer fastest, standard and smallest-file presets. Exact samples verified with own decoder and ffmpeg. |
-| Export: MIDI file | MIDI export | 3 | in-progress | windfall-midi flattens song clips or exports a pattern with offsets, loops, swing, mutes and tempo changes. Audio and sound processing are omitted; excess melodic tracks reuse MIDI channels. Shell and desktop export workflow remain. |
+| Export: MIDI file | MIDI export | 3 | done | Desktop pattern/song export writes MIDI format 0/1 at 480/960 PPQ with optional running status and swing. Native writes are atomic; the browser downloads bytes from the same Rust exporter. Offsets, loops, mutes and tempo changes are preserved. Audio and sound processing are omitted; excess melodic tracks reuse MIDI channels. |
 | Export: split mixer tracks (stems) | Stem export | 3 | done | Desktop export selects mixer tracks, mix inclusion, numbering and folders in all four audio formats. Track-output stems stream in one pass; source-through-master stems use separate passes, with nonlinear processing documented. Cancellation and ordinary-error rollback are tested. |
 | Export: all playlist tracks | Track export | 3 | todo |  |
 | Export options (song or pattern, tail, bit depth, dithering, resampling) | Export options | 3 | done | Song/pattern rendering, pattern repetitions, fixed or automatic tails, sample rate, lossless bit depth, compressed-format quality, stem selection and cancellation are available in the desktop dialog. |

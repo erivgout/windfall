@@ -3373,10 +3373,10 @@
       "summary": "Imports the tracks of a MIDI file into channels, or one track into the open piano roll.",
       "windfall_name": "MIDI import",
       "phase": 4,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "windfall-midi reads SMF formats 0/1/2, PPQ/SMPTE and creates checked project command batches with optional GM drums, tempo automation, bar splits and shared sections. Unsupported events are reported. Shell and desktop import workflow remain."
+      "notes": "Desktop file picker, review/options and adjustment report append SMF formats 0/1/2 with PPQ/SMPTE as one checked undo step. Optional factory drums, tempo automation, bar splits and shared sections are supported. Unsupported events are reported. Native session and browser tests verify errors, cancellation, stale reviews and undo; the browser uses the same Rust MIDI converter."
     },
     {
       "id": "fmt-import-rex",
@@ -3469,10 +3469,10 @@
       "summary": "Writes the project's step and piano roll notes to a standard MIDI file.",
       "windfall_name": "MIDI export",
       "phase": 3,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "windfall-midi flattens song clips or exports a pattern with offsets, loops, swing, mutes and tempo changes. Audio and sound processing are omitted; excess melodic tracks reuse MIDI channels. Shell and desktop export workflow remain."
+      "notes": "Desktop pattern/song export writes MIDI format 0/1 at 480/960 PPQ with optional running status and swing. Native writes are atomic; the browser downloads bytes from the same Rust exporter. Offsets, loops, mutes and tempo changes are preserved. Audio and sound processing are omitted; excess melodic tracks reuse MIDI channels."
     },
     {
       "id": "fmt-export-stems-mixer",
