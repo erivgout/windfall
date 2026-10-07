@@ -116,7 +116,7 @@ The SDK is MIT, so Windfall could vendor `pluginterfaces` and compile Steinberg'
 
 CLAP is hosted on clack-host and clack-extensions 0.2.0, with `clap-sys` 0.5.0 named directly where raw buffers are built.
 
-VST3 scanning uses the `vst3` 0.3.0 bindings, with the host objects written in Windfall. Audio hosting remains future work. No other VST3 crate is used, and the C++ SDK is not built.
+VST3 scanning and audio hosting use the exactly pinned `vst3` 0.3.0 bindings, with the host objects written in Windfall. No other VST3 crate is used, and the C++ SDK is not built. The [VST3 hosting report](vst3-hosting.md) describes the implemented API, verified audio/editor behavior, and remaining boundaries.
 
 The reasons:
 
@@ -211,15 +211,18 @@ These are host guarantees, not guarantees about arbitrary plugin code. CLAP host
 | Host-owned embedded CLAP native editor | Tested Win32 | Not implemented; returns unsupported | Not implemented; returns unsupported |
 | Plugin-owned floating CLAP editor | Implemented, not separately exercised | API structure present, not exercised | API structure present, not exercised; no X11 fd integration |
 | VST3 factory/component/controller/layout scan | Tested | Bundle entry not implemented; explicit unsupported | ModuleEntry/ModuleExit path implemented; not run here |
-| VST3 audio, parameter edits, state round trips, editor hosting | Explicit unsupported | Explicit unsupported | Explicit unsupported |
+| VST3 audio, parameter edits, inactive state round trips | Tested effects/instruments, mono/stereo | Bundle loading unsupported | Source implementation present; not built or run here |
+| VST3 embedded native editor | Tested Win32 with Surge XT and OB-Xf | Not implemented | Not implemented |
 
 The native editor example is `cargo run -p windfall-plugin-host --example editor -- <file> <id> [seconds]`. It defaults to 30 seconds, opens without taking keyboard focus, pumps timers/window messages and closes. On Windows it checks that the returned handle is a visible native top-level window and that it is destroyed on close. The fixture editor test also exercises resize negotiation, timer callbacks, user close, duplicate-open rejection and reopen.
 
 VST3 scans enumerate `IPluginFactory`/`IPluginFactory2`, filter audio component classes, initialize `IComponent` with a non-null `IHostApplication`, read bounded audio/event buses, initialize a separate controller when needed, connect component/controller `IConnectionPoint`s, read the parameter count, create/release an unattached view to detect editor support, disconnect, terminate and release before module exit. CLIDs use canonical FUID text rather than Windows COM byte order, with a round-trip test. `hasState` for VST3 means the component has the standard state API; successful state saving is not established by scanning.
 
-The reserved `vst3-hosting` Cargo feature defaults off and currently adds no behavior. Creating a VST3 audio instance returns `PluginError::Unsupported` even with this feature. Nothing half-working is available to the engine. Remaining VST3 work: complete host interface negotiation and messages, component handler/gesture queues, controller state synchronization, bounded reusable event/parameter COM queues, bus arrangements and activation, processing transport, state streams, adapter backend, realtime allocator tests, native views and macOS bundle lifecycle. No SDK C++ sources were copied or vendored.
+The `vst3-hosting` feature is retained for source compatibility; audio hosting is available in the default build. `PluginModule::create` returns a real VST3 instance with the existing instance, processor, effect/instrument adapter and Windows editor APIs. State save/restore requires returning the processor first; active state operations return an explicit error. Native 32-bit sample processing, reusable bounded COM queues, sample-offset parameters/notes, transport and inactive component/controller state round trips are implemented. Remaining limits, including optional host messaging, are recorded in [VST3 hosting](vst3-hosting.md). No SDK C++ sources were copied or vendored.
 
-## Real-plugin verification, 2026-10-07
+## Initial CLAP-first verification, 2026-10-07
+
+This subsection and `verification-2026-10-07.json` preserve the initial checkpoint before VST3 audio hosting was implemented. The current [supervised lifecycle report](verification-hosting-2026-10-07.json) passes all six CLAP/VST3 binaries; the [VST3 audio measurements](vst3-audio-verification-2026-10-07.json) establish finite nonzero effect/instrument processing. See [the current hosting report](vst3-hosting.md).
 
 No CLAP or VST3 installations were found in this machine's standard common-files or per-user common folders. The official release archives were extracted only under `%TEMP%/windfall-plugin-verification-a0371897`, never installed or committed. The supervised `verify` example ran the real scanner and the lifecycle check helper with a 20-second deadline for each step. The checked-in [machine-readable report](verification-2026-10-07.json) records every result and failure. This is a narrow Windows smoke test at 48 kHz, 512 frames, 64 blocks; it does not establish broad version/platform compatibility.
 
@@ -239,11 +242,13 @@ Release provenance and licenses:
 - [Surge official nightly release](https://github.com/surge-synthesizer/surge/releases/tag/Nightly): `surge-xt-win64-juce7-NIGHTLY-2026-10-01-348cfb3-pluginsonly.zip`, source revision `348cfb3`, SHA-256 `28c6c140f4714e5bc03fced74e2f7de3f793f24cd9a5bc965ba5521bb8e51225`. Surge XT and its effects are GPL-3.0, checked against the [upstream license](https://github.com/surge-synthesizer/surge/blob/main/LICENSE).
 - [OB-Xf official v1.0.3 release](https://github.com/surge-synthesizer/OB-Xf/releases/tag/v1.0.3): `ob-xf-Windows-v1.0.3.zip`, SHA-256 `149fda0649daf8a3aa0851801f92515f0dbf6203acf33c0edc7d3c445e80b1e7`. GPL-3.0, checked against its [upstream license](https://github.com/surge-synthesizer/OB-Xf/blob/main/LICENSE).
 
-The independent dev-only fixture library is GPL-3.0-or-later. Its raw CLAP gain/state/editor and sine/latency plugins include mono, separate-buffer swap, silent sidechain, MIDI-only notes, NaN, process failure/panic, absurd ports, slow process, init rejection/crash/hang, crash/hang on entry load, and continuously logging hang cases. Its VST3 factory exposes a good stereo component that requires a real host context, plus absurd buses. Integration tests build it into `target/tmp` and copy it into per-test scratch folders; nothing installed on the machine is a test dependency.
+The independent dev-only fixture library is GPL-3.0-or-later. Its raw CLAP gain/state/editor and sine/latency plugins include mono, separate-buffer swap, silent sidechain, MIDI-only notes, NaN, process failure/panic, absurd ports, slow process, init rejection/crash/hang, crash/hang on entry load, and continuously logging hang cases. Its VST3 factory now exposes a hosted stereo effect, instrument, mono effect, process-error/NaN cases and absurd buses. The VST3 processor checks lifecycle and transport and returns parameter feedback. Integration tests build it into `target/tmp` and copy it into per-test scratch folders; nothing installed on the machine is a test dependency.
 
 ## Validation
 
-Final Windows/MSVC run: **79 tests passed**, none failed or ignored. Actual `cargo test -p windfall-plugin-host` summaries, in order (library, scanner/check binaries, containment, native editor, parameter/state, processing, realtime, scanner, VST3 scan, doctests):
+The current Windows/MSVC all-features/all-targets run passes **93 tests**, with no failures or ignored tests: library 19, containment 9, native CLAP editor 1, parameters/state 10, CLAP processing 18, realtime 8, scanner 19, VST3 hosting 8, VST3 scanner 1. Host and independent fixture all-target clippy pass with warnings denied. Both format checks, doc tests, binary/example builds and `git diff --check` pass. The VST3 allocator test covers effect/instrument/mono processing, offsets, split blocks, reset and stop, with zero host allocation/reallocation/free calls. See [VST3 hosting](vst3-hosting.md) for the precise lifecycle and platform limits.
+
+Initial CLAP-first checkpoint: **79 tests passed**, none failed or ignored. Historical `cargo test -p windfall-plugin-host` summaries, in order (library, scanner/check binaries, containment, native editor, parameter/state, processing, realtime, scanner, VST3 scan, doctests):
 
 ```text
 test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
@@ -259,7 +264,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 ```
 
-`cargo clippy -p windfall-plugin-host --all-features --all-targets -- -D warnings`, the fixture crate's own all-target clippy with warnings denied, both crate-format checks, and `git diff --check` pass. Binaries and both examples build. Every cargo shell sourced `scripts/msvc-env.sh`. No whole-workspace or desktop build was performed.
+`cargo clippy -p windfall-plugin-host --all-features --all-targets -- -D warnings`, the fixture crate's own all-target clippy with warnings denied, both crate-format checks, and `git diff --check` pass. Binaries and all three examples build. Every cargo shell sourced `scripts/msvc-env.sh`. No whole-workspace or desktop build was performed in this host-only checkout.
 
 ## Integration proposal
 
