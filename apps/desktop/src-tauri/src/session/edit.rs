@@ -33,6 +33,43 @@ impl Session {
         })
     }
 
+    /// Validate native ownership and apply its edit under the same document lock.
+    /// An obsolete notification succeeds without changing the document; a
+    /// temporary refusal remains an error so the manager can retain the edit.
+    pub(crate) fn dispatch_plugin_update(
+        &self,
+        runtime: &crate::plugins::Runtime,
+        (revision, token, binding): (u64, u64, u64),
+        command: Command,
+        gesture: Option<u64>,
+    ) -> Result<bool, String> {
+        #[cfg(test)]
+        self.pause("plugin-update:apply");
+        let _recording = self.recording_idle()?;
+        let mut state = self.state();
+        let target = match &command {
+            Command::SetPluginParam { target, .. } | Command::SetPluginState { target, .. } => {
+                *target
+            }
+            _ => return Err("This is not a native plugin update".into()),
+        };
+        if !runtime.is_current(revision, token)
+            || !state
+                .document
+                .project()
+                .plugin(target)
+                .is_some_and(|current| crate::plugins::binding_identity(current) == binding)
+        {
+            return Ok(false);
+        }
+        let applied = state
+            .document
+            .dispatch(command, gesture)
+            .map_err(|error| error.to_string())?;
+        self.publish(&mut state, &applied.touched);
+        Ok(true)
+    }
+
     /// Makes an automation of `target` and puts it on the playlist, as one
     /// undo step: what "Create automation clip" on a knob or fader does.
     ///

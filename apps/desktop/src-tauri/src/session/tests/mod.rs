@@ -16,6 +16,8 @@ mod midi;
 mod playback;
 mod plugin_recording;
 #[cfg(windows)]
+mod plugin_update;
+#[cfg(windows)]
 mod plugins;
 mod recording;
 mod song;

@@ -235,10 +235,11 @@ impl Session {
     }
     pub fn refresh_plugins(&self) -> Result<(), String> {
         let _recording = self.recording_idle()?;
+        let state = self.state();
         if let Some(manager) = &*lock(&self.inner.plugins) {
             manager.runtime.retry();
         }
-        self.push_project(&self.state());
+        self.push_project(&state);
         Ok(())
     }
     /// Owns recording exclusion while native plugin control work runs.

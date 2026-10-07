@@ -1,6 +1,7 @@
 //! Cached, isolated discovery and a native owner thread for audio instances.
 mod runtime;
 pub use runtime::Runtime;
+pub(crate) use runtime::binding_identity;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -137,24 +138,17 @@ impl PluginManager {
                         }
                     }
                 }
-                let project = (!pending.is_empty()).then(|| session.document_snapshot().project);
+                // Reconcile values before opaque state changes its fingerprint.
+                pending.sort_by_key(|(_, _, _, command, _)| {
+                    matches!(command, windfall_project::Command::SetPluginState { .. })
+                });
                 pending.retain(|(before, token, binding, command, gesture)| {
-                    let target = match command {
-                        windfall_project::Command::SetPluginParam { target, .. }
-                        | windfall_project::Command::SetPluginState { target, .. } => *target,
-                        _ => return false,
-                    };
-                    if !project
-                        .as_ref()
-                        .and_then(|project| project.plugin(target))
-                        .is_some_and(|current| runtime::binding_identity(current) == *binding)
-                    {
-                        return false;
-                    }
-                    if !manager.runtime.is_current(*before, *token) {
-                        return false;
-                    }
-                    match session.dispatch(command.clone(), *gesture) {
+                    match session.dispatch_plugin_update(
+                        &manager.runtime,
+                        (*before, *token, *binding),
+                        command.clone(),
+                        *gesture,
+                    ) {
                         Ok(_) => false,
                         Err(error) => {
                             manager

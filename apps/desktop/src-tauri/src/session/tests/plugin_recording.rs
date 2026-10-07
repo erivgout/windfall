@@ -142,6 +142,25 @@ fn refused_refresh_preserves_live_clap_revision_and_captured_state_until_discard
             .contains("recording")
     );
     assert!(!controlled);
+    assert!(
+        rig.session
+            .dispatch_plugin_update(
+                &manager.runtime,
+                (
+                    revision,
+                    manager.runtime.selected_token(target).unwrap(),
+                    crate::plugins::binding_identity(&document.project.plugins[0]),
+                ),
+                Command::SetPluginParam {
+                    target,
+                    id: 7,
+                    value: 0.9,
+                },
+                None,
+            )
+            .unwrap_err()
+            .contains("recording")
+    );
     assert_eq!(
         manager.runtime.revision(),
         revision,
