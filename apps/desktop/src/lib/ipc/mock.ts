@@ -271,6 +271,11 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   let frameTimer: ReturnType<typeof setInterval> | null = null
   let lastFrameAt = 0
+  let exporting: {
+    timer: ReturnType<typeof setInterval>
+    path: string
+    fraction: number
+  } | null = null
 
   function readJson<T>(key: string, fallback: T): T {
     try {
@@ -803,15 +808,21 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
     exportAudio: (exportOptions) =>
       ipc(() => {
+        if (exporting) throw new Error("An export is already running.")
         if (!exportOptions.path)
           throw new Error("Choose where to save the file.")
         if (exportOptions.patternLoops < 1) {
           throw new Error("Render the pattern at least once.")
         }
-        let fraction = 0
         const timer = setInterval(() => {
-          fraction = Math.min(1, fraction + 0.06)
+          if (!exporting) return
+          const fraction = Math.min(1, exporting.fraction + 0.06)
+          exporting.fraction = fraction
           const done = fraction >= 1
+          if (done) {
+            clearInterval(timer)
+            exporting = null
+          }
           exportProgress.emit({
             path: exportOptions.path,
             fraction,
@@ -819,8 +830,24 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
             error: null,
             droppedClips: 0,
           })
-          if (done) clearInterval(timer)
         }, 60)
+        exporting = { timer, path: exportOptions.path, fraction: 0 }
+      }),
+
+    exportCancel: () =>
+      ipc(() => {
+        if (!exporting) return
+        const current = exporting
+        clearInterval(current.timer)
+        exporting = null
+        exportProgress.emit({
+          path: current.path,
+          fraction: current.fraction,
+          done: true,
+          error: null,
+          droppedClips: 0,
+          cancelled: true,
+        })
       }),
 
     onProjectPatch: (handler) => patches.on(handler),
@@ -842,8 +869,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     pickProjectToOpen: () => dialogs.openProject(recent()),
     pickProjectSavePath: (suggestedName) =>
       dialogs.saveProject(`/projects/${suggestedName}.windfall`),
-    pickExportPath: (suggestedName) =>
-      dialogs.exportPath(`/exports/${suggestedName}.wav`),
+    pickExportPath: (suggestedName, format = "wav") =>
+      dialogs.exportPath(`/exports/${suggestedName}.${format}`),
     pickFolder: () => dialogs.folder(),
     pickAudioFile: () => dialogs.audioFile(),
 
@@ -863,6 +890,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     },
 
     dispose() {
+      if (exporting) clearInterval(exporting.timer)
+      exporting = null
       if (frameTimer !== null) clearInterval(frameTimer)
       frameTimer = null
       doc.dispose()

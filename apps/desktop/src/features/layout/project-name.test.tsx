@@ -89,7 +89,7 @@ describe("the project's name", () => {
     useUiStore.getState().openDialog("export")
     render(<ExportDialog />)
     await user.click(await screen.findByRole("button", { name: "Choose…" }))
-    expect(pick).toHaveBeenCalledWith("beat1")
+    expect(pick).toHaveBeenCalledWith("beat1", "wav")
     expect(await screen.findByLabelText("Save to")).toHaveValue(
       "/exports/beat1.wav"
     )

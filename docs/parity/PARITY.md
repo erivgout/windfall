@@ -14,24 +14,24 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**47 of 342 rows accounted for (13.7%).** A row is accounted for when it is done or won't do.
+**52 of 342 rows accounted for (15.2%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 273 |
-| In progress | 22 |
-| Done | 45 |
+| Todo | 261 |
+| In progress | 29 |
+| Done | 50 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
-| Core features | 23 | 17 | 4 | 1 | 1 |
+| Core features | 23 | 16 | 5 | 1 | 1 |
 | Main windows | 113 | 70 | 12 | 30 | 1 |
 | Instruments | 41 | 39 | 1 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 3 | 0 | 0 | 0 |
-| File formats and plugin hosting | 36 | 32 | 0 | 4 | 0 |
+| File formats and plugin hosting | 36 | 21 | 6 | 9 | 0 |
 | Workflow, MIDI and settings | 39 | 30 | 5 | 4 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
@@ -39,8 +39,8 @@ As of 2026-10-07. Sources:
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 10 | 7 | 20 | 2 |
 | 2. Write a song | 99 | 60 | 14 | 25 | 0 |
-| 3. Record and edit audio | 34 | 34 | 0 | 0 | 0 |
-| 4. Plugins and files | 13 | 13 | 0 | 0 | 0 |
+| 3. Record and edit audio | 34 | 28 | 1 | 5 | 0 |
+| 4. Plugins and files | 13 | 7 | 6 | 0 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
@@ -67,7 +67,7 @@ As of 2026-10-07. Sources:
 | Time signature changes | Time signature changes | 2 | todo |  |
 | MIDI Support | MIDI input | 3 | todo |  |
 | MIDI Out | MIDI output | 3 | todo |  |
-| VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | todo | Umbrella row; each format is tracked as an fmt-host-* row. The plan covers CLAP, VST3 and AU, not VST2. |
+| VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | CLAP backend hosting and isolated CLAP/VST3 scanning are implemented; desktop integration remains. VST3 audio hosting and AU are pending. The plan covers CLAP, VST3 and AU, not VST2. |
 | FL Studio Remote | Phone remote | 6 | todo | The plan's phase-6 phone remote. |
 | Fruity Envelope Controller | TBD | 5 | todo |  |
 | Fruity Keyboard Controller | TBD | 5 | todo |  |
@@ -351,7 +351,7 @@ As of 2026-10-07. Sources:
 | Save new version | Save new version | 1 | todo |  |
 | Autosave and backups | Autosave and backups | 1 | done | The plan builds autosave and timestamped backups into the project format. |
 | New from template and Save as template | Project templates | 2 | todo | FL's bundled templates reference Image-Line content; needs own. |
-| FL Studio project (.flp) as an import source | FL project import | 4 | todo | Candidate basis: PyFLP (GPL-3.0). Identical sound is only possible where every plugin has a Windfall equivalent or is an installed third-party plugin. |
+| FL Studio project (.flp) as an import source | FL project import | 4 | in-progress | windfall-flp parses and converts musical structure through checked project commands, retaining unsupported plugin states and an import report. Two real FL 20.8.4 projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate. Shell and desktop workflow remain. See docs/flp/coverage.md. |
 | Back up to FL Cloud | Cloud backup (optional) | 6 | todo | New in FL Studio 2026. The plan lists optional cloud backup in phase 6. |
 | State file (.fst) | Presets | 2 | todo | Windfall presets use its own format; FL's bundled presets cannot be shipped. |
 | Score file (.fsc) | Score files | 2 | todo | FL 2026 treats .mid and .fsc interchangeably for scores. |
@@ -359,26 +359,26 @@ As of 2026-10-07. Sources:
 | Sample import: MP3 | MP3 import | 3 | todo | The plan lists MP3 as a read format without naming a phase; placed with the other codecs in phase 3. |
 | Sample import: OGG | OGG import | 3 | todo | The plan lists OGG as a read format without naming a phase; placed with the other codecs in phase 3. |
 | Sample import: FLAC | FLAC import | 3 | todo | unverified: FLAC as an FL sample import format (the manual pages checked name WAV, MP3 and OGG). The plan lists FLAC as a read format. |
-| MIDI file import | MIDI import | 4 | todo |  |
+| MIDI file import | MIDI import | 4 | in-progress | windfall-midi reads SMF formats 0/1/2, PPQ/SMPTE and creates checked project command batches with optional GM drums, tempo automation, bar splits and shared sections. Unsupported events are reported. Shell and desktop import workflow remain. |
 | Sample import: ReCycle loops (.rex, .rx2, .rcy) | REX loop import | 6 | todo | Not in the plan. REX decoding normally relies on a proprietary SDK; check its license against GPL-3.0 (may become wont-do). |
 | Sampler sources: DrumSynth (.ds), SimSynth (.syn) and speech (.speech) presets | Synth-preset sample sources | 6 | todo | Not in the plan; legacy formats. |
 | BeatCreator/BeatSlicer grid file (.zgr) | ZGR import | 6 | todo | Not in the plan; legacy format. |
 | Export: WAV | WAV export | 1 | done |  |
-| Export: MP3 | MP3 export | 3 | todo |  |
-| Export: OGG | OGG export | 3 | todo |  |
-| Export: FLAC | FLAC export | 3 | todo |  |
-| Export: MIDI file | MIDI export | 3 | todo |  |
-| Export: split mixer tracks (stems) | Stem export | 3 | todo |  |
+| Export: MP3 | MP3 export | 3 | done | Bundled LAME encoder with CBR 128/192/256/320 or VBR quality 0-9, mono/stereo/joint stereo, gapless length and independent ffmpeg verification. Desktop export controls are wired. |
+| Export: OGG | OGG export | 3 | done | Bundled Vorbis encoder with quality -1 to 10, gapless length and independent ffmpeg verification. Desktop export controls are wired. |
+| Export: FLAC | FLAC export | 3 | done | Native Rust encoder, 16/24-bit, compression levels 0-8 and deterministic dither. Desktop controls offer fastest, standard and smallest-file presets. Exact samples verified with own decoder and ffmpeg. |
+| Export: MIDI file | MIDI export | 3 | in-progress | windfall-midi flattens song clips or exports a pattern with offsets, loops, swing, mutes and tempo changes. Audio and sound processing are omitted; excess melodic tracks reuse MIDI channels. Shell and desktop export workflow remain. |
+| Export: split mixer tracks (stems) | Stem export | 3 | done | Desktop export selects mixer tracks, mix inclusion, numbering and folders in all four audio formats. Track-output stems stream in one pass; source-through-master stems use separate passes, with nonlinear processing documented. Cancellation and ordinary-error rollback are tested. |
 | Export: all playlist tracks | Track export | 3 | todo |  |
-| Export options (song or pattern, tail, bit depth, dithering, resampling) | Export options | 3 | todo |  |
+| Export options (song or pattern, tail, bit depth, dithering, resampling) | Export options | 3 | done | Song/pattern rendering, pattern repetitions, fixed or automatic tails, sample rate, lossless bit depth, compressed-format quality, stem selection and cancellation are available in the desktop dialog. |
 | Export: M4A (AAC) | M4A export | 6 | todo | Not in the plan's export list. AAC encoder licensing must be checked against GPL-3.0. |
 | Export: loop, slice and note markers in WAV files | WAV marker export | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | WavPack compressed audio | WavPack support | 6 | todo | Not in the plan. |
-| Plugin hosting: VST3 | VST3 hosting | 4 | todo | The plan notes the VST3 SDK has been MIT-licensed since October 2025. |
-| Plugin hosting: CLAP | CLAP hosting | 4 | todo |  |
+| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | Isolated VST3 discovery/scanning verifies factories, components, controllers, buses and editor availability on Windows. Audio hosting remains unsupported. Linux scanning is implemented but untested; macOS bundle entry is unsupported. See docs/plugins/host-evaluation.md. |
+| Plugin hosting: CLAP | CLAP hosting | 4 | in-progress | windfall-plugin-host implements CLAP audio lifecycle, events, parameters, transport, state, adapters and Win32 editors. Windows verified with Surge XT, Surge XT Effects and OB-Xf. Engine/model/shell integration remains; in-process audio plugin crashes are uncontained. See docs/plugins/host-evaluation.md. |
 | Plugin hosting: Audio Unit | AU hosting | 4 | todo | macOS only. |
 | Plugin hosting: VST2 | VST2 hosting | 4 | todo | unverified: licensing path. Not in the plan; Steinberg no longer issues VST2 SDK licenses, so this needs a decision and may become wont-do. |
-| Plugin manager (scan and verify) | Plugin scanner | 4 | todo | The plan runs scanning in a separate process. |
+| Plugin manager (scan and verify) | Plugin scanner | 4 | in-progress | Isolated CLAP/VST3 scanner, metadata cache and blocklist are implemented and tested in windfall-plugin-host. Desktop plugin manager and project/engine integration remain. |
 | Bridged plugins (separate process) | Out-of-process plugins | 4 | todo | The plan's crash protection. |
 | Plugin wrapper options (smart disable, fixed-size buffers, threaded processing, scaling, detached window) | Plugin host options | 4 | todo |  |
 | FL Studio as a VST or AU plugin | Windfall as a plugin | 6 | todo | The plan lists this as 'possible later' and assigns no phase. |

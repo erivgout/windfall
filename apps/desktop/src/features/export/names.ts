@@ -1,3 +1,4 @@
+import type { ExportFormat } from "@/bindings"
 import { fileName } from "@/lib/time"
 
 /** The longest tail an export may be given, in seconds. */
@@ -34,10 +35,21 @@ export function parsePatternLoops(text: string): number | null {
 }
 
 /**
- * The name of the file an export wrote. The shell adds ".wav" to a path
- * with no extension, and reports progress under the path as it was typed.
+ * The name of the file an export wrote. The shell adds the format's extension
+ * to a path with no extension, and reports progress under the submitted path.
  */
-export function exportedName(path: string): string {
+export function exportedName(
+  path: string,
+  format: ExportFormat = "wav"
+): string {
   const name = fileName(path)
-  return /\.[^.]+$/.test(name) ? name : `${name}.wav`
+  return /\.[^.]+$/.test(name) ? name : `${name}.${format}`
+}
+
+/** Keep a chosen audio file name in step with the format control. */
+export function replaceExportExtension(
+  path: string,
+  format: ExportFormat
+): string {
+  return path.replace(/\.(wav|flac|ogg|mp3)$/i, `.${format}`)
 }

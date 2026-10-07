@@ -1,0 +1,240 @@
+import type { BitDepth, ExportFormat, ExportOptions } from "@/bindings"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldTitle,
+} from "@/components/ui/field"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { formatSampleRate } from "@/lib/time"
+
+import { Choice, type Option } from "./choice"
+
+type Settings = Pick<
+  ExportOptions,
+  "format" | "bitDepth" | "sampleRate" | "flacLevel" | "oggQuality" | "mp3"
+>
+
+const FORMATS: Option<ExportFormat>[] = [
+  { value: "wav", label: "WAV" },
+  { value: "flac", label: "FLAC" },
+  { value: "ogg", label: "OGG" },
+  { value: "mp3", label: "MP3" },
+]
+const DEPTHS: Option<BitDepth>[] = [
+  { value: "int16", label: "16 bit" },
+  { value: "int24", label: "24 bit" },
+  { value: "float32", label: "32 bit float" },
+]
+const RATES = [44_100, 48_000, 88_200, 96_000]
+const MP3_DEFAULT: NonNullable<ExportOptions["mp3"]> = {
+  rate: { mode: "cbr", bitrate: 192 },
+  channels: "jointStereo",
+}
+
+/** The form offers rates every bitrate of its selected format supports. */
+export function exportSampleRates(format: ExportFormat): number[] {
+  return format === "mp3" ? [44_100, 48_000] : RATES
+}
+
+/** Keep the choices valid when changing from a lossless to a lossy format. */
+export function changeExportFormat<T extends Settings>(
+  draft: T,
+  format: ExportFormat
+): Omit<T, "format" | "bitDepth" | "sampleRate"> &
+  Pick<Settings, "format" | "bitDepth" | "sampleRate"> {
+  return {
+    ...draft,
+    format,
+    bitDepth:
+      format === "flac" && draft.bitDepth === "float32"
+        ? "int24"
+        : draft.bitDepth,
+    sampleRate: exportSampleRates(format).includes(draft.sampleRate)
+      ? draft.sampleRate
+      : 48_000,
+  }
+}
+
+export function FormatControls({
+  settings,
+  disabled,
+  set,
+  onFormat,
+}: {
+  settings: Settings
+  disabled: boolean
+  set<K extends keyof Settings>(key: K, value: Settings[K]): void
+  onFormat(format: ExportFormat): void
+}) {
+  const mp3 = settings.mp3 ?? MP3_DEFAULT
+  const lossless = settings.format === "wav" || settings.format === "flac"
+  return (
+    <FieldGroup>
+      <Field data-disabled={disabled || undefined}>
+        <FieldTitle id="export-format-label">File format</FieldTitle>
+        <ToggleGroup
+          aria-labelledby="export-format-label"
+          value={[settings.format]}
+          variant="outline"
+          disabled={disabled}
+          onValueChange={(values) => {
+            const format = FORMATS.find(
+              (option) => option.value === values[0]
+            )?.value
+            if (format) onFormat(format)
+          }}
+        >
+          {FORMATS.map(({ value, label }) => (
+            <ToggleGroupItem key={value} value={value}>
+              {label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <FieldDescription>
+          {settings.format === "wav"
+            ? "Uncompressed audio for editing and sharing with other music apps."
+            : settings.format === "flac"
+              ? "Lossless audio in a smaller file."
+              : settings.format === "ogg"
+                ? "Compressed Vorbis audio, with a choice of quality."
+                : "Compressed audio for players and sharing."}
+        </FieldDescription>
+      </Field>
+      <FieldGroup className="grid grid-cols-2 gap-3">
+        {lossless && (
+          <Field data-disabled={disabled || undefined}>
+            <FieldLabel htmlFor="export-depth">Bit depth</FieldLabel>
+            <Choice
+              id="export-depth"
+              value={settings.bitDepth}
+              options={
+                settings.format === "flac"
+                  ? DEPTHS.filter((option) => option.value !== "float32")
+                  : DEPTHS
+              }
+              disabled={disabled}
+              onChange={(depth) => set("bitDepth", depth)}
+            />
+          </Field>
+        )}
+        <Field data-disabled={disabled || undefined}>
+          <FieldLabel htmlFor="export-rate">Sample rate</FieldLabel>
+          <Choice
+            id="export-rate"
+            value={settings.sampleRate}
+            options={exportSampleRates(settings.format).map((value) => ({
+              value,
+              label: formatSampleRate(value),
+            }))}
+            disabled={disabled}
+            onChange={(rate) => set("sampleRate", rate)}
+          />
+        </Field>
+        {settings.format === "flac" && (
+          <Field data-disabled={disabled || undefined}>
+            <FieldLabel htmlFor="export-flac-level">Compression</FieldLabel>
+            <Choice
+              id="export-flac-level"
+              value={settings.flacLevel ?? 5}
+              options={[
+                { value: 0, label: "Fastest" },
+                { value: 5, label: "Standard" },
+                { value: 8, label: "Smallest file" },
+              ]}
+              disabled={disabled}
+              onChange={(value) => set("flacLevel", value)}
+            />
+          </Field>
+        )}
+        {settings.format === "ogg" && (
+          <Field data-disabled={disabled || undefined}>
+            <FieldLabel htmlFor="export-ogg-quality">Vorbis quality</FieldLabel>
+            <Choice
+              id="export-ogg-quality"
+              value={settings.oggQuality ?? 6}
+              options={Array.from({ length: 12 }, (_, index) => ({
+                value: index - 1,
+                label: `${index - 1}${index === 0 ? " (smallest)" : index === 11 ? " (highest)" : ""}`,
+              }))}
+              disabled={disabled}
+              onChange={(value) => set("oggQuality", value)}
+            />
+          </Field>
+        )}
+        {settings.format === "mp3" && (
+          <>
+            <Field data-disabled={disabled || undefined}>
+              <FieldLabel htmlFor="export-mp3-mode">Bitrate mode</FieldLabel>
+              <Choice
+                id="export-mp3-mode"
+                value={mp3.rate.mode}
+                options={[
+                  { value: "cbr", label: "Constant bitrate" },
+                  { value: "vbr", label: "Variable bitrate" },
+                ]}
+                disabled={disabled}
+                onChange={(mode) =>
+                  set("mp3", {
+                    ...mp3,
+                    rate:
+                      mode === "cbr"
+                        ? { mode, bitrate: 192 }
+                        : { mode, quality: 2 },
+                  })
+                }
+              />
+            </Field>
+            <Field data-disabled={disabled || undefined}>
+              <FieldLabel htmlFor="export-mp3-rate">
+                {mp3.rate.mode === "cbr" ? "Bitrate" : "MP3 quality"}
+              </FieldLabel>
+              {mp3.rate.mode === "cbr" ? (
+                <Choice
+                  id="export-mp3-rate"
+                  value={mp3.rate.bitrate}
+                  options={[128, 192, 256, 320].map((value) => ({
+                    value,
+                    label: `${value} kbps`,
+                  }))}
+                  disabled={disabled}
+                  onChange={(bitrate) =>
+                    set("mp3", { ...mp3, rate: { mode: "cbr", bitrate } })
+                  }
+                />
+              ) : (
+                <Choice
+                  id="export-mp3-rate"
+                  value={mp3.rate.quality}
+                  options={Array.from({ length: 10 }, (_, value) => ({
+                    value,
+                    label: `${value}${value === 0 ? " (highest)" : value === 9 ? " (smallest)" : ""}`,
+                  }))}
+                  disabled={disabled}
+                  onChange={(quality) =>
+                    set("mp3", { ...mp3, rate: { mode: "vbr", quality } })
+                  }
+                />
+              )}
+            </Field>
+            <Field data-disabled={disabled || undefined}>
+              <FieldLabel htmlFor="export-mp3-channels">Channels</FieldLabel>
+              <Choice
+                id="export-mp3-channels"
+                value={mp3.channels}
+                options={[
+                  { value: "jointStereo", label: "Joint stereo" },
+                  { value: "stereo", label: "Stereo" },
+                  { value: "mono", label: "Mono" },
+                ]}
+                disabled={disabled}
+                onChange={(channels) => set("mp3", { ...mp3, channels })}
+              />
+            </Field>
+          </>
+        )}
+      </FieldGroup>
+    </FieldGroup>
+  )
+}

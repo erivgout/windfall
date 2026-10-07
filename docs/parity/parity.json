@@ -229,10 +229,10 @@
       "summary": "Loads third-party instrument and effect plugins in the common plugin formats.",
       "windfall_name": "Plugin hosting",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Umbrella row; each format is tracked as an fmt-host-* row. The plan covers CLAP, VST3 and AU, not VST2."
+      "notes": "CLAP backend hosting and isolated CLAP/VST3 scanning are implemented; desktop integration remains. VST3 audio hosting and AU are pending. The plan covers CLAP, VST3 and AU, not VST2."
     },
     {
       "id": "core-fl-studio-remote",
@@ -3277,10 +3277,10 @@
       "summary": "Reads notes, clips, automation, routing and sample references out of an FL project file.",
       "windfall_name": "FL project import",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Candidate basis: PyFLP (GPL-3.0). Identical sound is only possible where every plugin has a Windfall equivalent or is an installed third-party plugin."
+      "notes": "windfall-flp parses and converts musical structure through checked project commands, retaining unsupported plugin states and an import report. Two real FL 20.8.4 projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate. Shell and desktop workflow remain. See docs/flp/coverage.md."
     },
     {
       "id": "fmt-cloud-backup",
@@ -3373,10 +3373,10 @@
       "summary": "Imports the tracks of a MIDI file into channels, or one track into the open piano roll.",
       "windfall_name": "MIDI import",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "windfall-midi reads SMF formats 0/1/2, PPQ/SMPTE and creates checked project command batches with optional GM drums, tempo automation, bar splits and shared sections. Unsupported events are reported. Shell and desktop import workflow remain."
     },
     {
       "id": "fmt-import-rex",
@@ -3433,10 +3433,10 @@
       "summary": "Renders to MP3 at a chosen bit rate.",
       "windfall_name": "MP3 export",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Bundled LAME encoder with CBR 128/192/256/320 or VBR quality 0-9, mono/stereo/joint stereo, gapless length and independent ffmpeg verification. Desktop export controls are wired."
     },
     {
       "id": "fmt-export-ogg",
@@ -3445,10 +3445,10 @@
       "summary": "Renders to Ogg Vorbis at a chosen bit rate.",
       "windfall_name": "OGG export",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Bundled Vorbis encoder with quality -1 to 10, gapless length and independent ffmpeg verification. Desktop export controls are wired."
     },
     {
       "id": "fmt-export-flac",
@@ -3457,10 +3457,10 @@
       "summary": "Renders to lossless compressed FLAC.",
       "windfall_name": "FLAC export",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Native Rust encoder, 16/24-bit, compression levels 0-8 and deterministic dither. Desktop controls offer fastest, standard and smallest-file presets. Exact samples verified with own decoder and ffmpeg."
     },
     {
       "id": "fmt-export-midi",
@@ -3469,10 +3469,10 @@
       "summary": "Writes the project's step and piano roll notes to a standard MIDI file.",
       "windfall_name": "MIDI export",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "windfall-midi flattens song clips or exports a pattern with offsets, loops, swing, mutes and tempo changes. Audio and sound processing are omitted; excess melodic tracks reuse MIDI channels. Shell and desktop export workflow remain."
     },
     {
       "id": "fmt-export-stems-mixer",
@@ -3481,10 +3481,10 @@
       "summary": "Renders each mixer track to its own audio file in one pass.",
       "windfall_name": "Stem export",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Desktop export selects mixer tracks, mix inclusion, numbering and folders in all four audio formats. Track-output stems stream in one pass; source-through-master stems use separate passes, with nonlinear processing documented. Cancellation and ordinary-error rollback are tested."
     },
     {
       "id": "fmt-export-playlist-tracks",
@@ -3505,10 +3505,10 @@
       "summary": "Settings for what is rendered, how the tail is handled and the quality of the output.",
       "windfall_name": "Export options",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Song/pattern rendering, pattern repetitions, fixed or automatic tails, sample rate, lossless bit depth, compressed-format quality, stem selection and cancellation are available in the desktop dialog."
     },
     {
       "id": "fmt-export-m4a",
@@ -3553,10 +3553,10 @@
       "summary": "Loads VST3 instruments and effects.",
       "windfall_name": "VST3 hosting",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "The plan notes the VST3 SDK has been MIT-licensed since October 2025."
+      "notes": "Isolated VST3 discovery/scanning verifies factories, components, controllers, buses and editor availability on Windows. Audio hosting remains unsupported. Linux scanning is implemented but untested; macOS bundle entry is unsupported. See docs/plugins/host-evaluation.md."
     },
     {
       "id": "fmt-host-clap",
@@ -3565,10 +3565,10 @@
       "summary": "Loads CLAP instruments and effects.",
       "windfall_name": "CLAP hosting",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "windfall-plugin-host implements CLAP audio lifecycle, events, parameters, transport, state, adapters and Win32 editors. Windows verified with Surge XT, Surge XT Effects and OB-Xf. Engine/model/shell integration remains; in-process audio plugin crashes are uncontained. See docs/plugins/host-evaluation.md."
     },
     {
       "id": "fmt-host-au",
@@ -3601,10 +3601,10 @@
       "summary": "Scans plugin folders, verifies each plugin and sorts it as instrument or effect.",
       "windfall_name": "Plugin scanner",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "The plan runs scanning in a separate process."
+      "notes": "Isolated CLAP/VST3 scanner, metadata cache and blocklist are implemented and tested in windfall-plugin-host. Desktop plugin manager and project/engine integration remain."
     },
     {
       "id": "fmt-host-bridging",

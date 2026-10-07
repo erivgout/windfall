@@ -110,6 +110,7 @@ export function createTauriBackend(): Backend {
     samplesReload: () => call("samples_reload"),
 
     exportAudio: (options) => call("export_audio", { options }),
+    exportCancel: () => call("export_cancel"),
 
     onProjectPatch: (handler) => on(EVENTS.projectPatch, handler),
     onProjectLoaded: (handler) => on(EVENTS.projectLoaded, handler),
@@ -141,11 +142,13 @@ export function createTauriBackend(): Backend {
         defaultPath: `${suggestedName}.windfall`,
         filters: PROJECT_FILTER,
       }),
-    pickExportPath: (suggestedName) =>
+    pickExportPath: (suggestedName, format = "wav") =>
       save({
         title: "Export audio",
-        defaultPath: `${suggestedName}.wav`,
-        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+        defaultPath: `${suggestedName}.${format}`,
+        filters: [
+          { name: `${format.toUpperCase()} audio`, extensions: [format] },
+        ],
       }),
     async pickFolder() {
       const picked = await open({

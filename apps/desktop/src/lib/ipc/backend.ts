@@ -10,6 +10,7 @@ import type {
   DocumentSnapshot,
   EngineStatus,
   ExportOptions,
+  ExportFormat,
   ExportProgress,
   PlaylistTrackId,
   ProjectPatch,
@@ -146,6 +147,8 @@ export interface Backend {
 
   /** Returns at once. Progress arrives through `onExportProgress`. */
   exportAudio(options: ExportOptions): Promise<void>
+  /** Stops the active export; its last progress event acknowledges cancellation. */
+  exportCancel(): Promise<void>
 
   onProjectPatch(handler: (patch: ProjectPatch) => void): Unsubscribe
   onProjectLoaded(handler: (snapshot: DocumentSnapshot) => void): Unsubscribe
@@ -160,7 +163,10 @@ export interface Backend {
   /** File dialogs. Each resolves to `null` when the user cancels. */
   pickProjectToOpen(): Promise<string | null>
   pickProjectSavePath(suggestedName: string): Promise<string | null>
-  pickExportPath(suggestedName: string): Promise<string | null>
+  pickExportPath(
+    suggestedName: string,
+    format?: ExportFormat
+  ): Promise<string | null>
   pickFolder(): Promise<string | null>
   pickAudioFile(): Promise<string | null>
 
