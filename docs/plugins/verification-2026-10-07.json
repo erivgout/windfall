@@ -1,0 +1,516 @@
+[
+  {
+    "checks": [
+      {
+        "allPassed": true,
+        "id": "org.surge-synth-team.OB-Xf",
+        "steps": [
+          {
+            "outcome": "Passed(\"1 plugins in the file\")",
+            "step": "load"
+          },
+          {
+            "outcome": "Passed(\"0 audio inputs, 1 audio outputs, 1 note inputs\")",
+            "step": "create"
+          },
+          {
+            "outcome": "Passed(\"latency 0 samples\")",
+            "step": "activate"
+          },
+          {
+            "outcome": "Passed(\"64 blocks, output peak 0.1308, tail 0\")",
+            "step": "process"
+          },
+          {
+            "outcome": "Passed(\"102 parameters, 102 with text\")",
+            "step": "params"
+          },
+          {
+            "outcome": "Passed(\"2314 bytes of plugin state, the same bytes after a restore\")",
+            "step": "state"
+          },
+          {
+            "outcome": "Passed(\"deactivated and destroyed\")",
+            "step": "deactivate"
+          }
+        ]
+      }
+    ],
+    "path": "C:\\Users\\ewhee\\AppData\\Local\\Temp/windfall-plugin-verification-a0371897/obxf/obxf_products\\OB-Xf.clap",
+    "scan": {
+      "failure": null,
+      "plugins": [
+        {
+          "descriptor": {
+            "features": [
+              "instrument",
+              "synthesizer",
+              "virtual analog",
+              "analog"
+            ],
+            "format": "clap",
+            "id": "org.surge-synth-team.OB-Xf",
+            "kind": "instrument",
+            "name": "OB-Xf",
+            "vendor": "Surge Synth Team",
+            "version": "1.0.3"
+          },
+          "failure": null,
+          "layout": {
+            "audioInputs": [],
+            "audioOutputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Output"
+              }
+            ],
+            "hasEditor": true,
+            "hasState": true,
+            "noteInputs": 1,
+            "noteOutputs": 0,
+            "parameterCount": 102
+          }
+        }
+      ]
+    }
+  },
+  {
+    "checks": [
+      {
+        "allPassed": false,
+        "id": "ABCDEF019182FAEB535354784F425846",
+        "steps": [
+          {
+            "outcome": "Passed(\"1 plugins in the file\")",
+            "step": "load"
+          },
+          {
+            "outcome": "Failed(\"VST3 audio hosting (not implemented) plugins cannot be run by this build\")",
+            "step": "create"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "activate"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "process"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "params"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "state"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "deactivate"
+          }
+        ]
+      }
+    ],
+    "path": "C:\\Users\\ewhee\\AppData\\Local\\Temp/windfall-plugin-verification-a0371897/obxf/obxf_products\\OB-Xf.vst3",
+    "scan": {
+      "failure": null,
+      "plugins": [
+        {
+          "descriptor": {
+            "features": [
+              "Instrument",
+              "Synth"
+            ],
+            "format": "vst3",
+            "id": "ABCDEF019182FAEB535354784F425846",
+            "kind": "instrument",
+            "name": "OB-Xf",
+            "vendor": "Surge Synth Team",
+            "version": "1.0.3"
+          },
+          "failure": null,
+          "layout": {
+            "audioInputs": [],
+            "audioOutputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Output"
+              }
+            ],
+            "hasEditor": true,
+            "hasState": true,
+            "noteInputs": 1,
+            "noteOutputs": 0,
+            "parameterCount": 2183
+          }
+        }
+      ]
+    }
+  },
+  {
+    "checks": [
+      {
+        "allPassed": true,
+        "id": "org.surge-synth-team.surge-xt-fx",
+        "steps": [
+          {
+            "outcome": "Passed(\"1 plugins in the file\")",
+            "step": "load"
+          },
+          {
+            "outcome": "Passed(\"2 audio inputs, 1 audio outputs, 0 note inputs\")",
+            "step": "create"
+          },
+          {
+            "outcome": "Passed(\"latency 0 samples\")",
+            "step": "activate"
+          },
+          {
+            "outcome": "Passed(\"64 blocks, output peak 0.0000, tail 96000\")",
+            "step": "process"
+          },
+          {
+            "outcome": "Passed(\"61 parameters, 61 with text\")",
+            "step": "params"
+          },
+          {
+            "outcome": "Passed(\"1089 bytes of plugin state, the same bytes after a restore\")",
+            "step": "state"
+          },
+          {
+            "outcome": "Passed(\"deactivated and destroyed\")",
+            "step": "deactivate"
+          }
+        ]
+      }
+    ],
+    "path": "C:\\Users\\ewhee\\AppData\\Local\\Temp/windfall-plugin-verification-a0371897/surge\\Surge XT Effects.clap",
+    "scan": {
+      "failure": null,
+      "plugins": [
+        {
+          "descriptor": {
+            "features": [
+              "audio-effect",
+              "filter",
+              "phaser",
+              "rotary speaker",
+              "equalizer",
+              "granular",
+              "frequency-shifter",
+              "distortion",
+              "flanger",
+              "chorus",
+              "delay",
+              "reverb",
+              "multi-effects",
+              "stereo",
+              "free and open source"
+            ],
+            "format": "clap",
+            "id": "org.surge-synth-team.surge-xt-fx",
+            "kind": "effect",
+            "name": "Surge XT Effects",
+            "vendor": "Surge Synth Team",
+            "version": "1.4.0"
+          },
+          "failure": null,
+          "layout": {
+            "audioInputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Input"
+              },
+              {
+                "channels": 2,
+                "main": false,
+                "name": "Sidechain"
+              }
+            ],
+            "audioOutputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Output"
+              }
+            ],
+            "hasEditor": true,
+            "hasState": true,
+            "noteInputs": 0,
+            "noteOutputs": 0,
+            "parameterCount": 61
+          }
+        }
+      ]
+    }
+  },
+  {
+    "checks": [
+      {
+        "allPassed": false,
+        "id": "ABCDEF019182FAEB566D624153465854",
+        "steps": [
+          {
+            "outcome": "Passed(\"1 plugins in the file\")",
+            "step": "load"
+          },
+          {
+            "outcome": "Failed(\"VST3 audio hosting (not implemented) plugins cannot be run by this build\")",
+            "step": "create"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "activate"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "process"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "params"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "state"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "deactivate"
+          }
+        ]
+      }
+    ],
+    "path": "C:\\Users\\ewhee\\AppData\\Local\\Temp/windfall-plugin-verification-a0371897/surge\\Surge XT Effects.vst3",
+    "scan": {
+      "failure": null,
+      "plugins": [
+        {
+          "descriptor": {
+            "features": [
+              "Fx"
+            ],
+            "format": "vst3",
+            "id": "ABCDEF019182FAEB566D624153465854",
+            "kind": "effect",
+            "name": "Surge XT Effects",
+            "vendor": "Surge Synth Team",
+            "version": "1.4.0"
+          },
+          "failure": null,
+          "layout": {
+            "audioInputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Input"
+              },
+              {
+                "channels": 2,
+                "main": false,
+                "name": "Sidechain"
+              }
+            ],
+            "audioOutputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Output"
+              }
+            ],
+            "hasEditor": true,
+            "hasState": true,
+            "noteInputs": 0,
+            "noteOutputs": 0,
+            "parameterCount": 62
+          }
+        }
+      ]
+    }
+  },
+  {
+    "checks": [
+      {
+        "allPassed": true,
+        "id": "org.surge-synth-team.surge-xt",
+        "steps": [
+          {
+            "outcome": "Passed(\"1 plugins in the file\")",
+            "step": "load"
+          },
+          {
+            "outcome": "Passed(\"1 audio inputs, 3 audio outputs, 1 note inputs\")",
+            "step": "create"
+          },
+          {
+            "outcome": "Passed(\"latency 0 samples\")",
+            "step": "activate"
+          },
+          {
+            "outcome": "Passed(\"64 blocks, output peak 0.2677, tail 96000\")",
+            "step": "process"
+          },
+          {
+            "outcome": "Passed(\"775 parameters, 775 with text\")",
+            "step": "params"
+          },
+          {
+            "outcome": "Passed(\"58609 bytes of plugin state, the same bytes after a restore\")",
+            "step": "state"
+          },
+          {
+            "outcome": "Passed(\"deactivated and destroyed\")",
+            "step": "deactivate"
+          }
+        ]
+      }
+    ],
+    "path": "C:\\Users\\ewhee\\AppData\\Local\\Temp/windfall-plugin-verification-a0371897/surge\\Surge XT.clap",
+    "scan": {
+      "failure": null,
+      "plugins": [
+        {
+          "descriptor": {
+            "features": [
+              "instrument",
+              "synthesizer",
+              "stereo",
+              "free and open source"
+            ],
+            "format": "clap",
+            "id": "org.surge-synth-team.surge-xt",
+            "kind": "instrument",
+            "name": "Surge XT",
+            "vendor": "Surge Synth Team",
+            "version": "1.4.0"
+          },
+          "failure": null,
+          "layout": {
+            "audioInputs": [
+              {
+                "channels": 2,
+                "main": false,
+                "name": "Sidechain"
+              }
+            ],
+            "audioOutputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Output"
+              },
+              {
+                "channels": 2,
+                "main": false,
+                "name": "Scene A"
+              },
+              {
+                "channels": 2,
+                "main": false,
+                "name": "Scene B"
+              }
+            ],
+            "hasEditor": true,
+            "hasState": true,
+            "noteInputs": 1,
+            "noteOutputs": 0,
+            "parameterCount": 775
+          }
+        }
+      ]
+    }
+  },
+  {
+    "checks": [
+      {
+        "allPassed": false,
+        "id": "ABCDEF019182FAEB566D624153675854",
+        "steps": [
+          {
+            "outcome": "Passed(\"1 plugins in the file\")",
+            "step": "load"
+          },
+          {
+            "outcome": "Failed(\"VST3 audio hosting (not implemented) plugins cannot be run by this build\")",
+            "step": "create"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "activate"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "process"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "params"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "state"
+          },
+          {
+            "outcome": "NotReached",
+            "step": "deactivate"
+          }
+        ]
+      }
+    ],
+    "path": "C:\\Users\\ewhee\\AppData\\Local\\Temp/windfall-plugin-verification-a0371897/surge\\Surge XT.vst3",
+    "scan": {
+      "failure": null,
+      "plugins": [
+        {
+          "descriptor": {
+            "features": [
+              "Instrument",
+              "Synth"
+            ],
+            "format": "vst3",
+            "id": "ABCDEF019182FAEB566D624153675854",
+            "kind": "instrument",
+            "name": "Surge XT",
+            "vendor": "Surge Synth Team",
+            "version": "1.4.0"
+          },
+          "failure": null,
+          "layout": {
+            "audioInputs": [
+              {
+                "channels": 2,
+                "main": false,
+                "name": "Sidechain"
+              }
+            ],
+            "audioOutputs": [
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Output"
+              },
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Scene A"
+              },
+              {
+                "channels": 2,
+                "main": true,
+                "name": "Scene B"
+              }
+            ],
+            "hasEditor": true,
+            "hasState": true,
+            "noteInputs": 1,
+            "noteOutputs": 0,
+            "parameterCount": 2855
+          }
+        }
+      ]
+    }
+  }
+]

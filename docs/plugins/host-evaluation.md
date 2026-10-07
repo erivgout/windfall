@@ -116,7 +116,7 @@ The SDK is MIT, so Windfall could vendor `pluginterfaces` and compile Steinberg'
 
 CLAP is hosted on clack-host and clack-extensions 0.2.0, with `clap-sys` 0.5.0 named directly where raw buffers are built.
 
-VST3 is hosted on the `vst3` 0.3.0 bindings, with the host objects written in Windfall. No other VST3 crate is used, and the C++ SDK is not built.
+VST3 scanning uses the `vst3` 0.3.0 bindings, with the host objects written in Windfall. Audio hosting remains future work. No other VST3 crate is used, and the C++ SDK is not built.
 
 The reasons:
 
@@ -154,3 +154,123 @@ Every crate `windfall-plugin-host` adds to the workspace lock file, with the lic
 The test plugins add nothing beyond `clap-sys`, `vst3` and `windows-sys`.
 
 The sections on real plugins and on what VST3 does today are at the end of this file. They are filled in from the runs made after the code was written.
+
+## Implemented host and public API
+
+The CLAP path loads modules, creates main-thread instances, activates prepared audio-thread processors, processes stereo effects and instruments, and deactivates/destroys them off the audio thread. Mono inputs receive the stereo average; mono outputs feed both sides. Main ports support in-place processing only when both ports declare the pairing. Sidechain inputs are silent and additional outputs have separate scratch buffers; routing those ports is future engine work. Blocks longer than the activation maximum are split without losing event offsets or transport position.
+
+Notes use sample offsets and CLAP notes or MIDI according to the first note input's dialect. Parameters support metadata, module paths, stepped/enum flags, values, text conversions, block-boundary changes from the main thread, sample-offset changes from the processor, and plugin gestures/value notifications back to `idle`. Native state uses bounded streams and an opaque versioned, base64-serialized `PluginState`; plugins without a state extension fall back to a parameter snapshot. Latency and tails are read from extensions. The adapters expose dynamically owned parameter descriptions shaped like `windfall_dsp::ParamInfo`; they cannot supply its static string references directly.
+
+The principal signatures are:
+
+```rust
+PluginHost::windfall() -> PluginHost
+PluginHost::load(&self, path: &Path) -> Result<PluginModule, PluginError>
+PluginModule::descriptors(&self) -> Vec<PluginDescriptor>
+PluginModule::create(&self, id: &str) -> Result<PluginInstance, PluginError>
+PluginModule::probe(&self, id: &str) -> Result<PluginLayout, PluginError>
+PluginInstance::activate(&mut self, sample_rate: f64, max_block: usize)
+    -> Result<PluginProcessor, PluginError>
+PluginInstance::deactivate(&mut self, processor: PluginProcessor)
+PluginInstance::set_param(&mut self, id: u32, value: f64) -> bool
+PluginInstance::save_state(&mut self) -> Result<PluginState, PluginError>
+PluginInstance::load_state(&mut self, state: &PluginState) -> Result<(), PluginError>
+PluginInstance::idle(&mut self, notify: &mut dyn FnMut(PluginNotification))
+PluginInstance::open_editor(&mut self, options: &EditorOptions)
+    -> Result<EditorInfo, EditorError>
+PluginInstance::close_editor(&mut self)
+PluginProcessor::note_on(&mut self, time: u32, key: u8, velocity: f32) -> bool
+PluginProcessor::note_off(&mut self, time: u32, key: u8) -> bool
+PluginProcessor::set_param(&mut self, time: u32, id: u32, value: f64) -> bool
+PluginProcessor::set_transport(&mut self, transport: Transport)
+PluginProcessor::process(&mut self, left: &mut [f32], right: &mut [f32]) -> ProcessStatus
+PluginInstance::prepare_effect(&mut self, sample_rate: f32, max_block: usize)
+    -> Result<PluginEffect, PluginError>
+PluginInstance::prepare_instrument(&mut self, sample_rate: f32, max_block: usize)
+    -> Result<PluginInstrument, PluginError>
+scan_file(runner: &dyn ScanRunner, path: &Path) -> Result<FileScan, ScannerUnavailable>
+check_plugin(program: &Path, path: &Path, id: &str, timeout: Duration)
+    -> Result<CheckReport, ScannerUnavailable>
+```
+
+`PluginEffect` and `PluginInstrument` offer `reset`, `set_param(index, value)`, `set_tempo`, `process(left, right)`, latency and tail. Instruments also offer note on/off, all-notes-off and a held-note count. Preparation belongs to the main-thread instance, and release returns the adapter to that instance. A held-note count is not the plugin's actual release-voice count; the engine must listen for silence and honor the reported tail. These adapters are separate types and do not yet change `AnyEffect`, `AnyInstrument` or the engine.
+
+Discovery has platform-specific CLAP/VST3 paths plus caller-supplied folders. The scanner uses one helper process per file, emits progress before each instance, and reruns while skipping instances that crash or hang. The supervising process enforces deadlines on recognized helper progress, not arbitrary plugin logging; it bounds buffered stdout and the reader queue. The JSON catalog caches path, binary mtime and size, writes through a temporary rename, records crash/timeout blocklisting, and offers `retry` and `retry_blocked`. Timestamp/size caching is not a content integrity check. A plugin can spoof stdout protocol messages; this scanner is crash isolation, not a security sandbox.
+
+### Realtime evidence and containment
+
+`tests/realtime.rs` uses a calibrated thread-local counting allocator around actual fixture-plugin processing, events, block splitting, reset/stop, overflow, mono/sidechain layouts and both adapters. Every tested audio path makes **zero allocations, reallocations or frees**. The calibration uses `black_box` so optimization cannot remove the allocation. A source audit of `processor.rs`, `clap/processor.rs`, `clap/events.rs`, the CLAP callbacks and clack's `StartedPluginAudioProcessor::process` found no host mutex, blocking channel or growing allocation in those paths. Setup preallocates port buffers and fixed-capacity event vectors; crossing threads uses `rtrb` and atomics. Draining the main-thread queue is bounded even if the producer keeps writing concurrently. Reset and stop also mark the audio callback context so plugin logging cannot call a potentially allocating user log sink there.
+
+These are host guarantees, not guarantees about arbitrary plugin code. CLAP host callbacks use clack's panic guards; the native window procedure catches Rust panics. A Rust plugin panic at a non-unwinding C ABI aborts its process. The fixture proves that the supervised check process dies and the parent survives. In-process plugin crashes, memory corruption and hangs can still kill or stall the DAW. NaN/infinity output is replaced with silence, denormals are flushed with the processor setting restored afterward, finite output is bounded, process failures disable further calls, and overruns increment atomic health counters. The watchdog observes a late return; it cannot preempt a hung plugin. No audible playback was used in any verification.
+
+### Platform and feature status
+
+| Capability | Windows x64 | macOS | Linux |
+|---|---|---|---|
+| CLAP discovery/scanner/core hosting | Tested | Implemented through clack; not run here | Implemented; not run here |
+| Host-owned embedded CLAP native editor | Tested Win32 | Not implemented; returns unsupported | Not implemented; returns unsupported |
+| Plugin-owned floating CLAP editor | Implemented, not separately exercised | API structure present, not exercised | API structure present, not exercised; no X11 fd integration |
+| VST3 factory/component/controller/layout scan | Tested | Bundle entry not implemented; explicit unsupported | ModuleEntry/ModuleExit path implemented; not run here |
+| VST3 audio, parameter edits, state round trips, editor hosting | Explicit unsupported | Explicit unsupported | Explicit unsupported |
+
+The native editor example is `cargo run -p windfall-plugin-host --example editor -- <file> <id> [seconds]`. It defaults to 30 seconds, opens without taking keyboard focus, pumps timers/window messages and closes. On Windows it checks that the returned handle is a visible native top-level window and that it is destroyed on close. The fixture editor test also exercises resize negotiation, timer callbacks, user close, duplicate-open rejection and reopen.
+
+VST3 scans enumerate `IPluginFactory`/`IPluginFactory2`, filter audio component classes, initialize `IComponent` with a non-null `IHostApplication`, read bounded audio/event buses, initialize a separate controller when needed, connect component/controller `IConnectionPoint`s, read the parameter count, create/release an unattached view to detect editor support, disconnect, terminate and release before module exit. CLIDs use canonical FUID text rather than Windows COM byte order, with a round-trip test. `hasState` for VST3 means the component has the standard state API; successful state saving is not established by scanning.
+
+The reserved `vst3-hosting` Cargo feature defaults off and currently adds no behavior. Creating a VST3 audio instance returns `PluginError::Unsupported` even with this feature. Nothing half-working is available to the engine. Remaining VST3 work: complete host interface negotiation and messages, component handler/gesture queues, controller state synchronization, bounded reusable event/parameter COM queues, bus arrangements and activation, processing transport, state streams, adapter backend, realtime allocator tests, native views and macOS bundle lifecycle. No SDK C++ sources were copied or vendored.
+
+## Real-plugin verification, 2026-10-07
+
+No CLAP or VST3 installations were found in this machine's standard common-files or per-user common folders. The official release archives were extracted only under `%TEMP%/windfall-plugin-verification-a0371897`, never installed or committed. The supervised `verify` example ran the real scanner and the lifecycle check helper with a 20-second deadline for each step. The checked-in [machine-readable report](verification-2026-10-07.json) records every result and failure. This is a narrow Windows smoke test at 48 kHz, 512 frames, 64 blocks; it does not establish broad version/platform compatibility.
+
+| Plugin / vendor | Format | Scan | Instantiate/activate | Process silence + note | Parameters | Save/restore state | Failure |
+|---|---|---|---|---|---|---|---|
+| Surge XT 1.4.0 / Surge Synth Team | CLAP | Pass | Pass | Pass; peak about 0.27 | 775, all readable/text | 58,609 bytes, identical after restore | None |
+| Surge XT Effects 1.4.0 / Surge Synth Team | CLAP | Pass | Pass | Pass; silence peak 0 | 61, all readable/text | 1,089 bytes, identical after restore | None |
+| OB-Xf 1.0.3 / Surge Synth Team | CLAP | Pass | Pass | Pass; peak about 0.13 | 102, all readable/text | 2,314 bytes, identical after restore | None |
+| Surge XT 1.4.0 / Surge Synth Team | VST3 | Pass; buses, editor detected | Scan creates/initializes component + controller; audio creation refused | Not reached | 2,855 reported by controller | Not tested | Audio hosting explicitly unsupported |
+| Surge XT Effects 1.4.0 / Surge Synth Team | VST3 | Pass; buses, editor detected | Scan creates/initializes component + controller; audio creation refused | Not reached | 62 reported by controller | Not tested | Audio hosting explicitly unsupported |
+| OB-Xf 1.0.3 / Surge Synth Team | VST3 | Pass; buses, editor detected | Scan creates/initializes component + controller; audio creation refused | Not reached | 2,183 reported by controller | Not tested | Audio hosting explicitly unsupported |
+
+The Surge VST3 parameter counts include its MIDI-controller parameters. They differ legitimately from CLAP. CLAP state restore was also verified between separate instances using the independent gain fixture. Both Surge XT and OB-Xf real CLAP editors opened briefly and closed cleanly; the dedicated fixture provides automated native handle/resize/timer assertions. No VST3 editor was attached and no audio device was opened.
+
+Release provenance and licenses:
+
+- [Surge official nightly release](https://github.com/surge-synthesizer/surge/releases/tag/Nightly): `surge-xt-win64-juce7-NIGHTLY-2026-10-01-348cfb3-pluginsonly.zip`, source revision `348cfb3`, SHA-256 `28c6c140f4714e5bc03fced74e2f7de3f793f24cd9a5bc965ba5521bb8e51225`. Surge XT and its effects are GPL-3.0, checked against the [upstream license](https://github.com/surge-synthesizer/surge/blob/main/LICENSE).
+- [OB-Xf official v1.0.3 release](https://github.com/surge-synthesizer/OB-Xf/releases/tag/v1.0.3): `ob-xf-Windows-v1.0.3.zip`, SHA-256 `149fda0649daf8a3aa0851801f92515f0dbf6203acf33c0edc7d3c445e80b1e7`. GPL-3.0, checked against its [upstream license](https://github.com/surge-synthesizer/OB-Xf/blob/main/LICENSE).
+
+The independent dev-only fixture library is GPL-3.0-or-later. Its raw CLAP gain/state/editor and sine/latency plugins include mono, separate-buffer swap, silent sidechain, MIDI-only notes, NaN, process failure/panic, absurd ports, slow process, init rejection/crash/hang, crash/hang on entry load, and continuously logging hang cases. Its VST3 factory exposes a good stereo component that requires a real host context, plus absurd buses. Integration tests build it into `target/tmp` and copy it into per-test scratch folders; nothing installed on the machine is a test dependency.
+
+## Validation
+
+Final Windows/MSVC run: **79 tests passed**, none failed or ignored. Actual `cargo test -p windfall-plugin-host` summaries, in order (library, scanner/check binaries, containment, native editor, parameter/state, processing, realtime, scanner, VST3 scan, doctests):
+
+```text
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.24s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+`cargo clippy -p windfall-plugin-host --all-features --all-targets -- -D warnings`, the fixture crate's own all-target clippy with warnings denied, both crate-format checks, and `git diff --check` pass. Binaries and both examples build. Every cargo shell sourced `scripts/msvc-env.sh`. No whole-workspace or desktop build was performed.
+
+## Integration proposal
+
+No engine, model or shell code changes belong to this spike. Add a model-owned `PluginReference { format, id, state_blob, parameter_snapshot }`, where snapshots are sorted `(plugin_parameter_id, value)` pairs. Resolve its id through the catalog; keep the actual binary path in the catalog, not as the project's portable identity. Add `EffectParams::Plugin(PluginReference)` and `ChannelSource::Plugin(PluginReference)` variants. Store opaque state and snapshots with the project; resolve missing/blocked plugins to a visible bypass/silent placeholder so projects can still open.
+
+The shell main thread owns `PluginHost`, modules, instances and GUI handles in a registry keyed by effect/channel id and project generation. It loads/restores inactive instances, activates/prepares adapters, then passes only `Send` adapters into prepared `PlanState` seats. Extend the rack processor enum to contain built-in or plugin adapters while retaining the existing id-based take-over and retired-state return. Match by both slot id and plugin identity; never reuse an old instance after a plugin identity change. GUI handles remain entirely in the shell registry. Return retired adapters from the audio thread, stop/release/deactivate them on the appropriate lifecycle threads and destroy them off the audio thread; drain/remove the GUI registry when the project changes.
+
+Automation needs stable plugin parameter ids, with a prepared id-to-index mapping for the adapter. The shell's `idle` notifications turn begin/value/end into one undoable gesture and automation events. Latency changes trigger an off-thread compensation-plan rebuild; restart requests return the processor for reactivation. Save/load state should happen with processing paused and the instance returned when a plugin requires it. Sidechains and extra outputs need an explicit prepared port-routing extension beyond this stereo adapter.
+
+`InstanceBackend` and `ProcessorBackend` are the seam for later process-hosting. A helper can share preallocated audio blocks and fixed event/transport arrays and exchange state/editor commands through a main-thread pipe. A pipelined audio protocol must consume the last completed block without waiting, add/report one block of latency and yield silence/bypass if the helper misses its deadline. A synchronous pipe read, futex wait or blocking event on the audio thread would break the engine contract.
+
+## Primary evaluation sources
+
+The package versions above were read from downloaded registry source, including each `Cargo.toml` license; `cargo search clack-host` and `cargo search vst3` were rerun on 2026-10-07. Repository maintenance figures for clack and vst3 were rechecked through the GitHub API. Primary sources: [clack source](https://github.com/prokopyl/clack), [clack-host docs](https://docs.rs/clack-host/0.2.0/clack_host/), [clap-sys source](https://github.com/micahrj/clap-sys), [vst3-rs source](https://github.com/coupler-rs/vst3-rs), [vst3 docs](https://docs.rs/vst3/0.3.0/vst3/), [vst3-sys source/license](https://github.com/RustAudio/vst3-sys), [official VST3 SDK](https://github.com/steinbergmedia/vst3sdk), [SDK interface license](https://github.com/steinbergmedia/vst3_pluginterfaces/blob/master/LICENSE.txt), and [CLAP specification](https://github.com/free-audio/clap).
