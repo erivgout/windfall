@@ -60,6 +60,13 @@ export type AudioClipPlace = {
  * plain text that can be shown to the user.
  */
 export interface Backend {
+  audioEditorOpen(
+    clip: number
+  ): Promise<import("@/features/audio-editor/types").AudioEditPreview>
+  audioEditorApply(
+    request: import("@/features/audio-editor/types").AudioEditRequest
+  ): Promise<DispatchResult>
+  audioEditorDiscard(token: number): Promise<void>
   recordingInputs(): Promise<import("@/bindings").RecordingInput[]>
   recordingState(): Promise<import("@/bindings").RecordingState>
   recordingStart(

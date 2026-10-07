@@ -58,6 +58,7 @@
 //! first and gives up if another document has taken its place.
 
 mod audio;
+mod audio_editor;
 mod autosave;
 mod clip_processing;
 mod edit;
@@ -147,6 +148,8 @@ impl WeakSession {
 }
 
 struct Inner {
+    /// Serializes editor workers and retains at most one bounded clip view.
+    audio_editor: Mutex<audio_editor::Editor>,
     plugins: Mutex<Option<Arc<crate::plugins::PluginManager>>>,
     /// Held by a save or a backup from before it copies the project until
     /// its file is written. Taken before `state`, never under it.
@@ -285,6 +288,7 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                audio_editor: Mutex::new(audio_editor::Editor::default()),
                 plugins: Mutex::new(None),
                 save: Mutex::new(()),
                 flp_import: Mutex::new(None),

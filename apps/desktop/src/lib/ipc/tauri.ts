@@ -62,6 +62,9 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    audioEditorOpen: (clip) => call("audio_editor_open", { clip }),
+    audioEditorApply: (request) => call("audio_editor_apply", { request }),
+    audioEditorDiscard: (token) => call("audio_editor_discard", { token }),
     pluginsState: () => call("plugins_state"),
     pluginsScan: (retry) => call("plugins_scan", { retry }),
     pluginsAddFolder: (folder) => call("plugins_add_folder", { folder }),

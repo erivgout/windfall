@@ -260,7 +260,7 @@ fn sides(gain: f32, pan: f32) -> (f32, f32) {
 /// The level of an equal-power fade `part` of the way from silence to full
 /// level: a quarter of a sine wave.
 #[inline]
-fn equal_power(part: f64) -> f32 {
+pub(crate) fn equal_power(part: f64) -> f32 {
     (part.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).sin() as f32
 }
 

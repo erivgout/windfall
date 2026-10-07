@@ -40,6 +40,7 @@ import {
   PPQ,
 } from "@/lib/units"
 import { cn } from "@/lib/utils"
+import { AudioEditorButton } from "@/features/audio-editor"
 
 import { usePlaylistStore } from "../store"
 import { describeFade, speedOf, ticksPerSecond } from "./geometry"
@@ -328,6 +329,7 @@ function Settings({ clips }: { clips: AudioClip[] }) {
         <Knob aria-label="Fade out" {...fadeProps} {...fadeOut} {...fadeHint} />
       </Labelled>
       <RouteSelect clips={clips} />
+      <AudioEditorButton clip={first.id} disabled={clips.length !== 1} />
     </>
   )
 }

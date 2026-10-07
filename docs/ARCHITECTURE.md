@@ -127,6 +127,8 @@ The playlist inspector prepares spectral settings using `prepare_clip_command` o
 
 `Document` owns the one copy of the `Project` plus the undo history.
 
+The basic [audio editor](AUDIO-EDITOR.md) snapshots a selected clip into a bounded immutable stereo view using playback's source reader, spectral preparation and explicit fade law. Worker IPC renders edits into new app-owned WAVs, then checks recording exclusion, generation, edits and source identity before attaching a derived sample/clip in one undoable batch. Originals are never overwritten. Tempo-automated projects and browser file operations are explicitly refused in this first editor.
+
 ```rust
 impl Document {
     pub fn new(project: Project) -> Self;
@@ -352,6 +354,9 @@ Tauri commands. Arguments are camelCase. A failed call rejects with a plain stri
 | `browser_list` | `path: string` | `BrowserEntry[]`, folders first, then by name |
 | `sample_info` | `path: string` | `SampleInfo` |
 | `sample_info_by_id` | `sample: SampleId` | `SampleInfo` of a sample in the project's pool. Rejects when the file is missing, and when another project was opened meanwhile. |
+| `audio_editor_open` | `clip: ClipId` | `AudioEditPreview`: token, clip/name, frame count, sample rate and waveform of the rendered clip view. Blocking worker, refused during recording. |
+| `audio_editor_apply` | `request: AudioEditRequest` | `DispatchResult`: derived sample, then resulting clip in `created`. One undo step; refuses invalid/expired/stale work or recording. |
+| `audio_editor_discard` | `token: number` | Releases the retained view only if the token still owns it; blocking worker. |
 | `add_channel_from_file` | `path: string`, `index?: number` | `DispatchResult`. One undo step: adds the sample to the pool and a channel that plays it. Rejects when another project was opened meanwhile. |
 | `set_channel_sample_from_file` | `channel: ChannelId`, `path: string` | `DispatchResult`. Rejects like `add_channel_from_file`. |
 | `samples_reload` | | `number`: how many samples still have no audio after looking for the missing files again. Which ones arrives as `project:warnings`. |
