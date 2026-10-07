@@ -5,7 +5,7 @@ use windfall_ipc::{PlayMode, TransportPatch};
 use windfall_project::{PatternId, Project};
 
 use crate::controller::Controller;
-use crate::plan::compile;
+use crate::plan::compile_render as compile;
 use crate::pool::SamplePool;
 
 /// What [`render`] produces.

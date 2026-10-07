@@ -123,6 +123,7 @@ mod device;
 mod message;
 mod mixer;
 mod plan;
+pub mod plugins;
 mod pool;
 mod processor;
 mod rack;

@@ -74,6 +74,7 @@ impl Splice {
 /// with a hole as long as its look-ahead, and a removed reverb would cut
 /// its tail.
 pub(crate) struct EffectUnit {
+    external: Option<crate::plugins::ExternalEffect>,
     slot: EffectSlot,
     /// What the slot was last given.
     params: EffectParams,
@@ -106,6 +107,7 @@ impl EffectUnit {
         slot.set_enabled(effect.enabled);
         slot.set_mix(effect.mix);
         let unit = Self {
+            external: None,
             slot,
             params: effect.params,
             enabled: effect.enabled,
@@ -122,9 +124,42 @@ impl EffectUnit {
         self.params.kind()
     }
 
+    pub fn install_plugin(
+        &mut self,
+        unit: Option<Box<dyn crate::plugins::HostedEffect>>,
+        binding: &windfall_project::PluginBinding,
+    ) {
+        self.external = Some(crate::plugins::ExternalEffect::new(
+            unit,
+            binding,
+            self.sample_rate as u32,
+            self.enabled,
+            self.mix,
+        ));
+    }
+
+    pub fn apply_plugin(&mut self, binding: &windfall_project::PluginBinding) {
+        if let Some(external) = &mut self.external {
+            external.apply(binding);
+        }
+    }
+    pub fn plugin_transport(&mut self, transport: crate::plugins::PluginTransport) {
+        if let Some(external) = &mut self.external
+            && let Some(unit) = &mut external.unit
+        {
+            unit.transport(transport);
+        }
+    }
+
     /// Follows the plan: whatever differs from what the effect was last
     /// given is handed to it, and it glides there.
     pub fn apply(&mut self, effect: &PlanEffect) {
+        if let Some(external) = &mut self.external {
+            self.enabled = effect.enabled;
+            self.mix = effect.mix;
+            external.set_mix(effect.enabled, effect.mix);
+            return;
+        }
         if effect.params != self.params && self.slot.set_params(&effect.params) {
             self.params = effect.params;
         }
@@ -139,6 +174,12 @@ impl EffectUnit {
     }
 
     pub fn set_tempo(&mut self, tempo_bpm: f64) {
+        if let Some(external) = &mut self.external {
+            if let Some(unit) = &mut external.unit {
+                unit.set_tempo(tempo_bpm as f32);
+            }
+            return;
+        }
         self.slot.set_tempo(tempo_bpm as f32);
     }
 
@@ -150,6 +191,10 @@ impl EffectUnit {
     /// limiter's look-ahead, is left alone: the delays that line the other
     /// paths up with the effect are made for the plan's value.
     pub fn automate(&mut self, param: usize, value: f32) {
+        if let Some(external) = &mut self.external {
+            external.automate(param, value);
+            return;
+        }
         let mut params = self.params;
         if !params.set(param, value) || params == self.params {
             return;
@@ -165,6 +210,11 @@ impl EffectUnit {
 
     /// Moves the slot's mix, as automation does.
     pub fn automate_mix(&mut self, mix: f32) {
+        if let Some(external) = &mut self.external {
+            self.mix = mix.clamp(0.0, 1.0);
+            external.set_mix(self.enabled, self.mix);
+            return;
+        }
         let mix = mix.clamp(0.0, 1.0);
         if mix != self.mix {
             self.mix = mix;
@@ -175,7 +225,12 @@ impl EffectUnit {
     /// Brings the effect in: unheard for as long as its latency, then
     /// fading in over `frames` frames. Returns how long it stays unheard.
     pub fn fade_in(&mut self, frames: u32) -> u32 {
-        let wait = u32::try_from(self.slot.latency_samples()).unwrap_or(u32::MAX);
+        let wait = u32::try_from(
+            self.external
+                .as_ref()
+                .map_or_else(|| self.slot.latency_samples(), |slot| slot.latency()),
+        )
+        .unwrap_or(u32::MAX);
         self.splice_frames = frames.max(1);
         self.splice = Splice::In {
             wait,
@@ -199,7 +254,10 @@ impl EffectUnit {
     pub fn tail_samples(&self) -> usize {
         match self.splice {
             Splice::Gone => 0,
-            Splice::Steady | Splice::In { .. } | Splice::Out(_) => self.slot.tail_samples(),
+            Splice::Steady | Splice::In { .. } | Splice::Out(_) => self
+                .external
+                .as_ref()
+                .map_or_else(|| self.slot.tail_samples(), |slot| slot.tail()),
         }
     }
 
@@ -208,7 +266,10 @@ impl EffectUnit {
     pub fn gap_samples(&self) -> usize {
         match self.splice {
             Splice::Gone => 0,
-            Splice::Steady | Splice::In { .. } | Splice::Out(_) => self.slot.gap_samples(),
+            Splice::Steady | Splice::In { .. } | Splice::Out(_) => self
+                .external
+                .as_ref()
+                .map_or_else(|| self.slot.gap_samples(), |slot| slot.tail()),
         }
     }
 
@@ -222,7 +283,10 @@ impl EffectUnit {
         dry_right: &mut [f32],
     ) {
         match self.splice {
-            Splice::Steady => return self.slot.process(left, right),
+            Splice::Steady => {
+                self.process_slot(left, right);
+                return;
+            }
             Splice::Gone => return,
             Splice::In { .. } | Splice::Out(_) => {}
         }
@@ -230,7 +294,7 @@ impl EffectUnit {
         let (dry_left, dry_right) = (&mut dry_left[..frames], &mut dry_right[..frames]);
         dry_left.copy_from_slice(left);
         dry_right.copy_from_slice(right);
-        self.slot.process(left, right);
+        self.process_slot(left, right);
 
         let length = self.splice_frames as f32;
         for index in 0..frames {
@@ -243,6 +307,14 @@ impl EffectUnit {
             right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
         }
     }
+
+    fn process_slot(&mut self, left: &mut [f32], right: &mut [f32]) {
+        if let Some(external) = &mut self.external {
+            external.process(left, right);
+        } else {
+            self.slot.process(left, right);
+        }
+    }
 }
 
 /// The instrument of one channel, with the notes it is holding.
@@ -253,6 +325,8 @@ impl EffectUnit {
 /// frame, so a tempo change moves the end of a sounding note the way it
 /// does for a sampler voice.
 pub(crate) struct InstrumentUnit {
+    external: Option<Option<Box<dyn crate::plugins::HostedInstrument>>>,
+    plugin_params: Box<[(u32, f32)]>,
     instrument: AnyInstrument,
     params: InstrumentParams,
     /// The clock tick on which the note on each key ends. NaN while the key
@@ -279,6 +353,8 @@ impl InstrumentUnit {
         instrument.set_tempo(tempo_bpm as f32);
         instrument.set_params(params);
         Self {
+            external: None,
+            plugin_params: Box::new([]),
             instrument,
             params: *params,
             ends: [f64::NAN; KEYS],
@@ -294,18 +370,63 @@ impl InstrumentUnit {
         self.params.kind()
     }
 
+    pub fn install_plugin(
+        &mut self,
+        unit: Option<Box<dyn crate::plugins::HostedInstrument>>,
+        binding: &windfall_project::PluginBinding,
+    ) {
+        self.external = Some(unit);
+        self.plugin_params = binding
+            .parameters
+            .iter()
+            .map(|param| (param.id, f32::NAN))
+            .collect();
+        self.apply_plugin(binding);
+    }
+    pub fn plugin_transport(&mut self, transport: crate::plugins::PluginTransport) {
+        if let Some(Some(unit)) = &mut self.external {
+            unit.transport(transport);
+        }
+    }
+
+    pub fn apply_plugin(&mut self, binding: &windfall_project::PluginBinding) {
+        for (index, param) in binding.parameters.iter().enumerate() {
+            self.automate(index, param.value);
+        }
+    }
+
     pub fn apply(&mut self, params: &InstrumentParams) {
+        if self.external.is_some() {
+            return;
+        }
         if *params != self.params && self.instrument.set_params(params) {
             self.params = *params;
         }
     }
 
     pub fn set_tempo(&mut self, tempo_bpm: f64) {
+        if let Some(external) = &mut self.external {
+            if let Some(unit) = external {
+                unit.set_tempo(tempo_bpm as f32);
+            }
+            return;
+        }
         self.instrument.set_tempo(tempo_bpm as f32);
     }
 
     /// Moves one setting, as automation does. Sounding notes glide to it.
     pub fn automate(&mut self, param: usize, value: f32) {
+        if let Some(external) = &mut self.external {
+            if let Some(cached) = self.plugin_params.get_mut(param)
+                && cached.1 != value
+            {
+                if let Some(unit) = external {
+                    unit.set_param(cached.0, value);
+                }
+                cached.1 = value;
+            }
+            return;
+        }
         let mut params = self.params;
         if params.set(param, value) && params != self.params && self.instrument.set_params(&params)
         {
@@ -315,20 +436,26 @@ impl InstrumentUnit {
 
     /// Voices sounding right now, fading ones included.
     pub fn voices(&self) -> u32 {
-        self.instrument.active_voices() as u32
+        self.external.as_ref().map_or_else(
+            || self.instrument.active_voices(),
+            |unit| unit.as_ref().map_or(0, |unit| unit.voices()),
+        ) as u32
     }
 
     /// True while the instrument is putting out sound, or did within the
     /// last `window` frames before `now`.
     pub fn sounding(&self, now: u64, window: u64) -> bool {
-        self.instrument.active_voices() > 0 || self.last_sound + window > now
+        self.voices() > 0 || self.last_sound + window > now
     }
 
     /// True once nothing more can come out of the instrument until its
     /// next note.
     pub fn settled(&self, now: u64) -> bool {
-        let tail = self.instrument.tail_samples() as u64;
-        self.instrument.active_voices() == 0 && self.last_sound + tail <= now
+        let tail = self.external.as_ref().map_or_else(
+            || self.instrument.tail_samples(),
+            |unit| unit.as_ref().map_or(0, |unit| unit.tail()),
+        ) as u64;
+        self.voices() == 0 && self.last_sound + tail <= now
     }
 
     /// Starts a note that ends on clock tick `end`, or never when that is
@@ -343,7 +470,13 @@ impl InstrumentUnit {
         }
         self.ends[index] = end;
         self.live[index] = live;
-        self.instrument.note_on(key, velocity);
+        if let Some(external) = &mut self.external {
+            if let Some(unit) = external {
+                unit.note_on(key, velocity);
+            }
+        } else {
+            self.instrument.note_on(key, velocity);
+        }
     }
 
     /// Ends the note played by hand on `key`, on the next frame.
@@ -357,7 +490,13 @@ impl InstrumentUnit {
 
     /// Stops every note with a short fade, as when the transport stops.
     pub fn silence(&mut self) {
-        self.instrument.all_notes_off();
+        if let Some(external) = &mut self.external {
+            if let Some(unit) = external {
+                unit.all_notes_off();
+            }
+        } else {
+            self.instrument.all_notes_off();
+        }
         self.ends = [f64::NAN; KEYS];
         self.held = 0;
     }
@@ -376,7 +515,7 @@ impl InstrumentUnit {
             if !self.live[key] && !self.ends[key].is_nan() {
                 self.ends[key] = f64::NAN;
                 self.held -= 1;
-                self.instrument.note_off(key as u8);
+                self.release_key(key as u8);
             }
         }
     }
@@ -429,7 +568,7 @@ impl InstrumentUnit {
             at = split;
             self.ends[key] = f64::NAN;
             self.held -= 1;
-            self.instrument.note_off(key as u8);
+            self.release_key(key as u8);
         }
         self.process(base, at, to);
     }
@@ -439,12 +578,31 @@ impl InstrumentUnit {
             return;
         }
         let (left, right) = (&mut self.left[from..to], &mut self.right[from..to]);
-        self.instrument.process(left, right);
+        if let Some(external) = &mut self.external {
+            if let Some(unit) = external {
+                unit.process(left, right);
+            } else {
+                left.fill(0.0);
+                right.fill(0.0);
+            }
+        } else {
+            self.instrument.process(left, right);
+        }
         let last = (0..to - from)
             .rev()
             .find(|&index| left[index] != 0.0 || right[index] != 0.0);
         if let Some(last) = last {
             self.last_sound = base + (from + last) as u64 + 1;
+        }
+    }
+
+    fn release_key(&mut self, key: u8) {
+        if let Some(external) = &mut self.external {
+            if let Some(unit) = external {
+                unit.note_off(key);
+            }
+        } else {
+            self.instrument.note_off(key);
         }
     }
 
