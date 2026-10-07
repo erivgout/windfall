@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use windfall_core::{AudioBuffer, PPQ};
 use windfall_ipc::{BrowserEntry, BrowserRoot, SampleInfo};
+use windfall_ipc::{LibraryFileToken, LibraryMetadata, LibraryResults, LibrarySearch};
 use windfall_project::file::sample_path_for;
 use windfall_project::{
     ChannelId, ClipContent, ClipInit, Command, DispatchResult, MAX_MIXER_TRACKS, MAX_SONG_TICKS,
@@ -38,6 +39,7 @@ pub struct ClipPlace {
 
 /// An audio file that is decoded and about to be put to use in the project.
 struct Import {
+    browser: Option<LibraryFileToken>,
     file: PathBuf,
     buffer: AudioBuffer,
     /// The document that was open when decoding started.
@@ -45,6 +47,28 @@ struct Import {
 }
 
 impl Session {
+    pub fn library_search(&self, search: &LibrarySearch) -> Result<LibraryResults, String> {
+        self.inner.library.search(search)
+    }
+    pub fn library_refresh(&self) {
+        self.inner.library.refresh();
+    }
+    pub fn library_cancel(&self, generation: u32) {
+        self.inner.library.cancel(generation);
+    }
+    pub fn library_file(&self, path: &str) -> Result<LibraryFileToken, String> {
+        self.inner.library.file_token(path)
+    }
+    pub fn library_metadata(&self, path: &str) -> Result<LibraryMetadata, String> {
+        self.inner.library.metadata(path)
+    }
+    pub fn library_set_metadata(
+        &self,
+        path: &str,
+        metadata: LibraryMetadata,
+    ) -> Result<LibraryMetadata, String> {
+        self.inner.library.set_metadata(path, metadata)
+    }
     /// The browser's top-level folders: the factory content first, then the
     /// folders the user added, in the order they were added.
     pub fn browser_roots(&self) -> Vec<BrowserRoot> {
@@ -59,10 +83,16 @@ impl Session {
         }
         let folder = paths::absolute(path)?;
         let shown = paths::display(&folder);
+        if shown.len() > crate::library::MAX_PATH_BYTES {
+            return Err("This folder path is too long for the library.".into());
+        }
         if !folder.is_dir() {
             return Err(format!("\"{shown}\" is not a folder."));
         }
         let mut settings = self.store();
+        if settings.settings().browser_roots.len() >= crate::library::MAX_ROOTS - 1 {
+            return Err("The browser supports at most 128 folders, including Factory. Remove a folder first.".into());
+        }
         let known = paths::same(&folder, &self.inner.factory_dir)
             || settings
                 .settings()
@@ -73,7 +103,9 @@ impl Session {
             return Err(format!("\"{shown}\" is already in the browser."));
         }
         settings.update(|stored| stored.browser_roots.push(shown));
-        Ok(self.roots(&settings.settings().browser_roots))
+        let roots = self.roots(&settings.settings().browser_roots);
+        self.inner.library.set_roots(roots.clone());
+        Ok(roots)
     }
 
     /// Takes a folder the user added out of the browser. Nothing on disk is
@@ -89,7 +121,9 @@ impl Session {
             return Err(format!("\"{path}\" is not in the browser."));
         }
         settings.update(|stored| stored.browser_roots.retain(|root| !is_it(root)));
-        Ok(self.roots(&settings.settings().browser_roots))
+        let roots = self.roots(&settings.settings().browser_roots);
+        self.inner.library.set_roots(roots.clone());
+        Ok(roots)
     }
 
     /// Lists a folder for the browser. Reads the disk.
@@ -101,6 +135,17 @@ impl Session {
     /// time a file is asked for.
     pub fn sample_info(&self, path: &str) -> Result<SampleInfo, String> {
         self.inner.cache.info(&paths::absolute(path)?)
+    }
+
+    pub fn browser_sample_info(
+        &self,
+        path: &str,
+        token: &LibraryFileToken,
+    ) -> Result<SampleInfo, String> {
+        let token = self.inner.library.pin_file(token, path)?;
+        let info = self.sample_info(path)?;
+        self.inner.library.check_file(&token, path)?;
+        Ok(info)
     }
 
     /// The same as [`sample_info`](Self::sample_info) for a sample of the
@@ -145,6 +190,24 @@ impl Session {
         index: Option<u32>,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
+        self.add_channel_import(import, index)
+    }
+
+    pub fn browser_add_channel(
+        &self,
+        path: &str,
+        index: Option<u32>,
+        token: LibraryFileToken,
+    ) -> Result<DispatchResult, String> {
+        let import = self.decode_for_browser(path, token)?;
+        self.add_channel_import(import, index)
+    }
+
+    fn add_channel_import(
+        &self,
+        import: Import,
+        index: Option<u32>,
+    ) -> Result<DispatchResult, String> {
         let name = paths::stem(&import.file);
         self.dispatch_with_sample(import, "Add channel", |sample| Command::AddChannel {
             name: Some(name.clone()),
@@ -167,6 +230,24 @@ impl Session {
         path: &str,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
+        self.replace_sample_import(channel, import)
+    }
+
+    pub fn browser_replace_sample(
+        &self,
+        channel: ChannelId,
+        path: &str,
+        token: LibraryFileToken,
+    ) -> Result<DispatchResult, String> {
+        let import = self.decode_for_browser(path, token)?;
+        self.replace_sample_import(channel, import)
+    }
+
+    fn replace_sample_import(
+        &self,
+        channel: ChannelId,
+        import: Import,
+    ) -> Result<DispatchResult, String> {
         self.dispatch_with_sample(import, "Change channel sample", |sample| {
             Command::SetChannelSample {
                 id: channel,
@@ -207,16 +288,32 @@ impl Session {
         let import = self.decode_for_project(path)?;
         self.attach_audio_clip_import(import, place)
     }
+
+    pub fn browser_add_clip(
+        &self,
+        path: &str,
+        place: ClipPlace,
+        token: LibraryFileToken,
+    ) -> Result<DispatchResult, String> {
+        let import = self.decode_for_browser(path, token)?;
+        let _recording = self.recording_idle()?;
+        self.attach_audio_clip_import(import, place)
+    }
     fn attach_audio_clip_import(
         &self,
         import: Import,
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
         let Import {
+            browser,
             file,
             buffer,
             generation,
         } = import;
+        let _library = browser
+            .as_ref()
+            .map(|t| self.inner.library.guard(t))
+            .transpose()?;
         let mut state = self.state();
         if state.generation != generation {
             return Err(format!(
@@ -308,16 +405,31 @@ impl Session {
     /// Decodes a file before the project is changed to use it, and notes
     /// which project that is.
     fn decode_for_project(&self, path: &str) -> Result<Import, String> {
-        let file = paths::absolute(path)?;
         let generation = self.state().generation;
+        self.decode_for_generation(path, generation)
+    }
+
+    fn decode_for_generation(&self, path: &str, generation: u64) -> Result<Import, String> {
+        let file = paths::absolute(path)?;
         let buffer = self.inner.cache.decode(&file)?;
         #[cfg(test)]
         self.pause("import:decoded");
         Ok(Import {
+            browser: None,
             file,
             buffer,
             generation,
         })
+    }
+
+    fn decode_for_browser(&self, path: &str, token: LibraryFileToken) -> Result<Import, String> {
+        // Membership/identity checks can block on a drive; pin the document first.
+        let generation = self.state().generation;
+        let token = self.inner.library.pin_file(&token, path)?;
+        let mut import = self.decode_for_generation(path, generation)?;
+        self.inner.library.check_file(&token, path)?;
+        import.browser = Some(token);
+        Ok(import)
     }
 
     /// Dispatches one undo step that adds the sample of an import and then
@@ -331,10 +443,15 @@ impl Session {
     ) -> Result<DispatchResult, String> {
         let _recording = self.recording_idle()?;
         let Import {
+            browser,
             file,
             buffer,
             generation,
         } = import;
+        let _library = browser
+            .as_ref()
+            .map(|t| self.inner.library.guard(t))
+            .transpose()?;
         let file = file.as_path();
         let mut state = self.state();
         if state.generation != generation {

@@ -9,6 +9,7 @@
 pub mod browser;
 mod commands;
 pub mod events;
+pub mod library;
 pub mod paths;
 pub mod plugins;
 pub mod samples;

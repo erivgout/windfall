@@ -37,7 +37,7 @@ function FilterBox() {
   const focusRequest = useBrowserStore((state) => state.focusFilter)
   const inputRef = useRef<HTMLInputElement>(null)
   const hint = useHint(
-    "Filter by name. Only folders you have opened are searched."
+    "Search filenames and paths in every configured folder. Use * and ?, AND, OR, NOT, quotes and parentheses."
   )
 
   // A request made while the panel was hidden is answered when it shows.
@@ -70,7 +70,8 @@ function FilterBox() {
         type="text"
         role="searchbox"
         aria-label="Filter the browser"
-        placeholder="Filter"
+        placeholder="Search library"
+        maxLength={512}
         spellCheck={false}
         autoComplete="off"
         value={filter}

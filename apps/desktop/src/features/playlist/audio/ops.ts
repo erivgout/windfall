@@ -3,6 +3,7 @@ import type {
   AudioClipUpdate,
   ClipId,
   Command,
+  LibraryFileToken,
   SampleAsset,
   SampleId,
   TrackId,
@@ -96,17 +97,21 @@ export function patchSelectedAudioClips(
  */
 export async function addAudioFile(
   path: string,
-  place: { row?: number; start: number }
+  place: { row?: number; start: number },
+  browser?: LibraryFileToken
 ): Promise<ClipId | null> {
   const mixerTrack = await mixerTrackForFile(path)
   const track =
     place.row === undefined ? undefined : playlist().tracks[place.row]?.id
+  const target = {
+    track,
+    start: Math.max(0, Math.round(place.start)),
+    mixerTrack,
+  }
   const result = await attempt(
-    backend.addAudioClipFromFile(path, {
-      track,
-      start: Math.max(0, Math.round(place.start)),
-      mixerTrack,
-    }),
+    browser
+      ? backend.addAudioClipFromFile(path, target, browser)
+      : backend.addAudioClipFromFile(path, target),
     "Could not add the sound to the playlist"
   )
   if (!result) return null

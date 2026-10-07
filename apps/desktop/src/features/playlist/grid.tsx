@@ -290,7 +290,7 @@ export function PlaylistGrid({ metrics }: { metrics: GridMetrics }) {
     const sample = readSampleDrag(event)
     if (!place || !sample) return
     containerRef.current?.focus({ preventScroll: true })
-    void addAudioFile(sample.path, place)
+    void addAudioFile(sample.path, place, sample.browser)
   }
 
   return (

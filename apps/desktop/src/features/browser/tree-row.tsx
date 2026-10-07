@@ -80,6 +80,9 @@ function EntryLine({
       aria-posinset={row.position}
       aria-setsize={row.setSize}
       aria-selected={selected}
+      aria-description={row.relativePath}
+      title={row.relativePath ? row.path : undefined}
+      data-library-path={row.relativePath ? row.path : undefined}
       aria-expanded={isFolder ? row.open : undefined}
       aria-busy={row.busy || undefined}
       aria-disabled={inert || undefined}
@@ -148,6 +151,14 @@ function EntryLine({
           )
         )}
       </span>
+      {row.relativePath && (
+        <span
+          aria-hidden
+          className="ml-2 min-w-0 flex-1 truncate text-muted-foreground"
+        >
+          {row.relativePath}
+        </span>
+      )}
     </div>
   )
 }

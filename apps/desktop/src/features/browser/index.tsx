@@ -6,6 +6,7 @@ import { openPluginManager } from "@/features/plugins/store"
 import { useShortcutScope } from "@/lib/actions"
 
 import { BrowserHeader } from "./browser-header"
+import { LibraryControls, LibraryMetadataEditor } from "./library-controls"
 import { flushScrollTop } from "./persist"
 import { PreviewPane } from "./preview-pane"
 import { BROWSER_MENU } from "./row-menu"
@@ -39,10 +40,12 @@ export default function BrowserPanel() {
         {...scope}
       >
         <BrowserHeader />
+        <LibraryControls />
         <Button variant="ghost" size="sm" onClick={() => openPluginManager()}>
           Browse plugins
         </Button>
         <TreeView />
+        <LibraryMetadataEditor />
         <PreviewPane />
       </div>
     </ContextActions>

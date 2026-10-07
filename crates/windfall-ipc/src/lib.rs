@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+pub mod library;
+pub use library::*;
 mod midi;
 pub use midi::*;
 mod plugins;

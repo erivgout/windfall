@@ -113,6 +113,32 @@ mod flp;
 
 /// The operations, as plain functions over JSON text.
 pub mod ops {
+    /// The browser mock uses the native query grammar and tag normalization.
+    pub fn browser_query(_handle: u32, input: &str) -> super::Reply {
+        #[derive(serde::Deserialize)]
+        struct Search {
+            query: String,
+            paths: Vec<String>,
+        }
+        let search: Search = super::parse("library search", input)?;
+        if search.paths.len() > 50_000 || search.paths.iter().any(|p| p.len() > 4096) {
+            return Err("Library search input exceeds its bounds.".into());
+        }
+        let query = windfall_ipc::LibraryQuery::parse(&search.query)?;
+        super::json(
+            &search
+                .paths
+                .iter()
+                .enumerate()
+                .filter_map(|(i, path)| query.matches(path).then_some(i))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn browser_tags(_handle: u32, input: &str) -> super::Reply {
+        let tags: Vec<String> = super::parse("library tags", input)?;
+        super::json(&windfall_ipc::normalize_tags(&tags)?)
+    }
     pub use crate::midi::{doc_midi_export, doc_midi_import, midi_preview};
     use serde::Deserialize;
     use windfall_project::file;
@@ -371,6 +397,8 @@ macro_rules! export_ops {
 }
 
 export_ops! {
+    browser_query
+    browser_tags
     project_new
     flp_convert
     doc_new

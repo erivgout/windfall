@@ -80,7 +80,7 @@ describe("adding a sound to the rack", () => {
     await user.dblClick(item("Kick 02.wav"))
     await waitFor(() => expect(channels()).toHaveLength(before + 1))
 
-    expect(add.mock.calls).toEqual([[KICK]])
+    expect(add.mock.calls.map(([path]) => [path])).toEqual([[KICK]])
     const added = channels()[before]
     expect(added.name).toBe("Kick 02")
     expect(useUiStore.getState().selectedChannel).toBe(added.id)
@@ -96,7 +96,11 @@ describe("adding a sound to the rack", () => {
     fireEvent.keyDown(tree(), { key: "Enter", repeat: true })
     fireEvent.keyDown(tree(), { key: "Enter", repeat: true })
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1))
-    expect(add).toHaveBeenCalledWith(KICK)
+    expect(add).toHaveBeenCalledWith(
+      KICK,
+      undefined,
+      expect.objectContaining({ path: KICK })
+    )
   })
 
   it("adds a channel from the pane and from the right-click menu", async () => {
@@ -114,7 +118,11 @@ describe("adding a sound to the rack", () => {
       screen.getByRole("menuitem", { name: /^Add to new channel/ })
     )
     await waitFor(() => expect(add).toHaveBeenCalledTimes(1))
-    expect(add).toHaveBeenLastCalledWith("/factory/Drums/Kicks/Kick 01.wav")
+    expect(add).toHaveBeenLastCalledWith(
+      "/factory/Drums/Kicks/Kick 01.wav",
+      undefined,
+      expect.objectContaining({ rootPath: "/factory" })
+    )
     await waitFor(() =>
       expect(screen.queryByRole("menu")).not.toBeInTheDocument()
     )
@@ -122,7 +130,11 @@ describe("adding a sound to the rack", () => {
     await user.click(item("Kick 02.wav"))
     await user.click(screen.getByRole("button", { name: "Add to rack" }))
     await waitFor(() => expect(add).toHaveBeenCalledTimes(2))
-    expect(add).toHaveBeenLastCalledWith(KICK)
+    expect(add).toHaveBeenLastCalledWith(
+      KICK,
+      undefined,
+      expect.objectContaining({ path: KICK })
+    )
   })
 
   it("shows a failure and adds nothing", async () => {
@@ -150,7 +162,9 @@ describe("adding a sound to the rack", () => {
     expect(play).not.toHaveBeenCalled()
 
     fireEvent.click(menuItem("Preview"))
-    expect(play.mock.calls).toEqual([["/factory/Drums/Kicks/Kick 03.wav"]])
+    expect(play.mock.calls.map(([path]) => [path])).toEqual([
+      ["/factory/Drums/Kicks/Kick 03.wav"],
+    ])
     expect(add).not.toHaveBeenCalled()
   })
 })
@@ -168,7 +182,9 @@ describe("adding a sound to the playlist", () => {
     await waitFor(() => expect(clips()).toHaveLength(1))
 
     // At the song position, on a new track of its own.
-    expect(add.mock.calls).toEqual([[KICK, { track: undefined, start: 0 }]])
+    expect(add.mock.calls.map(([path, place]) => [path, place])).toEqual([
+      [KICK, { track: undefined, start: 0, mixerTrack: undefined }],
+    ])
     expect(clips()[0].content).toMatchObject({ type: "audio" })
     const { history, project } = useProjectStore.getState()
     expect(history.entries.map((entry) => entry.label)).toEqual([
@@ -211,7 +227,11 @@ describe("replacing the selected channel's sample", () => {
     expect(on).toHaveTextContent("Replace Snare")
     await user.click(on)
 
-    await waitFor(() => expect(replace.mock.calls).toEqual([[snare.id, KICK]]))
+    await waitFor(() =>
+      expect(
+        replace.mock.calls.map(([channel, path]) => [channel, path])
+      ).toEqual([[snare.id, KICK]])
+    )
     const sampleId = sourceSample(
       channels().find((channel) => channel.id === snare.id)?.source
     )
@@ -229,7 +249,11 @@ describe("replacing the selected channel's sample", () => {
 
     await openMenu("Kick 02.wav")
     fireEvent.click(menuItem("Replace sample of Hat"))
-    await waitFor(() => expect(replace.mock.calls).toEqual([[hat.id, KICK]]))
+    await waitFor(() =>
+      expect(
+        replace.mock.calls.map(([channel, path]) => [channel, path])
+      ).toEqual([[hat.id, KICK]])
+    )
   })
 
   it("goes off again when the selected channel is deleted", async () => {
@@ -511,6 +535,11 @@ describe("dragging a sound out", () => {
     expect(JSON.parse(data.get(SAMPLE_DRAG_TYPE) ?? "null")).toEqual({
       path: KICK,
       name: "Kick 02",
+      browser: expect.objectContaining({
+        rootPath: "/factory",
+        path: KICK,
+        generation: expect.any(Number),
+      }),
     })
     expect(dataTransfer.effectAllowed).toBe("copy")
 
@@ -566,7 +595,7 @@ describe("actions", () => {
     await user.click(item("Kick 02.wav"))
 
     await registry.get("browser.addSelectedToRack")?.run()
-    expect(add.mock.calls).toEqual([[KICK]])
+    expect(add.mock.calls.map(([path]) => [path])).toEqual([[KICK]])
   })
 
   it("show the panel and focus the filter", async () => {
