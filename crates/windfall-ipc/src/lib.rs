@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+mod audio_edit;
+pub use audio_edit::*;
 mod midi;
 pub use midi::*;
 mod midi_hardware;

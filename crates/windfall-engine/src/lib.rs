@@ -157,5 +157,7 @@ pub use voice::PREVIEW_GAIN_DB;
 #[global_allocator]
 static ALLOCATOR: test_alloc::CountingAllocator = test_alloc::CountingAllocator;
 
+/// Bounded offline sample editing; never used by an audio callback.
+pub mod audio_edit;
 /// Bounded native audio input capture.
 pub mod recording;

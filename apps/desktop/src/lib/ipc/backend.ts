@@ -71,6 +71,13 @@ export interface Backend {
     revision: number
   ): Promise<import("@/bindings").MidiHardwareState>
   midiHardwarePanic(): Promise<void>
+  audioEditorOpen(
+    clip: number
+  ): Promise<import("@/features/audio-editor/types").AudioEditPreview>
+  audioEditorApply(
+    request: import("@/features/audio-editor/types").AudioEditRequest
+  ): Promise<DispatchResult>
+  audioEditorDiscard(token: number): Promise<void>
   recordingInputs(): Promise<import("@/bindings").RecordingInput[]>
   recordingState(): Promise<import("@/bindings").RecordingState>
   recordingStart(

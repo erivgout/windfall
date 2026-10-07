@@ -64,6 +64,31 @@ async fn detect_clip_tempo(
     blocking(move || session.detect_clip_tempo(sample)).await
 }
 #[tauri::command]
+async fn audio_editor_open(
+    session: State<'_, Session>,
+    clip: windfall_project::ClipId,
+) -> Result<windfall_ipc::AudioEditPreview, String> {
+    let session = session.inner().clone();
+    blocking(move || session.audio_editor_open(clip)).await
+}
+#[tauri::command]
+async fn audio_editor_apply(
+    session: State<'_, Session>,
+    request: windfall_ipc::AudioEditRequest,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.audio_editor_apply(request)).await
+}
+#[tauri::command]
+async fn audio_editor_discard(session: State<'_, Session>, token: u32) -> Result<(), String> {
+    let session = session.inner().clone();
+    blocking(move || {
+        session.audio_editor_discard(token);
+        Ok(())
+    })
+    .await
+}
+#[tauri::command]
 fn automate(
     session: State<'_, Session>,
     target: AutomationTarget,
@@ -499,6 +524,9 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         sample_info_by_id,
         prepare_clip_command,
         detect_clip_tempo,
+        audio_editor_open,
+        audio_editor_apply,
+        audio_editor_discard,
         samples_reload,
         add_channel_from_file,
         set_channel_sample_from_file,

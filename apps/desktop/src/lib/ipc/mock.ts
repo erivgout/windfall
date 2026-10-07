@@ -858,6 +858,19 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     browserList: (folderPath) => ipc(() => listFolder(roots, folderPath)),
     sampleInfo: (filePath) => ipc(() => sampleInfoFor(roots, filePath)),
     prepareClipCommand: (command) => ipc(() => dispatchNow(command)),
+    audioEditorOpen: () =>
+      Promise.reject(
+        new Error(
+          "Audio editing requires the desktop app. This browser preview cannot decode clips or create derived WAV files."
+        )
+      ),
+    audioEditorApply: () =>
+      Promise.reject(
+        new Error(
+          "Audio editing requires the desktop app. No audio or project changes were made."
+        )
+      ),
+    audioEditorDiscard: () => Promise.resolve(),
     detectClipTempo: () =>
       Promise.reject(
         new Error(
