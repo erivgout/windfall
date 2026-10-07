@@ -18,6 +18,7 @@ windfall-ipc = { path = "crates/windfall-ipc" }
 windfall-codec = { path = "crates/windfall-codec" }
 windfall-engine = { path = "crates/windfall-engine" }
 windfall-factory = { path = "crates/windfall-factory" }
+windfall-flp = { path = "crates/windfall-flp" }
 
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

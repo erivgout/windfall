@@ -1,0 +1,30 @@
+[package]
+name = "windfall-flp"
+description = "Reads FL Studio project files and converts them to Windfall projects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Every source this crate's format knowledge comes from is GPL-3.0-or-later
+# or GPL-2.0-or-later, so the workspace license applies. The crate docs list
+# the sources.
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+windfall-dsp.workspace = true
+windfall-project.workspace = true
+# MIT OR Apache-2.0.
+serde.workspace = true
+# MIT OR Apache-2.0.
+thiserror.workspace = true
+# MIT.
+ts-rs.workspace = true
+
+[dev-dependencies]
+# MIT OR Apache-2.0.
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
