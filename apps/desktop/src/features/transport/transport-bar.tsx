@@ -24,6 +24,7 @@ import { PerformanceReadout } from "./performance-readout"
 import { PositionReadout } from "./position-readout"
 import { TempoField } from "./tempo-field"
 import { TimeSignatureField } from "./time-signature"
+import { TapTempoDialog } from "./tap-tempo-dialog"
 
 function Divider() {
   return <Separator orientation="vertical" className="mx-1 my-2.5" />
@@ -100,6 +101,10 @@ export function TransportBar() {
         <ModeSwitch />
         <Divider />
         <Display />
+        <ActionButton action="tempo.tap" variant="ghost" size="sm">
+          Tap
+        </ActionButton>
+        <TapTempoDialog />
         <Divider />
         <div className="flex items-center gap-1">
           <PatternSelector />

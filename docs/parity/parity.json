@@ -772,7 +772,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Quantize starts and ends to the snap. No quantizer dialog with strength or groove templates yet."
+      "notes": "Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass; independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-articulate",
@@ -781,10 +781,10 @@
       "summary": "Changes note lengths in bulk to give legato, staccato or portamento phrasing.",
       "windfall_name": "Articulate",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected-note legato and staccato length transformations are implemented with atomic undo and stale-review guards. Portamento phrasing remains pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-chop",
@@ -793,10 +793,10 @@
       "summary": "Cuts long notes into shorter pieces by grid or by a slicing pattern.",
       "windfall_name": "Chop",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected notes split at absolute grid boundaries with bounded output and one undo entry. User-authored slicing patterns are not implemented; independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-glue",
@@ -805,10 +805,10 @@
       "summary": "Joins touching notes into one.",
       "windfall_name": "Glue",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Touching/overlapping selected notes with matching pitch, velocity and pan union deterministically; incompatible and unselected notes remain separate. Independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-arpeggiate",
@@ -829,10 +829,10 @@
       "summary": "Staggers the timing and velocity of the notes in a chord like a strummed instrument.",
       "windfall_name": "Strum",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected simultaneous chords stagger timing and velocity in either pitch order, preserving lengths and unrelated properties in one undo step. Independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-flam",
@@ -865,10 +865,10 @@
       "summary": "Transposes notes so they fall inside a chosen key range.",
       "windfall_name": "Key limiter",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass; independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-flip",
@@ -877,10 +877,10 @@
       "summary": "Mirrors selected notes in time or in pitch.",
       "windfall_name": "Flip",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. Independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-randomize",
@@ -901,10 +901,10 @@
       "summary": "Rescales the velocities of selected notes while keeping their relative differences.",
       "windfall_name": "Scale levels",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected velocities scale while retaining relative differences until clipping at full velocity. Other note properties are preserved. Independent integration review is pending. See docs/PIANO-TOOLS.md."
     },
     {
       "id": "win-piano-lfo",
@@ -3673,10 +3673,10 @@
       "summary": "Sets the project tempo by typing, dragging or tapping.",
       "windfall_name": "Tempo",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "Tempo field. No tap tempo yet."
+      "notes": "Transport typing/dragging and review-and-Apply tap tempo are implemented. Bounded estimator, keyboard repeat guards, reset/cancel, one-step undo/redo/save/open and stale-project reply tests pass. Existing tempo automation retains playback control. See docs/TAP-TEMPO.md."
     },
     {
       "id": "wf-metronome",

@@ -18,8 +18,45 @@ After the editing repairs, the three editor/slicer UI test files passed all 24 t
 
 The parent updates parity to reflect partial workflows: live hardware input/output/settings, selected-clip audio editing, detector/slicing foundations and plugin ownership. No additional row is marked done merely because a foundation exists. There are 342 rows: 59 done, 34 in progress, 247 todo and two previously justified won't-do rows.
 
+## Piano, transport and runtime follow-up
+
+Selected-note transformations `666e1394` are integrated through `9f716d8a`.
+They share one atomic Rust command across desktop and browser: quantize with
+strength/original grooves, legato/staccato, grid chop, compatible glue, strum,
+time/pitch flip, transpose/key-range limiting and velocity scaling. See
+[selected-note tools](../PIANO-TOOLS.md) for limits and remaining phrasing work.
+The combined bindings now contain 149 files, and the pinned browser WASM is
+1,722,263 bytes. Parent checks passed 12 native piano tests and 130 UI tests
+covering tools, piano-roll integration and exhaustive shared-WASM commands.
+
+CLAP repairs `320fe342` are integrated through `c2b8eb3c`. Immediate releases
+and panic have reserved bounded capacity, dialect-specific native event lists
+are sized for expansion, accepted parameter updates wait for available space,
+and retirement flushes ordered bounded chunks. Native fixture regressions cover
+saturation, retained UI key ownership, final accepted state and zero callback
+allocation. Parent processing/state/realtime checks passed 43 tests, followed
+by all eight desktop MIDI tests. Strict all-target Clippy for project, host,
+engine and desktop and workspace formatting passed. See
+[CLAP saturation](../plugins/clap-saturation.md).
+
+The transport now has a review-and-Apply tap-tempo dialog. Shared store guards
+also discard edit/history/snapshot replies from a replaced project and avoid
+snapshot rollback after a newer patch. The focused transport/tempo/store suite
+passed 73 tests; UI lint and production TypeScript/Vite build passed. See
+[tap tempo](../TAP-TEMPO.md). These checks supplement the earlier full suites.
+
+Editing review round two closed the original WASM and tempo-automation
+findings but reproduced a new inspector lifetime regression: publication of
+Apply's own replacement patch can unmount its dialog before the IPC reply and
+leave selection on the removed clip. A dedicated task is fixing stable
+operation ownership and adding event-before-reply inspector regressions.
+Piano rows remain in progress until follow-up review; no unreviewed tool is
+marked fully complete here.
+
 ## Remaining work and evidence limits
 
-The runtime review identified CLAP release/panic loss under a full event queue and accepted parameter truncation during inactive flush. A separate T3 implementation task owns both fixes; this integration must not be pushed as fully verified until those findings are resolved and tested.
+The initial CLAP findings have implementations and passing fixture regressions.
+Independent follow-up review and the inspector lifetime repair still need to
+finish before this local batch is pushed as verified progress.
 
 Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.

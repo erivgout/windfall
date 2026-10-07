@@ -14,31 +14,31 @@ As of 2026-10-07. Sources:
 
 ## Summary
 
-**61 of 342 rows accounted for (17.8%).** A row is accounted for when it is done or won't do.
+**62 of 342 rows accounted for (18.1%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 247 |
-| In progress | 34 |
-| Done | 59 |
+| Todo | 240 |
+| In progress | 40 |
+| Done | 60 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 13 | 7 | 2 | 1 |
-| Main windows | 113 | 65 | 14 | 33 | 1 |
+| Main windows | 113 | 58 | 21 | 33 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 75 | 0 | 5 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 18 | 4 | 14 | 0 |
-| Workflow, MIDI and settings | 39 | 29 | 6 | 4 | 0 |
+| Workflow, MIDI and settings | 39 | 29 | 5 | 5 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 9 | 7 | 21 | 2 |
-| 2. Write a song | 99 | 59 | 14 | 26 | 0 |
+| 1. Make a beat | 39 | 9 | 6 | 22 | 2 |
+| 2. Write a song | 99 | 52 | 21 | 26 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
 | 5. The long tail | 129 | 129 | 0 | 0 | 0 |
@@ -117,18 +117,18 @@ As of 2026-10-07. Sources:
 | Piano roll: snap to grid | Piano roll snap | 2 | done |  |
 | Piano roll: time markers and per-pattern time signatures | Pattern markers | 2 | todo |  |
 | Piano roll: waveform helper view | Waveform helper | 2 | todo |  |
-| Piano roll: Quantizer tool | Quantize | 2 | in-progress | Quantize starts and ends to the snap. No quantizer dialog with strength or groove templates yet. |
-| Piano roll: Articulator tool and Quick legato | Articulate | 2 | todo |  |
-| Piano roll: Chopper tool and Quick chop | Chop | 2 | todo |  |
-| Piano roll: Glue | Glue | 2 | todo |  |
+| Piano roll: Quantizer tool | Quantize | 2 | in-progress | Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass; independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Articulator tool and Quick legato | Articulate | 2 | in-progress | Selected-note legato and staccato length transformations are implemented with atomic undo and stale-review guards. Portamento phrasing remains pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Chopper tool and Quick chop | Chop | 2 | in-progress | Selected notes split at absolute grid boundaries with bounded output and one undo entry. User-authored slicing patterns are not implemented; independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Glue | Glue | 2 | in-progress | Touching/overlapping selected notes with matching pitch, velocity and pan union deterministically; incompatible and unselected notes remain separate. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
 | Piano roll: Arpeggiator tool | Arpeggiate | 2 | todo |  |
-| Piano roll: Strum tool | Strum | 2 | todo |  |
+| Piano roll: Strum tool | Strum | 2 | in-progress | Selected simultaneous chords stagger timing and velocity in either pitch order, preserving lengths and unrelated properties in one undo step. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
 | Piano roll: Flam tool | Flam | 2 | todo |  |
 | Piano roll: Claw machine tool | Rhythm reshaper | 2 | todo |  |
-| Piano roll: Key limiter tool | Key limiter | 2 | todo |  |
-| Piano roll: Flip tool | Flip | 2 | todo |  |
+| Piano roll: Key limiter tool | Key limiter | 2 | in-progress | Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass; independent integration review is pending. See docs/PIANO-TOOLS.md. |
+| Piano roll: Flip tool | Flip | 2 | in-progress | Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
 | Piano roll: Randomizer tool | Randomize | 2 | todo |  |
-| Piano roll: Scale levels tool | Scale levels | 2 | todo |  |
+| Piano roll: Scale levels tool | Scale levels | 2 | in-progress | Selected velocities scale while retaining relative differences until clipping at full velocity. Other note properties are preserved. Independent integration review is pending. See docs/PIANO-TOOLS.md. |
 | Piano roll: LFO tool | LFO tool | 2 | todo |  |
 | Piano roll: Riff machine | Riff generator | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | Piano roll scripting (Python) | Piano roll scripting | 6 | todo | Part of the plan's phase-6 scripting. |
@@ -389,7 +389,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- |
 | Audio settings (driver, device, sample rate, buffer length) | Audio settings | 0 | in-progress | The plan uses cpal: WASAPI and ASIO on Windows, CoreAudio on macOS, ALSA, JACK and PipeWire on Linux. Device, sample rate and buffer through WASAPI, CoreAudio, ALSA and JACK. ASIO is behind a build feature that is off. |
 | Transport (play, stop, record, pattern/song mode, song position) | Transport | 1 | in-progress | Play, stop, pattern/song mode and song position are available. Record opens native input/channel selection and explicit start/stop/discard controls. Initial capture uses manual playlist placement without hardware latency/clock compensation; monitoring, count-in and multitrack takes remain. |
-| Tempo and tempo tapper | Tempo | 1 | in-progress | Tempo field. No tap tempo yet. |
+| Tempo and tempo tapper | Tempo | 1 | done | Transport typing/dragging and review-and-Apply tap tempo are implemented. Bounded estimator, keyboard repeat guards, reset/cancel, one-step undo/redo/save/open and stale-project reply tests pass. Existing tempo automation retains playback control. See docs/TAP-TEMPO.md. |
 | Metronome | Metronome | 1 | todo |  |
 | Typing keyboard to piano keyboard | Typing keyboard | 1 | todo |  |
 | Themes | Light and dark themes | 1 | done | Light and dark themes. |

@@ -22,6 +22,7 @@ export type InnerScope =
 /** Anywhere keyboard shortcuts can be scoped to. */
 export type ScopeId = PanelId | InnerScope
 export type AppDialog =
+  | "tempoTap"
   | "palette"
   | "settings"
   | "export"

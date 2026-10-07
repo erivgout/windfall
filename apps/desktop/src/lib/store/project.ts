@@ -12,6 +12,7 @@ import { backend } from "@/lib/ipc"
 import { FORMAT_VERSION, MASTER_TRACK } from "@/lib/units"
 
 import { applyPatch, type DocumentState } from "./patch"
+import { getProjectGeneration } from "./replaced"
 
 /** Shown for the instant before the first snapshot arrives. */
 const BLANK_PROJECT: Project = {
@@ -86,19 +87,27 @@ let newestMissed = 0
  * so when one was newer than the snapshot, the snapshot is fetched again.
  */
 export function refetchSnapshot(): Promise<void> {
-  refetching ??= backend
+  if (refetching) return refetching
+  const generation = getProjectGeneration()
+  refetching = backend
     .documentSnapshot()
     .then((snapshot) => {
-      loadSnapshot(snapshot)
+      if (
+        generation === getProjectGeneration() &&
+        snapshot.revision >= useProjectStore.getState().revision
+      )
+        loadSnapshot(snapshot)
       return snapshot.revision
     })
     .catch((error: unknown) => {
-      reportError(error, "Could not load the project")
+      if (generation === getProjectGeneration())
+        reportError(error, "Could not load the project")
       return Infinity
     })
     .then((revision) => {
       refetching = null
-      const behind = newestMissed > revision
+      const behind =
+        generation !== getProjectGeneration() || newestMissed > revision
       newestMissed = 0
       if (behind) return refetchSnapshot()
     })
@@ -111,6 +120,7 @@ export function refetchSnapshot(): Promise<void> {
  * fetched again.
  */
 export function receivePatch(patch: ProjectPatch) {
+  if (refetching) newestMissed = Math.max(newestMissed, patch.revision)
   const outcome = applyPatch(useProjectStore.getState(), patch)
   if (outcome.status === "applied") {
     useProjectStore.setState(outcome.state)
@@ -123,28 +133,31 @@ export function receivePatch(patch: ProjectPatch) {
 /**
  * Sends an edit to the backend. Pass the same `gesture` id for every edit of
  * one drag so they become a single undo step. Resolves to `null` when the
- * command fails; the failure has already been shown to the user.
+ * command fails or its document was replaced before the reply arrived.
  */
 export async function dispatch(
   command: Command,
   gesture?: number
 ): Promise<DispatchResult | null> {
+  const generation = getProjectGeneration()
   try {
     const result = await backend.dispatch(command, gesture)
+    if (generation !== getProjectGeneration()) return null
     receivePatch(result.patch)
     return result
   } catch (error) {
-    reportError(error)
+    if (generation === getProjectGeneration()) reportError(error)
     return null
   }
 }
 
 async function runHistory(work: Promise<ProjectPatch | null>) {
+  const generation = getProjectGeneration()
   try {
     const patch = await work
-    if (patch) receivePatch(patch)
+    if (patch && generation === getProjectGeneration()) receivePatch(patch)
   } catch (error) {
-    reportError(error)
+    if (generation === getProjectGeneration()) reportError(error)
   }
 }
 
