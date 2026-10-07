@@ -9,6 +9,7 @@ mod export_formats;
 mod files;
 mod flp;
 mod import_formats;
+mod import_recording;
 mod library;
 mod midi;
 mod playback;
