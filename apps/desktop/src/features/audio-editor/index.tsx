@@ -15,6 +15,7 @@ import { backend, errorMessage } from "@/lib/ipc"
 import { receivePatch } from "@/lib/store/project"
 import {
   getProjectGeneration,
+  onProjectReplaced,
   useProjectGeneration,
 } from "@/lib/store/replaced"
 import { usePlaylistStore } from "@/features/playlist/store"
@@ -73,20 +74,64 @@ export function AudioEditorButton({
   clip,
   disabled,
 }: {
-  clip: number
+  clip: number | null
   disabled?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  // Capture the source at Open. The inspector may stop resolving that source
+  // after Apply publishes its replacement, before the IPC reply arrives.
+  const [session, setSession] = useState<{
+    clip: number
+    selection: ReadonlySet<number>
+    generation: number
+    ticket: number
+    busy: boolean
+  } | null>(null)
+  const nextTicket = useRef(0)
+  const busy = session?.busy ?? false
+  useEffect(() => {
+    const offSelection = usePlaylistStore.subscribe((state, previous) => {
+      if (state.selection !== previous.selection)
+        setSession((current) =>
+          current?.generation === getProjectGeneration() ? null : current
+        )
+    })
+    const offProject = onProjectReplaced(() =>
+      setSession((current) => current && { ...current, busy: false })
+    )
+    return () => {
+      offSelection()
+      offProject()
+    }
+  }, [])
+  function close() {
+    setSession((current) =>
+      current?.ticket === session?.ticket ? null : current
+    )
+  }
   return (
     <Dialog
-      open={open}
+      open={session !== null}
       onOpenChange={(value) => {
-        if (!busy) setOpen(value)
+        if (busy) return
+        if (!value) close()
+        else if (clip !== null)
+          setSession({
+            clip,
+            selection: usePlaylistStore.getState().selection,
+            generation: getProjectGeneration(),
+            ticket: ++nextTicket.current,
+            busy: false,
+          })
       }}
     >
       <DialogTrigger
-        render={<Button variant="outline" size="sm" disabled={disabled} />}
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={disabled || clip === null}
+          />
+        }
       >
         Audio editor
       </DialogTrigger>
@@ -101,12 +146,19 @@ export function AudioEditorButton({
             one undo step. Original sources stay intact.
           </DialogDescription>
         </DialogHeader>
-        {open && (
+        {session && (
           <Editor
-            key={clip}
-            clip={clip}
-            onBusy={setBusy}
-            onDone={() => setOpen(false)}
+            key={session.ticket}
+            clip={session.clip}
+            selectionAtOpen={session.selection}
+            onBusy={(busy) =>
+              setSession((current) =>
+                current?.ticket === session.ticket
+                  ? { ...current, busy }
+                  : current
+              )
+            }
+            onDone={close}
           />
         )}
       </DialogContent>
@@ -116,10 +168,12 @@ export function AudioEditorButton({
 
 function Editor({
   clip,
+  selectionAtOpen,
   onBusy,
   onDone,
 }: {
   clip: number
+  selectionAtOpen: ReadonlySet<number>
   onBusy(value: boolean): void
   onDone(): void
 }) {
@@ -135,10 +189,22 @@ function Editor({
     let cancelled = false
     alive.current = true
     const atGeneration = getProjectGeneration()
+    const offProject = onProjectReplaced(() => {
+      if (token.current !== null) {
+        void backend.audioEditorDiscard(token.current).catch(() => {})
+        token.current = null
+      }
+      setBusy(false)
+      setError("The project changed. Close and reopen the audio editor.")
+    })
     void backend
       .audioEditorOpen(clip)
       .then((value) => {
-        if (cancelled || atGeneration !== getProjectGeneration()) {
+        if (
+          cancelled ||
+          atGeneration !== getProjectGeneration() ||
+          selectionAtOpen !== usePlaylistStore.getState().selection
+        ) {
           void backend.audioEditorDiscard(value.token).catch(() => {})
           if (!cancelled)
             setError("The project changed. Close and reopen the audio editor.")
@@ -150,19 +216,34 @@ function Editor({
         setSelection({ start: 0, end: value.frames })
       })
       .catch((error: unknown) => {
-        if (!cancelled) setError(errorMessage(error))
+        if (
+          !cancelled &&
+          atGeneration === getProjectGeneration() &&
+          selectionAtOpen === usePlaylistStore.getState().selection
+        )
+          setError(errorMessage(error))
       })
     return () => {
       cancelled = true
       alive.current = false
-      if (token.current !== null)
+      offProject()
+      if (token.current !== null) {
         void backend.audioEditorDiscard(token.current).catch(() => {})
+        token.current = null
+      }
     }
-  }, [clip])
+  }, [clip, selectionAtOpen])
 
   const stale = preview !== null && previewGeneration !== generation
   async function apply(operation: AudioEditOperation) {
-    if (!preview || stale || !validSelection(selection, preview.frames) || busy)
+    if (
+      !preview ||
+      stale ||
+      previewGeneration !== getProjectGeneration() ||
+      selectionAtOpen !== usePlaylistStore.getState().selection ||
+      !validSelection(selection, preview.frames) ||
+      busy
+    )
       return
     const atGeneration = getProjectGeneration()
     setBusy(true)
@@ -175,13 +256,22 @@ function Editor({
         startFrame: selection.start,
         endFrame: selection.end,
       })
-      if (!alive.current || atGeneration !== getProjectGeneration()) return
+      if (
+        !alive.current ||
+        atGeneration !== getProjectGeneration() ||
+        selectionAtOpen !== usePlaylistStore.getState().selection
+      )
+        return
       receivePatch(result.patch)
       const id = result.created.at(-1)
       if (id !== undefined) usePlaylistStore.getState().select([id])
       onDone()
     } catch (error) {
-      if (alive.current && atGeneration === getProjectGeneration())
+      if (
+        alive.current &&
+        atGeneration === getProjectGeneration() &&
+        selectionAtOpen === usePlaylistStore.getState().selection
+      )
         setError(errorMessage(error))
     } finally {
       if (alive.current) {

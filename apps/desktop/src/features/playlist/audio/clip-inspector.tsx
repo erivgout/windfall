@@ -32,6 +32,7 @@ import { INSPECTOR_KEEPS, useShortcutScope } from "@/lib/actions"
 import { newGestureId } from "@/lib/store/gesture"
 import { useHint } from "@/lib/store/hint"
 import { useProjectStore } from "@/lib/store/project"
+import { useProjectGeneration } from "@/lib/store/replaced"
 import {
   clamp,
   colorToCss,
@@ -313,7 +314,6 @@ function Settings({ clips }: { clips: AudioClip[] }) {
         </Labelled>
       )}
       <ClipProcessingControls clips={clips} />
-      <SliceControls clips={clips} />
       <ToggleLed
         size="sm"
         pressed={clips.every((clip) => clip.content.reverse)}
@@ -331,7 +331,6 @@ function Settings({ clips }: { clips: AudioClip[] }) {
         <Knob aria-label="Fade out" {...fadeProps} {...fadeOut} {...fadeHint} />
       </Labelled>
       <RouteSelect clips={clips} />
-      <AudioEditorButton clip={first.id} disabled={clips.length !== 1} />
     </>
   )
 }
@@ -370,11 +369,12 @@ const PLACEHOLDERS = [PLACEHOLDER]
  * strip is for.
  */
 export function ClipInspector() {
+  const generation = useProjectGeneration()
   const open = usePlaylistStore((state) => state.inspectorOpen)
   const hasAudio = useProjectStore((state) =>
     state.project.playlist.clips.some((clip) => clip.content.type === "audio")
   )
-  return open && hasAudio ? <Strip /> : null
+  return open && hasAudio ? <Strip key={generation} /> : null
 }
 
 function Strip() {
@@ -406,6 +406,19 @@ function Strip() {
       ) : (
         <Settings clips={clips} />
       )}
+      {/* Editing dialogs belong to the strip, including the interval between
+          their replacement event and their Apply reply. */}
+      <div
+        aria-hidden={idle || undefined}
+        inert={idle || undefined}
+        className={cn("contents", idle && "invisible")}
+      >
+        <SliceControls clips={clips} />
+        <AudioEditorButton
+          clip={clips[0]?.id ?? null}
+          disabled={clips.length !== 1}
+        />
+      </div>
       <Button
         variant="ghost"
         size="icon-xs"
