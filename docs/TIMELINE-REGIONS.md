@@ -200,3 +200,89 @@ the rebuilt simulator passed `scripts/check-sim.mjs` before the shared-WASM
 checks. Bindings, simulator binaries and build metadata are validation-only
 and are excluded from the delivery commits. Parent integration must regenerate
 its own artifacts from the combined accepted source.
+
+## R1: lifetime races and stopped navigation tails
+
+The immutable first delivery ends at
+`ed4ad8713ffb6157ada552882e75eb5919722e5d`. R1 requested three P2 fixes:
+
+1. Play selection guarded region publication but then awaited unguarded
+   transport set, seek and play. A New/Open replacement during those awaits
+   could receive the old cursor and start playing. The action now captures
+   its entry lifetime/request and checks every continuation. Set/seek/play
+   also carry the publication's canonical generation, protocol revision,
+   request and region to native authority; an old request cannot mutate the
+   replacement even when its native execution was delayed, not just its reply.
+2. Clearing a pending first arm did nothing while UI `active` was false.
+   Selection changes now invalidate that action and reconcile pending or
+   possibly committed publications. Newer clear/arm requests win in native
+   transport; a late old reply never schedules a compensating clear that
+   could overwrite a newer arm. A committed arm whose reply was discarded
+   after an edit remains eligible for guarded clear/reconciliation.
+3. A skip `[90,200)` inside non-looping selection `[10,100)` clamps its
+   destination to 100 and stops. The jump cleared automation hold while
+   effect tails still sounded. It now holds that stopped destination through
+   the existing automation/tail policy. Healthy playing jumps still clear
+   hold, and explicit seek/resume retains the accepted behavior.
+
+The request watermark is transient Session `Inner` storage, initialized once
+and retained across document replacement. **Every load/store occurs while the
+existing State mutex is held.** Guarded publications and transport mutations
+take recording-idle before State, compare generation/revision/current request/
+current region under that same State guard, then mutate the controller before
+releasing it. The atomic storage adds no callback work; it avoids changing the
+portable-owned `files.rs` State reconstruction. No project field, history step,
+dirty state, controller, Plan, Rack, engine State, departure or adoption change
+is involved. Legacy unguarded transport and source-guard-free export calls keep
+their accepted paths.
+
+Requests are positive integers through `2^53 - 1`, exactly representable in
+TypeScript and native JSON. Allocation rebases from the canonical watermark
+and retains higher requests already sent by this UI. It refuses exhaustion
+before sending a command, and native refuses old, reused or out-of-range
+numbers before mutation; neither side wraps. A window/module reload observes
+the retained native watermark rather than restarting its sequence at zero.
+Exhaustion remains observable across reload and requires restarting the app.
+
+Executed RED/GREEN proof:
+
+- Against original production functions with only the new tests present and
+  freshly generated local shared WASM, 15 of 17 UI cases failed. Ten failures
+  reproduced New/Open races with set/seek/play deferred before native commit
+  or after commit before reply; four reproduced pending first-arm clear/
+  replacement, and one reproduced reordered old arm/clear versus a newer arm.
+  The two post-play-reply cases already preserved replacement state.
+- The compiled engine regression failed with the exact requested skip and
+  selection. With 480-frame limiter PDC, its first differing interleaved sample
+  was 4962: the held fader diverged during the audible reverb tail. After the
+  one-line destination-hold fix, output matches the constant-fader reference
+  sample for sample, including PDC and fixed/automatic linear render references;
+  callback allocator/deallocator calls are zero. Stopped seek releases hold and
+  resumed playback restores automation.
+- GREEN UI lifetime coverage includes every awaited source/publication/set/
+  seek/play boundary, New/Open, clear/replacement/rearm, delayed native commit
+  and delayed replies, edited committed publication cleanup, and subsequent
+  valid arms. Actual module reloads at native requests `2^53 - 3` and
+  `2^53 - 2` allocate the final two exact numbers and refuse exhaustion without
+  project/history/revision/dirty changes or wrap reuse.
+- Native session tests execute matching guards, wrong current region/request,
+  stale edit/New/Open, recording refusal, out-of-order arm/clear and a fresh
+  valid arm with actual processor output. They also execute the last safe
+  increment and atomic refusal above the limit, while retaining legacy calls,
+  native WAV/PDC/tail readback and destination/staging cancellation checks.
+
+Final R1 checks passed: 234 shared-WASM UI tests in 14 focused files (including
+28 lifetime races and the module-reload boundary test); nine engine timeline,
+25 engine automation, five native timeline, 14 native playback and 17 native
+export/format/stem tests. Strict all-target Clippy for the seven delivery
+packages, workspace fmt, desktop TypeScript/ESLint and changed-UI Prettier pass.
+Own-worktree regeneration again produced 177 bindings and a current simulator
+verified by `check-sim`; these local validation artifacts are excluded/restored
+before the source-only commit.
+
+R1 stays atop the isolated fixed source; no parent commits were imported or
+original commits amended. Parent E1 DSP and utility revision work remains
+independent and was not treated as an accepted prerequisite or edited here.
+These checks establish this source's behavior, not combined-root verification.
+All per-pattern, arrangements/grouping/linked-track/scrub, WAV marker metadata
+and scalar clip snap/grid follow-ups listed above remain open.

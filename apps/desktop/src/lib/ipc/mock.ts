@@ -267,17 +267,39 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let transport = new TransportSim(doc.project().patterns[0].id)
   let timelineDocument = doc
   let timelineGeneration = 1
+  let timelineRequest = 0
   function timelineState() {
     if (timelineDocument !== doc) {
       timelineDocument = doc
       timelineGeneration += 1
     }
     return {
+      request: timelineRequest,
       generation: timelineGeneration,
       revision: doc.snapshot(path).revision,
       region: transport.region,
       navigationOverflows: transport.navigationOverflows,
     }
+  }
+  function checkTimelineGuard(
+    guard?: import("@/bindings").TimelinePlaybackState
+  ) {
+    if (!guard) return
+    const current = timelineState()
+    if (
+      guard.generation !== current.generation ||
+      guard.revision !== current.revision ||
+      !Number.isSafeInteger(guard.request) ||
+      guard.request <= 0 ||
+      guard.request !== current.request ||
+      !guard.region ||
+      !current.region ||
+      guard.region.start !== current.region.start ||
+      guard.region.end !== current.region.end
+    )
+      throw new Error(
+        "The project or timeline selection changed before playback could continue."
+      )
   }
   let audioSettings = storedSettings({})
   let engine = describeStatus(audioSettings)
@@ -643,7 +665,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     },
 
     timelineState: () => ipc(timelineState),
-    timelineRegion: (region, generation, revision) =>
+    timelineRegion: (region, generation, revision, request) =>
       ipc(() => {
         const current = timelineState()
         if (generation !== current.generation || revision !== current.revision)
@@ -651,7 +673,13 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
             "The project changed before the timeline region was applied."
           )
         sim.call("timeline_range", 0, region)
+        request ??= timelineRequest + 1
+        if (!Number.isSafeInteger(request) || request <= timelineRequest)
+          throw new Error(
+            "The timeline request is stale or exceeds the exact request limit."
+          )
         transport.setRegion(region, doc.project())
+        timelineRequest = request
         return timelineState()
       }),
     documentSnapshot: () => ipc(() => doc.snapshot(path)),
@@ -819,8 +847,9 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       }),
     recentProjects: () => ipc(() => recent()),
 
-    transportPlay: () =>
+    transportPlay: (guard) =>
       ipc(() => {
+        checkTimelineGuard(guard)
         startPlayback()
         return emitTransport()
       }),
@@ -835,9 +864,14 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         else startPlayback()
         return emitTransport()
       }),
-    transportSeek: (tick) => ipc(() => transport.seek(tick, doc.project())),
-    transportSet: (patch) =>
+    transportSeek: (tick, guard) =>
       ipc(() => {
+        checkTimelineGuard(guard)
+        transport.seek(tick, doc.project())
+      }),
+    transportSet: (patch, guard) =>
+      ipc(() => {
+        checkTimelineGuard(guard)
         if (
           patch.pattern !== undefined &&
           !doc

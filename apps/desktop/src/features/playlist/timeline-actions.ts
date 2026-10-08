@@ -1,10 +1,13 @@
 import type { Action, AppState } from "@/lib/actions"
-import { play, setTransport } from "@/lib/store/transport"
+import { backend } from "@/lib/ipc"
 import { useUiStore } from "@/lib/store/ui"
 import { activeMetrics } from "./active"
-import { seekSong, songTick } from "./ops"
+import { songTick } from "./ops"
+import { usePlaylistStore } from "./store"
 import {
-  applyPlaybackRegion,
+  beginTimelineRequest,
+  publishPlaybackRegion,
+  timelineRequestError,
   editTimeline,
   selectTimelineRegion,
   useTimelineStore,
@@ -17,10 +20,21 @@ const hasRange = (state: AppState) =>
 
 export async function playTimelineSelection(loopSong: boolean) {
   const range = timeline().selection
-  if (!range || !(await applyPlaybackRegion(range))) return
-  await setTransport({ mode: "song", loopSong })
-  await seekSong(range.start)
-  await play()
+  if (!range) return
+  const operation = beginTimelineRequest()
+  const guard = await publishPlaybackRegion({ ...range }, operation)
+  if (!guard || !operation.current()) return
+  try {
+    await backend.transportSet({ mode: "song", loopSong }, guard)
+    if (!operation.current()) return
+    await backend.transportSeek(range.start, guard)
+    if (!operation.current()) return
+    usePlaylistStore.getState().setCursorTick(range.start)
+    await backend.transportPlay(guard)
+    if (!operation.current()) return
+  } catch (error) {
+    timelineRequestError(operation, error)
+  }
 }
 
 export function exportTimelineSelection() {

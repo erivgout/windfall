@@ -6,7 +6,10 @@ use crate::session::recording::{CaptureHandle, Sink};
 use crate::sync::lock;
 use std::{fs, path::Path, sync::mpsc, time::Duration};
 use windfall_engine::{RenderOptions, render};
-use windfall_ipc::{BitDepth, ExportFormat, ExportOptions, PlayMode, RecordingSource};
+use windfall_ipc::{
+    BitDepth, ExportFormat, ExportOptions, PlayMode, RecordingSource, TimelinePlaybackState,
+    TransportPatch,
+};
 use windfall_project::{Command, TickRange, TrackId};
 
 struct Capture;
@@ -24,6 +27,215 @@ impl CaptureHandle for Capture {
 fn capture(_: RecordingSource, _: u32, mut sink: Sink) -> Result<Box<dyn CaptureHandle>, String> {
     sink(&[0.25; 960])?;
     Ok(Box::new(Capture))
+}
+
+fn refuse_transport(rig: &Rig, guard: TimelinePlaybackState) {
+    let timeline = rig.session.timeline_state();
+    let transport = rig.session.transport_state();
+    let tick = rig.session.controller().frame().tick;
+    let document = rig.session.document_snapshot();
+    assert!(
+        rig.session
+            .timeline_transport_set(
+                TransportPatch {
+                    mode: Some(PlayMode::Song),
+                    loop_song: Some(true),
+                    ..Default::default()
+                },
+                guard
+            )
+            .is_err()
+    );
+    assert!(rig.session.timeline_transport_seek(711.0, guard).is_err());
+    assert!(rig.session.timeline_transport_play(guard).is_err());
+    assert_eq!(rig.session.timeline_state(), timeline);
+    assert_eq!(rig.session.transport_state(), transport);
+    assert_eq!(rig.session.controller().frame().tick, tick);
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.project, document.project);
+    assert_eq!(after.revision, document.revision);
+    assert_eq!(after.dirty, document.dirty);
+    assert_eq!(after.history, document.history);
+}
+
+#[test]
+fn timeline_request_ordering_and_safe_limit_refuse_old_arm_clear_without_mutation() {
+    let mut rig = Rig::new();
+    rig.session
+        .add_audio_clip_from_file(
+            &factory_file("Bass/Bass Sub.wav"),
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let source = rig.session.timeline_state();
+    let region = Some(TickRange {
+        start: 17,
+        end: 839,
+    });
+    let arm = rig
+        .session
+        .timeline_region_request(region, source.generation, source.revision, Some(10))
+        .unwrap();
+    rig.session
+        .timeline_region_request(None, source.generation, source.revision, Some(12))
+        .unwrap();
+    assert!(
+        rig.session
+            .timeline_region_request(region, source.generation, source.revision, Some(11))
+            .is_err()
+    );
+    refuse_transport(&rig, arm);
+    let rearm = rig
+        .session
+        .timeline_region_request(
+            Some(TickRange {
+                start: 91,
+                end: 210,
+            }),
+            source.generation,
+            source.revision,
+            Some(14),
+        )
+        .unwrap();
+    assert!(
+        rig.session
+            .timeline_region_request(None, source.generation, source.revision, Some(13))
+            .is_err()
+    );
+    assert_eq!(rig.session.timeline_state(), rearm);
+    refuse_transport(&rig, TimelinePlaybackState { region, ..rearm });
+    refuse_transport(
+        &rig,
+        TimelinePlaybackState {
+            request: 13,
+            ..rearm
+        },
+    );
+    rig.session
+        .timeline_transport_set(
+            TransportPatch {
+                mode: Some(PlayMode::Song),
+                loop_song: Some(false),
+                ..Default::default()
+            },
+            rearm,
+        )
+        .unwrap();
+    rig.session.timeline_transport_seek(91.0, rearm).unwrap();
+    assert!(rig.session.timeline_transport_play(rearm).unwrap().playing);
+    assert!(rms(&rig.run(600)) > 1e-5);
+    rig.session.transport_stop();
+    let max = super::super::timeline::MAX_TIMELINE_REQUEST;
+    rig.session
+        .timeline_region_request(None, source.generation, source.revision, Some(max - 1))
+        .unwrap();
+    assert_eq!(
+        rig.session
+            .timeline_region(region, source.generation, source.revision)
+            .unwrap()
+            .request,
+        max
+    );
+    let exhausted = rig.session.timeline_state();
+    assert!(
+        rig.session
+            .timeline_region_request(region, source.generation, source.revision, Some(max + 1))
+            .is_err()
+    );
+    assert!(
+        rig.session
+            .timeline_region(region, source.generation, source.revision)
+            .is_err()
+    );
+    assert_eq!(rig.session.timeline_state(), exhausted);
+}
+
+#[test]
+fn timeline_transport_guards_refuse_edited_new_open_and_recording_sources_before_mutation() {
+    let rig = Rig::new();
+    let saved = rig
+        .session
+        .project_save(Some(&rig.file("guarded-song")))
+        .unwrap();
+    for change in 0..3 {
+        let source = rig.session.timeline_state();
+        let guard = rig
+            .session
+            .timeline_region(
+                Some(TickRange {
+                    start: 17,
+                    end: 839,
+                }),
+                source.generation,
+                source.revision,
+            )
+            .unwrap();
+        match change {
+            0 => {
+                rig.session
+                    .dispatch(Command::AddPattern { name: None }, None)
+                    .unwrap();
+            }
+            1 => {
+                rig.session.project_new().unwrap();
+            }
+            _ => {
+                rig.session.project_open(&saved).unwrap();
+            }
+        }
+        refuse_transport(&rig, guard);
+    }
+    let source = rig.session.timeline_state();
+    let guard = rig
+        .session
+        .timeline_region(
+            Some(TickRange {
+                start: 17,
+                end: 839,
+            }),
+            source.generation,
+            source.revision,
+        )
+        .unwrap();
+    rig.session
+        .recording_start_with(
+            RecordingSource {
+                host: "Fake".into(),
+                device: "Fake".into(),
+                left: 0,
+                right: None,
+            },
+            960,
+            None,
+            capture,
+        )
+        .unwrap();
+    let timeline = rig.session.timeline_state();
+    assert!(
+        rig.session
+            .timeline_region_request(
+                None,
+                source.generation,
+                source.revision,
+                Some(timeline.request + 1)
+            )
+            .is_err()
+    );
+    refuse_transport(&rig, guard);
+    rig.session.recording_cancel();
+    // Unguarded legacy transport retains its accepted signature and behavior.
+    rig.session
+        .transport_set(TransportPatch {
+            mode: Some(PlayMode::Pattern),
+            ..Default::default()
+        })
+        .unwrap();
+    rig.session.transport_seek(27.0);
+    assert!(rig.session.transport_play().unwrap().playing);
 }
 
 #[test]

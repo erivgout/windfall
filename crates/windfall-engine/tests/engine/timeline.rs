@@ -29,6 +29,99 @@ fn marker(rig: &mut Rig, tick: u32, kind: MarkerKind) {
 }
 
 #[test]
+fn timeline_skip_clamped_to_selected_end_holds_automation_through_native_effect_tails() {
+    use crate::support::{peak, sine};
+    use windfall_dsp::{LimiterParams, ReverbParams};
+    use windfall_project::{AutomationTarget, EffectParams};
+    let build = |automated: bool| {
+        let mut rig = Rig::new();
+        let track = rig.track();
+        rig.track_mut(track).volume = if automated { 1.0 } else { 0.125 };
+        rig.effect(
+            track,
+            EffectParams::Reverb(ReverbParams {
+                decay_s: 1.0,
+                mix: 0.5,
+                ..Default::default()
+            }),
+        );
+        rig.effect(
+            TrackId::MASTER,
+            EffectParams::Limiter(LimiterParams {
+                lookahead_ms: 10.0,
+                ..Default::default()
+            }),
+        );
+        let lane = rig.playlist_track();
+        rig.audio_clip(lane, sine(RATE, 440.0, 1.0), track, 0, 960);
+        let automation = rig.automation(AutomationTarget::TrackVolume { track }, &[(0, 0.25)]);
+        let clip = rig.automation_clip(lane, automation, 0, 960);
+        rig.clip_mut(clip).muted = !automated;
+        marker(&mut rig, 90, MarkerKind::Skip { end: 200 });
+        rig
+    };
+    let rig = build(true);
+    let reference = build(false);
+    let range = TickRange {
+        start: 10,
+        end: 100,
+    };
+    let start = |rig: &Rig| {
+        let (processor, controller) = rig.song_processor(RATE);
+        controller.set_timeline_region(Some(range)).unwrap();
+        controller.seek(10.0);
+        controller.play();
+        (processor, controller)
+    };
+    let (mut processor, controller) = start(&rig);
+    let (mut other, _) = start(&reference);
+    let latency = controller.latency_frames() as usize;
+    assert_eq!(latency, 480);
+    let mut actual = vec![0.0; (2000 + latency + 28_800) * 2];
+    assert_eq!(allocator_calls(|| processor.process(&mut actual)), 0);
+    let expected = run(&mut other, actual.len() / 2, 79);
+    assert!(!controller.transport().playing);
+    assert_eq!(controller.frame().tick, 100.0);
+    assert!(
+        actual == expected,
+        "stopped skip released its fader; first mismatching sample {:?}",
+        actual.iter().zip(&expected).position(|(a, b)| a != b)
+    );
+    assert!(peak(&actual[(2000 + latency + 4800) * 2..]) > 1e-4);
+    assert_eq!(controller.frame().automated[0].value, 0.25);
+    // Offline export is deliberately linear, so this equivalent interval
+    // ends where the live skip left its source, before the destination jump.
+    for auto_tail in [false, true] {
+        let options = RenderOptions {
+            mode: PlayMode::Song,
+            region: Some(TickRange { start: 10, end: 90 }),
+            tail_secs: 0.6,
+            auto_tail,
+            ..Default::default()
+        };
+        let rendered = render(&rig.project, &rig.pool, &options, &mut |_| true);
+        assert_eq!(
+            rendered.samples(),
+            render(&reference.project, &reference.pool, &options, &mut |_| true).samples()
+        );
+        assert_eq!(
+            rendered.samples(),
+            &actual[latency * 2..latency * 2 + rendered.samples().len()]
+        );
+    }
+    controller.seek(20.0);
+    run(&mut processor, 64, 64);
+    assert!(
+        controller.frame().automated.is_empty(),
+        "an explicit stopped seek releases the hold"
+    );
+    controller.play();
+    run(&mut processor, 64, 64);
+    assert!(controller.transport().playing);
+    assert_eq!(controller.frame().automated[0].value, 0.25);
+}
+
+#[test]
 fn timeline_skip_pause_resume_and_seek_drive_the_processor_without_callback_allocations() {
     let mut rig = tape();
     marker(&mut rig, 13, MarkerKind::Skip { end: 31 });
