@@ -20,6 +20,7 @@ mod mixer;
 mod patterns;
 mod playlist;
 mod synth;
+mod timeline;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -151,6 +152,7 @@ pub fn convert(flp: &FlpProject, options: &ConvertOptions) -> Conversion {
     builder.channels();
     builder.patterns();
     builder.playlist();
+    builder.timeline();
     builder.leftovers();
     builder.finish()
 }
@@ -496,12 +498,8 @@ impl<'a> Builder<'a> {
         }
 
         let pattern_markers = flp.patterns.iter().flat_map(|pattern| &pattern.markers);
-        let song_markers = flp
-            .main_arrangement()
-            .into_iter()
-            .flat_map(|arrangement| &arrangement.markers);
         let (mut plain, mut signatures) = (0_u32, 0_u32);
-        for marker in pattern_markers.chain(song_markers) {
+        for marker in pattern_markers {
             if marker.is_time_signature() {
                 signatures += 1;
             } else {
@@ -513,7 +511,7 @@ impl<'a> Builder<'a> {
             self.report.say(
                 section,
                 Outcome::Dropped,
-                format!("{plain} markers were left out: Windfall has no markers yet."),
+                format!("{plain} pattern markers were left out: per-pattern timelines are not supported yet."),
             );
         }
         if signatures > 0 {
@@ -522,7 +520,7 @@ impl<'a> Builder<'a> {
                 section,
                 Outcome::Dropped,
                 format!(
-                    "{signatures} changes of time signature were left out: a Windfall project has one time signature."
+                    "{signatures} pattern changes of time signature were left out: per-pattern meter maps are not supported yet."
                 ),
             );
         }

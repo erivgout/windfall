@@ -263,6 +263,7 @@ impl Project {
             playlist: Playlist {
                 tracks: Vec::new(),
                 clips: Vec::new(),
+                timeline: crate::Timeline::default(),
             },
             automations: Vec::new(),
             plugins: Vec::new(),
@@ -748,6 +749,10 @@ pub struct Playlist {
     pub tracks: Vec<PlaylistTrack>,
     /// Sorted by `start`, then `id`.
     pub clips: Vec<Clip>,
+    /// Song meter changes and navigation markers. Absent in legacy v1 files.
+    #[serde(default, skip_serializing_if = "crate::Timeline::is_empty")]
+    #[ts(as = "Option<crate::Timeline>", optional)]
+    pub timeline: crate::Timeline,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

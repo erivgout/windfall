@@ -117,6 +117,8 @@ pub struct ImportPlan {
     /// The time signature the project will be set to. `None` leaves it as
     /// it is.
     pub time_signature: Option<TimeSignature>,
+    /// Ordered song meter events. Importing replaces the prior song map.
+    pub meters: Vec<(u32, TimeSignature)>,
     /// How long the imported song is, in ticks: a whole number of bars.
     pub length: u32,
     /// The samples the project will be given, each path once. Only a drum
@@ -306,7 +308,7 @@ impl fmt::Display for Adjustment {
             ),
             Adjustment::TimeSignatureChanges { count } => write!(
                 f,
-                "{} not imported: a project has one time signature, and the file's first is used",
+                "{} not imported: colliding events, song bounds or the timeline item limit",
                 counted(*count, "time signature change", "time signature changes")
             ),
             Adjustment::DrumsAsSynth { channel } => write!(
@@ -422,7 +424,9 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
         plan: ImportPlan {
             name: song.name.as_deref().and_then(clean_name),
             tempo_bpm: None,
-            time_signature: signature.filter(|_| options.time_signature),
+            time_signature: signature
+                .filter(|_| options.time_signature && first.is_some_and(|s| s.tick == 0)),
+            meters: Vec::new(),
             length,
             samples: Vec::new(),
             channels: Vec::new(),
@@ -449,6 +453,43 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
         builder.plan_tempo(&song);
     }
     builder.report(&song, first.zip(signature));
+    if options.time_signature {
+        let mut meters = BTreeMap::new();
+        let mut dropped = 0;
+        for event in &song.time_signatures {
+            if event.tick >= MAX_SONG_TICKS {
+                dropped += 1;
+                continue;
+            }
+            let used = fit_signature(event.numerator, event.denominator);
+            if (event.numerator, event.denominator) != (used.numerator, used.denominator) {
+                builder
+                    .plan
+                    .adjustments
+                    .push(Adjustment::TimeSignatureFitted {
+                        numerator: event.numerator,
+                        denominator: event.denominator,
+                        used,
+                    });
+            }
+            if meters.insert(event.tick, used).is_some() {
+                dropped += 1;
+            }
+        }
+        dropped += meters
+            .len()
+            .saturating_sub(windfall_project::MAX_TIMELINE_ITEMS);
+        builder.plan.meters = meters
+            .into_iter()
+            .take(windfall_project::MAX_TIMELINE_ITEMS)
+            .collect();
+        if dropped > 0 {
+            builder
+                .plan
+                .adjustments
+                .push(Adjustment::TimeSignatureChanges { count: dropped });
+        }
+    }
     builder.plan
 }
 
@@ -846,28 +887,7 @@ impl Builder<'_> {
         if let Some((changes, kept)) = fitted.tempo_thinned {
             list.push(Adjustment::TempoChangesThinned { changes, kept });
         }
-        if let Some((first, used)) = signature {
-            if (first.numerator, first.denominator) != (used.numerator, used.denominator) {
-                list.push(Adjustment::TimeSignatureFitted {
-                    numerator: first.numerator,
-                    denominator: first.denominator,
-                    used,
-                });
-            }
-            // Only a signature that differs from the one before it is a
-            // change.
-            let mut signatures: Vec<(u8, u8)> = song
-                .time_signatures
-                .iter()
-                .map(|signature| (signature.numerator, signature.denominator))
-                .collect();
-            signatures.dedup();
-            if signatures.len() > 1 {
-                list.push(Adjustment::TimeSignatureChanges {
-                    count: signatures.len() - 1,
-                });
-            }
-        }
+        let _ = signature; // Fitted meter events are reported individually above.
         let drums = self.drums.drain(..);
         list.extend(drums.map(|channel| Adjustment::DrumsAsSynth { channel }));
         self.plan.adjustments = list;
@@ -894,7 +914,7 @@ impl ImportPlan {
     /// True when the import would add nothing to a project: the song has
     /// no notes and no tempo changes.
     pub fn is_empty(&self) -> bool {
-        self.channels.is_empty() && self.tempo_points.is_empty()
+        self.channels.is_empty() && self.tempo_points.is_empty() && self.meters.is_empty()
     }
 
     /// How many notes the import adds to the project's patterns.
@@ -1056,6 +1076,21 @@ impl ImportPlan {
                     content: ClipContent::Automation { automation },
                 }],
             });
+        }
+        if !self.meters.is_empty() {
+            commands.extend(
+                project
+                    .playlist
+                    .timeline
+                    .meters
+                    .iter()
+                    .map(|m| Command::RemoveMeterChange { id: m.id }),
+            );
+            commands.extend(
+                self.meters
+                    .iter()
+                    .map(|&(tick, signature)| Command::AddMeterChange { tick, signature }),
+            );
         }
         commands
     }

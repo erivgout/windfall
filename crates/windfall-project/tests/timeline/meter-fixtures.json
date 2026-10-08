@@ -1,0 +1,19 @@
+{
+  "legacy": { "numerator": 4, "denominator": 4 },
+  "meters": [
+    { "id": 2, "tick": 4001, "signature": { "numerator": 7, "denominator": 8 } },
+    { "id": 3, "tick": 7400, "signature": { "numerator": 3, "denominator": 4 } }
+  ],
+  "positions": [
+    { "tick": 0, "position": { "bar": 1, "beat": 1, "tick": 0 } },
+    { "tick": 3840, "position": { "bar": 2, "beat": 1, "tick": 0 } },
+    { "tick": 4000, "position": { "bar": 2, "beat": 1, "tick": 160 } },
+    { "tick": 4001, "position": { "bar": 3, "beat": 1, "tick": 0 } },
+    { "tick": 4481, "position": { "bar": 3, "beat": 2, "tick": 0 } },
+    { "tick": 7361, "position": { "bar": 4, "beat": 1, "tick": 0 } },
+    { "tick": 7399, "position": { "bar": 4, "beat": 1, "tick": 38 } },
+    { "tick": 7400, "position": { "bar": 5, "beat": 1, "tick": 0 } },
+    { "tick": 8360, "position": { "bar": 5, "beat": 2, "tick": 0 } },
+    { "tick": 10280, "position": { "bar": 6, "beat": 1, "tick": 0 } }
+  ]
+}
