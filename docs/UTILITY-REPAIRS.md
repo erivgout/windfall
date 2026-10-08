@@ -309,6 +309,58 @@ blocking wait, owner destruction or unbounded storage is introduced. The
 one-outgoing/one-active representation and control-side retirement contract
 from R4 remain intact. No new phase or readiness exception is added.
 
+## Sixth review: detached preparation identity (a4b46967 source)
+
+The exact detached precompiled-plan case was compiled RED before production
+edits. At 48 kHz, a plan was compiled with factory revision 0, then the same
+factory advanced to revision 1. The plan was installed without a stream and
+later attached, preparing a real hosted 32-frame delay followed by a 1/1 ms
+identity matrix. After 4092 priming frames, an unchanged project update lost
+the running native owner. The solo 0.25-amplitude 173 Hz tone measured an
+adjacent step of **0.068483695**, exceeding the unchanged **0.04** bound. The
+opposite-track version measured cancellation residual **0.2646036**, exceeding
+**1e-6**. Both tests failed in
+`cargo test -p windfall-engine --lib utility_r6 -- --nocapture`; these are
+executed native results, not the review's source-equation predictions.
+
+Detached installation now refreshes the requested binding/provider/revision
+snapshot. This alone cannot freeze attachment's identity: the revision can
+change again after installation. Each attachment already returns a ledger of
+the native identities and latencies actually prepared on the control side.
+Plan progress adoption now compares against that frozen preparation ledger,
+not the previous plan's possibly older compilation snapshot or its mutable
+factory's current revision. Subsequent ordinary and precompiled updates reuse
+the running owner when that identity matches; an actual revision replacement
+still receives a fresh generation under the R5 policy. Departing records are
+excluded from active identity lookup.
+
+The exact GREEN residual is **0**, and the solo maximum step is **0.0056612906**.
+The hosted owner continues processing across four unchanged updates, is
+prepared exactly once, and retains the reported **80-frame** chain latency.
+Removing it preserves cancellation through its splice, then reports the
+matrix's **48-frame** latency and retires that native owner once on the control
+side. Irregular blocks include 1, 7, 29 and 137 frames.
+
+Four controller-unit regressions cover the exact cancellation and solo cases,
+a further revision change after detached installation but before attachment,
+and a failed attachment retry followed by a suspended stream's reopening.
+The factory records the revision used for each actual prepared owner. The
+unheard abandoned owner processes zero blocks and drops once outside audio;
+the later owners use revisions 2 and 3, continue processing through unchanged
+updates, and retire once when their processors are dropped on the control
+side. Tests stay in the controller module because attachment is crate-private;
+no public test hook is added.
+
+Every callback in these cases is allocator-guarded for zero alloc/realloc/free
+calls. The production change adds only a control-side identity lookup and
+snapshot refresh; it adds no callback allocation, lock, wait, native-owner
+handle or storage. Immutable plans are not cloned or mutated at attachment.
+The approved one-outgoing/one-active bound, routing/automation authority,
+control-side retirement and all R1-R5 contracts remain unchanged. Controller
+transport/navigation, processor, native facade/adoption and DSP registry
+behavior are outside this repair. No additional limitation is introduced to
+excuse the detached adoption failure.
+
 ## Transition policy and bounds
 
 When history is ready, a retarget freezes the current tap mixture at its
@@ -612,3 +664,49 @@ and topology phase boundaries and the one-second fallback are unchanged; the
 revision-only readiness/cancellation and two-owner failures are fixed without
 new exceptions. Hardware listening, native worst-case device deadlines and
 combined shared-WASM parity are not claimed.
+
+## Sixth-repair verification (a4b46967 source)
+
+All native commands use the existing worktree-local
+`target/utility-repairs-native` and `target/utility-repairs-bindings`,
+`source scripts/msvc-env.sh`, `CARGO_BUILD_JOBS=1` and
+`RUST_TEST_THREADS=1`, with one Cargo process at a time.
+
+The exact two-case RED and initial GREEN command was
+`cargo test -p windfall-engine --lib utility_r6 -- --nocapture`.
+After adding the attachment variants, that command passed **four tests**.
+Final fixed-source checks:
+
+- `cargo test -p windfall-engine --lib controller::tests -- --nocapture`:
+  **12 passed**, including all four R6 tests and the eight existing stream,
+  transport and automation-state regressions. Exact printed GREEN values
+  match those above.
+- `cargo test -p windfall-engine --test engine effects --quiet`:
+  **71 passed**, 183 unrelated tests filtered out. Preserves all original
+  utility/limiter policies, R1-R5 closures, native-owner authority and guarded
+  restoration, automation, revision, history and retirement edge paths.
+- `cargo test -p windfall-engine --lib repeated_restores --quiet`: **one passed**,
+  including 1000 rounds at the maximum active slot count.
+- `cargo test -p windfall-engine --lib rack::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib state::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib plugins::tests --quiet`: **eight passed**.
+- `cargo test -p windfall-dsp --test dsp utility_repairs --quiet`: **nine passed**.
+  DSP source is unchanged. These final suites cover **107 distinct native
+  tests**; the focused four-test rerun is not added again to that count.
+- `cargo clippy -p windfall-engine --all-targets -- -D warnings` and
+  `cargo fmt --all --check`: **passed after the final source edits**.
+- Prettier on this repair document and `git diff --check`: **passed**.
+- Every new detached adoption, unchanged update, attachment retry, reopening
+  and removal callback asserts **zero alloc/realloc/free calls**.
+
+This source-only incremental repair is atop immutable a4b46967. Production
+edits are confined to controller identity preparation/adoption and the
+Plan/Ledger identity seam; tests are in the existing controller unit module.
+No parent import, amendment, artifact, new review thread, push or release is
+included. DSP registries, native facade/adoption hook, processor and
+transport/navigation behavior are unchanged. No full workspace, desktop or UI
+suite was repeated. Combined artifacts and acceptance remain with the parent.
+Existing independent varying-branch/topology boundaries and the one-second
+fallback remain; the detached native-owner loss is fixed without a new
+exception. Hardware listening, device deadline measurements and combined
+shared-WASM parity are not claimed.
