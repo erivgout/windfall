@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
 import { useHint } from "@/lib/store/hint"
@@ -92,10 +93,10 @@ export function Scrollbar({ axis }: { axis: Axis }) {
   function measure(event: React.PointerEvent<HTMLDivElement>) {
     const bounds = event.currentTarget.getBoundingClientRect()
     return {
-      length: horizontal ? bounds.width : bounds.height,
+      length: logicalDelta(horizontal ? bounds.width : bounds.height),
       position: horizontal
-        ? event.clientX - bounds.left
-        : event.clientY - bounds.top,
+        ? logicalDelta(event.clientX - bounds.left)
+        : logicalDelta(event.clientY - bounds.top),
     }
   }
 

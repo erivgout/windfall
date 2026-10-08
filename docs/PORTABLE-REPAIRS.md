@@ -155,3 +155,154 @@ Cross-machine throughput, power-loss recovery on specific filesystems,
 macOS/Linux dialogs and a third-party plugin corpus remain external checks.
 Root owns combined integration validation, UI synchronization and generated
 bindings/WASM/parity; this repair does not change those surfaces.
+
+## Round two: carried audio and retained history sources
+
+The independent read-only review of
+`d42c810ea7beee0ee49f60305ab0d21d30b00828` found the original two repairs closed,
+then identified two existing save-data integrity defects. Its evidence was
+pinned source tracing and bounded Python interleaving models, not Rust
+execution. This round compiled native regressions before changing either
+production seam.
+
+Parent sampler preparation `42522322e96c04cffc831370cef762d2bf1a41d0` was merged
+as `2b8f350e9bf72be64a32cd793dd086f9ae71ad85` before these checks. Both
+`Refusal::Cancelled` and `Refusal::SamplerPreparation`, plus `archive:install`
+and `sampler:install-prepared`, are retained. No sampler/runtime/browser/UI
+source was edited by this round.
+
+Two sessions could both observe a missing sample destination, then overwrite
+each other's audio through `fs::copy`, despite no-replace project publication.
+Samples now copy into request-owned temporary files under the destination
+parent, sync, and publish through `persist_noclobber`. A competing arrival is
+compared byte for byte or assigned another numbered sample name. Every retry
+records that exact name in the project and matching history source. Failure
+and collision drop only the owned temporary file; they never remove a final
+sample. The native test holds both owners after the missing-file check, lets
+the first publish, then resumes the second. It checks both exact numbered
+project files, unchanged competitor/source/old project bytes, retained history,
+clean successful documents, decoded samples after separate restarts, and
+audible sampler output. A focused failure test also catches the previous
+cleanup handler deleting a competitor after a missing-source copy failed.
+
+Moving the sample root previously considered only current project samples.
+Undone additions absent from capture, and additions made and undone during a
+pending save, kept history-relative paths and could load unrelated destination
+audio on redo. `Document::sample_sources` now enumerates current and all retained
+edit source occurrences. The save identifies sources not carried in its exact
+published snapshot and preserves their original absolute paths before changing
+the live root. It relinks those identities before carried renames, so a
+history-only relative name cannot force a history reset merely because a
+carried sample acquired that name. `relink_sample_source` matches both ID and
+old path, keeping different historical source versions separate. The existing
+whole-ID `relink_sample` behavior remains unchanged. These helpers do not add
+history steps or change dirty state; generation/edit and save serialization
+guards remain authoritative.
+
+If exact relinks conflict with the project model's distinct-path requirement,
+the save reports the already-written copy and refuses to adopt its root. The
+live document, old root and complete history remain unchanged. The previous
+unchanged-save fallback silently started a fresh document in this case. A
+native fixture with two history-only IDs for one original path now checks this
+conservative refusal, the retained redo step, unchanged source/old project,
+and the reported copy. No conflicting source identity is silently discarded.
+
+Three native cases exercise undo before capture, undo after capture, and an
+addition made and undone during a pending save. They check one-step redo/undo,
+history and dirty behavior, old files and same-name competitors, exact decoded
+audio, subsequent numbered save/reopen, and sampler output. A missing
+history-only source remains an explicit missing original absolute path, rather
+than using unrelated destination audio. Historical sources deliberately held
+as absolute paths remain dependencies of the live document and later ordinary
+saves; a portable export after redo bundles those reachable samples.
+
+### Round-two native RED evidence
+
+The existing worktree-local target and binding directories above were reused,
+with `CARGO_BUILD_JOBS=1` and `RUST_TEST_THREADS=1`. All commands run serially
+after `source scripts/msvc-env.sh`; no full workspace or fixture build was run.
+
+```bash
+cargo test --locked -p windfall-desktop --lib session::tests::files::portable_ -- --test-threads=1
+```
+
+Exit 1: 3 failed, 1 passed (0.15 seconds execution; 4m16s cached parent-source
+recompile). The forced concurrent carry failed at `the second owner replaced
+the first owner's audio`. Both pre-capture undo and pending addition/undo failed
+at `redo loaded the destination's unrelated sound`. The captured-then-undone
+control passed before repair.
+
+```bash
+cargo test --locked -p windfall-desktop --lib session::files::tests::portable_failed_sample_staging -- --test-threads=1
+```
+
+Exit 1: 1 failed (0.00 seconds execution). Reading the competitor after the
+failed copy returned `NotFound`, proving its deletion by the old cleanup.
+
+The initial post-fix native `portable_` run passed all 5 tests (0.16 seconds).
+An intermediate compilation reported an iterator borrow lifetime error,
+corrected by limiting the read-only iterator scope; an added project unit test
+used the nonexistent `Project::default`, corrected to `Project::new`, and its
+command-test error expectation needed `SampleId.0` for the existing `u32`
+helper. No failed compilation is counted as a test result.
+
+An intermediate file suite had 29 pass and one assertion fail because the
+missing-source test assumed deleting a file discards cached decoded audio.
+Production cache behavior was kept: the test now checks any cached audio is
+the original sound, then cold-reopens a subsequent save and asserts a missing
+original-source warning rather than destination substitution.
+
+```bash
+cargo test --locked -p windfall-desktop --lib session::tests::files::portable_source_conflict -- --test-threads=1
+```
+
+Exit 1 before the conflict-refusal guard: 1 failed (0.01 seconds), returning
+success through the history-reset fallback where the test required a safe
+refusal. The guard removes that fallback; it does not loosen source-path
+uniqueness or the existing whole-ID relink checks.
+The first post-guard file run passed 30 tests and failed only the fixture's
+reported-path substring assertion because its expected Windows path contained
+a mixed slash. The expectation was corrected to a native joined path; the
+production refusal and its message were already correct.
+
+### Round-two final scoped checks
+
+Every test command below exited 0. Counts are unique tests in these scoped
+filters, not including repeated regression runs:
+
+| Command | Result |
+| --- | --- |
+| `cargo test --locked -p windfall-project --lib sample_sources -- --test-threads=1` | 1 passed, 0.00s |
+| `cargo test --locked -p windfall-project --test commands relink -- --test-threads=1` | 5 passed, 0.00s |
+| `cargo test --locked -p windfall-desktop --lib session::tests::files -- --test-threads=1` | 31 passed, 0.83s |
+| `cargo test --locked -p windfall-desktop --lib session::files::tests -- --test-threads=1` | 6 passed, 0.03s |
+| `cargo test --locked -p windfall-desktop --lib session::tests::versions -- --test-threads=1` | 7 passed, 0.44s |
+| `cargo test --locked -p windfall-desktop --lib session::tests::archive -- --test-threads=1 --skip selected_native_plugin_capture_archive_and_export_round_trip` | 7 passed, 0.90s |
+| `cargo test --locked -p windfall-desktop --lib sampler_processing_open_and_history_prepare_off_lock_and_reject_project_replacement -- --test-threads=1` | 1 passed, 0.03s |
+| `cargo test --locked -p windfall-archive --lib --test archive -- --test-threads=1` | 4 parser + 9 archive integration passed, 0.06/0.20s |
+
+Total: 71 focused tests. This includes the original bounded parser-binding
+regressions and backup-shaped numbered destination round trip. Native archive
+tests exercise cancellation/stale/edit/recording refusals at `archive:install`;
+the sampler test exercises `sampler:install-prepared` and its history guard.
+Both file-install refusal variants remain in the merged source.
+
+```bash
+cargo clippy --locked -p windfall-project -p windfall-archive -p windfall-desktop --lib --tests -- -D warnings
+cargo fmt -p windfall-project -p windfall-archive -p windfall-desktop -- --check
+git diff --check
+```
+
+All exited 0. Strict scoped Clippy finished in 28.94 seconds with no warnings;
+formatting and whitespace checks passed. Checks reused the existing unique
+target, one Cargo process at a time. No interrupted or pending process is
+counted as passed.
+After the final Rust doc-comment clarification, strict Clippy and scoped fmt
+were rerun on the final source with exit 0 (Clippy 2.04 seconds).
+
+The real CLAP archive fixture is explicitly excluded from this round's native
+filter, and is not counted as passed. Parent reported the integrated base suite
+including that fixture; this subsequent source repair still needs the parent's
+actual fixture and combined integration rerun after integration. No full
+workspace suite, UI tests, scanner/fixture build, bindings/WASM regeneration,
+artifact edits, push or release occurred here. Version stays `v0.1.0-alpha.1`.

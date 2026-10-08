@@ -334,8 +334,10 @@ fn runtime_repair_vst3_bundle_binary_changes_require_rescan() {
     std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
     std::fs::copy(library(), &inner).unwrap();
     let scanner = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap()
+        .map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target"),
+            PathBuf::from,
+        )
         .join("debug/windfall-desktop.exe");
     let manager = crate::plugins::PluginManager::fixture(rig.folder.path(), &bundle, &scanner);
     let entry = manager

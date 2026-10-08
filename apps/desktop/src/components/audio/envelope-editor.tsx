@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { logicalDelta } from "@/lib/ui-scale"
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
@@ -485,8 +486,9 @@ function EnvelopeEditor({
       return
     }
     const speed = event.shiftKey ? 0.1 : 1
-    state.time += ((event.clientX - state.x) / plotWidth) * state.span * speed
-    state.level -= ((event.clientY - state.y) / plotHeight) * speed
+    state.time +=
+      (logicalDelta(event.clientX - state.x) / plotWidth) * state.span * speed
+    state.level -= (logicalDelta(event.clientY - state.y) / plotHeight) * speed
     state.x = event.clientX
     state.y = event.clientY
     const { time, level } = NODES[state.node]

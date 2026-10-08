@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client"
 import "./index.css"
 import App from "./App.tsx"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
+import { useApplicationScale } from "@/lib/ui-scale-root"
 
 // `?view=kit` opens the audio control kit showcase instead of the app, and
 // `?view=params` the editors made from the effect and instrument descriptors.
@@ -15,16 +16,21 @@ const Showcase = view === "kit" ? KitDemo : view === "params" ? ParamDemo : null
 // The stylesheet locks scrolling and text selection for the app window only.
 document.documentElement.dataset.view = Showcase ? "kit" : "app"
 
+function ScaledApplication() {
+  useApplicationScale()
+  return Showcase ? (
+    <Suspense>
+      <Showcase />
+    </Suspense>
+  ) : (
+    <App />
+  )
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
-      {Showcase ? (
-        <Suspense>
-          <Showcase />
-        </Suspense>
-      ) : (
-        <App />
-      )}
+      <ScaledApplication />
     </ThemeProvider>
   </StrictMode>
 )

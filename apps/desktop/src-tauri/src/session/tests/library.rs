@@ -35,6 +35,502 @@ fn checked_import(
     }
 }
 
+fn prepared_sampler_import_fixture() -> (Rig, String) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    use windfall_project::{ClipStretchQuality, SamplerKeyRange, SamplerPatch, SamplerStretch};
+    let rig = Rig::new();
+    let folder = rig.folder.path().join("Sources");
+    fs::create_dir(&folder).unwrap();
+    let old = folder.join("old.wav");
+    write_wav(
+        &old,
+        &AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 4800]),
+        WavSampleFormat::Float32,
+    )
+    .unwrap();
+    rig.session
+        .set_channel_sample_from_file(rig.channel(0), &paths::display(&old))
+        .unwrap();
+    {
+        let mut state = rig.session.state();
+        let mut limited = windfall_engine::SamplePool::with_sampler_budget(256 * 1024);
+        for (id, source) in state.pool.iter() {
+            limited.insert(id, source.clone());
+        }
+        state.pool = limited;
+    }
+    rig.session
+        .dispatch(
+            Command::UpdateSampler {
+                id: rig.channel(0),
+                patch: SamplerPatch {
+                    stretch: Some(SamplerStretch::Spectral {
+                        ratio: 1.0,
+                        quality: ClipStretchQuality::Fast,
+                        formants: false,
+                        range: SamplerKeyRange {
+                            first: 60,
+                            last: 60,
+                        },
+                    }),
+                    ..Default::default()
+                },
+            },
+            None,
+        )
+        .unwrap();
+    let project = rig.project();
+    assert!(!rig.session.state().pool.needs_sampler_preparation(&project));
+    rig.session
+        .browser_add_root(&paths::display(&folder))
+        .unwrap();
+    (rig, paths::display(&folder))
+}
+
+fn refused_file_sampler_replacement(browser: bool) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    let (mut rig, folder) = prepared_sampler_import_fixture();
+    let file = std::path::Path::new(&folder).join("over-budget.wav");
+    write_wav(
+        &file,
+        &AudioBuffer::from_interleaved(48_000, 2, vec![0.75; 48_000 * 2]),
+        WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let path = paths::display(&file);
+    // Save a clean document and retain a real redo entry before failure.
+    rig.session
+        .project_save(Some(&rig.file("saved.windfall")))
+        .unwrap();
+    rig.session
+        .dispatch(
+            Command::AddChannel {
+                name: Some("Redo must survive".into()),
+                sample: None,
+                instrument: None,
+                index: None,
+                mixer_track: None,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.undo().unwrap();
+    let before = rig.session.document_snapshot();
+    let pool = rig.session.state().pool.clone();
+    let retained = pool.sampler_retained_bytes();
+    rig.run(960);
+    rig.session.controller().note_on(rig.channel(0), 60, 1.0);
+    let audible = rig.run(6000);
+    assert!(audible.iter().any(|value| value.abs() > 0.01));
+    let result = if browser {
+        rig.session.browser_replace_sample(
+            rig.channel(0),
+            &path,
+            rig.session.library_file(&path).unwrap(),
+        )
+    } else {
+        rig.session
+            .set_channel_sample_from_file(rig.channel(0), &path)
+    };
+    let after = rig.session.document_snapshot();
+    rig.session.controller().note_on(rig.channel(0), 60, 1.0);
+    let after_audio = rig.run(6000);
+    let export = rig.session.export_audio(windfall_ipc::ExportOptions {
+        path: rig.file("after-refusal.wav"),
+        mode: windfall_ipc::PlayMode::Pattern,
+        tail_secs: 0.0,
+        bit_depth: windfall_ipc::BitDepth::Float32,
+        ..Default::default()
+    });
+    if export.is_ok() {
+        assert!(rig.events.wait_for_export().error.is_none());
+    }
+    assert!(
+        result.is_err(),
+        "{} replacement committed history {} -> {}, changed project={}, left old playback={}, export={export:?}",
+        if browser { "checked" } else { "ordinary" },
+        before.history.cursor,
+        after.history.cursor,
+        before.project != after.project,
+        audible == after_audio
+    );
+    assert!(result.unwrap_err().contains("budget"));
+    assert_eq!(after, before, "dirty/history/redo must remain unchanged");
+    assert_eq!(after_audio, audible, "audible plan must remain unchanged");
+    assert!(
+        export.is_ok(),
+        "refused edit must not block exporting the old source"
+    );
+    let state = rig.session.state();
+    assert_eq!(state.pool.len(), pool.len());
+    for (id, source) in pool.iter() {
+        assert_eq!(state.pool.get(id).unwrap().identity(), source.identity());
+    }
+    assert_eq!(state.pool.sampler_retained_bytes(), retained);
+    assert!(
+        !state
+            .pool
+            .needs_sampler_preparation(state.document.project())
+    );
+}
+
+#[test]
+fn ordinary_file_sampler_budget_refusal_is_transactional() {
+    refused_file_sampler_replacement(false);
+}
+#[test]
+fn checked_file_sampler_budget_refusal_is_transactional() {
+    refused_file_sampler_replacement(true);
+}
+
+fn routed_import(
+    rig: &Rig,
+    path: &str,
+    browser: bool,
+    destination: &str,
+) -> Result<windfall_project::DispatchResult, String> {
+    if browser {
+        return checked_import(rig, path, rig.session.library_file(path)?, destination);
+    }
+    match destination {
+        "rack" => rig.session.add_channel_from_file(path, None),
+        "playlist" => rig.session.add_audio_clip_from_file(
+            path,
+            crate::session::ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        ),
+        "replacement" => rig
+            .session
+            .set_channel_sample_from_file(rig.channel(0), path),
+        _ => panic!("unknown destination"),
+    }
+}
+
+fn successful_file_sampler_replacement(browser: bool) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    let (mut rig, folder) = prepared_sampler_import_fixture();
+    // Isolate the prepared channel for an actual playback/export comparison.
+    for channel in rig.project().channels.iter().skip(1) {
+        rig.session
+            .dispatch(Command::RemoveChannel { id: channel.id }, None)
+            .unwrap();
+    }
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel: rig.channel(0),
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    let file = std::path::Path::new(&folder).join("good.wav");
+    write_wav(
+        &file,
+        &AudioBuffer::from_interleaved(48_000, 1, vec![0.75; 2400]),
+        WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let path = paths::display(&file);
+    let before = rig.session.document_snapshot();
+    let result = routed_import(&rig, &path, browser, "replacement").unwrap();
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.history.cursor, before.history.cursor + 1);
+    let source = after.project.channels[0].source.sample().unwrap();
+    assert!(result.created.contains(&source.0));
+    assert_eq!(
+        rig.session.state().pool.get(source).unwrap().samples()[0],
+        0.75
+    );
+    assert!(
+        !rig.session
+            .state()
+            .pool
+            .needs_sampler_preparation(&after.project)
+    );
+    assert!(
+        rig.session
+            .controller()
+            .sampler_key_supported(rig.channel(0), 60)
+    );
+    assert!(
+        !rig.session
+            .controller()
+            .sampler_key_supported(rig.channel(0), 59)
+    );
+    rig.run(960);
+    let export_path = rig.file("prepared.wav");
+    rig.session
+        .export_audio(windfall_ipc::ExportOptions {
+            path: export_path.clone(),
+            mode: windfall_ipc::PlayMode::Pattern,
+            sample_rate: super::SAMPLE_RATE,
+            tail_secs: 0.0,
+            auto_tail: false,
+            bit_depth: windfall_ipc::BitDepth::Float32,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rig.events.wait_for_export().error.is_none());
+    let exported = windfall_codec::decode_file(&export_path).unwrap();
+    rig.session.transport_seek(0.0);
+    rig.session.transport_play().unwrap();
+    let played = rig.run(exported.frames());
+    rig.session.transport_stop();
+    rig.run(960);
+    assert!(played.iter().any(|value| value.abs() > 0.01));
+    assert_eq!(played.len(), exported.samples().len());
+    let mismatch = played
+        .iter()
+        .zip(exported.samples())
+        .enumerate()
+        .find(|(_, (played, exported))| played.to_bits() != exported.to_bits());
+    assert!(
+        mismatch.is_none(),
+        "playback/export must use the same prepared source: {mismatch:?}"
+    );
+    // Identical replacement is a musical no-op, preserving a real redo tail.
+    rig.session
+        .dispatch(
+            Command::AddChannel {
+                name: Some("Keep redo".into()),
+                sample: None,
+                instrument: None,
+                index: None,
+                mixer_track: None,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.undo().unwrap();
+    let unchanged = rig.session.document_snapshot();
+    let identity = rig.session.state().pool.get(source).unwrap().identity();
+    routed_import(&rig, &path, browser, "replacement").unwrap();
+    assert_eq!(rig.session.document_snapshot(), unchanged);
+    assert_eq!(
+        rig.session.state().pool.get(source).unwrap().identity(),
+        identity
+    );
+    rig.session.undo().unwrap();
+    let mut restored = rig.project();
+    restored.next_id = before.project.next_id;
+    assert_eq!(restored, before.project);
+    rig.session.redo().unwrap();
+    let mut restored = rig.project();
+    restored.next_id = after.project.next_id;
+    assert_eq!(restored, after.project);
+    assert!(
+        !rig.session
+            .state()
+            .pool
+            .needs_sampler_preparation(&restored)
+    );
+    assert_eq!(
+        rig.session.state().pool.get(source).unwrap().identity(),
+        identity
+    );
+    let saved = rig
+        .session
+        .project_save(Some(&rig.file("prepared.windfall")))
+        .unwrap();
+    rig.session.project_new().unwrap();
+    rig.session.project_open(&saved).unwrap();
+    let reopened = rig.session.document_snapshot();
+    assert_eq!(
+        rig.session.state().pool.get(source).unwrap().samples()[0],
+        0.75
+    );
+    assert!(
+        !rig.session
+            .state()
+            .pool
+            .needs_sampler_preparation(&reopened.project)
+    );
+    routed_import(&rig, &path, browser, "replacement").unwrap();
+    assert_eq!(rig.session.document_snapshot(), reopened);
+}
+
+#[test]
+fn ordinary_file_sampler_replacement_prepares_once_for_playback_export_and_undo() {
+    successful_file_sampler_replacement(false);
+}
+#[test]
+fn checked_file_sampler_replacement_prepares_once_for_playback_export_and_undo() {
+    successful_file_sampler_replacement(true);
+}
+
+#[test]
+fn file_import_rechecks_guards_after_off_lock_preparation_at_all_destinations() {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    struct Capture;
+    impl crate::session::recording::CaptureHandle for Capture {
+        fn frames(&self) -> u64 {
+            0
+        }
+        fn failed(&self) -> bool {
+            false
+        }
+        fn finish(self: Box<Self>) -> Result<u64, String> {
+            Ok(0)
+        }
+    }
+    for browser in [false, true] {
+        for destination in ["rack", "playlist", "replacement"] {
+            for change in [
+                "file",
+                "edit",
+                "New",
+                "Open",
+                "root",
+                "source",
+                "pending-load",
+                "recording",
+                "folder",
+            ] {
+                if !browser && change == "root" {
+                    continue;
+                }
+                let (rig, folder) = prepared_sampler_import_fixture();
+                let file = std::path::Path::new(&folder).join("good.wav");
+                write_wav(
+                    &file,
+                    &AudioBuffer::from_interleaved(48_000, 1, vec![0.75; 2400]),
+                    WavSampleFormat::Float32,
+                )
+                .unwrap();
+                let path = paths::display(&file);
+                let saved = rig
+                    .session
+                    .project_save(Some(&rig.file("saved.windfall")))
+                    .unwrap();
+                let channel = rig.channel(0);
+                let token = browser.then(|| rig.session.library_file(&path).unwrap());
+                let hold = rig.session.hold("import:prepared");
+                let worker = rig
+                    .session
+                    .background(move |session| match (token, destination) {
+                        (Some(token), "rack") => session.browser_add_channel(&path, None, token),
+                        (Some(token), "playlist") => session.browser_add_clip(
+                            &path,
+                            crate::session::ClipPlace {
+                                track: None,
+                                start: 0,
+                                mixer_track: None,
+                            },
+                            token,
+                        ),
+                        (Some(token), _) => session.browser_replace_sample(channel, &path, token),
+                        (None, "rack") => session.add_channel_from_file(&path, None),
+                        (None, "playlist") => session.add_audio_clip_from_file(
+                            &path,
+                            crate::session::ClipPlace {
+                                track: None,
+                                start: 0,
+                                mixer_track: None,
+                            },
+                        ),
+                        (None, _) => session.set_channel_sample_from_file(channel, &path),
+                    });
+                hold.wait();
+                match change {
+                    "file" => write_wav(
+                        &file,
+                        &AudioBuffer::from_interleaved(48_000, 1, vec![0.5; 3000]),
+                        WavSampleFormat::Float32,
+                    )
+                    .unwrap(),
+                    "edit" => {
+                        rig.session
+                            .dispatch(
+                                Command::AddChannel {
+                                    name: Some("Concurrent edit".into()),
+                                    sample: None,
+                                    instrument: None,
+                                    index: None,
+                                    mixer_track: None,
+                                },
+                                None,
+                            )
+                            .unwrap();
+                    }
+                    "New" => {
+                        rig.session.project_new().unwrap();
+                    }
+                    "Open" => {
+                        rig.session.project_open(&saved).unwrap();
+                    }
+                    "root" => {
+                        rig.session.browser_remove_root(&folder).unwrap();
+                    }
+                    "source" => {
+                        let mut state = rig.session.state();
+                        let sample = state.document.project().channels[0]
+                            .source
+                            .sample()
+                            .unwrap();
+                        state.pool.insert(
+                            sample,
+                            AudioBuffer::from_interleaved(48_000, 1, vec![0.1; 4800]),
+                        );
+                    }
+                    "pending-load" => {
+                        let mut state = rig.session.state();
+                        let sample = state.document.project().samples[0].id;
+                        state.loading.insert(sample);
+                    }
+                    "recording" => {
+                        rig.session
+                            .recording_start_with(
+                                windfall_ipc::RecordingSource {
+                                    host: "Synthetic".into(),
+                                    device: "Synthetic".into(),
+                                    left: 0,
+                                    right: None,
+                                },
+                                0,
+                                None,
+                                |_, _, _| Ok(Box::new(Capture)),
+                            )
+                            .unwrap();
+                    }
+                    "folder" => {
+                        rig.session
+                            .project_save(Some(&rig.file("Moved/song.windfall")))
+                            .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let before = rig.session.document_snapshot();
+                let sources = rig.session.state().pool.clone();
+                hold.release();
+                assert!(
+                    worker.join().unwrap().is_err(),
+                    "{browser}/{destination}/{change} published stale preparation"
+                );
+                assert_eq!(rig.session.document_snapshot(), before);
+                let state = rig.session.state();
+                assert_eq!(state.pool.len(), sources.len());
+                for (id, audio) in sources.iter() {
+                    assert_eq!(state.pool.get(id).unwrap().identity(), audio.identity());
+                }
+                drop(state);
+                if change == "recording" {
+                    assert!(rig.session.recording_state().active);
+                    rig.session.recording_cancel();
+                }
+            }
+        }
+    }
+}
+
 // Real reload/redo decodes stop off-lock, before installing their older audio.
 fn pending_source_load(destination: &str, redo: bool) {
     use windfall_codec::{WavSampleFormat, write_wav};
@@ -285,7 +781,7 @@ fn checked_import_refuses_reusing_a_loaded_older_file_version_at_every_destinati
 }
 
 #[test]
-fn checked_unchanged_imports_deduplicate_after_decoded_cache_eviction() {
+fn unchanged_file_imports_deduplicate_across_save_after_decoded_cache_eviction() {
     use windfall_codec::{WavSampleFormat, write_wav};
     use windfall_core::AudioBuffer;
     let rig = Rig::new();
@@ -310,24 +806,25 @@ fn checked_unchanged_imports_deduplicate_after_decoded_cache_eviction() {
         rig.session.inner.cache.decode(&other).unwrap();
     }
     assert!(rig.session.inner.cache.peek(&file).is_none());
-    for destination in ["rack", "playlist", "replacement"] {
-        let before = rig.project();
-        checked_import(
-            &rig,
-            &path,
-            rig.session.library_file(&path).unwrap(),
-            destination,
-        )
+    // The imported External asset still resolves to the same file after save,
+    // although a newly classified import would use a Project-relative path.
+    rig.session
+        .project_save(Some(&rig.file("dedup.windfall")))
         .unwrap();
-        assert_eq!(rig.project().samples.len(), before.samples.len());
-        assert_eq!(
-            rig.session.state().pool.get(sample).unwrap().identity(),
-            original
-        );
-        rig.session.undo().unwrap();
-        let mut current = rig.project();
-        current.next_id = before.next_id;
-        assert_eq!(current, before);
+    for browser in [false, true] {
+        for destination in ["rack", "playlist", "replacement"] {
+            let before = rig.project();
+            routed_import(&rig, &path, browser, destination).unwrap();
+            assert_eq!(rig.project().samples.len(), before.samples.len());
+            assert_eq!(
+                rig.session.state().pool.get(sample).unwrap().identity(),
+                original
+            );
+            rig.session.undo().unwrap();
+            let mut current = rig.project();
+            current.next_id = before.next_id;
+            assert_eq!(current, before);
+        }
     }
 }
 

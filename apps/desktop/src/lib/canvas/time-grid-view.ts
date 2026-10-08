@@ -1,4 +1,6 @@
 import { rgbaToCss } from "./color"
+import { localPoint, observePixelRatio } from "@/lib/ui-scale"
+import { canvasResolution } from "./resolution"
 import { createRenderer, type RendererChoice } from "./create-renderer"
 import {
   DEFAULT_TIME_GRID,
@@ -23,7 +25,6 @@ import {
 } from "./theme"
 import {
   DEFAULT_LIMITS,
-  backingSize,
   clampViewport,
   deviceTransform,
   deviceX,
@@ -131,6 +132,7 @@ export class TimeGridView {
   private readonly parseColor: CssColorParser
   private readonly resizeObserver: ResizeObserver
   private readonly stopThemeObserver: () => void
+  private readonly stopPixelObserver: () => void
   private timeGrid: TimeGridSpec
   private readonly autoRender: boolean
   private rows: RowStyle
@@ -196,7 +198,8 @@ export class TimeGridView {
     this.currentTheme = deriveGridTheme(this.tokens)
     this.adopt(renderer)
 
-    const dpr = window.devicePixelRatio || 1
+    const size = canvasResolution(container.clientWidth, container.clientHeight)
+    const dpr = size.dpr
     this.currentViewport = clampViewport(
       {
         width: container.clientWidth,
@@ -209,10 +212,7 @@ export class TimeGridView {
       },
       this.viewportLimits
     )
-    this.resizeCanvases(
-      Math.round(container.clientWidth * dpr),
-      Math.round(container.clientHeight * dpr)
-    )
+    this.resizeCanvases(size.pixelWidth, size.pixelHeight)
 
     this.resizeObserver = new ResizeObserver((entries) => {
       const entry = entries[entries.length - 1]
@@ -226,6 +226,7 @@ export class TimeGridView {
       // Safari has no device-pixel-content-box.
       this.resizeObserver.observe(container)
     }
+    this.stopPixelObserver = observePixelRatio(() => this.handleResize())
     this.stopThemeObserver = observeTheme(() => {
       this.themeDirty = true
       this.invalidate("all")
@@ -468,16 +469,12 @@ export class TimeGridView {
     return stats
   }
 
-  /** Converts a pointer event position to CSS pixels inside the view. */
+  /** Converts visual client coordinates to logical CSS pixels inside the view. */
   localPoint(event: { clientX: number; clientY: number }): {
     x: number
     y: number
   } {
-    const bounds = this.container.getBoundingClientRect()
-    return {
-      x: event.clientX - bounds.left - this.container.clientLeft,
-      y: event.clientY - bounds.top - this.container.clientTop,
-    }
+    return localPoint(this.container, event)
   }
 
   hitTest(x: number, y: number, options?: HitOptions): Hit | null {
@@ -492,6 +489,7 @@ export class TimeGridView {
     if (this.frameRequest !== 0) cancelAnimationFrame(this.frameRequest)
     this.resizeObserver.disconnect()
     this.stopThemeObserver()
+    this.stopPixelObserver()
     this.activeRenderer.onRestored = null
     this.activeRenderer.onLost = null
     this.activeRenderer.dispose()
@@ -517,18 +515,16 @@ export class TimeGridView {
     for (const listener of this.themeListeners) listener(this.currentTheme)
   }
 
-  private handleResize(entry: ResizeObserverEntry): void {
-    const dpr = window.devicePixelRatio || 1
+  private handleResize(entry?: ResizeObserverEntry): void {
     const width = this.container.clientWidth
     const height = this.container.clientHeight
-    const size = backingSize(
+    const size = canvasResolution(
       width,
       height,
-      dpr,
-      entry.devicePixelContentBoxSize?.[0]
+      entry?.devicePixelContentBoxSize?.[0]
     )
-    const resized = this.resizeCanvases(size.width, size.height)
-    this.setViewport({ ...this.currentViewport, width, height, dpr })
+    const resized = this.resizeCanvases(size.pixelWidth, size.pixelHeight)
+    this.setViewport({ ...this.currentViewport, width, height, dpr: size.dpr })
     if (resized) {
       this.invalidate("all")
       // Resizing clears a canvas. Drawing before the browser paints keeps

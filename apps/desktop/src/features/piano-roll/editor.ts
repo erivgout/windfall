@@ -300,11 +300,16 @@ export class Editor {
   }
 
   get busy(): boolean {
-    return (
-      this.gesture.kind !== "idle" ||
-      this.armedStamp !== null ||
-      this.pendingStamp !== null
-    )
+    return this.hasPointerGesture || this.hasStampChoice
+  }
+
+  /** Only a started pointer gesture owns capture, not an idle stamp choice. */
+  get hasPointerGesture(): boolean {
+    return this.gesture.kind !== "idle"
+  }
+
+  get hasStampChoice(): boolean {
+    return this.armedStamp !== null || this.pendingStamp !== null
   }
 
   get stampState(): StampState | null {
@@ -445,14 +450,14 @@ export class Editor {
 
   /** Starts a gesture. Returns what the press does. */
   pointerDown(input: PointerInput, button: PressButton): Intent | null {
+    if (button === "right" && this.hasStampChoice) {
+      this.cancel()
+      return null
+    }
     const surface = this.surface
     const ctx = this.ctx
     if (!surface || !ctx) return null
     if (this.armedStamp) {
-      if (button === "right") {
-        this.cancel()
-        return null
-      }
       const placement = this.previewStamp(input)
       if (!placement) return null
       if (placement.error) {

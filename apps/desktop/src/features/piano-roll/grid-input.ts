@@ -1,3 +1,4 @@
+import { logicalDelta, logicalWheel } from "@/lib/ui-scale"
 import {
   createPointerFrame,
   type PointerFrame,
@@ -46,7 +47,9 @@ export function handleWheel(
   if (!view) return
   event.preventDefault()
   // Shift turns a vertical wheel into a horizontal one on some systems.
-  const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX
+  // Preserve the roll's existing line/page step sizes at 100%.
+  const wheel = logicalWheel(event, { line: 1, page: 1 })
+  const delta = wheel.deltaY !== 0 ? wheel.deltaY : wheel.deltaX
   const zoom = event.ctrlKey || event.metaKey
   if (event.altKey || (zoom && event.shiftKey)) {
     if (axes.rows) session.zoomRows(point.y, delta < 0 ? 1.15 : 1 / 1.15)
@@ -60,7 +63,7 @@ export function handleWheel(
     if (axes.time) view.panBy(delta, 0)
     return
   }
-  view.panBy(axes.time ? event.deltaX : 0, event.deltaY)
+  view.panBy(axes.time ? wheel.deltaX : 0, wheel.deltaY)
 }
 
 function edgeSpeed(position: number, size: number): number {
@@ -95,6 +98,9 @@ export function attachGridInput(
   let scrollFrame = 0
   let stampCanceledByRightClick = false
 
+  const canRefresh = () =>
+    pointerInside || (frame.held && editor.hasPointerGesture)
+
   const showCursor = () => {
     element.style.cursor = pan
       ? "grabbing"
@@ -113,7 +119,7 @@ export function attachGridInput(
   // gesture is fed the same pointer position, which now means a new place.
   const autoScroll = () => {
     scrollFrame = 0
-    if (!editor.busy || !last) return
+    if (!editor.hasPointerGesture || !last) return
     const { width, height } = view.viewport
     const dx = edgeSpeed(last.x, width)
     const dy = edgeSpeed(last.y, height)
@@ -130,9 +136,11 @@ export function attachGridInput(
     if (pan) {
       pan = null
       showCursor()
-    } else if (editor.busy) {
+    } else if (editor.hasPointerGesture) {
       if (commit) editor.pointerUp(toInput(frame, event))
       else editor.cancel()
+    } else if (!commit) {
+      editor.cancel()
     }
     frame.release()
     if (!pointerInside) editor.pointerLeave()
@@ -144,7 +152,7 @@ export function attachGridInput(
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === "touch") return
     pointerInside = true
-    stampCanceledByRightClick = event.button === 2 && editor.stampState !== null
+    stampCanceledByRightClick = event.button === 2 && editor.hasStampChoice
     session.focusGrid()
     if (event.button === 1) {
       // Stops the browser's own middle-button scrolling.
@@ -160,12 +168,13 @@ export function attachGridInput(
     last = toInput(frame, event)
     pressed = last
     travelled = false
-    const intent = editor.pointerDown(
-      last,
-      event.button === 0 ? "left" : "right"
-    )
-    if (!editor.busy || intent?.kind === "menu") {
+    editor.pointerDown(last, event.button === 0 ? "left" : "right")
+    if (!editor.hasPointerGesture) {
+      stopAutoScroll()
       frame.release()
+      if (element.hasPointerCapture(event.pointerId)) {
+        element.releasePointerCapture(event.pointerId)
+      }
       return
     }
     element.setPointerCapture(event.pointerId)
@@ -181,12 +190,15 @@ export function attachGridInput(
       point.y >= 0 &&
       point.y < view.viewport.height
     if (pan) {
-      view.panBy(pan.x - event.clientX, pan.y - event.clientY)
+      view.panBy(
+        logicalDelta(pan.x - event.clientX),
+        logicalDelta(pan.y - event.clientY)
+      )
       pan = { x: event.clientX, y: event.clientY }
       return
     }
     last = toInput(frame, event)
-    if (!pointerInside && !frame.held) {
+    if (!canRefresh()) {
       editor.pointerLeave()
       return
     }
@@ -209,7 +221,7 @@ export function attachGridInput(
 
   // Right-click deletes in every tool but Select, where it opens the menu.
   const onContextMenu = (event: MouseEvent) => {
-    if (stampCanceledByRightClick || editor.stampState) {
+    if (stampCanceledByRightClick || editor.hasStampChoice) {
       stampCanceledByRightClick = false
       editor.cancel()
       event.preventDefault()
@@ -230,12 +242,12 @@ export function attachGridInput(
       time: true,
       rows: true,
     })
-    if (last && (pointerInside || frame.held)) editor.pointerMove(last)
+    if (last && canRefresh()) editor.pointerMove(last)
   }
 
   // Ctrl and Shift change what a drag does, also while the mouse is still.
   const onModifier = (event: KeyboardEvent) => {
-    if (!last || !editor.busy || (!pointerInside && !frame.held)) return
+    if (!last || !editor.busy || !canRefresh()) return
     if (!["Control", "Shift", "Alt", "Meta"].includes(event.key)) return
     last = {
       ...last,

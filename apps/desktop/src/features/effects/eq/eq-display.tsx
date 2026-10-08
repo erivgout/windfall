@@ -1,3 +1,4 @@
+import { logicalDelta, observePixelRatio } from "@/lib/ui-scale"
 import {
   useEffect,
   useEffectEvent,
@@ -164,7 +165,9 @@ export function EqDisplay({
     const element = root.current
     if (!element) return
     const measure = () => {
-      const { width, height } = element.getBoundingClientRect()
+      const rect = element.getBoundingClientRect()
+      const width = logicalDelta(rect.width)
+      const height = logicalDelta(rect.height)
       if (width <= 0 || height <= 0) return
       setMeasured((current) =>
         current?.width === width && current.height === height
@@ -175,7 +178,11 @@ export function EqDisplay({
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(element)
-    return () => observer.disconnect()
+    const stopPixelObserver = observePixelRatio(measure)
+    return () => {
+      observer.disconnect()
+      stopPixelObserver()
+    }
   }, [])
 
   const canvas = useDisplayCanvas(COLORS, (context, canvasSize, colors) => {
@@ -289,8 +296,8 @@ export function EqDisplay({
       startX: event.clientX,
       startY: event.clientY,
       lastY: event.clientY,
-      offsetX: event.clientX - rect.left - node.x,
-      offsetY: event.clientY - rect.top - node.y,
+      offsetX: logicalDelta(event.clientX - rect.left) - node.x,
+      offsetY: logicalDelta(event.clientY - rect.top) - node.y,
       moved: false,
       wasEnabled: bandPoint(params, spec.id).enabled,
       qFrom: null,
@@ -303,8 +310,8 @@ export function EqDisplay({
     const spec = bandSpec(state.band)
     if (!state.moved) {
       const travel = Math.hypot(
-        event.clientX - state.startX,
-        event.clientY - state.startY
+        logicalDelta(event.clientX - state.startX),
+        logicalDelta(event.clientY - state.startY)
       )
       if (travel < DRAG_SLOP) return
       state.moved = true
@@ -317,20 +324,21 @@ export function EqDisplay({
     if (event.altKey) {
       // Measured from where the pointer was when Alt went down.
       state.qFrom ??= { y: from, q: bind.value(spec.q) }
-      const octaves = (state.qFrom.y - event.clientY) / Q_DRAG_PIXELS
+      const octaves =
+        logicalDelta(state.qFrom.y - event.clientY) / Q_DRAG_PIXELS
       set(dragGroup, spec.q, roundTo(state.qFrom.q * 2 ** octaves, 3))
       return
     }
     state.qFrom = null
     const rect = root.current.getBoundingClientRect()
     const x = clamp(
-      event.clientX - rect.left - state.offsetX,
+      logicalDelta(event.clientX - rect.left) - state.offsetX,
       plot.left,
       plot.left + plot.width
     )
     set(dragGroup, spec.frequency, roundTo(xToFrequency(x, plot), 3))
     if (spec.gain) {
-      const y = event.clientY - rect.top - state.offsetY
+      const y = logicalDelta(event.clientY - rect.top) - state.offsetY
       const gain = clamp(yToGain(y, plot, range), -range, range)
       set(dragGroup, spec.gain, Math.round(gain * 10) / 10)
     }

@@ -56,6 +56,25 @@ current path only for the saved document;
 concurrent edits remain dirty. The UI refetches authoritative state after a
 numbered save so an old save cannot assign its path to a replacement document.
 
+Carried samples are also staged, synced and published without replacement.
+Independent saves sharing a sample filename reuse it only for identical bytes;
+otherwise each project records the unique sample name it actually published.
+Failed staging removes only that request's temporary file.
+
+When a save moves the sample root, source paths retained only in undo/redo
+history keep their exact original files as absolute references. This includes
+additions undone before capture and additions made and undone during a pending
+save. Paths in all matching history entries are relinked without adding an undo
+step. Those files are deliberately referenced in place: keep them available
+while the live document or subsequent ordinary saves reference them. A portable
+export after redo bundles their audio. A missing historical source stays
+missing; unrelated same-name audio in the destination is never substituted for
+it.
+
+If keeping the exact sources would create conflicting stored paths, the
+already-written copy stays at its reported filename and the live document keeps
+its old sample root and complete history.
+
 ## Archive schema 1
 
 `windfall-archive` is a native crate used by the desktop shell, outside the
@@ -187,5 +206,6 @@ Real cross-machine large-project throughput, power-loss recovery on specific
 filesystems, macOS/Linux desktop dialogs and a real third-party plugin corpus
 remain external checks. Synthetic Windows tests do not establish those results.
 
-The subsequent parser-binding and numbered sample-root repair evidence is
+The subsequent parser-binding, numbered sample-root, concurrent carried-audio
+publication and history source-lifetime repair evidence is
 recorded in [`PORTABLE-REPAIRS.md`](PORTABLE-REPAIRS.md).

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { logicalDelta } from "@/lib/ui-scale"
 import * as React from "react"
 
 import { parseNumber } from "./units"
@@ -549,10 +550,11 @@ export function useDragValue(options: UseDragValueOptions) {
     if (!state || state.pointerId !== event.pointerId) {
       return
     }
-    const pixels =
+    const pixels = logicalDelta(
       orientation === "horizontal"
         ? event.clientX - state.x
         : state.y - event.clientY
+    )
     state.x = event.clientX
     state.y = event.clientY
     if (pixels === 0) {
