@@ -61,6 +61,7 @@ pub mod filter_family;
 pub mod frequency_delay;
 mod instrument;
 mod limiter;
+pub mod lofi;
 mod param;
 mod polarity;
 mod reverb;
