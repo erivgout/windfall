@@ -27,6 +27,7 @@ use crate::filter_family::{
     SelectableFilterParams,
 };
 use crate::limiter::{LOOKAHEAD_FADE_MS, Limiter, LimiterParams};
+use crate::lofi::{Lofi, LofiParams};
 use crate::param::{ParamInfo, ParamSet};
 use crate::reverb::{Reverb, ReverbParams};
 
@@ -173,10 +174,11 @@ pub enum EffectKind {
     FastLowpass,
     SelectableFilter,
     BassShelf,
+    Lofi,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 15] = [
+    pub const ALL: [EffectKind; 16] = [
         EffectKind::Eq,
         EffectKind::Compressor,
         EffectKind::Limiter,
@@ -192,6 +194,7 @@ impl EffectKind {
         EffectKind::FastLowpass,
         EffectKind::SelectableFilter,
         EffectKind::BassShelf,
+        EffectKind::Lofi,
     ];
 
     /// The effect's name as shown to the user.
@@ -212,6 +215,7 @@ impl EffectKind {
             EffectKind::FastLowpass => FastLowpassParams::NAME,
             EffectKind::SelectableFilter => SelectableFilterParams::NAME,
             EffectKind::BassShelf => BassShelfParams::NAME,
+            EffectKind::Lofi => LofiParams::NAME,
         }
     }
 
@@ -233,6 +237,7 @@ impl EffectKind {
             EffectKind::FastLowpass => FastLowpassParams::descriptors(),
             EffectKind::SelectableFilter => SelectableFilterParams::descriptors(),
             EffectKind::BassShelf => BassShelfParams::descriptors(),
+            EffectKind::Lofi => LofiParams::descriptors(),
         }
     }
 
@@ -254,7 +259,8 @@ impl EffectKind {
             | EffectKind::SoftClipper
             | EffectKind::FastLowpass
             | EffectKind::SelectableFilter
-            | EffectKind::BassShelf => 0,
+            | EffectKind::BassShelf
+            | EffectKind::Lofi => 0,
         }
     }
 
@@ -278,6 +284,7 @@ impl EffectKind {
                 EffectParams::SelectableFilter(SelectableFilterParams::default())
             }
             EffectKind::BassShelf => EffectParams::BassShelf(BassShelfParams::default()),
+            EffectKind::Lofi => EffectParams::Lofi(LofiParams::default()),
         }
     }
 }
@@ -303,6 +310,7 @@ pub enum EffectParams {
     FastLowpass(FastLowpassParams),
     SelectableFilter(SelectableFilterParams),
     BassShelf(BassShelfParams),
+    Lofi(LofiParams),
 }
 
 /// Runs `$body` with `$params` bound to the settings inside an
@@ -325,6 +333,7 @@ macro_rules! each_params {
             EffectParams::FastLowpass($params) => $body,
             EffectParams::SelectableFilter($params) => $body,
             EffectParams::BassShelf($params) => $body,
+            EffectParams::Lofi($params) => $body,
         }
     };
 }
@@ -347,6 +356,7 @@ impl EffectParams {
             EffectParams::FastLowpass(_) => EffectKind::FastLowpass,
             EffectParams::SelectableFilter(_) => EffectKind::SelectableFilter,
             EffectParams::BassShelf(_) => EffectKind::BassShelf,
+            EffectParams::Lofi(_) => EffectKind::Lofi,
         }
     }
 
@@ -370,6 +380,7 @@ impl EffectParams {
                 EffectParams::SelectableFilter(params.sanitized())
             }
             EffectParams::BassShelf(params) => EffectParams::BassShelf(params.sanitized()),
+            EffectParams::Lofi(params) => EffectParams::Lofi(params.sanitized()),
         }
     }
 
@@ -394,7 +405,8 @@ impl EffectParams {
             | EffectParams::SoftClipper(_)
             | EffectParams::FastLowpass(_)
             | EffectParams::SelectableFilter(_)
-            | EffectParams::BassShelf(_) => 0,
+            | EffectParams::BassShelf(_)
+            | EffectParams::Lofi(_) => 0,
         }
     }
 
@@ -435,6 +447,7 @@ pub enum AnyEffect {
     FastLowpass(Box<FastLowpass>),
     SelectableFilter(Box<SelectableFilter>),
     BassShelf(Box<BassShelf>),
+    Lofi(Box<Lofi>),
 }
 
 /// Runs `$body` with `$effect` bound to the effect inside an [`AnyEffect`].
@@ -456,6 +469,7 @@ macro_rules! each_effect {
             AnyEffect::FastLowpass($effect) => $body,
             AnyEffect::SelectableFilter($effect) => $body,
             AnyEffect::BassShelf($effect) => $body,
+            AnyEffect::Lofi($effect) => $body,
         }
     };
 }
@@ -480,6 +494,7 @@ impl AnyEffect {
             EffectKind::FastLowpass => AnyEffect::FastLowpass(Box::default()),
             EffectKind::SelectableFilter => AnyEffect::SelectableFilter(Box::default()),
             EffectKind::BassShelf => AnyEffect::BassShelf(Box::default()),
+            EffectKind::Lofi => AnyEffect::Lofi(Box::default()),
         };
         effect.set_params(params);
         effect
@@ -502,6 +517,7 @@ impl AnyEffect {
             AnyEffect::FastLowpass(_) => EffectKind::FastLowpass,
             AnyEffect::SelectableFilter(_) => EffectKind::SelectableFilter,
             AnyEffect::BassShelf(_) => EffectKind::BassShelf,
+            AnyEffect::Lofi(_) => EffectKind::Lofi,
         }
     }
 
@@ -559,6 +575,7 @@ impl AnyEffect {
             (AnyEffect::BassShelf(effect), EffectParams::BassShelf(params)) => {
                 effect.set_params(params)
             }
+            (AnyEffect::Lofi(effect), EffectParams::Lofi(params)) => effect.set_params(params),
             _ => return false,
         }
         true

@@ -184,6 +184,7 @@ fn check<P: ParamSet + Serialize + DeserializeOwned>() {
 
 #[test]
 fn every_parameter_struct_agrees_with_its_description() {
+    check::<windfall_dsp::LofiParams>();
     check::<EqParams>();
     check::<CompressorParams>();
     check::<LimiterParams>();
@@ -386,6 +387,7 @@ fn names_are_plain_descriptions() {
             "Fast lowpass",
             "Selectable filter",
             "Bass shelf",
+            "Lo-fi reduction",
             "Subtractive synth"
         ]
     );

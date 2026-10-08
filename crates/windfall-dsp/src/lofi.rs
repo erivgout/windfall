@@ -1,7 +1,6 @@
-//! Original resolution reduction, sample hold, drive and post filtering.
+//! Original resolution reduction, timed sample replacement and resonant tone.
 //!
-//! This is a standalone [`Effect`]; registry/project integration is deliberately
-//! left to a later ownership window. See `docs/LOFI.md` for equations and limits.
+//! See `docs/LOFI.md` for the original equations, source context and limits.
 
 use crate::blocks::math::{clean, db_to_gain, flush64, ms_to_samples};
 use crate::param::param_set;
@@ -13,6 +12,28 @@ use ts_rs::TS;
 pub const LOFI_SMOOTHING_MS: f32 = 5.0;
 /// Largest hold interval, in host frames. No delay buffer is required.
 pub const LOFI_MAX_RATIO: f32 = 64.0;
+/// Largest resonant quality factor; bounds the frozen tail estimate.
+pub const LOFI_MAX_Q: f64 = 4.0;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum RunRelation {
+    #[default]
+    Independent,
+    Equal,
+    Double,
+    Half,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FilterPlacement {
+    #[default]
+    Post,
+    Pre,
+}
 
 // Evaluate from a frozen start and integer frame position, avoiding accumulated
 // f32 slope error on long (e.g. 192 kHz) ramps. Retarget from the last emitted
@@ -74,6 +95,7 @@ impl FrameRamp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
+#[ts(export)]
 pub struct LofiParams {
     /// Symmetric midtread resolution, 2..=16 bits; default 8.
     pub bits: u8,
@@ -85,15 +107,30 @@ pub struct LofiParams {
     pub drive_db: f32,
     /// Blend from original to driven saturation, 0..=1; default 0.25.
     pub distortion: f32,
-    /// Post-filter pole frequency, 20..=20000 Hz; default 8000.
+    /// Tone cutoff frequency, 20..=20000 Hz; default 8000.
     /// Effective frequency is capped at 0.45 * prepared sample rate.
     pub cutoff_hz: f32,
-    /// Blend from held signal to two-pole lowpass, 0..=1; default 1.
+    /// Blend from unfiltered to tone-filtered audio, 0..=1; default 1.
     pub filter: f32,
     /// Dry/wet blend, 0..=1; default 1. Histories keep running when dry.
     pub mix: f32,
     /// Final dry-and-wet trim, -24..=12 dB; default -3.
     pub output_db: f32,
+    /// Unreplaced run duration, 0..=1000 ms; default 10.
+    pub preserve_ms: f32,
+    /// Independent replaced run duration, 0..=1000 ms; default 2.
+    pub replace_ms: f32,
+    /// Replaced duration independent/equal/double/half of the preserved run.
+    pub run_relation: RunRelation,
+    /// Fixed positive nominal amplitude during replaced runs, 0..=1; default 0.
+    pub replacement_value: f32,
+    /// Blend toward the fixed value during replaced runs, 0..=1; default 0.
+    pub replacement: f32,
+    /// Morph from monotonic tone to resonant lowpass, 0..=1; default 0.
+    /// The resonant path's Q increases from 1/sqrt(2) to 4.
+    pub resonance: f32,
+    /// Tone filter before or after drive/quantization/replacement/hold.
+    pub placement: FilterPlacement,
 }
 
 impl Default for LofiParams {
@@ -108,6 +145,13 @@ impl Default for LofiParams {
             filter: 1.0,
             mix: 1.0,
             output_db: -3.0,
+            preserve_ms: 10.0,
+            replace_ms: 2.0,
+            run_relation: RunRelation::Independent,
+            replacement_value: 0.0,
+            replacement: 0.0,
+            resonance: 0.0,
+            placement: FilterPlacement::Post,
         }
     }
 }
@@ -125,6 +169,13 @@ impl LofiParams {
             filter: 0.0,
             mix: 1.0,
             output_db: 0.0,
+            preserve_ms: 10.0,
+            replace_ms: 2.0,
+            run_relation: RunRelation::Independent,
+            replacement_value: 0.0,
+            replacement: 0.0,
+            resonance: 0.0,
+            placement: FilterPlacement::Post,
         }
     }
 }
@@ -140,6 +191,16 @@ param_set!(LofiParams, "Lo-fi reduction", {
     float [filter] "filter" "Tone filter" { Fraction, Linear, 0.0, 1.0, 1.0 }
     float [mix] "mix" "Mix" { Fraction, Linear, 0.0, 1.0, 1.0 }
     float [output_db] "outputDb" "Output" { Decibels, Linear, -24.0, 12.0, -3.0 }
+    float [preserve_ms] "preserveMs" "Preserve time" { Milliseconds, Linear, 0.0, 1_000.0, 10.0 }
+    float [replace_ms] "replaceMs" "Replace time" { Milliseconds, Linear, 0.0, 1_000.0, 2.0 }
+    choice [run_relation] "runRelation" "Run relationship" { RunRelation, Independent, [
+        Independent "independent" "Independent", Equal "equal" "Equal",
+        Double "double" "Double", Half "half" "Half"
+    ] }
+    float [replacement_value] "replacementValue" "Replacement value" { Fraction, Linear, 0.0, 1.0, 0.0 }
+    float [replacement] "replacement" "Replacement" { Fraction, Linear, 0.0, 1.0, 0.0 }
+    float [resonance] "resonance" "Resonance" { Fraction, Linear, 0.0, 1.0, 0.0 }
+    choice [placement] "placement" "Filter placement" { FilterPlacement, Post, [Post "post" "Post", Pre "pre" "Pre"] }
 });
 
 #[inline]
@@ -192,10 +253,38 @@ fn morph_quantize(input: f64, step: f32) -> f64 {
 }
 
 #[derive(Default)]
+struct ToneFilter {
+    low: [f64; 2],
+    integrators: [f64; 2],
+}
+
+impl ToneFilter {
+    fn tick(&mut self, input: f64, controls: &[f32; 17]) -> f64 {
+        let alpha = f64::from(controls[5]);
+        self.low[0] = flush64(self.low[0] + alpha * (input - self.low[0]));
+        self.low[1] = flush64(self.low[1] + alpha * (self.low[0] - self.low[1]));
+        // Original solution of the two trapezoidal integrator equations in
+        // double precision, retaining the established monotonic path at zero
+        // resonance. g and damping are ramped, never tan-computed per frame.
+        let g = f64::from(controls[9]);
+        let k = f64::from(controls[10]);
+        let a = 1.0 / (1.0 + g * (g + k));
+        let band = a * (self.integrators[0] + g * (input - self.integrators[1]));
+        let low = self.integrators[1] + g * band;
+        self.integrators[0] = flush64(2.0 * band - self.integrators[0]);
+        self.integrators[1] = flush64(2.0 * low - self.integrators[1]);
+        blend(self.low[1], low, controls[11])
+    }
+}
+
+#[derive(Default)]
 struct Channel {
     phase: f64,
     held: f64,
-    low: [f64; 2],
+    tone: [ToneFilter; 2],
+    run_phase: f64,
+    run_error: f64,
+    activity: u32,
 }
 
 impl Channel {
@@ -207,7 +296,7 @@ impl Channel {
     }
 
     #[inline]
-    fn tick(&mut self, input: f32, controls: &[f32; 9]) -> f32 {
+    fn tick(&mut self, input: f32, controls: &[f32; 17]) -> f32 {
         // The direct DSP contract requires finite input. Release builds expose
         // invalid samples unchanged instead of converting them to plausible audio.
         if !input.is_finite() {
@@ -219,15 +308,18 @@ impl Channel {
             ratio,
             drive,
             distortion,
-            alpha,
+            _,
             filter,
             mix,
             output,
+            ..,
         ] = *controls;
         let dry = f64::from(input);
-        let driven = dry * f64::from(drive);
-        let shaped = blend(dry, driven / (1.0 + driven.abs()), distortion);
-        let crushed = if amount == 0.0 {
+        let pre = blend(dry, self.tone[0].tick(dry, controls), filter);
+        let before_drive = blend(dry, pre, controls[12]);
+        let driven = before_drive * f64::from(drive);
+        let shaped = blend(before_drive, driven / (1.0 + driven.abs()), distortion);
+        let mut crushed = if amount == 0.0 {
             shaped
         } else {
             // Morph adjacent integer grids. No per-frame exponentials and no
@@ -235,6 +327,32 @@ impl Channel {
             let grid = morph_quantize(shaped, step);
             blend(shaped, grid, amount)
         };
+        let preserved = f64::from(controls[13]).round();
+        let replaced = f64::from(controls[14]).round();
+        let period = preserved + replaced;
+        if period > 0.0 {
+            // Input-triggered finite activity window: fixed-value replacement
+            // may ring for a whole run cycle after the last non-silent input,
+            // but cannot turn an idle processor into an indefinite DC source.
+            if dry.abs() >= 1.0e-20 {
+                self.activity = period as u32;
+            }
+            let replacing = replaced > 0.0 && self.run_phase >= preserved / period - 1.0e-12;
+            if replacing && self.activity > 0 {
+                crushed = blend(crushed, f64::from(controls[15]), controls[16]);
+            }
+            self.activity = self.activity.saturating_sub(1);
+            let increment = 1.0 / period - self.run_error;
+            let next = self.run_phase + increment;
+            self.run_error = (next - self.run_phase) - increment;
+            self.run_phase = next;
+            if self.run_phase >= 1.0 - 1.0e-12 {
+                self.run_phase = (self.run_phase - 1.0).max(0.0);
+                self.run_error = 0.0;
+            }
+        } else {
+            self.activity = 0;
+        }
         if ratio == 1.0 {
             self.phase = 1.0;
         }
@@ -246,25 +364,21 @@ impl Channel {
         }
         self.phase += 1.0 / f64::from(ratio);
 
-        // Two convex leaky integrators. Double precision keeps finite f32
-        // headroom safe internally. Flush only tiny finite state, never NaN/Inf.
-        let alpha = f64::from(alpha);
-        self.low[0] = flush64(self.low[0] + alpha * (self.held - self.low[0]));
-        self.low[1] = flush64(self.low[1] + alpha * (self.low[0] - self.low[1]));
-        let wet = blend(self.held, self.low[1], filter);
+        let post = blend(self.held, self.tone[1].tick(self.held, controls), filter);
+        let wet = blend(post, self.held, controls[12]);
         (blend(dry, wet, mix) * f64::from(output)) as f32
     }
 }
 
 /// Fixed-storage stereo processor. No heap storage, even during prepare.
 ///
-/// Drive -> quantization -> sample hold -> two-pole post lowpass -> mix -> trim.
+/// Pre tone -> drive/quantization/replacement/hold -> post tone -> mix -> trim.
 /// Finite input and equal slice lengths are required by the direct DSP contract.
 /// Aliasing from the drive, quantizer and capture clock is intentional.
 pub struct Lofi {
     params: LofiParams,
     rate: f32,
-    ramps: [FrameRamp; 9],
+    ramps: [FrameRamp; 17],
     smoothing: u32,
     fresh: bool,
     channels: [Channel; 2],
@@ -276,7 +390,7 @@ impl Default for Lofi {
         let mut effect = Self {
             params: LofiParams::default(),
             rate: 48_000.0,
-            ramps: [FrameRamp::new(0.0); 9],
+            ramps: [FrameRamp::new(0.0); 17],
             smoothing: 240,
             fresh: true,
             channels: std::array::from_fn(|_| Channel::default()),
@@ -292,6 +406,17 @@ impl Lofi {
         let p = self.params;
         let cutoff = f64::from(p.cutoff_hz).min(0.45 * f64::from(self.rate));
         let alpha = -(-std::f64::consts::TAU * cutoff / f64::from(self.rate)).exp_m1();
+        let preserved = (f64::from(p.preserve_ms) * f64::from(self.rate) * 0.001).round();
+        let replaced = match p.run_relation {
+            RunRelation::Independent => {
+                (f64::from(p.replace_ms) * f64::from(self.rate) * 0.001).round()
+            }
+            RunRelation::Equal => preserved,
+            RunRelation::Double => 2.0 * preserved,
+            RunRelation::Half => (preserved * 0.5).round(),
+        };
+        let q = std::f64::consts::FRAC_1_SQRT_2
+            + (LOFI_MAX_Q - std::f64::consts::FRAC_1_SQRT_2) * f64::from(p.resonance);
         let values = [
             spacing(u32::from(p.bits)),
             p.quantize,
@@ -302,6 +427,18 @@ impl Lofi {
             p.filter,
             p.mix,
             db_to_gain(p.output_db),
+            (std::f64::consts::PI * cutoff / f64::from(self.rate)).tan() as f32,
+            (1.0 / q) as f32,
+            p.resonance,
+            if p.placement == FilterPlacement::Pre {
+                1.0
+            } else {
+                0.0
+            },
+            preserved as f32,
+            replaced as f32,
+            p.replacement_value,
+            p.replacement,
         ];
         for (ramp, value) in self.ramps.iter_mut().zip(values) {
             ramp.set_target(value, if self.fresh { 0 } else { self.smoothing });
@@ -315,12 +452,17 @@ impl Effect for Lofi {
     fn prepare(&mut self, sample_rate: f32, _max_block: usize) {
         self.rate = clean(sample_rate, 1.0, 384_000.0, 48_000.0);
         self.smoothing = ms_to_samples(LOFI_SMOOTHING_MS, self.rate);
-        // Frozen, parameter-independent bound: 128 time constants of the
-        // slowest permitted pole, plus a maximal hold and a complete ramp.
-        // Covers even finite f32::MAX state decaying below -90 dBFS.
+        // Frozen bound for two tone stages, maximum resonant pole radius,
+        // a full activity cycle, maximal hold and a complete control ramp.
         let minimum_cutoff = 20.0_f64.min(0.45 * f64::from(self.rate));
-        self.tail = (128.0 * f64::from(self.rate) / (std::f64::consts::TAU * minimum_cutoff)).ceil()
-            as usize
+        let maximum_cutoff = 20_000.0_f64.min(0.45 * f64::from(self.rate));
+        let radius = |cutoff: f64| {
+            let g = (std::f64::consts::PI * cutoff / f64::from(self.rate)).tan();
+            ((1.0 - g / LOFI_MAX_Q + g * g) / (1.0 + g / LOFI_MAX_Q + g * g)).sqrt()
+        };
+        let maximum_radius = radius(minimum_cutoff).max(radius(maximum_cutoff));
+        self.tail = (160.0 / -maximum_radius.ln()).ceil() as usize
+            + (3.0 * self.rate).ceil() as usize
             + LOFI_MAX_RATIO as usize
             + self.smoothing as usize;
         self.reset();
