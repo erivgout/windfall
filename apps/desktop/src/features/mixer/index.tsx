@@ -1,3 +1,4 @@
+import { logicalWheel } from "@/lib/ui-scale"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useEffect, useRef, useState } from "react"
