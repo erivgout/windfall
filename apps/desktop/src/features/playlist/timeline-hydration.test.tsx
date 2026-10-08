@@ -76,7 +76,7 @@ it("hydrates an armed native range before disabling the reload menu and clears i
   })
   expect(screen.getByText("Ticks 17–839 · playback region")).toBeVisible()
   await user.click(screen.getByRole("button", { name: "Timeline" }))
-  const clear = screen.getByRole("menuitem", {
+  const clear = await screen.findByRole("menuitem", {
     name: "Clear song time selection",
   })
   expect(clear).not.toHaveAttribute("aria-disabled", "true")

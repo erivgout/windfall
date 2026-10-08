@@ -946,3 +946,74 @@ committed; root composition/reviews/artifact/platform acceptance remain parent
 gates. Full arrangements, per-pattern timelines, links/groups/make-unique/scrub,
 WAV marker metadata and scalar snap/grid refinements remain open; no parity or
 full T1 closure follows from these package checks.
+
+## UI CI menu-opening synchronization repair (2026-10-08)
+
+This source-only increment follows immutable `aa6c55b6138d34257d73bb55a4e5c30cc6b6deb5`.
+The parent reported a real failure in pushed root
+`7027569f8b466242a75faf327381e6ac44c88d28`: run `37766014784`, UI job
+`113273753452`. Of 172 files / 2662 tests, exactly the armed-range reload menu
+case in `timeline-hydration.test.tsx` failed at the synchronous Clear menu-item
+lookup on line 79. Its DOM contains the Timeline trigger with
+`aria-expanded="false"` and no menu. Raw evidence is
+`C:/Temp/windfall-702-ui-ci.log`, SHA-256
+`f47c7ed410482a12f96ecd013f7d4db70ba0db5e2948ab3db0572b329a4612bf`;
+lines 1105–1114 show the closed trigger and line 1478 identifies the lookup.
+The parent's earlier complete UI passes are separate provenance, not a local
+reproduction or a successful rerun of this CI job.
+
+Read-only tracing explains why even the closed trigger is compatible with a
+pending open: locked Base UI 1.8.0 `MenuTrigger` uses `useClick` with
+`event: 'mousedown'`. On a non-typeable button, `useClick` schedules `setOpen`
+through `frame.request` to let pointer focus settle; the following pointer
+click is deliberately ignored. `MenuPortal` returns null until mounted.
+Awaiting `user.click` does not await that animation frame. The uncontrolled
+Timeline menu supplies no custom open-change cancellation. The relevant
+control, shared dropdown, hydration test and dependency lock are identical
+between the isolated checkpoint and pushed root. This source-supported pending
+frame explanation does not claim the CI callback timing was instrumented.
+
+The only test change is `getByRole` → `await findByRole` for the same exact
+Clear role and accessible name, using the existing default query timeout.
+There is still one trigger click and one Clear click. No sleep, repeated
+activation, retry loop, backend replacement, skip or relaxed assertion was
+added. All initial hydration, armed-range label, registry enablement/reasons,
+canonical backend region, local selection and returned-focus assertions remain
+unchanged. Production sources and every native guard/history path are untouched.
+
+Validation loaded the actual assigned combined-root WASM, copied only for local
+validation: **1,982,055 bytes**, SHA-256
+`d1a3aa6b1d4b908b160ed77fc88c4ee82fa1ec8bad7206ee0e715e5ed27e51a3`.
+Its recorded input hash is
+`732414a3bad9f213c17a4791f5bb3301caa4e5f6e1b8beb04f8e5fc3c180ea59`.
+The parent's root `node scripts/check-sim.mjs` passed read-only before copying;
+the copied bytes were independently hashed. The unchanged local hydration file
+passed **4/4** in 59.57 seconds, so the CI failure was **not reproduced locally**.
+After the lookup correction, **64/64** passed across these four files in
+11.92 seconds, with at most two workers:
+
+```text
+pnpm --dir apps/desktop exec vitest run \
+  src/features/playlist/timeline-hydration.test.tsx \
+  src/features/playlist/timeline-add-actions.test.tsx \
+  src/features/playlist/timeline-lifetime.test.ts \
+  src/features/playlist/timeline-request-reload.test.ts --maxWorkers=2
+pnpm --dir apps/desktop typecheck
+pnpm --dir apps/desktop exec eslint src/features/playlist/timeline-hydration.test.tsx
+pnpm --dir apps/desktop exec prettier --check src/features/playlist/timeline-hydration.test.tsx
+git diff --check
+```
+
+All listed checks pass. Own-source typecheck used the previously generated
+179-file binding cache, whose model shape has not changed since generation;
+the combined root has 183 bindings for other owners' additions. No parent
+source or bindings were imported. Validation WASM/metadata and own cached
+bindings were restored/removed before committing. Excluded logs are
+`target/timeline-ci-hydration-{baseline,green,tsc,eslint,prettier}.log`.
+
+Only this evidence document and the one menu lookup change are delivered.
+No Rust/native checks, full UI suite, Linux run or GitHub rerun are claimed for
+this increment; parent composition and fresh CI verification remain gates.
+P1 preparation/retirement work and all staged arrangement/per-pattern/linked/
+group/make-unique/scrub/WAV-marker/scalar-grid requirements remain open. This
+test correction closes no roadmap row or platform/parity acceptance gate.
