@@ -684,3 +684,86 @@ full Song meter producer is separately coordinated by the parent. Production
 routing/renderer integration and the inherited native preparation/retirement
 under State/controller guards remain unaccepted pending the larger leaf and P1.
 N4 stays partial; separate processes provide crash containment, not a sandbox.
+
+## Postcommit native-capture acknowledgement
+
+An accepted native capture and ready document/engine install do not become a
+preparation refusal if the later owner bookkeeping call fails. The private
+`CaptureOutcome` is `Obsolete` or `Accepted { restart, acknowledgement }`.
+`CaptureAcknowledgement` is `Confirmed` or `Pending { ticket, warning }`;
+the Copy ticket contains only the unique owner token and the **captured** dirty
+serial, never the earlier request serial or opaque native bytes. The accepted
+restart result is consumed once. A retry performs bookkeeping only and cannot
+reapply, recapture or roll back accepted state.
+
+Runtime retains its historical fallible `acknowledge_capture` wrapper. The
+new postcommit helper converts a delivery error into a pending acknowledgement.
+Generic owner cancellation can win after its closure has already cleared flags;
+the error therefore does not prove that those side effects were absent. Manager
+retains its separate ticket even in that case, retries each ticket at most once
+per control-worker pass with a250ms backoff, and treats an explicitly retired
+token as terminal completion. There is one outstanding ticket per owner,
+coalesced to the highest accepted captured serial. Acknowledging an older serial
+preserves newer dirty/restart intent and reopens notification scheduling.
+Manager defers its requested refresh while tickets remain. Its warning is latched
+for status snapshots so another status producer cannot hide unconfirmed delivery.
+
+Bookkeeping is off document, recording, engine-ready and audio guards. It contains
+no constructor, native FFI or helper IO, and changes no parameter generation,
+native event, admission, processed proof or timeline metadata. The owner call
+remains honestly fallible with its existing15s control timeout/cancellation
+policy. No callback sees the retry queue, warning locks, timer or test seam.
+
+The additive contract is frozen at e075bb4d directly atop2dc. The Manager repair
+preserves every earlier pin. Its historical `session/edit.rs` changes are only
+the private return type, three obsolete returns, postcommit recording-guard drop
+and typed helper return. The single recording-test boolean assertion becomes
+an exact `Accepted { restart: true, .. }` match. Parent/P1 must transplant those
+equivalent hunks into the genuinely ready route; this historical preparation
+body is **not** accepted as the P1 implementation and must not replace it.
+
+For compiled Windows Session tests only,
+`Runtime::unconfirm_next_capture_acknowledgement(target)` returns a scoped guard.
+It loses one receipt **after actual successful owner bookkeeping**, scoped to
+that target. Runtime itself derives the actual request token and captured serial.
+It does not interrupt native capture or construction, and ordinary ticket retry
+bypasses the fault. Consumption is one-shot; dropping the guard also restores
+normal delivery. No test fields or fault branches exist in production builds.
+Session tests can pass the returned ticket to the crate-private
+`Runtime::retry_capture_ack(ticket)` and check successful idempotent completion;
+ticket fields remain private to plugins.
+
+Local verification includes a compiled old stopped-owner RED at the exact
+`The plugin owner stopped` postcommit error, then14 passing contract/Manager/
+Runtime tests including4 explicit native fixture units. These cover actual VST3
+capture, loss of confirmation after real bookkeeping, deterministic queued
+cancellation and completion cancellation after flag side effects, idempotent
+retry without capture replay/restart repetition, explicit retirement, sibling
+ticket retention, visible warnings and preserved newer dirty/control generations.
+The forced completion fence is private ordering evidence, not a claimed elapsed
+timeout or new process containment test. The first native run exposed a new test
+setup assumption: R4 desired/applied counters start at2, and a pending value is
+desired4/applied2. Assertions were corrected to those exact existing values;
+production counters and all older assertions were unchanged. Healthy native
+processing after acknowledgement retains the actual37-frame fixture onset and
+zero callback/control-boundary allocator calls.
+
+Explicit fixture units use the separately built `WINDFALL_BRIDGE_FIXTURE`:
+
+```sh
+cargo test -p windfall-desktop --lib capture_ack -- --include-ignored --test-threads=1 --nocapture
+```
+
+All5 existing recording/capture cases pass with the exact typed restart assertion
+in118.11s (including their cached/fixture setup). The3 existing runtime-repair
+capture cases pass in0.58s, and the existing four-role R4 document-adoption test
+passes in0.06s. Desktop lib/tests strict Clippy and workspace formatting pass.
+These unchanged native suites execute the compiled test binary directly so their
+historical fixture builder does not overlap a parent Cargo process; all jobs and
+test workers are serial. No new nested fixture Cargo invocation is introduced.
+
+No fixture/native-thread, host ABI4/Hello3, native facade, engine, schema,
+dependency or generated artifact changes occur in this bookkeeping repair.
+P1 ready preparation/retirement and full meter render composition remain distinct
+acceptance gates. All verification is local; no GitHub Actions run or triggering
+push is authorized. Installer/device/licensed-corpus/editor/platform gates remain.
