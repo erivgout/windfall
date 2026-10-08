@@ -1045,3 +1045,45 @@ The parser’s three-errors-to-zero comparison and 20 passing fixtures are owner
 Unresolved gates remain: GitHub service acceptance; native installer contents and install/update/uninstall; signing/notarization; editor verification; helper/model resources; operator configuration; corresponding-source/license review, including historical `buffers@0.1.1` provenance. Publication remains parent-owned and gated.
 
 Root's static syntax/context/release-contract checker passed. The combined existing release and new workflow fixtures passed **68 tests**, zero failures/skips, in 163.79 seconds (`C:/Temp/windfall-root-release-cbae-final.log`). This is separate from the owner's narrow 20-fixture execution and pinned parser comparison. No candidate workflow was dispatched and no bundle, artifact upload or release was produced. Published alpha and future version/signing/operator/license requirements remain unchanged.
+
+# Analyzer test-quota isolation review R1
+
+Frozen `2a46e2aaa27390a25677e9ec0617f115f0b400c8`, direct parent `51c88f45`, imported only as root `dfe522b5`. Both new reviewers received the original foundation, all prior review findings/responses, actual Windows CI failure and controlled contention proof. The increment contains only the test file and evidence document.
+
+## Standards
+
+**0 new findings** for pinned `51c88f45212f9592b62349a9bc11ecf9d7343bc9...2a46e2aaa27390a25677e9ec0617f115f0b400c8`.
+
+**Standards:** 0 documented breaches; 0 optional heuristic findings. The mutex is confined to integration-test orchestration, consistent with [ARCHITECTURE.md’s callback rule](C:/Users/ewhee/.t3/projects/windfall/docs/ARCHITECTURE.md:176).
+
+**Spec:** The narrow repair is source-acceptable. All 17 cases acquire the same named guard as their first local, including the existing ignored CPU case. Explicit cleanup and reverse local destruction keep endpoint retirement and native joins inside the guard lifetime. Acquisition precedes allocator-watch and timing intervals. No recursive acquisition or worker dependency on this test mutex appears.
+
+[Poison recovery](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-engine/tests/analyzer_taps.rs:17) holds the recovered guard, requires zero taps/slots/charged bytes, then clears poison. Nonzero retained ownership fails without resetting accounting; the originating panic remains a failed libtest result.
+
+Mechanically removing only the import, helper, and 17 guard statements reproduces the complete base test source. Every original assertion remains unchanged. The diff contains only the two granted paths, with no production, dependency, limit, or feature changes.
+
+Owner-reported executions and controlled diagnostics remain **unreproduced by this review**. The parent’s fresh root default-parallel run remains pending. Actual graph/session routing, native delivery/UI, EQ live spectrum, integrated measurement, physical-device acceptance, and T8/P1 readiness remain open as documented in [ANALYZER-TAPS.md](C:/Users/ewhee/.t3/projects/windfall/docs/ANALYZER-TAPS.md:510).
+
+## Spec
+
+**0 new spec findings** for pinned `51c88f45212f9592b62349a9bc11ecf9d7343bc9...2a46e2aaa27390a25677e9ec0617f115f0b400c8`.
+
+All 17 cases acquire the same test-local guard as their first local. It survives endpoint cleanup and explicit/RAII native joins, including unwind, and acquisition precedes allocator and timing intervals. There is no nested acquisition or worker/callback acquisition path introducing a deadlock.
+
+Removing only the new import, helper, and 17 guard statements reconstructs the entire base test file exactly after newline normalization, preserving all 148 original assertion macro callsites. Production limits and code are unchanged.
+
+Poison recovery checks zero taps, slots, and charged bytes while holding the poisoned guard before clearing poison. Retained credit causes failure without resetting accounting; the original libtest failure remains visible.
+
+The complete pinned analyzer document and architecture were reviewed. Evidence labels distinguish prior serial runs, failing parent CI, private diagnostics, and owner post-repair checks. Those execution results remain **unreproduced by this review**; the parent’s fresh root default-parallel run is pending.
+
+Both integrated routing and measurement gates remain unresolved: actual attached-graph/session/native delivery, EQ live spectrum and UI, fresh integrated measurements, and physical-device checks. No T8-row or P1-readiness closure follows from this repair.
+
+Parent subsequently executed the composed root target under default parallel scheduling and again with one test thread: **16 passed / one existing optional CPU ignore** each. Strict engine all-target Clippy, workspace fmt, exact bindings, simulator freshness, parity and diff checks passed (`C:/Temp/windfall-root-t8-2a-final.log`). All original assertions and process-wide limits remain unchanged; serialization is limited to this analyzer test executable. Remote Windows behavior still requires the next CI run. No integrated analyzer, EQ, device or P1 readiness gate closes.
+
+# Remaining app and preparation gates at this push
+
+P1 stage 1 remains isolated engine implementation on the sole authorized prerequisite merge. The legacy attached-publication path is being made to refuse readiness work rather than silently construct native units under inherited document/controller guards. New source, exact queue/history/retirement proof and independent review must precede the separate Session publication window; no partially migrated engine source is imported here.
+
+M1 App R2 has actual old-Session RED for a DOS drive remap after source hashing, alongside the repaired dialog lifetime. Local retained-object and direct-volume alias probes passed their bounded mechanisms, but the global/local shadow fixture was unavailable (`AccessDenied`) and was not executed as authority proof. Its production namespace source remains exactly `9243f20f`; proposed 66-handle/1,122 aggregate caps remain prototype-only. A further private test-only object-creation seam is authorized for unused owned slots without elevation, privileged helper, physical-drive or competitor mutation. No global namespace policy or M1 app source was accepted/imported. Foundation and test-local heap isolation remain distinct from app/inference acceptance.
+
+The pushed batch contains reviewed timeline/MIDI/native-bar source and matching 183 bindings/WASM, isolated bridge ABI3 prerequisites/fixtures, test-only analysis/analyzer CI isolation, the Linux fixture identity increment and gated candidate-workflow scope repair. It excludes full production bridge `19f6ddc2`/`6b228e12`, M1 app `e3cdbb3f`/`9243f20f`, and P1 engine drafts. No version, published alpha, candidate dispatch, operator signing material or parity counter changed.
