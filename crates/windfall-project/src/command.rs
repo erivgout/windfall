@@ -38,6 +38,30 @@ use crate::model::{
 )]
 #[ts(export)]
 pub enum Command {
+    /// Adds a meter change without moving any notes, clips or automation.
+    AddMeterChange {
+        tick: u32,
+        signature: TimeSignature,
+    },
+    UpdateMeterChange {
+        id: u32,
+        tick: u32,
+        signature: TimeSignature,
+    },
+    RemoveMeterChange {
+        id: u32,
+    },
+    AddTimelineMarker {
+        tick: u32,
+        name: String,
+        kind: crate::MarkerKind,
+    },
+    UpdateTimelineMarker {
+        marker: crate::TimelineMarker,
+    },
+    RemoveTimelineMarker {
+        id: u32,
+    },
     /// Adds an instrument channel and binds its hosted plugin in one undo step.
     AddPluginInstrument {
         plugin: crate::PluginBinding,

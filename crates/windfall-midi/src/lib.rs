@@ -14,7 +14,7 @@
 //! notes crossing a split retrigger. [`PatternStrategy::Bars`] can share
 //! identical sections. Channel 10 stays a synth unless a [`DrumKit`] maps
 //! its keys to samples. Limits and unsupported data appear in
-//! [`ImportPlan::adjustments`]. The first signature sets the project meter;
+//! [`ImportPlan::adjustments`]. Ordered signature events set the song meter map;
 //! tempo changes become stepped automation. Other controllers, program
 //! changes, bend, pressure, markers and key signatures remain in the MIDI
 //! representation but are not imported into the project. Only the first

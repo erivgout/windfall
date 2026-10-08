@@ -489,8 +489,9 @@ fn the_first_time_signature_becomes_the_projects() {
         signature(1_920, 4, 4),
         signature(2_880, 5, 4),
     ];
-    let (_, plan) = imported(&song, &ImportOptions::default());
-    assert!(has(&plan, &Adjustment::TimeSignatureChanges { count: 2 }));
+    let (project, plan) = imported(&song, &ImportOptions::default());
+    assert_eq!(project.playlist.timeline.meters.len(), 4);
+    assert!(!has(&plan, &Adjustment::TimeSignatureChanges { count: 2 }));
 }
 
 #[test]
