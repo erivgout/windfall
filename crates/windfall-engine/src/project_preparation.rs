@@ -74,7 +74,15 @@ pub enum PublicationRefusal {
 
 impl fmt::Display for ProjectPreparationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{self:?}")
+        match self {
+            Self::Sampler(error) => write!(formatter, "{error}"),
+            Self::Native { target, reason } => write!(
+                formatter,
+                "Native plugin preparation failed for {target:?}: {reason}"
+            ),
+            Self::Unsupported(reason) => formatter.write_str(reason),
+            _ => write!(formatter, "Project preparation refused: {self:?}"),
+        }
     }
 }
 impl std::error::Error for ProjectPreparationError {}
@@ -95,6 +103,7 @@ impl From<crate::plugins::NativePreparationError> for ProjectPreparationError {
 
 /// Cheap immutable engine metadata. Capturing never drains a queue or prepares
 /// a processor, and no unique native owner is temporarily held under its guard.
+#[derive(Clone)]
 pub struct PreparationSnapshot {
     owner: Arc<Inner>,
     plan: Arc<Plan>,
@@ -130,6 +139,8 @@ pub struct ProjectRetirement {
     snapshot: Option<PreparationSnapshot>,
     old_link: Option<Link>,
     backlog: Option<VecDeque<Message>>,
+    old_error: Option<ProjectPreparationError>,
+    old_sampler_error: Option<crate::sampler_processing::SamplerPreparationError>,
 }
 
 impl Default for ProjectRetirement {
@@ -141,7 +152,24 @@ impl Default for ProjectRetirement {
             snapshot: None,
             old_link: None,
             backlog: None,
+            old_error: None,
+            old_sampler_error: None,
         }
+    }
+}
+
+impl ProjectRetirement {
+    /// Release retired owners only after all caller/controller guards are gone.
+    /// Retains the bounded ring-drain capacity for the next control-side pass.
+    pub fn clear(&mut self) {
+        self.garbage.clear();
+        self.old_link = None;
+        self.backlog = None;
+        self.old_plan = None;
+        self.old_ledger = None;
+        self.snapshot = None;
+        self.old_error = None;
+        self.old_sampler_error = None;
     }
 }
 
@@ -152,6 +180,18 @@ pub struct ProjectPublicationLease<'a> {
 }
 
 impl PreparationSnapshot {
+    /// Retry may recapture a newer plan/source ledger only within the same
+    /// controller, stream epoch, rate and captured provider/revision universe.
+    /// This compares immutable metadata; it neither locks nor retires owners.
+    pub fn same_environment(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.owner, &other.owner)
+            && self.stream_generation == other.stream_generation
+            && self.phase == other.phase
+            && self.factory == other.factory
+            && self.ledger.as_ref().map(|ledger| ledger.sample_rate)
+                == other.ledger.as_ref().map(|ledger| ledger.sample_rate)
+    }
+
     pub(super) fn is_attached(&self) -> bool {
         self.ledger.is_some()
     }
@@ -161,9 +201,23 @@ impl PreparationSnapshot {
         pool: &SamplePool,
         intent: ProjectPublicationIntent,
     ) -> Result<PreparedPublication, ProjectPreparationError> {
-        let prepared = Controller::try_prepare_project(project, pool)
-            .map_err(ProjectPreparationError::Sampler)?;
-        self.prepare_compiled(prepared, intent)
+        let controller = Controller {
+            inner: self.owner.clone(),
+        };
+        let result = Controller::try_prepare_project(project, pool)
+            .map_err(ProjectPreparationError::Sampler)
+            .and_then(|prepared| self.prepare_compiled(prepared, intent));
+        if let Err(error) = &result {
+            if let ProjectPreparationError::Sampler(error) = error {
+                *controller
+                    .inner
+                    .sampler_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
+            }
+            controller.latch_preparation_error(error.clone());
+        }
+        result
     }
 
     pub(crate) fn prepare_compiled(
@@ -249,11 +303,6 @@ impl Controller {
             return Err(PublicationRefusal::WrongController);
         }
         let state = self.lock();
-        if state.plan_generation != snapshot.plan_generation
-            || !Arc::ptr_eq(&state.plan, &snapshot.plan)
-        {
-            return Err(PublicationRefusal::StalePlan);
-        }
         if state.stream_generation != snapshot.stream_generation
             || state.stream_phase != snapshot.phase
             || matches!(
@@ -275,6 +324,11 @@ impl Controller {
             || plan.factory_stamp != FactoryStamp::capture(&plan.plugin_factory)
         {
             return Err(PublicationRefusal::StaleFactory);
+        }
+        if state.plan_generation != snapshot.plan_generation
+            || !Arc::ptr_eq(&state.plan, &snapshot.plan)
+        {
+            return Err(PublicationRefusal::StalePlan);
         }
         if state.plan_generation == u64::MAX {
             return Err(PublicationRefusal::GenerationExhausted);
@@ -410,6 +464,20 @@ impl ProjectPublicationLease<'_> {
             ));
             retired.old_ledger = std::mem::replace(&mut state.hosted, prepared.ledger.take());
             retired.snapshot = prepared.snapshot.take();
+            retired.old_error = self
+                .controller
+                .inner
+                .preparation_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            retired.old_sampler_error = self
+                .controller
+                .inner
+                .sampler_error
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             state.plan_generation += 1;
             state.transport = prepared.transport.take().expect("admitted transport");
             state.sequence = prepared.sequence;
@@ -490,6 +558,18 @@ impl Controller {
         if matches!(snapshot.phase, StreamPhase::Starting | StreamPhase::Closing) {
             return Err(ProjectPreparationError::StreamTransitioning);
         }
+        // The previous consumer must be destroyed before its control endpoints
+        // can be displaced. An abandoned consumer permits a fresh retry.
+        if self
+            .lock()
+            .link
+            .as_ref()
+            .is_some_and(|link| !link.messages.is_abandoned())
+        {
+            return Err(ProjectPreparationError::Publication(
+                PublicationRefusal::StaleStream,
+            ));
+        }
         let plan = Arc::new(snapshot.plan.for_attachment());
         if plan.meters.is_err() {
             return Err(ProjectPreparationError::Unsupported(
@@ -519,6 +599,15 @@ impl Controller {
         let admission;
         {
             let mut state = self.lock();
+            if state
+                .link
+                .as_ref()
+                .is_some_and(|link| !link.messages.is_abandoned())
+            {
+                return Err(ProjectPreparationError::Publication(
+                    PublicationRefusal::StaleStream,
+                ));
+            }
             if snapshot.plan_generation != state.plan_generation
                 || !Arc::ptr_eq(&snapshot.plan, &state.plan)
             {
@@ -670,6 +759,7 @@ mod tests {
         recording: Mutex<()>,
         block: Mutex<(bool, bool)>,
         barrier: Condvar,
+        processed: Mutex<Vec<Arc<AtomicUsize>>>,
     }
 
     #[derive(Debug)]
@@ -686,9 +776,11 @@ mod tests {
         external: Arc<Mutex<()>>,
         ring: Vec<[f32; 2]>,
         cursor: usize,
+        processed: Arc<AtomicUsize>,
     }
     impl HostedEffect for Unit {
         fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+            self.processed.fetch_add(left.len(), Ordering::Relaxed);
             for (left, right) in left.iter_mut().zip(right) {
                 let before = self.ring[self.cursor];
                 self.ring[self.cursor] = [*left, *right];
@@ -761,12 +853,19 @@ mod tests {
                 return Err("actual constructor refused".into());
             }
             let latency = self.evidence.latency.load(Ordering::Relaxed).max(37);
+            let processed = Arc::new(AtomicUsize::new(0));
+            self.evidence
+                .processed
+                .lock()
+                .unwrap()
+                .push(processed.clone());
             Ok(Box::new(Unit {
                 evidence: self.evidence.clone(),
                 controller: self.controller.clone(),
                 external: self.external.clone(),
                 ring: vec![[0.0; 2]; latency],
                 cursor: 0,
+                processed,
             }))
         }
         fn instrument(
@@ -1291,6 +1390,134 @@ mod tests {
             drop(reopened);
             drop(processor);
         }
+    }
+
+    #[test]
+    fn p1_live_attachment_refuses_before_construction_and_abandoned_retry_retires_after_shutdown() {
+        let (processor, controller, project, pool, evidence, _) = fixture(1);
+        controller.set_project(&project, &pool);
+        let made = evidence.made.load(Ordering::Relaxed);
+        let plan = controller.lock().plan.clone();
+        let generation = controller.lock().stream_generation;
+        assert!(matches!(
+            controller.try_attach(48_000, AttachmentMode::Independent),
+            Err(ProjectPreparationError::Publication(
+                PublicationRefusal::StaleStream
+            ))
+        ));
+        assert_eq!(evidence.made.load(Ordering::Relaxed), made);
+        assert_eq!(controller.lock().stream_generation, generation);
+        assert!(Arc::ptr_eq(&plan, &controller.lock().plan));
+        drop(processor);
+        // Queued native-bearing SetPlan still belongs to the retained endpoints.
+        assert_eq!(evidence.dropped.load(Ordering::Relaxed), 0);
+        let (replacement, _, retirement) = controller
+            .try_attach(48_000, AttachmentMode::Independent)
+            .unwrap();
+        assert_eq!(evidence.dropped.load(Ordering::Relaxed), 0);
+        drop(retirement);
+        assert_eq!(evidence.dropped.load(Ordering::Relaxed), 1);
+        let closing = controller.begin_close(false).unwrap();
+        drop(replacement);
+        // Processor-owned units may retire at its control-side destruction;
+        // its control endpoints remain retained until that destruction ends.
+        assert_eq!(evidence.dropped.load(Ordering::Relaxed), 2);
+        assert!(
+            controller
+                .lock()
+                .link
+                .as_ref()
+                .unwrap()
+                .messages
+                .is_abandoned()
+        );
+        controller.finish_close(closing);
+        assert!(controller.lock().link.is_none());
+        assert_eq!(evidence.dropped.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn p1_attachment_revalidates_live_consumer_after_stalled_construction() {
+        let (processor, controller, project, pool, evidence, _) = fixture(1);
+        drop(processor);
+        controller.detach();
+        controller.set_project(&project, &pool);
+        evidence.block.lock().unwrap().0 = true;
+        let pending = controller.clone();
+        let worker =
+            std::thread::spawn(move || pending.try_attach(48_000, AttachmentMode::Independent));
+        {
+            let mut block = evidence.block.lock().unwrap();
+            while !block.1 {
+                block = evidence.barrier.wait(block).unwrap();
+            }
+        }
+        controller.set_project(&Project::new("winning attachment"), &SamplePool::new());
+        let (winner, _, retirement) = controller
+            .try_attach(48_000, AttachmentMode::Independent)
+            .unwrap();
+        drop(retirement);
+        let generation = controller.lock().stream_generation;
+        evidence.block.lock().unwrap().0 = false;
+        evidence.barrier.notify_all();
+        assert!(matches!(
+            worker.join().unwrap(),
+            Err(ProjectPreparationError::Publication(
+                PublicationRefusal::StaleStream
+            ))
+        ));
+        assert_eq!(controller.lock().stream_generation, generation);
+        assert_eq!(evidence.dropped.load(Ordering::Relaxed), 1);
+        let closing = controller.begin_close(false).unwrap();
+        drop(winner);
+        controller.finish_close(closing);
+    }
+
+    #[test]
+    fn p1_restore_then_move_before_departure_completion_switches_old_track_immediately() {
+        let (mut processor, controller, mut project, mut pool, evidence, _) = fixture(1);
+        let mut second = project.mixer.tracks[0].clone();
+        second.id = TrackId(project.next_id);
+        project.next_id += 1;
+        second.effects.clear();
+        second.output = Some(TrackId(0));
+        project.mixer.tracks.push(second);
+        sounding(&mut project, &mut pool, &controller);
+        project.channels[0].mixer_track = project.mixer.tracks[1].id;
+        controller.set_project(&project, &pool);
+        audio(&mut processor, 1000);
+        let mut removed = project.clone();
+        removed.mixer.tracks[0].effects.clear();
+        removed.plugins.clear();
+        controller.set_project(&removed, &pool);
+        audio(&mut processor, 30);
+        controller.set_project(&project, &pool);
+        audio(&mut processor, 1);
+        let restored = controller.lock().plan.tracks[0].effects[1].life.clone();
+        assert!(!restored.heard());
+        let outgoing = controller.lock().plan.tracks[0].effects[0].life.clone();
+        assert!(outgoing.heard(), "departure remains unfinished at the move");
+        let old = evidence.processed.lock().unwrap()[0].clone();
+        let active = evidence.processed.lock().unwrap()[1].clone();
+        let before = old.load(Ordering::Relaxed);
+        let mut moved = project;
+        let effect = moved.mixer.tracks[0].effects.remove(0);
+        moved.mixer.tracks[1].effects.push(effect);
+        let mut candidate = ready(&controller, &moved, &pool);
+        assert!(
+            candidate.plan.as_ref().unwrap().tracks[0]
+                .effects
+                .is_empty()
+        );
+        let row = &candidate.plan.as_ref().unwrap().tracks[1].effects[0];
+        assert!(Arc::ptr_eq(&row.life, &restored));
+        assert!(row.after_departure.is_none());
+        assert_eq!(evidence.made.load(Ordering::Relaxed), 2);
+        install(&controller, &mut candidate);
+        audio(&mut processor, 128);
+        assert_eq!(old.load(Ordering::Relaxed), before);
+        assert!(active.load(Ordering::Relaxed) > 0);
+        assert!(restored.heard());
     }
 
     #[test]

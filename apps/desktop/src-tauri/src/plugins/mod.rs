@@ -1,5 +1,7 @@
 //! Cached, isolated discovery and a native owner thread for audio instances.
+mod capture_ack;
 mod runtime;
+pub(crate) use capture_ack::{CaptureAcknowledgement, CaptureOutcome};
 pub use runtime::Runtime;
 pub(crate) use runtime::binding_identity;
 #[cfg(all(test, windows))]
@@ -16,6 +18,33 @@ use windfall_plugin_host::{
 };
 use windfall_project::{PluginBinding, PluginTarget};
 
+const ACKNOWLEDGEMENT_WARNING: &str =
+    "Native plugin state was accepted; acknowledgement is pending:";
+
+fn overlay_capture_ack_warning(status: &mut PluginManagerState, warning: Option<&str>) {
+    if let Some(warning) = warning {
+        status.error = Some(format!("{ACKNOWLEDGEMENT_WARNING} {warning}"));
+    }
+}
+
+fn update_capture_status(
+    status: &mut PluginManagerState,
+    pending_empty: bool,
+    captures: &capture_ack::CaptureUpdates,
+) {
+    if let Some(warning) = captures.warning() {
+        overlay_capture_ack_warning(status, Some(warning));
+    } else if status.error.as_ref().is_some_and(|error| {
+        error.starts_with(ACKNOWLEDGEMENT_WARNING)
+            || (pending_empty
+                && captures.is_empty()
+                && (error.starts_with("Native plugin edit is waiting:")
+                    || error.starts_with("Native plugin state is waiting:")))
+    }) {
+        status.error = None;
+    }
+}
+
 pub struct PluginManager {
     catalog: Mutex<PluginCatalog>,
     status: Mutex<PluginManagerState>,
@@ -24,6 +53,9 @@ pub struct PluginManager {
     pub runtime: Arc<Runtime>,
     session: Mutex<Option<crate::session::WeakSession>>,
     retry_requested: std::sync::atomic::AtomicBool,
+    // Other status producers (for example scanning) cannot hide an accepted
+    // state's outstanding acknowledgement while its control worker is waiting.
+    capture_ack_warning: Mutex<Option<String>>,
 }
 impl PluginManager {
     #[cfg(all(test, windows))]
@@ -74,6 +106,7 @@ impl PluginManager {
             runtime: Arc::new(Runtime::new()?),
             session: Mutex::new(None),
             retry_requested: std::sync::atomic::AtomicBool::new(false),
+            capture_ack_warning: Mutex::new(None),
         });
         manager.update_entries();
         Ok(manager)
@@ -84,6 +117,13 @@ impl PluginManager {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        overlay_capture_ack_warning(
+            &mut state,
+            self.capture_ack_warning
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_deref(),
+        );
         state.instances = self
             .runtime
             .errors()
@@ -101,8 +141,9 @@ impl PluginManager {
         std::thread::spawn(move || {
             let mut pending: Vec<(u64, u64, u64, windfall_project::Command, Option<u64>)> =
                 Vec::new();
-            let mut captures: Vec<runtime::PendingUpdate> = Vec::new();
+            let mut captures = capture_ack::CaptureUpdates::default();
             let mut capture_retry = std::time::Instant::now();
+            let mut acknowledgement_retry = std::time::Instant::now();
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 let Some(manager) = manager.upgrade() else {
@@ -135,7 +176,6 @@ impl PluginManager {
                             ));
                         }
                         runtime::Update::Capture { .. } => {
-                            captures.retain(|before| before.token != update.token);
                             captures.push(update);
                         }
                     }
@@ -162,48 +202,56 @@ impl PluginManager {
                         }
                     }
                 });
+                // These accepted edits have already changed the document. Retry
+                // only bookkeeping, independently of recording/capture admission.
+                // Every ticket is tried once per pass, with finite backoff.
+                if captures.has_pending_ack() && std::time::Instant::now() >= acknowledgement_retry
+                {
+                    captures.retry_ack(|ticket| manager.runtime.retry_capture_ack(ticket));
+                    acknowledgement_retry =
+                        std::time::Instant::now() + std::time::Duration::from_millis(250);
+                }
                 // Parameters are reconciled before taking opaque state. A take
                 // retains these identity-bound requests for a later worker tick.
                 if pending.is_empty() && std::time::Instant::now() >= capture_retry {
-                    captures.retain(|request| {
-                        match session.capture_plugin_update(&manager.runtime, request.clone()) {
-                            Ok(restart) => {
-                                if restart {
-                                    manager
-                                        .retry_requested
-                                        .store(true, std::sync::atomic::Ordering::Relaxed);
-                                }
-                                false
-                            }
-                            Err(error) => {
-                                manager
-                                    .status
-                                    .lock()
-                                    .unwrap_or_else(|error| error.into_inner())
-                                    .error =
-                                    Some(format!("Native plugin state is waiting: {error}"));
-                                capture_retry = std::time::Instant::now()
-                                    + std::time::Duration::from_millis(250);
-                                true
-                            }
-                        }
+                    let had_pending_ack = captures.has_pending_ack();
+                    let progress = captures.capture(|request| {
+                        session.capture_plugin_update(&manager.runtime, request)
                     });
+                    if progress.restart {
+                        manager
+                            .retry_requested
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Some(error) = progress.error {
+                        manager
+                            .status
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner())
+                            .error = Some(format!("Native plugin state is waiting: {error}"));
+                        capture_retry =
+                            std::time::Instant::now() + std::time::Duration::from_millis(250);
+                    }
+                    if !had_pending_ack && captures.has_pending_ack() {
+                        acknowledgement_retry =
+                            std::time::Instant::now() + std::time::Duration::from_millis(250);
+                    }
                 }
                 if pending.len() > 4096 {
                     pending.drain(..pending.len() - 4096);
                     manager.status.lock().unwrap_or_else(|error| error.into_inner()).error = Some("Too many pending native plugin edits; reopen the plugin to reconcile its state".into());
                 }
-                if pending.is_empty() && captures.is_empty() {
+                {
+                    *manager
+                        .capture_ack_warning
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) =
+                        captures.warning().map(str::to_owned);
                     let mut status = manager
                         .status
                         .lock()
                         .unwrap_or_else(|error| error.into_inner());
-                    if status.error.as_ref().is_some_and(|error| {
-                        error.starts_with("Native plugin edit is waiting:")
-                            || error.starts_with("Native plugin state is waiting:")
-                    }) {
-                        status.error = None;
-                    }
+                    update_capture_status(&mut status, pending.is_empty(), &captures);
                 }
                 // Preserve native edits before replacing their current owner. A
                 // take can refuse refresh; one flag retains the request until idle.

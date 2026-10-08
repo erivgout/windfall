@@ -522,6 +522,13 @@ impl Plan {
             let mut at = 0;
             let mut rows: Vec<(EffectId, Vec<DepartureSource>, usize)> = Vec::new();
             for before in &previous.tracks[old_index].effects {
+                // Moving an active id switches its old track immediately,
+                // including any unfinished departure reserved for that id.
+                if self.effect_ids.get(before.id.0).is_some_and(|index| {
+                    self.effect_places[index].0 != self.track_ids.get(track.id.0).unwrap()
+                }) {
+                    continue;
+                }
                 let kept = track
                     .effects
                     .iter()

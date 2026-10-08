@@ -15,7 +15,7 @@ impl Session {
         &self,
         runtime: &crate::plugins::Runtime,
         request: crate::plugins::PendingUpdate,
-    ) -> Result<bool, String> {
+    ) -> Result<crate::plugins::CaptureOutcome, String> {
         let crate::plugins::Update::Capture { target, .. } = request.update else {
             return Err("Not a native state request".into());
         };
@@ -33,7 +33,7 @@ impl Session {
         let desired = {
             let state = self.state();
             if !current(&state) {
-                return Ok(false);
+                return Ok(crate::plugins::CaptureOutcome::Obsolete);
             }
             state
                 .document
@@ -44,11 +44,11 @@ impl Session {
                 .clone()
         };
         let Some(captured) = runtime.capture_pending(request.clone(), desired.clone())? else {
-            return Ok(false);
+            return Ok(crate::plugins::CaptureOutcome::Obsolete);
         };
-        let mut state = self.state();
+        let state = self.state();
         if !current(&state) {
-            return Ok(false);
+            return Ok(crate::plugins::CaptureOutcome::Obsolete);
         }
         let binding = state
             .document
@@ -73,20 +73,36 @@ impl Session {
             target,
             state: captured.bytes.clone(),
         });
-        let applied = state
-            .document
-            .dispatch(
-                Command::Batch {
-                    label: Some("Native plugin state".into()),
-                    commands,
-                },
-                None,
-            )
-            .map_err(|error| error.to_string())?;
-        self.publish(&mut state, &applied.touched);
+        let ticket = self.sample_edit_ticket(
+            &state,
+            Command::Batch {
+                label: Some("Native plugin state".into()),
+                commands,
+            },
+            None,
+            Vec::new(),
+        )?;
         drop(state);
-        runtime.acknowledge_capture(&request, &captured)?;
-        Ok(captured.restart)
+        drop(_recording);
+        let mut prepared = ticket.prepare()?;
+        #[cfg(test)]
+        self.pause("plugin-capture:prepared");
+        let mut retirement = None;
+        {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            if !current(&state) {
+                return Ok(crate::plugins::CaptureOutcome::Obsolete);
+            }
+            prepared.commit(&mut state, &mut retirement)?;
+        }
+        if let Some(retirement) = &mut retirement {
+            self.retire_project(retirement);
+        }
+        Ok(crate::plugins::CaptureOutcome::Accepted {
+            restart: captured.restart,
+            acknowledgement: runtime.acknowledge_committed_capture(&request, &captured),
+        })
     }
     pub fn document_snapshot(&self) -> DocumentSnapshot {
         let state = self.state();
@@ -100,28 +116,13 @@ impl Session {
         command: Command,
         gesture: Option<u64>,
     ) -> Result<DispatchResult, String> {
-        let _recording = self.recording_idle()?;
-        let mut state = self.state();
-        let mut candidate = state.document.clone();
-        let candidate_applied = candidate
-            .dispatch(command.clone(), gesture)
-            .map_err(|error| error.to_string())?;
-        if candidate_applied.touched.samples
-            || state.pool.needs_sampler_preparation(candidate.project())
-        {
-            let ticket = self.sample_edit_ticket(&state, command, gesture, Vec::new())?;
-            drop(state);
-            drop(_recording);
-            return self.finish_sample_edit(ticket);
-        }
-        let applied = state
-            .document
-            .dispatch(command, gesture)
-            .map_err(|error| error.to_string())?;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish(&mut state, &applied.touched),
-        })
+        let ticket = {
+            let _recording = self.recording_idle()?;
+            let state = self.state();
+            self.sample_edit_ticket(&state, command, gesture, Vec::new())?
+                .ordinary()
+        };
+        self.finish_sample_edit(ticket)
     }
 
     /// Validate native ownership and apply its edit under the same document lock.
@@ -137,7 +138,7 @@ impl Session {
         #[cfg(test)]
         self.pause("plugin-update:apply");
         let _recording = self.recording_idle()?;
-        let mut state = self.state();
+        let state = self.state();
         let target = match &command {
             Command::SetPluginParam { target, .. } | Command::SetPluginState { target, .. } => {
                 *target
@@ -153,11 +154,28 @@ impl Session {
         {
             return Ok(false);
         }
-        let applied = state
-            .document
-            .dispatch(command, gesture)
-            .map_err(|error| error.to_string())?;
-        self.publish(&mut state, &applied.touched);
+        let ticket = self.sample_edit_ticket(&state, command, gesture, Vec::new())?;
+        drop(state);
+        drop(_recording);
+        let mut prepared = ticket.prepare()?;
+        let mut retirement = None;
+        {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            if !runtime.is_current(revision, token)
+                || !state
+                    .document
+                    .project()
+                    .plugin(target)
+                    .is_some_and(|current| crate::plugins::binding_identity(current) == binding)
+            {
+                return Ok(false);
+            }
+            prepared.commit(&mut state, &mut retirement)?;
+        }
+        if let Some(retirement) = &mut retirement {
+            self.retire_project(retirement);
+        }
         Ok(true)
     }
 
@@ -173,7 +191,7 @@ impl Session {
     /// clip. Fails when the project has nothing of that kind to automate.
     pub fn automate(&self, target: AutomationTarget) -> Result<DispatchResult, String> {
         let _recording = self.recording_idle()?;
-        let mut state = self.state();
+        let state = self.state();
         let project = state.document.project();
         let clips = project.playlist.clips.iter();
         let song = clips
@@ -209,14 +227,10 @@ impl Session {
                 },
             ],
         };
-        let applied = state
-            .document
-            .dispatch(batch, None)
-            .map_err(|error| error.to_string())?;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish(&mut state, &applied.touched),
-        })
+        let ticket = self.sample_edit_ticket(&state, batch, None, Vec::new())?;
+        drop(state);
+        drop(_recording);
+        self.finish_sample_edit(ticket)
     }
 
     /// Undoes the last edit. `None` when there is nothing to undo.
@@ -235,43 +249,43 @@ impl Session {
             .unwrap_or_else(|| self.state().document.unchanged_patch())
     }
 
-    /// Builds the patch for a change that was just made, hands the changed
-    /// project to the engine and sends the patch to every window.
+    /// Metadata-only path relinking after Save as; the exact audio handles and
+    /// musical plan are unchanged. Musical edits always use `publish_prepared`.
     pub(super) fn publish(&self, state: &mut State, touched: &Touched) -> ProjectPatch {
-        self.publish_with_prepared(state, touched, None)
+        let patch = state.document.patch(touched);
+        if !touched.is_empty() {
+            state.edits += 1;
+        }
+        self.emit(Event::ProjectPatch(patch.clone()));
+        patch
     }
 
+    /// Publish bounded native desired-value metadata after Document dispatch,
+    /// before the guaranteed serial engine install can be consumed. This does
+    /// not service/join/capture the owner or prepare any native unit.
+    pub(super) fn commit_prepared_parameters(&self, state: &State, touched: &Touched) {
+        if !touched.is_empty()
+            && let Some(manager) = &*crate::sync::lock(&self.inner.plugins)
+        {
+            manager.runtime.commit_parameters(state.document.project());
+        }
+    }
+
+    /// Patch/sample bookkeeping AFTER the borrowed ready lease was installed.
+    /// This helper neither constructs units nor falls back to legacy publication.
     pub(super) fn publish_prepared(
         &self,
         state: &mut State,
         touched: &Touched,
-        prepared: windfall_engine::PreparedProject,
+        prepared: &windfall_engine::SamplePool,
     ) -> ProjectPatch {
-        self.publish_with_prepared(state, touched, Some(prepared))
-    }
-
-    fn publish_with_prepared(
-        &self,
-        state: &mut State,
-        touched: &Touched,
-        prepared: Option<windfall_engine::PreparedProject>,
-    ) -> ProjectPatch {
-        let patch = if prepared.is_some() && touched.is_empty() {
+        let patch = if touched.is_empty() {
             state.document.unchanged_patch()
         } else {
             state.document.patch(touched)
         };
-        if let Some(prepared) = &prepared
-            && !touched.is_empty()
-        {
-            self.sync_prepared_samples(state, prepared.sampler_pool());
-        } else if touched.samples {
-            self.sync_samples(state);
-        }
         if !touched.is_empty() {
-            if let Some(manager) = &*crate::sync::lock(&self.inner.plugins) {
-                manager.runtime.commit_parameters(state.document.project());
-            }
+            self.sync_prepared_samples(state, prepared);
             state.edits += 1;
             if touched.channels {
                 self.controller().panic_hardware();
@@ -283,39 +297,20 @@ impl Session {
                 }
             }
         }
-        // Runtime recovery can succeed independently of a musical edit.
-        if let Some(prepared) = prepared {
-            state
-                .pool
-                .install_sampler_preparation(prepared.sampler_pool());
-            self.controller()
-                .set_prepared_project(state.document.project(), prepared);
-            self.sync_transport();
-        } else if !touched.is_empty() {
-            self.push_project(state);
-        }
+        state.pool.install_sampler_preparation(prepared);
+        self.sync_transport();
         self.emit(Event::ProjectPatch(patch.clone()));
         patch
     }
 
-    /// Makes the engine play the project as it is now. The engine moves the
-    /// transport off a pattern that no longer exists, and the UI is told of
-    /// that before it hears of the edit that removed the pattern.
+    /// A loader/cache notification only queues preparation. No native/DSP work
+    /// or implicit retirement is allowed while its caller holds State.
     pub(super) fn push_project(&self, state: &State) {
         if state
             .pool
             .needs_sampler_preparation(state.document.project())
         {
             self.queue_sampler_preparation();
-            return;
-        }
-        state
-            .pool
-            .prune_sampler_preparation(state.document.project());
-        if let Some(pool) = state.pool.cached_clip_pool(state.document.project()) {
-            self.controller()
-                .set_project(state.document.project(), &pool);
-            self.sync_transport();
         } else {
             self.queue_clip_preparation();
         }
@@ -343,7 +338,16 @@ impl Session {
     fn prepare_history(&self, action: HistoryMove) -> Option<ProjectPatch> {
         drop(self.recording_idle().ok()?);
         for _ in 0..8 {
-            let (mut document, mut pool, directory, generation, edits, replacements, loading) = {
+            let (
+                mut document,
+                mut pool,
+                directory,
+                generation,
+                edits,
+                replacements,
+                loading,
+                preparation,
+            ) = {
                 let state = self.state();
                 (
                     state.document.clone(),
@@ -353,6 +357,7 @@ impl Session {
                     state.edits,
                     state.replacements,
                     state.loading.clone(),
+                    self.project_preparation(&state),
                 )
             };
             let original_pool = pool.clone();
@@ -367,30 +372,49 @@ impl Session {
                     pool.insert(asset.id, audio);
                 }
             }
-            let prepared =
-                match windfall_engine::Controller::prepare_project(document.project(), &pool) {
-                    Ok(prepared) => prepared,
+            let mut prepared = match preparation.prepare(
+                document.project(),
+                &pool,
+                windfall_engine::ProjectPublicationIntent::Edit,
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.emit(Event::ProjectWarnings(vec![error.to_string()]));
+                    return None;
+                }
+            };
+            #[cfg(test)]
+            self.pause("sampler:history-prepared");
+            let retirement;
+            let result = {
+                let _recording = self.recording_idle().ok()?;
+                let mut state = self.state();
+                if state.generation != generation || state.replacements != replacements {
+                    return None;
+                }
+                if state.edits != edits {
+                    continue;
+                }
+                // Resolved history sources are candidate additions, not the live baseline.
+                if !state.pool.same_sources(&original_pool) || state.loading != loading {
+                    continue;
+                }
+                let pool = prepared.pool().clone();
+                let lease = match prepared.publication(self, &state) {
+                    Ok(lease) => lease,
                     Err(error) => {
                         self.emit(Event::ProjectWarnings(vec![error.to_string()]));
                         return None;
                     }
                 };
-            #[cfg(test)]
-            self.pause("sampler:history-prepared");
-            let _recording = self.recording_idle().ok()?;
-            let mut state = self.state();
-            if state.generation != generation || state.replacements != replacements {
-                return None;
-            }
-            if state.edits != edits {
-                continue;
-            }
-            // Resolved history sources are candidate additions, not the live baseline.
-            if !state.pool.same_sources(&original_pool) || state.loading != loading {
-                continue;
-            }
-            let touched = action.apply(&mut state.document)?;
-            return Some(self.publish_prepared(&mut state, &touched, prepared));
+                let touched = action.apply(&mut state.document)?;
+                self.commit_prepared_parameters(&state, &touched);
+                retirement = lease.install();
+                Some(self.publish_prepared(&mut state, &touched, &pool))
+            };
+            let mut retirement = retirement;
+            self.retire_project(&mut retirement);
+            return result;
         }
         self.emit(Event::ProjectWarnings(vec![
             "Sampler history preparation was superseded by repeated edits. Try again.".into(),

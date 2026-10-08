@@ -492,6 +492,8 @@ struct Owner {
 pub struct Runtime {
     selection: Selection,
     jobs: mpsc::Sender<Job>,
+    #[cfg(all(test, windows))]
+    capture_ack_fault: Arc<Mutex<Option<super::capture_ack::CaptureAckTestFault>>>,
     errors: Arc<Mutex<Vec<(PluginTarget, String)>>>,
     approved: Approved,
     controls: ControlRegistry,
@@ -650,6 +652,8 @@ impl Runtime {
         Ok(Self {
             selection,
             jobs,
+            #[cfg(all(test, windows))]
+            capture_ack_fault: Arc::new(Mutex::new(None)),
             errors,
             approved,
             controls,
@@ -1069,22 +1073,98 @@ impl Runtime {
     }
     /// Only acknowledge after the session has accepted the captured edit.
     /// A concurrent parameter commit must leave its dirty ticket retryable.
+    /// This legacy wrapper still reports delivery failures; new postcommit
+    /// callers use `acknowledge_committed_capture` and retain its typed ticket.
     pub(crate) fn acknowledge_capture(
         &self,
         request: &PendingUpdate,
         captured: &CapturedState,
     ) -> Result<(), String> {
-        let serial = captured.serial;
-        let token = request.token;
-        self.call(move |owner| {
-            if let Some(record) = owner.instances.get_mut(&token) {
+        self.retry_capture_ack(super::capture_ack::CaptureAckTicket {
+            token: request.token,
+            serial: captured.serial,
+        })
+        .map(|_| ())
+    }
+    /// Bookkeeping after document and ready-engine acceptance, off all guards.
+    /// A transport failure cannot turn that accepted edit into a preparation
+    /// refusal. Even a timeout after owner-side effects retains a retry ticket.
+    pub(crate) fn acknowledge_committed_capture(
+        &self,
+        request: &PendingUpdate,
+        captured: &CapturedState,
+    ) -> super::CaptureAcknowledgement {
+        self.acknowledge_committed_capture_with(request, captured, |_| {
+            self.acknowledge_capture(request, captured)?;
+            #[cfg(all(test, windows))]
+            if let Update::Capture { target, .. } = request.update
+                && self
+                    .capture_ack_fault
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_mut()
+                    .is_some_and(|fault| fault.consume(target))
+            {
+                return Err("Test bookkeeping acknowledgement delivery is unconfirmed".into());
+            }
+            Ok(super::capture_ack::CaptureAckCompletion::Acknowledged)
+        })
+    }
+    /// Session tests may lose one real bookkeeping receipt after its effects.
+    /// Runtime derives the actual request token/captured serial; tests cannot
+    /// forge a ticket or stop capture/native construction through this seam.
+    #[cfg(all(test, windows))]
+    pub(crate) fn unconfirm_next_capture_acknowledgement(
+        &self,
+        target: PluginTarget,
+    ) -> super::capture_ack::CaptureAckTestScope {
+        super::capture_ack::CaptureAckTestScope::arm(self.capture_ack_fault.clone(), target)
+    }
+    fn acknowledge_committed_capture_with(
+        &self,
+        request: &PendingUpdate,
+        captured: &CapturedState,
+        deliver: impl FnOnce(
+            super::capture_ack::CaptureAckTicket,
+        ) -> Result<super::capture_ack::CaptureAckCompletion, String>,
+    ) -> super::CaptureAcknowledgement {
+        let ticket = super::capture_ack::CaptureAckTicket {
+            token: request.token,
+            serial: captured.serial,
+        };
+        match deliver(ticket) {
+            Ok(_) => super::CaptureAcknowledgement::Confirmed,
+            Err(warning) => super::CaptureAcknowledgement::Pending { ticket, warning },
+        }
+    }
+    /// Retry an accepted capture's bookkeeping only. A unique retired owner is
+    /// terminal completion. Newer dirty/restart intent remains owned by its
+    /// newer serial; no state is recaptured and no native control is processed.
+    pub(crate) fn retry_capture_ack(
+        &self,
+        ticket: super::capture_ack::CaptureAckTicket,
+    ) -> Result<super::capture_ack::CaptureAckCompletion, String> {
+        self.retry_capture_ack_with_checkpoint(ticket, Duration::from_secs(15), |_, _| {})
+    }
+    fn retry_capture_ack_with_checkpoint(
+        &self,
+        ticket: super::capture_ack::CaptureAckTicket,
+        timeout: Duration,
+        checkpoint: impl FnOnce(&mut Owner, &JobLifetime) + Send + 'static,
+    ) -> Result<super::capture_ack::CaptureAckCompletion, String> {
+        self.call_with_lifetime(timeout, move |owner, lifetime| {
+            let completion = if let Some(record) = owner.instances.get_mut(&ticket.token) {
                 record.capture_sent = false;
-                if record.dirty_serial == serial {
+                if record.dirty_serial == ticket.serial {
                     record.dirty = false;
                     record.restart = false;
                 }
-            }
-            Ok(())
+                super::capture_ack::CaptureAckCompletion::Acknowledged
+            } else {
+                super::capture_ack::CaptureAckCompletion::Retired
+            };
+            checkpoint(owner, lifetime);
+            Ok(completion)
         })
     }
     pub fn editor_binding(
@@ -1431,6 +1511,9 @@ impl HostedEffect for Audio {
     }
 }
 
+#[cfg(all(test, windows))]
+#[path = "capture_ack_tests.rs"]
+mod capture_ack_tests;
 #[cfg(all(test, windows))]
 #[path = "ownership_tests.rs"]
 pub(crate) mod ownership_tests;

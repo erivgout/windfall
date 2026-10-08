@@ -143,6 +143,11 @@ impl SamplePool {
     pub fn set_plugin_factory(&mut self, factory: Arc<dyn crate::plugins::PluginFactory>) {
         self.plugin_factory = Some(factory);
     }
+    /// Cheap captured provider ownership for a document replacement. Constructor
+    /// work remains in the engine snapshot's off-guard preparation phase.
+    pub fn plugin_factory(&self) -> Option<Arc<dyn crate::plugins::PluginFactory>> {
+        self.plugin_factory.clone()
+    }
     pub fn new() -> Self {
         Self::default()
     }

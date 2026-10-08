@@ -35,18 +35,27 @@ pub(super) struct Take {
     path: PathBuf,
     place: ClipPlace,
     rate: u32,
+    installed: Arc<std::sync::atomic::AtomicBool>,
 }
 impl Drop for Take {
     fn drop(&mut self) {
         self.capture.take();
         lock(&self.writer).take();
-        let _ = fs::remove_file(&self.path);
+        if !self.installed.load(Ordering::Acquire) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+struct Finishing<'a>(&'a std::sync::atomic::AtomicBool);
+impl Drop for Finishing<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 impl Session {
     pub(super) fn recording_idle(&self) -> Result<MutexGuard<'_, Option<Take>>, String> {
         let take = lock(&self.inner.recording);
-        if take.is_some() {
+        if take.is_some() || self.inner.recording_finishing.load(Ordering::Acquire) {
             return Err("Stop or cancel recording first.".into());
         }
         Ok(take)
@@ -168,6 +177,7 @@ impl Session {
                 mixer_track: None,
             },
             rate: status.sample_rate,
+            installed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         take.capture = Some(open(
             source,
@@ -185,12 +195,20 @@ impl Session {
         Ok(self.recording_state())
     }
     pub fn recording_cancel(&self) {
-        lock(&self.inner.recording).take();
+        let take = lock(&self.inner.recording).take();
+        drop(take);
     }
     pub fn recording_stop(&self) -> Result<DispatchResult, String> {
+        let _finishing;
         let mut owned = lock(&self.inner.recording);
         let mut take = owned.take().ok_or("No recording is active.")?;
-        // Keep ownership locked through finalization and clip attachment.
+        // Exclude a second take/ordinary edits, but do not hold a mutex during
+        // source/native preparation or helper/input destruction.
+        self.inner
+            .recording_finishing
+            .store(true, Ordering::Release);
+        _finishing = Finishing(&self.inner.recording_finishing);
+        drop(owned);
         let frames = take
             .capture
             .take()
@@ -204,8 +222,11 @@ impl Session {
             .ok_or("Recording writer closed.")?
             .finalize()
             .map_err(|e| e.to_string())?;
-        let result =
-            self.attach_audio_clip_from_file(&crate::paths::display(&take.path), take.place)?;
+        let result = self.attach_audio_clip_from_file(
+            &crate::paths::display(&take.path),
+            take.place,
+            take.installed.clone(),
+        )?;
         // Completed source stays on disk for undo/redo and future project saves.
         take.path = PathBuf::new();
         Ok(result)

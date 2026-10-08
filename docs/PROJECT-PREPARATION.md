@@ -1236,3 +1236,271 @@ lifetime/capture integration remains its owner window. No UI artifacts, parity,
 release, hardware deadline, listening or other-platform acceptance is claimed.
 This checkpoint establishes the engine contract for review, not closure of the
 production locking finding or global desktop compatibility.
+
+## Stage2 production Session adoption increment
+
+Stage1 remains immutable at `b4e07679a035c6e57afe74d8e9b2de232965cf4b`.
+The later coherent Session grant supersedes the stage2-closed paragraph above.
+This increment preserves the sole `937891439e4c9f268ddfa5cd91c1b7c6a9d4e8ff`
+prerequisite composition; it imports no full N4, M1, MIDI, T8 or root125 branch.
+Final source verification and the additive N4 acknowledgement contract are
+recorded below before freezing this increment. Source implementation is not
+parent combined acceptance or activation proof.
+
+### Fixed-source review findings
+
+Standards classified live attachment replacement P2; Spec classified the same
+counterexample P1. Both classifications remain separate. `try_attach` now refuses
+a non-abandoned existing consumer with StaleStream before any factory constructor,
+and revalidates that condition under its final short mutation guard. An abandoned
+Processor can still retry. The new admission race test lets another attachment
+win while the first constructor stalls; the loser preserves the installed link.
+Endpoint-order evidence destroys the old Processor first, observes abandoned
+control endpoints still retained, then completes close and retires endpoints.
+It does not establish CPAL hardware or actual helper process exit timing.
+
+Spec's restore/move P2 is fixed in the granted Plan window: an outgoing reservation
+is omitted when that active effect ID has moved to a different mixer track.
+Same-track remove/restore still retains predecessor ordering and actual remainder;
+same-ID revision replacement still supersedes the unheard current generation
+without adding a departure. The new remove/restore/move-before-completion test
+runs both sounding tracks, preserves the reused actual generation, verifies the
+old-track immediate switch and callback allocator count. No Processor, transport,
+fixture or DSP source was changed for these findings.
+
+### Actual caller ownership
+
+`session/preparation.rs` pairs the engine snapshot with the document generation,
+edits/replacement counters, exact source pool/loading snapshot and captured
+provider/revision. `ProjectPreparation::prepare` builds the full ready token off
+recording, document and controller guards. `ReadyProject::publication` borrows
+that token and checks those document/provider fences, then the exact engine
+stream/factory/plan fences, then exact source/loading equality. Source refusal
+drops only a borrowed lease. The ready candidate and all old/source ownership
+remain outer-owned through refusal, success and unwinding. Installation clears
+latched preparation errors by moving them into the returned outer carrier; no
+error String/native owner is freed under the controller/document lease.
+
+Ordinary dispatch/automation, native parameter/state notifications, explicit
+sampler edits, undo/redo/history, file/browser imports, MIDI review application,
+slice application and destructive audio edits now prepare before actual Document
+mutation. The private `PreparedSampleEdit::commit(&mut self,state,&mut outer)`
+preserves cancellation, generation, request, original_pool/loading and recovered
+source guards. Borrowed readiness admission precedes actual dispatch, bounded
+native desired-value metadata precedes serial install, and patch/sample metadata
+follows install. `publish_prepared(state,touched,&SamplePool)` has no legacy
+fallback or constructor. Ordinary no-op dispatch still increments its patch
+revision; explicit sampler runtime-recovery no-ops retain the document snapshot
+and open gesture, including R1 recovery semantics.
+
+New/Open decodes sources and stages the runtime provider off guards, builds a
+Replace ready token and an outer candidate State, then leases before swapping
+State. Old State and retirement outlive recording/State guards. The installed
+runtime revision publishes only after guaranteed engine installation. Saved
+transport fields and late transport commands use the owned Replace intent;
+Stop -> SetPlan -> SetTransport -> Seek(0) remains serial, with no callback group
+atomicity. Full and one-short queue space refuse before State swap; exact space
+admits the whole initialized prefix even when the consumer interleaves.
+
+Plugin refresh uses `prepare_document` and a staged factory off guards, never
+live `retry` before readiness. On refusal it leaves the document/pool/history and
+installed runtime revision unchanged. `install_plugins` also retains displaced
+pool/manager references until their guards are released. Source reload, sample
+workers and spectral clip workers take cheap snapshots, build off guards and
+install only borrowed exact readiness. `push_project` now only schedules the
+existing bounded worker. Device configuration releases recording exclusion
+before driver/native preparation and keeps the stage1 fallible lifecycle adapter;
+reopening does not call attached static publication under State.
+
+The only production Session `set_project` is initial Session construction,
+outside Session guards. No production Session static PreparedProject,
+prepare_project or set_prepared_project caller remains. The engine's attached
+legacy Unsupported adapter stays explicit, but ordinary Session editing does
+not use it. N4 offline renderer/stems/pool error channels remain its owner seam.
+
+Explicit retirement is caller-owned. `ProjectRetirement::clear` destroys its
+captured owners outside all guards and retains the preallocated carrier capacity.
+The control realtime worker allocates one carrier before its loop, captures at
+most the existing 4096-entry capacity per tick and clears before subscriber or
+transport guards. It does not silently collect from a transport/frame accessor,
+add a trash registry, or claim a global backlog bound. Candidate and displaced
+owners declared outside admission scopes survive event-sink poison/unwind.
+
+Recording finish uses a transient finishing reservation while releasing the
+recording mutex before input finalization, decode and native/DSP preparation.
+Edits and a second take refuse this reservation; recording queries remain
+available. Cancellation moves the Take out before destruction. Recording import
+checks the finishing reservation before State and marks its persistent source as
+installed immediately after actual Doc plus ready installation, before patch
+emission. A postinstall event panic cannot delete that committed WAV. Destructive
+audio edits likewise disarm their generated-file cleanup after install and before
+patch emission. Precommit failures still clean uninstalled artifacts.
+
+### Source refresh and the root125 sampler race
+
+The exact `SampleEditTicket::commit` original_pool/loading guard is unchanged.
+Root125 Ubuntu CI observed the second AddSample refusal while the preceding
+missing external sample's decoder completed. Its log was supplied at
+`C:/Temp/windfall-125-ubuntu-ci.log`, SHA256
+`0ce3796e66e9e4d98396b54a5341c695961e7813bd09c8bc7f110adfad639f09`.
+This is parent failure provenance; no Ubuntu pass is inferred from local MSVC.
+
+Ordinary readiness may retry at most eight times only when originally pending
+loading IDs have settled, loading is a strict subset, and every source identity
+difference is confined to those settled IDs. Cancellation and original document,
+request, provider/revision fences must still match. Stream refusal takes
+precedence over StalePlan. A cloned captured snapshot's `same_environment`
+compares controller, stream epoch/phase, actual Ledger rate and captured factory
+stamp before a fresh plan/actual Ledger capture is used. Every refused candidate
+is destroyed outside guards before a new constructor. Unrelated source insertion,
+new pending load, provider/rate/stream transition, document edit or recording
+never enters this retry path. Eighth refusal explicitly reports the retry limit.
+
+A replacement may similarly recapture a source/background plan refresh only
+within its original unchanged document/request/provider/stream environment,
+using the original decoded candidate sources and Replace intent. Reload does not
+silently authorize a stale token. Actual musical edits and New/Open supersession
+still refuse. Replacement exhaustion is explicitly warned. Held native owners
+come from the new actual Ledger, never an earlier provisional candidate.
+
+### Test migrations and evidence boundaries
+
+The first full stage2 Session run passed 264 cases and failed four: benign reload
+invalidated pending Open; an ordinary no-op did not advance its patch revision;
+an export test expected implicit transport-query retirement; an uncached clip
+test expected a musical commit before asynchronous preparation. The source fixes
+and exact test migrations retain the original final assertions and deadlines.
+`sampler_processing_export_snapshot_retains_a_charged_bank_after_live_cache_eviction`
+adds a preallocated outer carrier and explicit capture/clear after each standalone
+transport query; the retained export bank and zero-byte retirement assertions
+are unchanged. `uncached_clip_publications_prepare_off_lock_and_install_the_latest_edit`
+now holds the actual ordinary ready path before Doc commit, verifies a concurrent
+gain edit refuses that stale candidate without mutation, explicitly retries from
+the fresh document, and retains its spectral/gain and five-second assertions.
+Six sampler ticket fixture commit sites borrow the prepared owner and an outer
+retirement slot; no original source/budget/gesture/allocation assertion changes.
+
+New Session proofs use an actual synchronous scripted factory. Constructors and
+destructors assert recording/document mutex freedom and perform a controller
+transport query. They cover ordinary edit, New/Open, refresh, history reuse,
+provider/revision/source/stream/recording interruptions, constructor failure,
+poison/unwind, true candidate selection timing, queue capacity, finishing
+exclusion and committed recording artifact survival. The decoder regression uses
+an actual held missing-file worker during native construction, observes truthful
+source refusal and off-guard candidate retirement, then fresh readiness. A
+parallel unrelated source injection still refuses before another constructor.
+A separate controlled completion schedule verifies all eight refusals/retirements
+and explicit exhaustion without a musical commit. Its initial NEW fixture had
+only four sample IDs; four additional registered assets corrected that setup.
+No existing assertion, bound, timing or ignore was weakened.
+
+The first combined current-source run passed engine lib 134/134, engine
+integration 281/281 and desktop lib 322/322, including the original sample-info
+case. Subsequent new artifact/retry proofs and final strict/frozen checks are
+reported below. Existing R3-R6 signal, process/drop, identity/revision, live-owner,
+latency and allocator assertions remain intact; detached late-revision scenarios
+remain legacy. Tests model device outcomes and use current compiled native
+fixtures where available. N4 production19f/6b/2dc, M1 app e3/924 and other parent
+increments are not imported, so their combined acceptance, actual helper joins,
+hardware behavior, other platforms, generated UI parity and activation are not
+claimed here.
+
+### Concrete owner adapter contract
+
+M1 captures `session.project_preparation(&state)` with its document/source/job
+eligibility snapshot, prepares Edit off recording/State, and keeps mutable ready
+and outer retirement before entering final guards. It checks borrowed
+`ready.publication(session,&state)` BEFORE actual job Document dispatch. Clone the
+borrowed ready pool before leasing. After successful dispatch, publish bounded
+`commit_prepared_parameters`, assign the exact `lease.install()` to the outer
+slot, then run `publish_prepared(state,touched,&pool)` and artifact acknowledgement.
+Release all guards before `session.retire_project` or ready destruction. A stale
+candidate never falls back to static preparation or gets an artifact success ack.
+
+N4's offline adapter consumes the stage1 fallible independent attachment result
+and moves its retirement outward; constructor failure goes to its independent
+render error channel, while true unavailable bindings retain their existing
+representation. N4 provider/revision reads must stay bounded metadata, negotiated
+native latency must remain graph-aligned, candidates remain unselected until
+Audio.transport, and compact postcommit owner acknowledgement must never replay
+captured bytes after a binding fingerprint changes. Its additive contract pin
+and final composed caller proof remain the pending narrow dependency for this
+increment; no unavailable signature or full owner import is invented.
+
+Current pre-acknowledgement source validation: ten owned Session readiness/source
+proofs pass; full desktop lib passes 324/324 with no failures or ignored tests.
+Engine lib 134/134 and integration 281/281 remain green on unchanged engine source.
+Strict engine all-targets and desktop lib/tests Clippy with `-D warnings`, owned
+Rust formatting, document Prettier and diff/scope checks pass. The first new
+strict Session run identified only a let-and-return in the artifact acknowledgement
+ordering correction; the direct return fixes it without a lint suppression.
+These runs use scripts/msvc-env.sh, one Cargo job, target/p1-native and task-local
+TS exports. Compact native acknowledgement integration remains to compile and
+verify before freezing this stage2 source.
+
+The final N4 contract names supersede its earlier intended names:
+`CaptureOutcome::{Obsolete,Accepted {restart,acknowledgement}}` and
+`CaptureAcknowledgement::{Confirmed,Pending {ticket,warning}}`. Copy
+`CaptureAckTicket` stores only token/serial (16 bytes, no Drop). Runtime alone
+reads the actual captured serial. After actual Doc plus exact ready installation
+and release of all guards, Session constructs Accepted with `captured.restart`
+and the non-Result `Runtime::acknowledge_committed_capture(request,captured)`
+acknowledgement. Obsolete requests return Obsolete before mutation. The legacy
+Result acknowledgement wrapper remains available.
+
+Manager retains/retries only the compact ticket, gates refresh until confirmation
+and emits restart once. A generic owner timeout may follow successful side
+effects, so Pending is not proof that flags were untouched. Bookkeeping retry
+is idempotent, a missing retired token is Confirmed terminal, and newer dirty
+serials remain preserved. This is fallible postcommit owner acknowledgement,
+separate from guaranteed engine installation; it neither rolls back nor reports
+a preparation refusal nor recaptures accepted bytes after a binding fingerprint
+changes. The compatible four-path additive leaf is frozen at
+`e075bb4d31600a584ef6758c4764da4a3ce68cd5`. The parent authorizes it only together
+with the forthcoming tested typed Manager/Runtime retry increment. Neither is
+imported partially; the Manager counterpart is awaited before changing Session's
+return type and compiling the coherent composition.
+
+The user's subsequent CI-minutes constraint makes all remaining compilation,
+tests and review local. This owner will not dispatch or rerun Actions, use a
+GitHub runner/VM job, push, or start release/candidate automation. Final native
+checks will also set `CARGO_BUILD_JOBS=1` so nested fixture Cargo invocations
+inherit the one-job bound. Other-platform execution awaits future user
+authorization and available minutes; it is not an additional review gate.
+
+### Scoped ACK prerequisite composition
+
+The parent subsequently authorized the compiled pair
+`e075bb4d31600a584ef6758c4764da4a3ce68cd5` and
+`11267d689bcefe9cabf52a06e34af52e89021103`. This increment applies only their
+diff from `2dc226099d18c02fa4d7a64ac2ab90e8331b6dca` in five bookkeeping paths:
+plugins/capture_ack.rs, capture_ack_tests.rs, capture_ack_manager_tests.rs,
+mod.rs and runtime.rs. All three new files match the exact pinned Git blobs.
+The first mod.rs hunk omits only the unimported bridge module context; no bridge
+module, full owner branch, historical Session body or process-bridge document is
+imported. All existing stage2 working files were hashed before application and
+verified unchanged immediately afterward. The prepared Session capture route
+then receives the equivalent typed outcome returns and non-Result off-guard
+acknowledgement. The sole existing plugin_recording assertion migration matches
+Accepted with restart=true; every other original assertion remains unchanged.
+
+The new actual Session regression arms Runtime's scoped one-shot receipt loss
+for the real captured target/token/serial. It holds the whole prepared native
+candidate before final document admission, verifies the document and selected
+predecessor are unchanged, then admits and installs without further processor
+execution. The returned outcome must be Accepted with restart=true and Pending,
+the captured deactivation rescan/state must be installed, and native selection
+must still name the predecessor until the existing serial callback adopts the
+ready plan. Repeated bookkeeping-only ticket retry must leave the exact document
+snapshot unchanged, including after adoption/control retirement. Recording,
+document and controller queries remain available at the preparation barrier and
+after acknowledgement. The initial NEW test incorrectly held sampler:prepared,
+which exists only in the ordinary wrapper and timed out before reaching a
+capture barrier. A test-only plugin-capture:prepared barrier in the actual
+capture route corrects that schedule; no existing deadline or assertion changes.
+
+The imported native acknowledgement tests explicitly require a built fixture.
+Local validation builds the current bound branch's fixture source into
+target/p1-native/capture-ack-fixture with one Cargo job, supplies that binary via
+WINDFALL_BRIDGE_FIXTURE, and includes the opted-in native cases. No older cached
+fixture or N4 production bridge result substitutes for this composition's proof.

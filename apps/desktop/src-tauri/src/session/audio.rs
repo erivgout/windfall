@@ -86,7 +86,12 @@ impl Session {
     pub fn engine_configure(&self, settings: AudioSettings) -> EngineStatus {
         let _configuring = lock(&self.inner.configuring);
         let _recording = lock(&self.inner.recording);
-        if _recording.is_some() {
+        if _recording.is_some()
+            || self
+                .inner
+                .recording_finishing
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
             let mut status = self.engine_status();
             status.error = Some("Stop or cancel recording before changing audio settings.".into());
             return status;
@@ -98,14 +103,13 @@ impl Session {
             .update(|stored| stored.audio = settings.clone());
         let open = openable(&settings, || self.inner.audio.devices());
         self.inner.audio.reconfigure(&open);
+        // The device adapter attached the current ready plan off State. Cache
+        // notifications queued during reopening use their own checked worker.
         {
             let state = self.state();
-            // Playback carries on from the playhead on the device that was
-            // just opened, and has stopped only if no device could be.
-            // Either way this is where the UI hears how the transport
-            // stands.
-            self.push_project(&state);
+            self.push_project(&state); // bounded worker, never constructs under State
         }
+        self.sync_transport();
         let mut told = lock(&self.inner.status);
         let status = self.inner.audio.status();
         *told = status.clone();

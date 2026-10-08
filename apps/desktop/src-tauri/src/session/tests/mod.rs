@@ -22,6 +22,7 @@ mod plugin_recording;
 mod plugin_update;
 #[cfg(windows)]
 mod plugins;
+mod project_preparation;
 mod recording;
 mod sampler_processing;
 mod slicer;

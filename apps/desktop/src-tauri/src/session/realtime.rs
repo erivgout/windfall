@@ -53,11 +53,21 @@ impl Session {
 
     /// Reads one frame from the engine and sends it to every subscriber.
     ///
-    /// Reading a frame resets the meter peaks and frees what the audio
-    /// thread has handed back, so exactly one caller must do this, and keep
+    /// The outer carrier explicitly frees returned audio owners before reading
+    /// the frame/resetting peaks, with no Session/controller guard held. Exactly
+    /// one caller must do this, and keep
     /// doing it whether or not anyone is listening. That caller is the
     /// thread [`spawn_realtime`](Self::spawn_realtime) starts.
     pub fn realtime_tick(&self) -> RealtimeFrame {
+        let mut retirement = windfall_engine::ProjectRetirement::default();
+        self.realtime_tick_with_retirement(&mut retirement)
+    }
+
+    fn realtime_tick_with_retirement(
+        &self,
+        retirement: &mut windfall_engine::ProjectRetirement,
+    ) -> RealtimeFrame {
+        self.retire_project(retirement);
         let frame = self.controller().frame();
         lock(&self.inner.subscribers).retain_mut(|subscriber| (subscriber.send)(&frame));
         // Playback that ended by itself: the end of a song, or a device
@@ -78,6 +88,7 @@ impl Session {
             .spawn(move || {
                 let mut deadline = Instant::now();
                 let mut frames = 0_u32;
+                let mut retirement = windfall_engine::ProjectRetirement::default();
                 loop {
                     // Frames are timed from a running deadline and not from
                     // the end of the last one, so the rate does not drift
@@ -88,7 +99,7 @@ impl Session {
                     let Some(session) = session.upgrade() else {
                         break;
                     };
-                    session.realtime_tick();
+                    session.realtime_tick_with_retirement(&mut retirement);
                     frames = frames.wrapping_add(1);
                     if frames.is_multiple_of(STATUS_EVERY) {
                         session.poll_engine_status();
