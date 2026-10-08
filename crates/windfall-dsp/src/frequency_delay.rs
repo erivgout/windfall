@@ -3,6 +3,10 @@
 mod params;
 use crate::blocks::svf::{OnePoleFilter, cutoff_gain};
 use crate::echo_bank::support::{History, Ramps, Tap, audio, balance, bounded, rate};
+pub use crate::echo_bank::{
+    PreparationBudget, PreparationError, PreparationRefusal, PreparationRequirements,
+    PreparationStatus,
+};
 use crate::{Effect, ParamSet};
 pub use params::*;
 
@@ -38,6 +42,7 @@ pub struct FrequencyDelay {
     prepared: bool,
     horizon: usize,
     clock: u32,
+    refusal: Option<PreparationRefusal>,
 }
 impl Default for FrequencyDelay {
     fn default() -> Self {
@@ -51,16 +56,94 @@ impl Default for FrequencyDelay {
             prepared: false,
             horizon: 0,
             clock: 0,
+            refusal: None,
         }
     }
 }
 impl FrequencyDelay {
-    /// Payload bytes to admit before control-side preparation, including the
-    /// inline processor. Allocator bookkeeping is platform-specific.
+    /// Final payload estimate. Use checked requirements and `try_prepare` to
+    /// admit peak storage and handle allocation refusal off the audio thread.
     pub fn preparation_bytes(sample_rate: f32) -> usize {
-        let samples = rate(sample_rate).ceil() as usize;
-        std::mem::size_of::<Self>()
-            + FREQUENCY_BANDS * 2 * (samples + 1) * std::mem::size_of::<f32>()
+        PreparationRequirements::checked::<32>(
+            rate(sample_rate),
+            rate(sample_rate).ceil() as usize,
+            size_of::<Self>(),
+            0,
+        )
+        .map_or(usize::MAX, |r| r.retained_bytes)
+    }
+    /// Includes the old histories and the fixed staging headers in peak bytes.
+    /// Read-only and allocation-free; rate sanitation matches legacy prepare.
+    pub fn preparation_requirements(
+        &self,
+        sample_rate: f32,
+    ) -> Result<PreparationRequirements, PreparationError> {
+        PreparationRequirements::checked::<32>(
+            rate(sample_rate),
+            rate(sample_rate).ceil() as usize,
+            size_of::<Self>(),
+            self.prepared_bytes() - size_of::<Self>(),
+        )
+    }
+    /// Control-thread only. Every history is reserved before publishing any
+    /// new clock/control/filter state. Refusal preserves the prior audio state.
+    /// `max_block` is accepted for Effect compatibility; work is frame-based.
+    pub fn try_prepare(
+        &mut self,
+        sample_rate: f32,
+        _max_block: usize,
+        budget: PreparationBudget,
+    ) -> Result<(), PreparationError> {
+        let sample_rate = rate(sample_rate);
+        let result = self.prepare_replacement(sample_rate, budget);
+        self.refusal = result
+            .err()
+            .map(|error| PreparationRefusal { sample_rate, error });
+        result
+    }
+    pub fn preparation_status(&self) -> PreparationStatus {
+        PreparationStatus {
+            is_prepared: self.prepared,
+            last_refusal: self.refusal,
+        }
+    }
+    fn prepare_replacement(
+        &mut self,
+        sample_rate: f32,
+        budget: PreparationBudget,
+    ) -> Result<(), PreparationError> {
+        let mut staged = crate::echo_bank::support::stage_histories::<32>(
+            sample_rate,
+            sample_rate.ceil() as usize,
+            size_of::<Self>(),
+            self.prepared_bytes() - size_of::<Self>(),
+            budget,
+        )?;
+        for (live, replacement) in self
+            .bands
+            .iter_mut()
+            .flat_map(|b| &mut b.lines)
+            .zip(&mut staged)
+        {
+            std::mem::swap(live, replacement);
+        }
+        self.rate = sample_rate;
+        for band in &mut self.bands {
+            band.controls.prepare(self.rate);
+        }
+        self.coefficients.prepare(self.rate);
+        self.controls.prepare(self.rate);
+        self.prepared = true;
+        // Both one-pole banks, including all bandwidth/sample-rate extremes.
+        let min_c = OnePoleFilter::coefficient(0.0, self.rate) as f64;
+        let max_c = OnePoleFilter::coefficient(self.rate * 0.49, self.rate) as f64;
+        let radius = (1.0 - 2.0 * min_c).abs().max((1.0 - 2.0 * max_c).abs());
+        self.horizon = (128.0 / -radius.ln()).ceil() as usize
+            + self.rate.ceil() as usize
+            + (self.rate * 0.1).ceil() as usize
+            + 64;
+        self.reset();
+        Ok(())
     }
     /// Rate actually used after finite-range sanitation.
     pub fn actual_sample_rate(&self) -> f32 {
@@ -140,26 +223,8 @@ impl FrequencyDelay {
 }
 impl Effect for FrequencyDelay {
     type Params = FrequencyDelayParams;
-    fn prepare(&mut self, sample_rate: f32, _max_block: usize) {
-        self.rate = rate(sample_rate);
-        for band in &mut self.bands {
-            for line in &mut band.lines {
-                line.prepare(self.rate.ceil() as usize);
-            }
-            band.controls.prepare(self.rate);
-        }
-        self.coefficients.prepare(self.rate);
-        self.controls.prepare(self.rate);
-        self.prepared = true;
-        // Both one-pole banks, including all bandwidth/sample-rate extremes.
-        let min_c = OnePoleFilter::coefficient(0.0, self.rate) as f64;
-        let max_c = OnePoleFilter::coefficient(self.rate * 0.49, self.rate) as f64;
-        let radius = (1.0 - 2.0 * min_c).abs().max((1.0 - 2.0 * max_c).abs());
-        self.horizon = (128.0 / -radius.ln()).ceil() as usize
-            + self.rate.ceil() as usize
-            + (self.rate * 0.1).ceil() as usize
-            + 64;
-        self.reset();
+    fn prepare(&mut self, sample_rate: f32, max_block: usize) {
+        let _ = self.try_prepare(sample_rate, max_block, PreparationBudget::UNLIMITED);
     }
     fn reset(&mut self) {
         self.filters = [[[OnePoleFilter::default(); 2]; 2]; 15];

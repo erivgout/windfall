@@ -147,9 +147,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[0].feedback_filter.gain] "units.0.feedbackFilter.gain" "Unit 1 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[0].feedback_filter.sections] "units.0.feedbackFilter.sections" "Unit 1 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[0].filter_post] "units.0.filterPost" "Unit 1 post filter" { false }
-    float [units[0].output_gain] "units.0.outputGain" "Unit 1 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[0].output_gain] "units.0.outputGain" "Unit 1 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[0].output_pan] "units.0.outputPan" "Unit 1 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[0].next_send] "units.0.nextSend" "Unit 1 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[0].next_send] "units.0.nextSend" "Unit 1 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[1].enabled] "units.1.enabled" "Unit 2 enabled" { false }
     float [units[1].input_gain] "units.1.inputGain" "Unit 2 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[1].input_pan] "units.1.inputPan" "Unit 2 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -174,9 +174,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[1].feedback_filter.gain] "units.1.feedbackFilter.gain" "Unit 2 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[1].feedback_filter.sections] "units.1.feedbackFilter.sections" "Unit 2 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[1].filter_post] "units.1.filterPost" "Unit 2 post filter" { false }
-    float [units[1].output_gain] "units.1.outputGain" "Unit 2 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[1].output_gain] "units.1.outputGain" "Unit 2 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[1].output_pan] "units.1.outputPan" "Unit 2 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[1].next_send] "units.1.nextSend" "Unit 2 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[1].next_send] "units.1.nextSend" "Unit 2 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[2].enabled] "units.2.enabled" "Unit 3 enabled" { false }
     float [units[2].input_gain] "units.2.inputGain" "Unit 3 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[2].input_pan] "units.2.inputPan" "Unit 3 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -201,9 +201,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[2].feedback_filter.gain] "units.2.feedbackFilter.gain" "Unit 3 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[2].feedback_filter.sections] "units.2.feedbackFilter.sections" "Unit 3 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[2].filter_post] "units.2.filterPost" "Unit 3 post filter" { false }
-    float [units[2].output_gain] "units.2.outputGain" "Unit 3 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[2].output_gain] "units.2.outputGain" "Unit 3 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[2].output_pan] "units.2.outputPan" "Unit 3 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[2].next_send] "units.2.nextSend" "Unit 3 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[2].next_send] "units.2.nextSend" "Unit 3 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[3].enabled] "units.3.enabled" "Unit 4 enabled" { false }
     float [units[3].input_gain] "units.3.inputGain" "Unit 4 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[3].input_pan] "units.3.inputPan" "Unit 4 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -228,9 +228,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[3].feedback_filter.gain] "units.3.feedbackFilter.gain" "Unit 4 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[3].feedback_filter.sections] "units.3.feedbackFilter.sections" "Unit 4 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[3].filter_post] "units.3.filterPost" "Unit 4 post filter" { false }
-    float [units[3].output_gain] "units.3.outputGain" "Unit 4 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[3].output_gain] "units.3.outputGain" "Unit 4 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[3].output_pan] "units.3.outputPan" "Unit 4 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[3].next_send] "units.3.nextSend" "Unit 4 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[3].next_send] "units.3.nextSend" "Unit 4 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[4].enabled] "units.4.enabled" "Unit 5 enabled" { false }
     float [units[4].input_gain] "units.4.inputGain" "Unit 5 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[4].input_pan] "units.4.inputPan" "Unit 5 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -255,9 +255,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[4].feedback_filter.gain] "units.4.feedbackFilter.gain" "Unit 5 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[4].feedback_filter.sections] "units.4.feedbackFilter.sections" "Unit 5 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[4].filter_post] "units.4.filterPost" "Unit 5 post filter" { false }
-    float [units[4].output_gain] "units.4.outputGain" "Unit 5 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[4].output_gain] "units.4.outputGain" "Unit 5 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[4].output_pan] "units.4.outputPan" "Unit 5 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[4].next_send] "units.4.nextSend" "Unit 5 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[4].next_send] "units.4.nextSend" "Unit 5 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[5].enabled] "units.5.enabled" "Unit 6 enabled" { false }
     float [units[5].input_gain] "units.5.inputGain" "Unit 6 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[5].input_pan] "units.5.inputPan" "Unit 6 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -282,9 +282,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[5].feedback_filter.gain] "units.5.feedbackFilter.gain" "Unit 6 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[5].feedback_filter.sections] "units.5.feedbackFilter.sections" "Unit 6 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[5].filter_post] "units.5.filterPost" "Unit 6 post filter" { false }
-    float [units[5].output_gain] "units.5.outputGain" "Unit 6 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[5].output_gain] "units.5.outputGain" "Unit 6 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[5].output_pan] "units.5.outputPan" "Unit 6 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[5].next_send] "units.5.nextSend" "Unit 6 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[5].next_send] "units.5.nextSend" "Unit 6 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[6].enabled] "units.6.enabled" "Unit 7 enabled" { false }
     float [units[6].input_gain] "units.6.inputGain" "Unit 7 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[6].input_pan] "units.6.inputPan" "Unit 7 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -309,9 +309,9 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[6].feedback_filter.gain] "units.6.feedbackFilter.gain" "Unit 7 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[6].feedback_filter.sections] "units.6.feedbackFilter.sections" "Unit 7 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[6].filter_post] "units.6.filterPost" "Unit 7 post filter" { false }
-    float [units[6].output_gain] "units.6.outputGain" "Unit 7 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[6].output_gain] "units.6.outputGain" "Unit 7 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[6].output_pan] "units.6.outputPan" "Unit 7 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[6].next_send] "units.6.nextSend" "Unit 7 next send" { Gain, Linear, -1.0, 1.0, 0.0 }
+    float [units[6].next_send] "units.6.nextSend" "Unit 7 next send" { None, Linear, -1.0, 1.0, 0.0 }
     toggle [units[7].enabled] "units.7.enabled" "Unit 8 enabled" { false }
     float [units[7].input_gain] "units.7.inputGain" "Unit 8 input" { Gain, Linear, 0.0, 2.0, 1.0 }
     float [units[7].input_pan] "units.7.inputPan" "Unit 8 input pan" { Pan, Linear, -1.0, 1.0, 0.0 }
@@ -336,7 +336,7 @@ param_set!(EchoBankParams, "Echo bank", {
     float [units[7].feedback_filter.gain] "units.7.feedbackFilter.gain" "Unit 8 feedback filter gain" { Gain, Linear, 0.1, 2.0, 1.0 }
     int [units[7].feedback_filter.sections] "units.7.feedbackFilter.sections" "Unit 8 feedback filter sections" { None, 1, 3, 1 }
     toggle [units[7].filter_post] "units.7.filterPost" "Unit 8 post filter" { false }
-    float [units[7].output_gain] "units.7.outputGain" "Unit 8 output" { Gain, Linear, -1.0, 1.0, 1.0 }
+    float [units[7].output_gain] "units.7.outputGain" "Unit 8 output" { None, Linear, -1.0, 1.0, 1.0 }
     float [units[7].output_pan] "units.7.outputPan" "Unit 8 output pan" { Pan, Linear, -1.0, 1.0, 0.0 }
-    float [units[7].next_send] "units.7.nextSend" "Unit 8 next send (no destination)" { Gain, Linear, 0.0, 0.0, 0.0 }
+    float [units[7].next_send] "units.7.nextSend" "Unit 8 next send (no destination)" { None, Linear, 0.0, 0.0, 0.0 }
 });

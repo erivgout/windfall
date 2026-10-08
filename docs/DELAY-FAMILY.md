@@ -136,14 +136,16 @@ all crossover, last-output and valid-history state without touching heap owners.
 
 Sample rates: finite 1–384000 Hz are supported; finite out-of-range rates clamp;
 NaN/Inf fall back to 48000 Hz. `actual_sample_rate()` exposes this policy.
-Constructors hold empty rings; only `prepare` allocates histories, replacing
+Constructors hold empty rings; only preparation allocates histories, replacing
 and releasing all old histories on the control side. Exact-length ring storage
 is `ceil(seconds * actual_rate)+1` f32 values per channel; no power-of-two padding
 or uncharged tap vectors. Reset invalidates by counters in constant time.
 `prepared_bytes()` includes the entire inline processor and heap histories;
-allocator bookkeeping is excluded. `preparation_bytes(rate)` gives the same
-payload bound before allocating, for control-side admission. Preparing at a
-lower rate replaces every ring instead of retaining high-rate capacity.
+allocator bookkeeping is excluded. `preparation_bytes(rate)` remains a final
+payload estimate for compatibility; an estimate alone does not admit memory or
+guarantee allocation. `preparation_requirements(rate)` and `try_prepare` supply
+checked sizing, peak accounting and observable refusal. Preparing at a lower
+rate replaces every ring instead of retaining high-rate capacity.
 No process/reset/set_params/set_tempo allocation, reallocation, free, lock, wait
 or IO; no heap clones. One caller-owned block at a time. Dropping is control-side.
 
@@ -154,12 +156,82 @@ FrequencySplit}`. Both implement `Effect`, all complete settings implement
 `ParamSet`, all persisted structs/enums derive serde and TS without autoexport.
 Descriptor order is explicit in source and tested against nested JSON paths.
 
+Both processor module paths also expose the same owned preparation types:
+`PreparationBudget`, `PreparationRequirements`, `PreparationError`,
+`PreparationRefusal`, `PreparationStatus`. The processor methods are:
+
+```rust
+fn preparation_requirements(&self, sample_rate: f32)
+    -> Result<PreparationRequirements, PreparationError>;
+fn try_prepare(&mut self, sample_rate: f32, max_block: usize,
+    budget: PreparationBudget) -> Result<(), PreparationError>;
+fn preparation_status(&self) -> PreparationStatus;
+```
+
+`PreparationRequirements` holds the sanitized `sample_rate`, `retained_bytes`
+and `peak_bytes`. `PreparationBudget` has independent `retained_bytes` and
+`peak_bytes` limits. Retained payload includes the inline processor and new
+history capacities. Peak adds all existing history capacities and the fixed
+staging headers (640 bytes for sixteen histories, 1280 for thirty-two on this
+64-bit target). Ordinary call-stack temporaries and allocator bookkeeping are
+excluded; hosts must reserve their own overhead/headroom. Every size addition,
+multiplication and each Vec's `isize` pointer-offset limit is checked before
+reservation. `try_reserve_exact` allocates empty vectors fallibly, then resize
+initializes within reserved capacity; there is no `vec![0; capacity]` abort path.
+Actual capacities are checked against admission limits before publishing.
+
+All sixteen/thirty-two histories stage before any live sample rate, parameter,
+filter, ramp, tap, history or clock mutation. On success, histories swap and
+fixed inline preparation/reset applies the existing sanitized parameter target
+and tempo. Old histories retire on the calling control thread. On failure,
+partial staged histories retire there and the previous prepared processor
+remains usable with exactly the same audio state. The only live change on
+refusal is its copyable status latch; no time, rate, band or unit is shortened.
+
+Errors are `CapacityOverflow { maximum_delay_samples, history_count }`,
+`RetainedBudgetExceeded { required_bytes, budget_bytes }`,
+`PeakBudgetExceeded { required_bytes, budget_bytes }`, or
+`ReservationFailed { history_index, requested_bytes }`. The latter identifies
+`2 * unit_or_band + channel`, left then right. Retained-budget refusal takes
+precedence if both limits fail. Errors implement Display/Error and own no heap
+data. `PreparationStatus` exposes `is_prepared` and `last_refusal`, an optional
+`PreparationRefusal { sample_rate, error }` recording the sanitized requested
+clock that was refused. `actual_sample_rate()` continues to report the old
+clock. A first refusal leaves `is_prepared=false` and the existing sanitized
+passthrough behavior, rather than installing a different clock. Reset, no-ops,
+setters and processing preserve the latch; only successful preparation clears
+it. `preparation_requirements` is a read-only query and does not latch errors.
+
+The existing `Effect::prepare` signature is unchanged and delegates to
+`try_prepare` with `PreparationBudget::UNLIMITED`. It too retains prior state
+and latches any refusal. Legacy callers must check `preparation_status()` off
+thread before treating a preparation as successful. Concrete host integration
+must use `try_prepare` with actual admitted limits, not the unlimited wrapper.
+`max_block` retains the Effect argument shape; these frame-based processors do
+not allocate block-sized scratch. None of these preparation methods belongs in
+an audio callback. Static `preparation_bytes` saturates to `usize::MAX` if its
+checked calculation cannot be represented; the fallible API reports the error.
+Preparation requires exclusive ownership of a detached/stopped processor.
+Hosts prepare a candidate off thread while the distinct installed plan remains
+active; this API does not permit racing preparation against a callback.
+
 EchoBank has 220 descriptors: four global controls followed by 27 per unit.
 Unit offset is `4 + 27*i`: enabled, inputGain, inputPan, sync, timeMs, division,
 stereoOffsetMs, feedback, feedbackMode, feedbackPan, separation, six input-filter
 fields (mode/frequencyHz/q/gainDb/gain/sections), the same six feedback-filter
 fields, filterPost, outputGain, outputPan, nextSend. The last nextSend is a
 zero-span reserved field, forcibly sanitized to zero, with no ninth destination.
+All outputGain and nextSend descriptors use `None` for their signed coefficients;
+their indices, ranges, defaults, smoothing and JSON are unchanged. Input and
+filter gain descriptors remain `Gain`. Read-only source tracing of
+`apps/desktop/src/features/params/format.ts` and
+`apps/desktop/src/components/audio/units.ts` establishes why this matters:
+`gain` formats through `20*log10(value)` (nonpositive becomes `−∞ dB`) and parses
+through `10^(dB/20)` (`"-1"` becomes positive 0.891251, displayed infinity becomes
+zero). `none` instead uses the signed plain number and parseNumber paths:
+−1 displays as `−1.00` and parses as −1. This is source behavior, not an executed
+editor acceptance claim. Native regressions check all signed metadata fields,
+stable indices/JSON and independently timed negative output/send impulses.
 FrequencyDelay has 71 descriptors: dry, wet, feedback, scale, shortRange,
 bandwidth, split, then delayMs/level/pan/enabled at `7 + 4*i` for bands 0–15.
 Missing objects/fields use serde defaults. Parameter setters also sanitize
@@ -182,14 +254,20 @@ boxed variants for the two new `AnyEffect` arms so the 35 KiB EchoBank state
 does not enlarge every existing effect slot. All owner retirement remains
 off callback under the utility repair contract.
 
-The proposed host preparation contract charges `preparation_bytes()` to a
-project/rack memory budget before construction, refuses an over-budget plan
-with the required bytes visible to the user, and retains the current plan.
-It must neither shorten times nor clamp a requested device rate to save memory.
-This source prepare API is infallible like `Effect`; it has a finite per-instance
-bound, not a project-wide admission policy. At 384 kHz ten banks exceed 6 GB.
+The proposed host contract reserves retained and peak requirements against the
+project/rack budget, then invokes the concrete `try_prepare` seam off thread.
+Only an `Ok(())` instance may be installed in audio. A typed refusal releases
+the reservation and candidate off thread, reports required/budget or failing
+history bytes to the user, and retains the current plan. Charge other live/
+retiring plan owners separately: an empty candidate's peak includes its own
+staging, not a different rack's old processor. Budget admission cannot replace
+checking the actual allocation result. Hosts must neither shorten times nor
+clamp a requested device rate to save memory. The new API is per-instance;
+project-wide admission, installation and retirement remain integration work.
+At 384 kHz ten banks still exceed 6 GB; replacing a live bank at that rate
+temporarily needs approximately 1.229 GB of its own payload.
 
-## Evidence
+## Original checkpoint evidence (immutable 6326f883)
 
 Windows/MSVC, 2026-10-08, isolated task target, one Cargo job and one Rust test
 thread. No workspace, desktop, Tauri or UI build was run. All TS export tests
@@ -258,3 +336,59 @@ Actual slot bypass/dormant restoration, native/live versus offline host paths,
 project history/serde migration, generated inventory, drawn editors, device
 deadlines and listening remain outside this first source window. No acoustic
 equivalence or full parity completion is claimed.
+
+## R1 repair evidence (incremental child of 6326f883)
+
+2026-10-08, same Windows/MSVC task target and single job/test thread. Before
+the production edits, the new signed-descriptor regression failed with
+`Gain != None` at units.0.outputGain. The new fallible-API fixture then failed
+to compile against 6326 (`E0422`/`E0599`, missing types/methods). This safe RED
+step did not invoke the old infallible vector abort path or attempt OS OOM.
+
+Four private native tests exercise actual staging and reservation refusal.
+The test-only allocator returns null once for the selected valid, fallible
+history reservation; std's real `try_reserve_exact` reports the allocation
+error. The hook is scoped to that reservation, thread-local and absent from
+production. Every history position (sixteen bank, thirty-two frequency) is
+refused in turn. Tests account for each earlier staged allocation and its
+retirement, verify retained live bytes/clock/params/readiness/tail unchanged,
+and compare subsequent stereo samples bit-for-bit with an independently
+prepared, untouched processor while filter, tempo, gain and tap edits run.
+Legacy prepare is tested after partial staging, as are first refusal,
+unprepared passthrough, latch survival through reset and successful recovery.
+Private checked-size fixtures cover sample-count/byte-count/aggregate/header/
+retained/peak overflow without large reservations. Public tests reject budgets
+one byte below either limit, compare audio after refusal, then admit the exact
+limits at full 1/8000/48000/384000 Hz and reprepare down to 1 Hz. Callback
+allocator guards remain active after refusal and successful preparation.
+
+The repair adds 32 inline bytes to each processor for its copyable refusal
+latch; all history counts, lengths and per-unit/per-band figures above remain
+unchanged. Current retained payload at 1/8000/48000/384000 Hz is:
+
+- EchoBank: 37200 / 12835600 / 76835600 / 614435600 bytes (inline 35536).
+- FrequencyDelay: 4480 / 1028352 / 6148352 / 49156352 bytes (inline 4224).
+
+At 384000 Hz this is still 614.4 MB / 49.2 MB, without shortening any delay.
+Initial preparation peak is 614436240 / 49157632 bytes. Replacing a live
+instance at the same rate peaks at 1228836304 / 98309760 bytes. At all four
+rates, same-rate replacement peaks reported by checked payload accounting are:
+
+- EchoBank: 39504 / 25636304 / 153636304 / 1228836304 bytes.
+- FrequencyDelay: 6016 / 2053760 / 12293760 / 98309760 bytes.
+
+132 library tests and 26 release integration tests pass; the original CPU
+observation is the sole ignored test in this repair run. All twenty-four
+original signal/allocator cases run again, including full 25-second bank and
+1000-ms frequency impulses at all four rates. Strict DSP Clippy, owned
+formatting and diff checks pass. The earlier CPU observation and its counts
+remain attributed to immutable 6326, and were not rerun solely to update the
+count. DSP callback equations and frame clocks were not changed by this
+repair; the P3 positional-control naming judgement remains a suggestion.
+
+Repair validation uses the commands above except that the release invocation
+omits `--include-ignored`. `cargo clippy -p windfall-dsp --lib --tests -- -D warnings`
+also checks the private test-only allocator/rollback code. The new preparation
+cases are part of the library run. Foundation R2 review, fallible host admission,
+saturating engine tail aggregation, registry/project integration, drawn editors and all other
+remaining E3 work remain pending; this repair does not close parity.

@@ -1,9 +1,14 @@
 //! Eight independently controlled, filtered, feed-forward linked stereo echoes.
 //! The source/time/headroom contract is in docs/DELAY-FAMILY.md.
 mod params;
+mod preparation;
 pub(crate) mod support;
 use crate::{Effect, ParamSet, SelectableFilter, SelectableFilterMode, SelectableFilterParams};
 pub use params::*;
+pub use preparation::{
+    PreparationBudget, PreparationError, PreparationRefusal, PreparationRequirements,
+    PreparationStatus,
+};
 use support::{History, Ramps, Tap, audio, balance, bounded};
 
 /// Number of units; persisted unit indices are always 0..8.
@@ -115,9 +120,6 @@ impl Default for Unit {
 }
 impl Unit {
     fn prepare(&mut self, rate: f32) {
-        for line in &mut self.lines {
-            line.prepare((f64::from(ECHO_MAX_SECONDS) * f64::from(rate)).ceil() as usize);
-        }
         for filter in [&mut self.pre, &mut self.post, &mut self.feedback_filter] {
             filter.prepare(rate);
         }
@@ -251,6 +253,7 @@ pub struct EchoBank {
     tempo: f32,
     prepared: bool,
     horizon: usize,
+    refusal: Option<PreparationRefusal>,
 }
 impl Default for EchoBank {
     fn default() -> Self {
@@ -262,16 +265,101 @@ impl Default for EchoBank {
             tempo: 120.0,
             prepared: false,
             horizon: 0,
+            refusal: None,
         }
     }
 }
 impl EchoBank {
-    /// Payload bytes to admit before control-side preparation. This includes
-    /// the inline processor; allocator bookkeeping is platform-specific.
+    /// Final payload estimate, including inline state. Use the checked
+    /// requirements and `try_prepare` to admit peak storage and handle refusal.
     pub fn preparation_bytes(sample_rate: f32) -> usize {
-        let samples =
-            (f64::from(ECHO_MAX_SECONDS) * f64::from(support::rate(sample_rate))).ceil() as usize;
-        std::mem::size_of::<Self>() + ECHO_UNITS * 2 * (samples + 1) * std::mem::size_of::<f32>()
+        PreparationRequirements::checked::<16>(
+            support::rate(sample_rate),
+            Self::maximum(sample_rate),
+            size_of::<Self>(),
+            0,
+        )
+        .map_or(usize::MAX, |r| r.retained_bytes)
+    }
+    fn maximum(sample_rate: f32) -> usize {
+        (f64::from(ECHO_MAX_SECONDS) * f64::from(support::rate(sample_rate))).ceil() as usize
+    }
+    /// Checked requirements for replacing this instance, retaining its old
+    /// histories until ALL reservations succeed. Read-only; no allocation.
+    pub fn preparation_requirements(
+        &self,
+        sample_rate: f32,
+    ) -> Result<PreparationRequirements, PreparationError> {
+        PreparationRequirements::checked::<16>(
+            support::rate(sample_rate),
+            Self::maximum(sample_rate),
+            size_of::<Self>(),
+            self.prepared_bytes() - size_of::<Self>(),
+        )
+    }
+    /// Control-thread only. A refusal changes only the observable status;
+    /// clock, params, ramps, filters, taps and audio histories remain intact.
+    /// `max_block` is accepted for Effect compatibility; work is frame-based.
+    pub fn try_prepare(
+        &mut self,
+        sample_rate: f32,
+        _max_block: usize,
+        budget: PreparationBudget,
+    ) -> Result<(), PreparationError> {
+        let sample_rate = support::rate(sample_rate);
+        let result = self.prepare_replacement(sample_rate, budget);
+        self.refusal = result
+            .err()
+            .map(|error| PreparationRefusal { sample_rate, error });
+        result
+    }
+    pub fn preparation_status(&self) -> PreparationStatus {
+        PreparationStatus {
+            is_prepared: self.prepared,
+            last_refusal: self.refusal,
+        }
+    }
+    fn prepare_replacement(
+        &mut self,
+        sample_rate: f32,
+        budget: PreparationBudget,
+    ) -> Result<(), PreparationError> {
+        let mut staged = support::stage_histories::<16>(
+            sample_rate,
+            Self::maximum(sample_rate),
+            size_of::<Self>(),
+            self.prepared_bytes() - size_of::<Self>(),
+            budget,
+        )?;
+        // No live mutation above. All remaining operations are infallible,
+        // fixed inline work. Old histories retire with staged on this thread.
+        for (live, replacement) in self
+            .units
+            .iter_mut()
+            .flat_map(|u| &mut u.lines)
+            .zip(&mut staged)
+        {
+            std::mem::swap(live, replacement);
+        }
+        self.rate = sample_rate;
+        for unit in &mut self.units {
+            unit.prepare(self.rate);
+        }
+        self.controls.prepare(self.rate);
+        self.prepared = true;
+        self.horizon = self
+            .units
+            .iter()
+            .map(|u| {
+                (ECHO_MAX_SECONDS * self.rate) as usize
+                    + u.pre.tail()
+                    + u.post.tail()
+                    + u.feedback_filter.tail()
+            })
+            .sum::<usize>()
+            + (self.rate * 0.1) as usize;
+        self.reset();
+        Ok(())
     }
     /// Rate actually used after finite-range sanitation.
     pub fn actual_sample_rate(&self) -> f32 {
@@ -305,25 +393,8 @@ impl EchoBank {
 }
 impl Effect for EchoBank {
     type Params = EchoBankParams;
-    fn prepare(&mut self, sample_rate: f32, _max_block: usize) {
-        self.rate = support::rate(sample_rate);
-        for unit in &mut self.units {
-            unit.prepare(self.rate);
-        }
-        self.controls.prepare(self.rate);
-        self.prepared = true;
-        self.horizon = self
-            .units
-            .iter()
-            .map(|u| {
-                (ECHO_MAX_SECONDS * self.rate) as usize
-                    + u.pre.tail()
-                    + u.post.tail()
-                    + u.feedback_filter.tail()
-            })
-            .sum::<usize>()
-            + (self.rate * 0.1) as usize;
-        self.reset();
+    fn prepare(&mut self, sample_rate: f32, max_block: usize) {
+        let _ = self.try_prepare(sample_rate, max_block, PreparationBudget::UNLIMITED);
     }
     fn reset(&mut self) {
         for unit in &mut self.units {

@@ -5,7 +5,7 @@ use std::f64::consts::PI;
 use std::time::Instant;
 use windfall_dsp::echo_bank::*;
 use windfall_dsp::frequency_delay::*;
-use windfall_dsp::{Effect, NoteDivision, ParamKind, ParamSet};
+use windfall_dsp::{Effect, NoteDivision, ParamKind, ParamScale, ParamSet, ParamUnit};
 
 struct WatchedAllocator;
 thread_local! { static WATCH: Cell<bool> = const { Cell::new(false) }; static CALLS: Cell<usize> = const { Cell::new(0) }; }
@@ -139,6 +139,69 @@ fn parameter_contract_has_all_stable_nested_controls_and_legacy_defaults() {
     check_params::<FrequencyDelayParams>(71);
     assert_eq!(EchoBankParams::index_of("units.0.timeMs"), Some(8));
     assert_eq!(FrequencyDelayParams::index_of("bands.15.pan"), Some(69));
+}
+
+#[test]
+fn signed_bank_descriptors_preserve_polarity_units_indices_json_and_audio() {
+    let descriptors = EchoBankParams::descriptors();
+    let defaults = EchoBankParams::default();
+    for unit in 0..8 {
+        for (field, offset, default) in [("outputGain", 24, 1.0), ("nextSend", 26, 0.0)] {
+            let index = 4 + 27 * unit + offset;
+            let id = format!("units.{unit}.{field}");
+            let d = &descriptors[index];
+            assert_eq!(EchoBankParams::index_of(&id), Some(index));
+            assert_eq!(d.id, id);
+            assert_eq!(d.kind, ParamKind::Float);
+            assert_eq!(d.unit, ParamUnit::None, "signed coefficient {id}");
+            assert_eq!(d.scale, ParamScale::Linear);
+            let reserved = unit == 7 && field == "nextSend";
+            assert_eq!(
+                (d.min, d.max),
+                if reserved { (0.0, 0.0) } else { (-1.0, 1.0) }
+            );
+            assert_eq!(d.default, default);
+            assert_eq!(defaults.get(index), Some(default));
+            let mut p = defaults;
+            assert!(p.set(index, -1.0));
+            let json = serde_json::to_value(p).unwrap();
+            assert_eq!(
+                json["units"][unit][field],
+                if reserved { 0.0 } else { -1.0 }
+            );
+            assert_eq!(serde_json::from_value::<EchoBankParams>(json).unwrap(), p);
+        }
+        for offset in [1, 15, 21] {
+            assert_eq!(descriptors[4 + 27 * unit + offset].unit, ParamUnit::Gain);
+        }
+    }
+    // Independent paths: first echo at 40 frames with output -1; its negative
+    // send reaches unit 1 at 40+24 frames, whose output -1 restores polarity.
+    let mut p = bank_params();
+    p.units[0].output_gain = -1.0;
+    p.units[0].next_send = -1.0;
+    p.units[1].enabled = true;
+    p.units[1].input_gain = 0.0;
+    p.units[1].time_ms = 3.0;
+    p.units[1].output_gain = -1.0;
+    let mut e = EchoBank::default();
+    e.prepare(8000.0, 1);
+    e.set_params(&p);
+    let (mut l, mut r) = ([0.0; 100], [0.0; 100]);
+    l[0] = 0.75;
+    r[0] = -0.25;
+    watched(|| run(&mut e, &mut l, &mut r, &[1, 7, 31]));
+    for n in 0..100 {
+        let sign = if n == 40 {
+            -1.0
+        } else if n == 64 {
+            1.0
+        } else {
+            0.0
+        };
+        assert_eq!(l[n], 0.75 * sign);
+        assert_eq!(r[n], -0.25 * sign);
+    }
 }
 
 #[test]
@@ -682,6 +745,127 @@ fn preparation_rate_policy_and_reprepare_charge_only_retained_storage() {
             std::mem::size_of::<FrequencyDelay>() + 32 * (actual.ceil() as usize + 1) * 4
         );
     }
+}
+
+#[test]
+fn budgeted_preparation_refuses_atomically_and_then_accepts_every_full_rate() {
+    macro_rules! exercise {
+        ($processor:ty, $params:expr) => {{
+            let (mut subject, mut reference) = (<$processor>::default(), <$processor>::default());
+            let p = $params;
+            for e in [&mut subject, &mut reference] {
+                e.prepare(8000.0, 64);
+                e.set_params(&p);
+                e.set_tempo(137.0);
+                e.process(&mut [0.4; 237], &mut [-0.2; 237]);
+            }
+            let original = (
+                subject.actual_sample_rate(),
+                subject.prepared_bytes(),
+                subject.params(),
+                subject.tail_samples(),
+                subject.gap_samples(),
+                subject.warm_up_samples(),
+                subject.latency_transition_samples_remaining(),
+            );
+            let requirements = subject.preparation_requirements(384000.0).unwrap();
+            for (budget, expected) in [
+                (
+                    PreparationBudget {
+                        retained_bytes: requirements.retained_bytes - 1,
+                        peak_bytes: usize::MAX,
+                    },
+                    PreparationError::RetainedBudgetExceeded {
+                        required_bytes: requirements.retained_bytes,
+                        budget_bytes: requirements.retained_bytes - 1,
+                    },
+                ),
+                (
+                    PreparationBudget {
+                        retained_bytes: usize::MAX,
+                        peak_bytes: requirements.peak_bytes - 1,
+                    },
+                    PreparationError::PeakBudgetExceeded {
+                        required_bytes: requirements.peak_bytes,
+                        budget_bytes: requirements.peak_bytes - 1,
+                    },
+                ),
+            ] {
+                let result = subject.try_prepare(384000.0, 64, budget);
+                assert_eq!(result, Err(expected));
+                let status = subject.preparation_status();
+                assert!(status.is_prepared);
+                assert_eq!(
+                    status.last_refusal,
+                    Some(PreparationRefusal {
+                        sample_rate: 384000.0,
+                        error: expected
+                    })
+                );
+                assert_eq!(
+                    (
+                        subject.actual_sample_rate(),
+                        subject.prepared_bytes(),
+                        subject.params(),
+                        subject.tail_samples(),
+                        subject.gap_samples(),
+                        subject.warm_up_samples(),
+                        subject.latency_transition_samples_remaining()
+                    ),
+                    original
+                );
+            }
+            for _ in 0..30 {
+                let (mut sl, mut sr, mut rl, mut rr) =
+                    ([0.3; 127], [-0.1; 127], [0.3; 127], [-0.1; 127]);
+                watched(|| {
+                    subject.set_params(&p);
+                    subject.set_tempo(137.0);
+                    subject.process(&mut sl, &mut sr);
+                    reference.process(&mut rl, &mut rr);
+                    let _ = subject.preparation_status();
+                });
+                assert_eq!(sl, rl);
+                assert_eq!(sr, rr);
+                assert!(subject.preparation_status().last_refusal.is_some());
+            }
+            // Exact budget boundaries admit the entire declared range, and a
+            // lower-rate replacement releases the preceding large storage.
+            for sample_rate in [1.0, 8000.0, 48000.0, 384000.0, 1.0] {
+                let req = subject.preparation_requirements(sample_rate).unwrap();
+                assert_eq!(
+                    req.retained_bytes,
+                    <$processor>::preparation_bytes(sample_rate)
+                );
+                let budget = PreparationBudget {
+                    retained_bytes: req.retained_bytes,
+                    peak_bytes: req.peak_bytes,
+                };
+                assert_eq!(subject.try_prepare(sample_rate, 64, budget), Ok(()));
+                assert_eq!(subject.prepared_bytes(), req.retained_bytes);
+                assert_eq!(subject.actual_sample_rate(), sample_rate);
+                assert!(subject.preparation_status().is_prepared);
+                assert_eq!(subject.preparation_status().last_refusal, None);
+                println!(
+                    "{} rate={sample_rate} retained={} same-rate replacement peak={}",
+                    stringify!($processor),
+                    subject.prepared_bytes(),
+                    subject
+                        .preparation_requirements(sample_rate)
+                        .unwrap()
+                        .peak_bytes
+                );
+                watched(|| {
+                    subject.reset();
+                    subject.set_params(&p);
+                    subject.set_tempo(137.0);
+                    subject.process(&mut [0.2; 16], &mut [-0.1; 16]);
+                });
+            }
+        }};
+    }
+    exercise!(EchoBank, EchoBankParams::default());
+    exercise!(FrequencyDelay, FrequencyDelayParams::default());
 }
 
 fn automation<E: Effect>(e: &mut E, rate: f32, blocks: &[usize]) -> (Vec<f32>, Vec<f32>) {
