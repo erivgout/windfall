@@ -110,6 +110,11 @@ patches through the existing store. No derived buffer or job state is persisted.
 
 ## Verification and quality limits
 
+The follow-up [R1 repair record](SAMPLER-REPAIRS.md) documents guarded import
+candidate preparation, musical no-op runtime recovery, exact restored-source
+publication and symmetric clip source checks. File-import routing belongs to
+the browser owner and requires combined integration validation.
+
 Verification was run on Windows in this isolated worktree with one Cargo process,
 `CARGO_BUILD_JOBS=1`, a worktree-local target directory and isolated temporary
 TypeScript exports. Results below are local engineering evidence.

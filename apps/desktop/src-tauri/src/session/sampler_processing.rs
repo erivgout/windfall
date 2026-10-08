@@ -1,9 +1,169 @@
 //! Checked sampler preparation, outside document and recording locks.
-use super::Session;
+use super::{Session, State};
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
-use windfall_project::{Command, DispatchResult};
+use windfall_core::AudioBuffer;
+use windfall_engine::{PreparedProject, SamplePool};
+use windfall_project::{Applied, Command, DispatchResult, Document, SampleId};
+
+/// Candidate import/edit snapshot. The caller owns recording/library exclusion
+/// when taking this ticket and committing its result; preparation takes no locks.
+pub(super) struct SampleEditTicket {
+    session: Session,
+    command: Command,
+    applied: Applied,
+    gesture: Option<u64>,
+    document: Document,
+    original_pool: SamplePool,
+    candidate_pool: SamplePool,
+    loading: HashSet<SampleId>,
+    generation: u64,
+    edits: u64,
+    replacements: u64,
+    request: Option<u64>,
+}
+
+pub(super) struct PreparedSampleEdit {
+    ticket: SampleEditTicket,
+    prepared: PreparedProject,
+}
+
+impl SampleEditTicket {
+    fn current(&self) -> bool {
+        self.request
+            .is_none_or(|id| self.session.inner.sampler_ticket.load(Ordering::Acquire) == id)
+    }
+
+    /// Slow DSP/compilation; call only after dropping State/library guards.
+    /// Does not acquire recording exclusion, including for recording-finish imports.
+    pub(super) fn prepare(self) -> Result<PreparedSampleEdit, String> {
+        let pool = self
+            .candidate_pool
+            .prepare_samplers(
+                self.document.project(),
+                &mut || self.current(),
+                &mut |_, done, total| {
+                    if self.request.is_some() && self.current() {
+                        self.session
+                            .inner
+                            .sampler_done
+                            .store(u32::from(done), Ordering::Release);
+                        self.session
+                            .inner
+                            .sampler_total
+                            .store(u32::from(total), Ordering::Release);
+                    }
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        if !self.current() {
+            return Err("Sampler preparation was cancelled.".into());
+        }
+        let prepared =
+            windfall_engine::Controller::compile_prepared_project(self.document.project(), &pool);
+        Ok(PreparedSampleEdit {
+            ticket: self,
+            prepared,
+        })
+    }
+}
+
+impl PreparedSampleEdit {
+    /// Final caller-held recording -> library -> State exclusion is required.
+    /// Caller must additionally recheck file/root/version/project-directory guards.
+    pub(super) fn commit(self, state: &mut State) -> Result<DispatchResult, String> {
+        let ticket = self.ticket;
+        if !ticket.current() {
+            return Err("Sampler preparation was cancelled.".into());
+        }
+        if state.generation != ticket.generation
+            || state.edits != ticket.edits
+            || state.replacements != ticket.replacements
+        {
+            return Err(
+                "The project changed while sampler audio was being prepared. Try again.".into(),
+            );
+        }
+        if !state.pool.same_sources(&ticket.original_pool) || state.loading != ticket.loading {
+            return Err(
+                "The source changed while sampler audio was being prepared. Try again.".into(),
+            );
+        }
+        let applied = if ticket.applied.touched.is_empty() {
+            // Preserve even an open gesture: this publication only repairs runtime.
+            ticket.applied
+        } else {
+            state
+                .document
+                .dispatch(ticket.command, ticket.gesture)
+                .map_err(|error| error.to_string())?
+        };
+        Ok(DispatchResult {
+            created: applied.created,
+            patch: ticket
+                .session
+                .publish_prepared(state, &applied.touched, self.prepared),
+        })
+    }
+}
 
 impl Session {
+    /// Snapshot a candidate under the caller's existing lock order. Overlays are
+    /// private until successful publication and ignored for musical no-ops.
+    pub(super) fn sample_edit_ticket(
+        &self,
+        state: &State,
+        command: Command,
+        gesture: Option<u64>,
+        sources: Vec<(SampleId, AudioBuffer)>,
+    ) -> Result<SampleEditTicket, String> {
+        let mut document = state.document.clone();
+        let applied = document
+            .dispatch(command.clone(), gesture)
+            .map_err(|error| error.to_string())?;
+        let mut candidate_pool = state.pool.clone();
+        if !applied.touched.is_empty() {
+            for (id, audio) in sources {
+                if !document
+                    .project()
+                    .samples
+                    .iter()
+                    .any(|asset| asset.id == id)
+                {
+                    return Err("The candidate source is not registered in the project.".into());
+                }
+                candidate_pool.insert(id, audio);
+            }
+            if applied.touched.samples {
+                for asset in &document.project().samples {
+                    if !candidate_pool.contains(asset.id)
+                        && let Ok(path) = super::samples::locate(
+                            asset,
+                            state.sample_dir.as_deref(),
+                            &self.inner.factory_dir,
+                        )
+                        && let Some(audio) = self.inner.cache.peek(&path)
+                    {
+                        candidate_pool.insert(asset.id, audio);
+                    }
+                }
+            }
+        }
+        Ok(SampleEditTicket {
+            session: self.clone(),
+            command,
+            applied,
+            gesture,
+            document,
+            original_pool: state.pool.clone(),
+            candidate_pool,
+            loading: state.loading.clone(),
+            generation: state.generation,
+            edits: state.edits,
+            replacements: state.replacements,
+            request: None,
+        })
+    }
     pub fn sampler_preparation_begin(&self) -> Result<u64, String> {
         drop(self.recording_idle()?);
         let _state = self.state();
@@ -63,77 +223,24 @@ impl Session {
         request: Option<u64>,
     ) -> Result<DispatchResult, String> {
         drop(self.recording_idle()?);
-        let (mut document, pool, generation, edits, replacements) = {
+        let mut ticket = {
             let state = self.state();
-            (
-                state.document.clone(),
-                state.pool.clone(),
-                state.generation,
-                state.edits,
-                state.replacements,
-            )
+            self.sample_edit_ticket(&state, command, gesture, Vec::new())?
         };
-        document
-            .dispatch(command.clone(), gesture)
-            .map_err(|error| error.to_string())?;
-        let current =
-            || request.is_none_or(|id| self.inner.sampler_ticket.load(Ordering::Acquire) == id);
-        let pool = pool
-            .prepare_samplers(
-                document.project(),
-                &mut || current(),
-                &mut |_, done, total| {
-                    if current() {
-                        self.inner
-                            .sampler_done
-                            .store(u32::from(done), Ordering::Release);
-                        self.inner
-                            .sampler_total
-                            .store(u32::from(total), Ordering::Release);
-                    }
-                },
-            )
-            .map_err(|error| error.to_string())?;
-        if !current() {
-            return Err("Sampler preparation was cancelled.".into());
-        }
-        let prepared =
-            windfall_engine::Controller::compile_prepared_project(document.project(), &pool);
+        ticket.request = request;
+        self.finish_sample_edit(ticket)
+    }
+
+    pub(super) fn finish_sample_edit(
+        &self,
+        ticket: SampleEditTicket,
+    ) -> Result<DispatchResult, String> {
+        let prepared = ticket.prepare()?;
         #[cfg(test)]
         self.pause("sampler:prepared");
         let _recording = self.recording_idle()?;
         let mut state = self.state();
-        if !current() {
-            return Err("Sampler preparation was cancelled.".into());
-        }
-        if state.generation != generation
-            || state.edits != edits
-            || state.replacements != replacements
-        {
-            return Err(
-                "The project changed while sampler audio was being prepared. Try again.".into(),
-            );
-        }
-        if pool.len() != state.pool.len()
-            || pool.iter().any(|(id, old)| {
-                state
-                    .pool
-                    .get(id)
-                    .is_none_or(|now| !std::ptr::eq(old.samples(), now.samples()))
-            })
-        {
-            return Err(
-                "The source changed while sampler audio was being prepared. Try again.".into(),
-            );
-        }
-        let applied = state
-            .document
-            .dispatch(command, gesture)
-            .map_err(|error| error.to_string())?;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish_prepared(&mut state, &applied.touched, prepared),
-        })
+        prepared.commit(&mut state)
     }
 
     /// Source reload/attachment can need a bank without a musical settings edit.
@@ -207,15 +314,7 @@ impl Session {
             if state.generation != generation || state.replacements != replacements {
                 return false;
             }
-            if state.edits != edits
-                || pool.len() != state.pool.len()
-                || pool.iter().any(|(id, old)| {
-                    state
-                        .pool
-                        .get(id)
-                        .is_none_or(|now| !std::ptr::eq(old.samples(), now.samples()))
-                })
-            {
+            if state.edits != edits || !pool.same_sources(&state.pool) {
                 continue;
             }
             state

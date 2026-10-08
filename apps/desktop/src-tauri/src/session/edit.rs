@@ -103,13 +103,16 @@ impl Session {
         let _recording = self.recording_idle()?;
         let mut state = self.state();
         let mut candidate = state.document.clone();
-        candidate
+        let candidate_applied = candidate
             .dispatch(command.clone(), gesture)
             .map_err(|error| error.to_string())?;
-        if state.pool.needs_sampler_preparation(candidate.project()) {
+        if candidate_applied.touched.samples
+            || state.pool.needs_sampler_preparation(candidate.project())
+        {
+            let ticket = self.sample_edit_ticket(&state, command, gesture, Vec::new())?;
             drop(state);
             drop(_recording);
-            return self.prepare_sampler_edit(command, gesture, None);
+            return self.finish_sample_edit(ticket);
         }
         let applied = state
             .document
@@ -253,8 +256,16 @@ impl Session {
         touched: &Touched,
         prepared: Option<windfall_engine::PreparedProject>,
     ) -> ProjectPatch {
-        let patch = state.document.patch(touched);
-        if touched.samples {
+        let patch = if prepared.is_some() && touched.is_empty() {
+            state.document.unchanged_patch()
+        } else {
+            state.document.patch(touched)
+        };
+        if let Some(prepared) = &prepared
+            && !touched.is_empty()
+        {
+            self.sync_prepared_samples(state, prepared.sampler_pool());
+        } else if touched.samples {
             self.sync_samples(state);
         }
         if !touched.is_empty() {
@@ -271,16 +282,17 @@ impl Session {
                     state.midi_target = None;
                 }
             }
-            if let Some(prepared) = prepared {
-                state
-                    .pool
-                    .install_sampler_preparation(prepared.sampler_pool());
-                self.controller()
-                    .set_prepared_project(state.document.project(), prepared);
-                self.sync_transport();
-            } else {
-                self.push_project(state);
-            }
+        }
+        // Runtime recovery can succeed independently of a musical edit.
+        if let Some(prepared) = prepared {
+            state
+                .pool
+                .install_sampler_preparation(prepared.sampler_pool());
+            self.controller()
+                .set_prepared_project(state.document.project(), prepared);
+            self.sync_transport();
+        } else if !touched.is_empty() {
+            self.push_project(state);
         }
         self.emit(Event::ProjectPatch(patch.clone()));
         patch
@@ -331,7 +343,7 @@ impl Session {
     fn prepare_history(&self, action: HistoryMove) -> Option<ProjectPatch> {
         drop(self.recording_idle().ok()?);
         for _ in 0..8 {
-            let (mut document, mut pool, directory, generation, edits, replacements) = {
+            let (mut document, mut pool, directory, generation, edits, replacements, loading) = {
                 let state = self.state();
                 (
                     state.document.clone(),
@@ -340,8 +352,10 @@ impl Session {
                     state.generation,
                     state.edits,
                     state.replacements,
+                    state.loading.clone(),
                 )
             };
+            let original_pool = pool.clone();
             action.apply(&mut document)?;
             for asset in &document.project().samples {
                 if !pool.contains(asset.id)
@@ -370,11 +384,8 @@ impl Session {
             if state.edits != edits {
                 continue;
             }
-            // Existing sources must also still be the ones compiled.
-            if state.pool.iter().any(|(id, audio)| {
-                pool.get(id)
-                    .is_none_or(|old| old.samples().as_ptr() != audio.samples().as_ptr())
-            }) {
+            // Resolved history sources are candidate additions, not the live baseline.
+            if !state.pool.same_sources(&original_pool) || state.loading != loading {
                 continue;
             }
             let touched = action.apply(&mut state.document)?;

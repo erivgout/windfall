@@ -160,6 +160,17 @@ impl SamplePool {
         self.samples.get(&id)
     }
 
+    /// Exact source snapshot equality, including additions/removals and empty audio.
+    /// Derived caches and plugin providers are deliberately outside this comparison.
+    pub fn same_sources(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && self.iter().all(|(id, audio)| {
+                other
+                    .get(id)
+                    .is_some_and(|now| audio.identity() == now.identity())
+            })
+    }
+
     /// Returns cached spectral audio for a playlist clip, preparing it if needed.
     /// Allocates and performs DSP on a cache miss: call only on control/worker threads.
     /// Clones share this bounded cache; inserting/reloading a sample invalidates by source identity.
@@ -288,6 +299,30 @@ mod tests {
         assert!(!snapshot.contains(SampleId(2)));
         assert_eq!(pool.len(), 1);
         assert_eq!(pool.get(SampleId(2)).map(AudioBuffer::frames), Some(1));
+    }
+
+    #[test]
+    fn source_snapshot_equality_includes_both_directions_and_empty_allocation_identity() {
+        let mut first = SamplePool::new();
+        first.insert(
+            SampleId(1),
+            AudioBuffer::from_interleaved(48_000, 1, vec![]),
+        );
+        let original = first.clone();
+        assert!(first.same_sources(&original));
+        first.insert(
+            SampleId(2),
+            AudioBuffer::from_interleaved(48_000, 1, vec![0.25]),
+        );
+        assert!(!first.same_sources(&original));
+        assert!(!original.same_sources(&first));
+        first.remove(SampleId(2));
+        first.insert(
+            SampleId(1),
+            AudioBuffer::from_interleaved(48_000, 1, vec![]),
+        );
+        assert!(!first.same_sources(&original));
+        assert!(!original.same_sources(&first));
     }
 
     #[test]
