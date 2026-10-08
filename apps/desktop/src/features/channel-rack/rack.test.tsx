@@ -122,6 +122,16 @@ describe("rows", () => {
       ],
     })
     render(<ChannelRackPanel />)
+    expect(
+      screen.getByRole("button", {
+        name: "Kick note preview. Open in piano roll",
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("group", { name: "Kick steps" })
+    ).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Kick row view" }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Show steps" }))
     const row = stepGrid("Kick").parentElement!
     const marked = [...row.querySelectorAll("[data-detail-step]")].map((mark) =>
       mark.getAttribute("data-detail-step")
