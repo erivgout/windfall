@@ -706,7 +706,9 @@ describe("the rack note preview backed by the Rust WASM document", () => {
     await view("Lead", "Show steps")
     await app.backend.projectSave("/Saved.windfall")
     await userEvent.click(screen.getByRole("button", { name: "Lead row view" }))
-    const item = screen.getByRole("menuitem", { name: /^Open in piano roll/ })
+    const item = await screen.findByRole("menuitem", {
+      name: /^Open in piano roll/,
+    })
     await act(async () => {
       await app.backend.projectOpen("/Saved.windfall")
     })
