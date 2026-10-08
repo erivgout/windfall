@@ -7,13 +7,15 @@ impl Session {
         drop(self.recording_idle()?);
         let mut targets = Vec::new();
         clip_targets(&command, &mut targets)?;
-        let (mut document, pool, generation, edits) = {
+        let (mut document, pool, generation, edits, replacements, loading) = {
             let state = self.state();
             (
                 state.document.clone(),
                 state.pool.clone(),
                 state.generation,
                 state.edits,
+                state.replacements,
+                state.loading.clone(),
             )
         };
         document
@@ -44,18 +46,16 @@ impl Session {
         self.pause("clip:prepared");
         let _recording = self.recording_idle()?;
         let mut state = self.state();
-        if state.generation != generation || state.edits != edits {
+        if state.generation != generation
+            || state.edits != edits
+            || state.replacements != replacements
+        {
             return Err(
                 "The project changed while audio was being prepared. Try again.".to_owned(),
             );
         }
         // A reload can replace the source without editing the document.
-        if pool.iter().any(|(id, audio)| {
-            state
-                .pool
-                .get(id)
-                .is_none_or(|now| now.samples().as_ptr() != audio.samples().as_ptr())
-        }) {
+        if !pool.same_sources(&state.pool) || state.loading != loading {
             return Err("The sample changed while audio was being prepared. Try again.".to_owned());
         }
         let applied = state
@@ -129,13 +129,14 @@ impl Session {
     }
     fn refresh_clip_plan(&self) {
         loop {
-            let (project, pool, generation, edits) = {
+            let (project, pool, generation, edits, replacements) = {
                 let state = self.state();
                 (
                     state.document.project().clone(),
                     state.pool.clone(),
                     state.generation,
                     state.edits,
+                    state.replacements,
                 )
             };
             if pool.needs_sampler_preparation(&project) {
@@ -165,10 +166,8 @@ impl Session {
             let mut state = self.state();
             if state.generation != generation
                 || state.edits != edits
-                || state.pool.iter().any(|(id, audio)| {
-                    pool.get(id)
-                        .is_none_or(|old| old.samples().as_ptr() != audio.samples().as_ptr())
-                })
+                || state.replacements != replacements
+                || !state.pool.same_sources(&pool)
             {
                 continue;
             }

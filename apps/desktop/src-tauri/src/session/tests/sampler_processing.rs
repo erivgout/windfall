@@ -488,3 +488,474 @@ fn sampler_processing_export_snapshot_retains_a_charged_bank_after_live_cache_ev
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
+
+#[test]
+fn sampler_r1_identical_apply_recovers_recording_refused_reload_without_a_musical_edit() {
+    use std::sync::atomic::Ordering;
+    let mut rig = Rig::new();
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel: rig.channel(0),
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    prepare(&rig);
+    let hold = rig.session.hold("sampler:background-prepared");
+    {
+        let mut state = rig.session.state();
+        let sample = state.document.project().channels[0]
+            .source
+            .sample()
+            .unwrap();
+        let data = (0..8192)
+            .map(|frame| (std::f32::consts::TAU * 880.0 * frame as f32 / 48_000.0).sin() * 0.25)
+            .collect();
+        state
+            .pool
+            .insert(sample, AudioBuffer::from_interleaved(48_000, 1, data));
+        rig.session.push_project(&state);
+    }
+    hold.wait();
+    start_take(&rig);
+    hold.release();
+    let deadline = std::time::Instant::now() + super::PATIENCE;
+    while rig.session.inner.preparing_samplers.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    rig.session.recording_cancel();
+    let before = rig.session.document_snapshot();
+    assert!(
+        rig.session
+            .state()
+            .pool
+            .needs_sampler_preparation(&before.project)
+    );
+    prepare(&rig); // identical settings: runtime repair, no new musical undo step
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert!(
+        !rig.session
+            .state()
+            .pool
+            .needs_sampler_preparation(&before.project)
+    );
+    let expected = {
+        let state = rig.session.state();
+        windfall_engine::render(
+            &before.project,
+            &state.pool,
+            &windfall_engine::RenderOptions {
+                pattern: Some(before.project.patterns[0].id),
+                tail_secs: 0.0,
+                ..Default::default()
+            },
+            &mut |_| true,
+        )
+    };
+    rig.session.transport_play().unwrap();
+    let playback = rig.run(4096);
+    assert_eq!(playback, expected.samples()[..playback.len()]);
+    assert!(playback.iter().any(|value| value.abs() > 0.01));
+    rig.session.transport_stop();
+    let path = rig.file("recovered.wav");
+    rig.session
+        .export_audio(windfall_ipc::ExportOptions {
+            path: path.clone(),
+            mode: windfall_ipc::PlayMode::Pattern,
+            bit_depth: windfall_ipc::BitDepth::Float32,
+            tail_secs: 0.0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rig.events.wait_for_export().error.is_none());
+    assert_eq!(
+        windfall_codec::decode_file(path).unwrap().samples(),
+        expected.samples()
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+}
+
+#[test]
+fn sampler_r1_history_attaches_the_exact_prepared_restored_asset_after_cache_replacement() {
+    let rig = Rig::new();
+    let file = rig.file("restored.wav");
+    let write = |frames, level| {
+        windfall_codec::write_wav(
+            &file,
+            &AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]),
+            windfall_codec::WavSampleFormat::Float32,
+        )
+        .unwrap();
+    };
+    write(4096, 0.25);
+    let channel = rig.channel(0);
+    let imported = rig
+        .session
+        .set_channel_sample_from_file(channel, &file)
+        .unwrap();
+    let sample = windfall_project::SampleId(imported.created[0]);
+    prepare(&rig);
+    let original = rig.session.state().pool.get(sample).unwrap().clone();
+    let restored = rig.session.document_snapshot();
+    rig.session
+        .dispatch(
+            Command::Batch {
+                label: Some("Remove spectral asset".into()),
+                commands: vec![
+                    Command::RemoveChannel { id: channel },
+                    Command::RemoveSample { id: sample },
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    assert!(!rig.session.state().pool.contains(sample));
+    let hold = rig.session.hold("sampler:history-prepared");
+    let worker = rig.session.background(|session| session.undo());
+    hold.wait();
+    write(8192, -0.125);
+    rig.session.sample_info(&file).unwrap(); // public preview/info cache replaces A with B
+    let replacement = rig
+        .session
+        .inner
+        .cache
+        .peek(std::path::Path::new(&file))
+        .unwrap();
+    assert_ne!(original.identity(), replacement.identity());
+    assert!(!rig.session.state().pool.contains(sample));
+    hold.release();
+    assert!(worker.join().unwrap().is_some());
+    assert_eq!(rig.project(), restored.project);
+    let state = rig.session.state();
+    assert_eq!(
+        state.pool.get(sample).unwrap().identity(),
+        original.identity()
+    );
+    assert!(!state.pool.needs_sampler_preparation(&restored.project));
+    drop(state);
+    rig.session
+        .export_audio(windfall_ipc::ExportOptions {
+            path: rig.file("restored-export.wav"),
+            mode: windfall_ipc::PlayMode::Pattern,
+            tail_secs: 0.0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rig.events.wait_for_export().error.is_none());
+}
+
+#[test]
+fn sampler_r1_clip_apply_refuses_a_newly_loaded_sampler_source_and_keeps_its_bank() {
+    use std::sync::atomic::Ordering;
+    use windfall_project::{AudioClipPatch, AudioClipUpdate, ClipId, SampleId, SamplePath};
+    let rig = Rig::new();
+    let clip = rig
+        .session
+        .add_audio_clip_from_file(
+            &super::factory_file("Bass/Bass Sub.wav"),
+            crate::session::ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let clip = ClipId(*clip.created.last().unwrap());
+    let file = rig.file("missing-spectral.wav");
+    let sample = SampleId(rig.project().next_id);
+    let channel = rig.channel(0);
+    rig.session
+        .dispatch(
+            Command::Batch {
+                label: None,
+                commands: vec![
+                    Command::AddSample {
+                        name: "Missing".into(),
+                        path: SamplePath::External(file.clone()),
+                    },
+                    Command::SetChannelSample {
+                        id: channel,
+                        sample: Some(sample),
+                    },
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    rig.wait_until_loaded_or_failed(sample);
+    assert!(rig.session.state().failed.contains(&sample));
+    prepare(&rig);
+    let pending = Command::UpdateAudioClips {
+        updates: vec![AudioClipUpdate {
+            id: clip,
+            patch: AudioClipPatch {
+                reverse: Some(true),
+                ..Default::default()
+            },
+        }],
+    };
+    let hold = rig.session.hold("clip:prepared");
+    let worker = rig
+        .session
+        .background(move |session| session.prepare_clip_command(pending));
+    hold.wait();
+    windfall_codec::write_wav(
+        &file,
+        &AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 4096]),
+        windfall_codec::WavSampleFormat::Float32,
+    )
+    .unwrap();
+    assert_eq!(rig.session.samples_reload(), 0);
+    let deadline = std::time::Instant::now() + super::PATIENCE;
+    while rig.session.inner.preparing_samplers.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let before = rig.session.document_snapshot();
+    let source = rig.session.state().pool.get(sample).unwrap().identity();
+    let bytes = rig.session.state().pool.sampler_retained_bytes();
+    assert!(
+        !rig.session
+            .state()
+            .pool
+            .needs_sampler_preparation(&before.project)
+    );
+    assert!(rig.session.controller().sampler_key_supported(channel, 60));
+    hold.release();
+    assert!(
+        worker
+            .join()
+            .unwrap()
+            .unwrap_err()
+            .contains("sample changed")
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+    let state = rig.session.state();
+    assert_eq!(state.pool.get(sample).unwrap().identity(), source);
+    assert_eq!(state.pool.sampler_retained_bytes(), bytes);
+    assert!(!state.pool.needs_sampler_preparation(&before.project));
+    assert!(rig.session.controller().sampler_key_supported(channel, 60));
+}
+
+fn limited_candidate_fixture() -> Rig {
+    let rig = Rig::new();
+    {
+        let mut state = rig.session.state();
+        let mut pool = windfall_engine::SamplePool::with_sampler_budget(256 * 1024);
+        for (id, audio) in state.pool.iter() {
+            pool.insert(id, audio.clone());
+        }
+        let sample = state.document.project().channels[0]
+            .source
+            .sample()
+            .unwrap();
+        pool.insert(
+            sample,
+            AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 4096]),
+        );
+        state.pool = pool;
+    }
+    prepare(&rig);
+    rig
+}
+
+#[test]
+fn sampler_r1_candidate_budget_noop_and_success_publish_atomically_with_exact_sources() {
+    use windfall_project::{SampleId, SamplePath};
+    for mode in ["budget", "noop", "success"] {
+        let mut rig = limited_candidate_fixture();
+        let channel = rig.channel(0);
+        // A real redo branch must survive failed/no-op candidate preparation.
+        rig.session
+            .dispatch(
+                Command::UpdateSampler {
+                    id: channel,
+                    patch: SamplerPatch {
+                        gain: Some(0.5),
+                        ..Default::default()
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        rig.session.undo().unwrap();
+        let before = rig.session.document_snapshot();
+        let original = rig.session.state().pool.clone();
+        let bytes = original.sampler_retained_bytes();
+        rig.session.controller().note_on(channel, 60, 0.8);
+        let playback = rig.run(8192);
+        assert!(playback.iter().any(|x| x.abs() > 0.01));
+        let old_sample = before.project.channels[0].source.sample().unwrap();
+        let sample = if mode == "noop" {
+            old_sample
+        } else {
+            SampleId(before.project.next_id)
+        };
+        let audio = AudioBuffer::from_interleaved(
+            48_000,
+            2,
+            vec![-0.125; if mode == "success" { 2048 } else { 524288 }],
+        );
+        let file = rig.file("candidate.wav");
+        windfall_codec::write_wav(&file, &audio, windfall_codec::WavSampleFormat::Float32).unwrap();
+        let audio = rig
+            .session
+            .inner
+            .cache
+            .decode(std::path::Path::new(&file))
+            .unwrap();
+        let command = if mode == "noop" {
+            Command::SetChannelSample {
+                id: channel,
+                sample: Some(sample),
+            }
+        } else {
+            Command::Batch {
+                label: Some("Candidate import".into()),
+                commands: vec![
+                    Command::AddSample {
+                        name: "Candidate".into(),
+                        path: SamplePath::External(file),
+                    },
+                    Command::SetChannelSample {
+                        id: channel,
+                        sample: Some(sample),
+                    },
+                ],
+            }
+        };
+        let ticket = {
+            let _recording = rig.session.recording_idle().unwrap();
+            let state = rig.session.state();
+            rig.session
+                .sample_edit_ticket(&state, command, None, vec![(sample, audio.clone())])
+                .unwrap()
+        };
+        let prepared = ticket.prepare(); // neither State nor recording is acquired by the helper
+        assert_eq!(rig.session.document_snapshot(), before);
+        assert!(rig.session.state().pool.same_sources(&original));
+        if mode == "budget" {
+            assert!(prepared.err().unwrap().contains("budget"));
+        } else {
+            let _recording = rig.session.recording_idle().unwrap();
+            let mut state = rig.session.state();
+            prepared.unwrap().commit(&mut state).unwrap();
+            if mode == "success" {
+                assert_eq!(state.pool.get(sample).unwrap().identity(), audio.identity());
+                assert!(state.loaded.contains(&sample));
+                assert!(!state.loading.contains(&sample));
+                assert!(!state.failed.contains(&sample));
+                assert!(
+                    !state
+                        .pool
+                        .needs_sampler_preparation(state.document.project())
+                );
+                drop(state);
+                drop(_recording);
+                let after = rig.session.document_snapshot();
+                assert_eq!(after.history.cursor, before.history.cursor + 1);
+                rig.session.undo().unwrap();
+                let mut undone = before.project.clone();
+                undone.next_id = after.project.next_id; // allocated ids are never reused by undo
+                assert_eq!(rig.project(), undone);
+                rig.session.redo().unwrap();
+                assert_eq!(rig.project(), after.project);
+                assert!(
+                    !rig.session
+                        .state()
+                        .pool
+                        .needs_sampler_preparation(&after.project)
+                );
+                assert_eq!(
+                    rig.session.state().pool.get(sample).unwrap().identity(),
+                    audio.identity()
+                );
+                continue;
+            }
+        }
+        assert_eq!(rig.session.document_snapshot(), before);
+        assert!(rig.session.state().pool.same_sources(&original));
+        assert_eq!(rig.session.state().pool.sampler_retained_bytes(), bytes);
+        rig.session.controller().note_on(channel, 60, 0.8);
+        assert_eq!(rig.run(8192), playback);
+        rig.session
+            .export_audio(windfall_ipc::ExportOptions {
+                path: rig.file("candidate-refusal.wav"),
+                mode: windfall_ipc::PlayMode::Pattern,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(rig.events.wait_for_export().error.is_none());
+    }
+}
+
+#[test]
+fn sampler_r1_candidate_guards_validate_the_original_map_and_pending_loads_before_dispatch() {
+    for change in [
+        "generation",
+        "edits",
+        "replacements",
+        "addition",
+        "removal",
+        "replacement",
+        "loading",
+    ] {
+        let rig = limited_candidate_fixture();
+        let command = command(rig.channel(0));
+        let ticket = {
+            let state = rig.session.state();
+            rig.session
+                .sample_edit_ticket(&state, command, None, Vec::new())
+                .unwrap()
+        };
+        let prepared = ticket.prepare().unwrap();
+        {
+            let mut state = rig.session.state();
+            let id = state.document.project().channels[0]
+                .source
+                .sample()
+                .unwrap();
+            match change {
+                "generation" => state.generation += 1,
+                "edits" => state.edits += 1,
+                "replacements" => state.replacements += 1,
+                "addition" => {
+                    state.pool.insert(
+                        windfall_project::SampleId(999),
+                        AudioBuffer::from_interleaved(48_000, 1, vec![]),
+                    );
+                }
+                "removal" => {
+                    state.pool.remove(id);
+                }
+                "replacement" => {
+                    state.pool.insert(
+                        id,
+                        AudioBuffer::from_interleaved(48_000, 1, vec![0.125; 4096]),
+                    );
+                }
+                "loading" => {
+                    state.loading.insert(id);
+                }
+                _ => unreachable!(),
+            }
+        }
+        let before = rig.session.document_snapshot();
+        let pool = rig.session.state().pool.clone();
+        let _recording = rig.session.recording_idle().unwrap();
+        let mut state = rig.session.state();
+        assert!(prepared.commit(&mut state).is_err(), "{change}");
+        assert!(state.pool.same_sources(&pool));
+        drop(state);
+        assert_eq!(rig.session.document_snapshot(), before);
+        assert!(
+            rig.session
+                .controller()
+                .sampler_key_supported(rig.channel(0), 60)
+        );
+    }
+}
