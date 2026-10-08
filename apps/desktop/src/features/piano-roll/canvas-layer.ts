@@ -5,6 +5,9 @@ export type LayerSize = {
   /** Backing size in device pixels. */
   width: number
   height: number
+  /** This layer's bounded density; it can differ from the grid's density.
+   * Painters must derive device transforms from this value, not view.transform.
+   */
   dpr: number
 }
 
@@ -26,6 +29,7 @@ export class CanvasLayer {
   private readonly stopPixelObserver: () => void
   private frame = 0
   private destroyed = false
+  private size: ReturnType<typeof canvasResolution> | null = null
 
   constructor(canvas: HTMLCanvasElement, paint: LayerPainter) {
     this.canvas = canvas
@@ -59,16 +63,26 @@ export class CanvasLayer {
   }
 
   private resize(): boolean {
-    const { pixelWidth: width, pixelHeight: height } = canvasResolution(
+    const next = canvasResolution(
       this.canvas.clientWidth,
       this.canvas.clientHeight
     )
-    if (this.canvas.width === width && this.canvas.height === height) {
-      return false
-    }
-    this.canvas.width = width
-    this.canvas.height = height
-    return true
+    const previous = this.size
+    this.size = next
+    if (this.canvas.width !== next.pixelWidth)
+      this.canvas.width = next.pixelWidth
+    if (this.canvas.height !== next.pixelHeight)
+      this.canvas.height = next.pixelHeight
+    // A capped store can keep the same pixel dimensions while its logical
+    // size/density changes. The painter still needs the new transform.
+    return (
+      !previous ||
+      previous.width !== next.width ||
+      previous.height !== next.height ||
+      previous.dpr !== next.dpr ||
+      previous.pixelWidth !== next.pixelWidth ||
+      previous.pixelHeight !== next.pixelHeight
+    )
   }
 
   // Resizing clears a canvas, so it is drawn again before the browser paints.
@@ -83,8 +97,7 @@ export class CanvasLayer {
     this.paint(ctx, {
       width,
       height,
-      dpr: canvasResolution(this.canvas.clientWidth, this.canvas.clientHeight)
-        .dpr,
+      dpr: this.size!.dpr,
     })
     ctx.restore()
   }

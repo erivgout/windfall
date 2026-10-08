@@ -7,6 +7,7 @@ import {
   type ContextItem,
 } from "@/components/context-actions"
 import {
+  deviceTransform,
   deviceX,
   rgbaToCss,
   tickToX,
@@ -58,7 +59,8 @@ function paintRuler(
   const view = session.view
   const context = session.editor.context
   if (!view || !context) return
-  const { viewport, transform, theme } = view
+  const { viewport, theme } = view
+  const transform = deviceTransform({ ...viewport, dpr: size.dpr })
   const signature = context.pattern.signature
   const beat = ticksPerBeat(signature)
   const bar = ticksPerBar(signature)

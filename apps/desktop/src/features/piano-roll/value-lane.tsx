@@ -2,6 +2,7 @@ import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
 import {
+  deviceTransform,
   deviceX,
   resizedSpan,
   rgbaToCss,
@@ -82,7 +83,8 @@ function paintLane(
   const view = session.view
   const context = session.editor.context
   if (!view || !context) return
-  const { viewport, transform, theme } = view
+  const { viewport, theme } = view
+  const transform = deviceTransform({ ...viewport, dpr: size.dpr })
   const { editor } = session
   const { dpr, width, height } = size
   const cssHeight = height / dpr

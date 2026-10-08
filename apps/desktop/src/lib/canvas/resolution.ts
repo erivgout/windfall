@@ -5,7 +5,9 @@ import { backingSize } from "./viewport"
 const MAX_EDGE = 8192
 const MAX_PIXELS = 16_777_216
 
-/** Keep all layers on one density, within a bounded GPU/2D allocation. */
+/** Bound each canvas allocation. Differently sized layers can have different
+ * densities; each painter must use the returned density for its own transform.
+ */
 export function canvasResolution(
   width: number,
   height: number,
