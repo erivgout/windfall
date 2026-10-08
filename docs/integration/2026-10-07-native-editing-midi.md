@@ -657,3 +657,67 @@ fresh independent review are still required before desktop activation.
 
 No new parity row is marked complete. GitHub publication remains pending
 these remaining repair gates; the existing private alpha is unchanged.
+
+## 2026-10-08 integrated filter foundation and next repair boundaries
+
+Utility restoration `7491dfb6` is integrated as `1e24389e`. Root native
+execution 69297 passed **94 unique focused cases**: 65 engine effects, one
+maximum-slot Plan bound, three Rack, three State, eight plugin, nine DSP repair
+and five real R4 adoption/capture cases. Strict DSP/engine/desktop all-target
+Clippy, workspace formatting and simulator freshness passed. The command's
+tee covered only its final command; its named file is not a full transcript.
+The executed command and results are retained in the T3 native tool activity.
+
+Independent utility R5 passed 89 of those cases and confirmed the R1–R4
+closures. It found one further P2: replacing a restored native owner by changing
+only the existing factory revision can retain its progress identity while
+losing its predecessor wait. The review's non-periodic cancellation residual
+and excess outgoing-owner example are source-equation predictions, not new
+compiled failures. The same owner is writing bounded regressions and a repair
+in the approved Plan/Rack/State window. This remains an acceptance gate.
+
+E1 pure DSP `f0ad5e44` and `796a62f9` are integrated as `7061a055` and
+`9f365ef1`. Independent R1 source review and R2 found no actionable defects.
+R2 independently passed 13 attributable release tests, leaving the throughput
+test ignored, and sampled float32 filter poles without finding instability.
+This sampled check is not an exhaustive mathematical stability proof. Root
+passed 13 native tests with that same throughput test ignored, all-target DSP
+Clippy and workspace formatting. Log: `windfall-root-e1-native.log`.
+
+Root independently regenerated and compared all 170 bindings/fixtures and
+passed 70 Document/transport UI tests against its rebuilt simulator. Logs are
+`windfall-root-e1-bindings.log` and `windfall-root-e1-sim-ui.log`. The simulator
+remains 1,863,302 bytes but is **not byte-identical** after this build; its new
+SHA-256 is `7d2e0cb206eeeadb8cdc17fe669912bd08de1aee7fe3b59400aaead7b635a56e`.
+Both the generated binary and source record are checked in. The three filter
+rows are in progress; effect registry, persistence, automation, UI and actual
+engine/export integration remain reserved until utility/T1 acceptance.
+
+T1's complete first source range ends at `ed4ad871`, following `3ba8b13c`,
+`401939d4` and `e9febc2c`. It remains outside root. Independent R1 passed
+eight engine and three native timeline cases, reproduced two races through
+the actual UI functions and source-traced a stopped-navigation automation
+hold error. The owner is repairing guarded selection playback, ordered
+pending arm/clear publication and destination automation hold. The approved
+request watermark and guarded transport checks are transient session state,
+preserve legacy callers and do not change musical history. Its 177 bindings
+and larger simulator remain owner validation artifacts, not root artifacts.
+
+N4 `ba61a255` follows the separate `27dc8a4a` leaf, both outside root.
+Independent R2 source review supports the original watchdog, note-overflow,
+offline-failure, capture-order and authentication trigger closures. It still
+finds a post-reset incomplete-block proof epoch case, valid startup state
+socket backpressure, and cancellation/deadline racing the final DONE state.
+These three cases are assigned to the same owner for compiled regressions.
+The additional native capture/flood/latency fixtures remain separate work.
+A narrow sticky state-writer refusal guard was approved for the existing
+LimitedWriter and CLAP save boundary; a plugin reporting success must not
+make partial bytes acceptable after the host stream refused a write.
+Desktop production routing remains closed pending acceptance.
+
+M1 is active in the T3-bound `gpt/t3-analysis-jobs-m1` worktree at base
+`1e24389e`. Its first owned stage is the native analysis crate: bounded worker
+jobs, immutable inputs, explicit model provenance/checksums, owned artifacts,
+cancellation and review tickets. Session/IPC/UI attachment is a later serialized
+window. Fake inference verifies lifecycle only; it cannot close any ML row.
+No additional parity completion or release publication is claimed.
