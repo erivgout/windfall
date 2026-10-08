@@ -96,6 +96,9 @@ impl Audio {
         parameters: &[ParameterSpec],
     ) -> Result<Self, ProtocolError> {
         region.config.validate()?;
+        if region.timeline_epoch()? != 1 {
+            return Err(ProtocolError::Sequence);
+        }
         if parameters.len() > PARAM_CAPACITY
             || parameters.iter().any(|parameter| !parameter.valid())
             || parameters.iter().enumerate().any(|(index, parameter)| {
@@ -301,32 +304,57 @@ impl Audio {
     /// Explicit discontinuity: invalidate old audio without reusing a helper
     /// slot. Current held ownership is retained; the caller supplies releases.
     pub fn reset_timeline(&mut self) {
-        let Some(epoch) = self.epoch.checked_add(1) else {
-            self.signals.failed.store(true, Ordering::Release);
-            return;
-        };
-        self.epoch = epoch;
-        // Partially collected sequence must never later be published under the
-        // same number; gaps instruct the helper to reconstruct native controls.
-        if let Some(sequence) = self.sequence.checked_add(1) {
-            self.sequence = sequence;
-        } else {
-            self.signals.failed.store(true, Ordering::Release);
-            return;
-        }
-        self.cursor = 0;
-        self.blocks_since_reset = 0;
-        self.dry.fill([0.0; 2]);
-        self.dry_cursor = 0;
-        self.available = false;
-        self.transition = true;
+        let previous = self.epoch;
+        let next = previous
+            .checked_add(1)
+            .filter(|epoch| *epoch <= u64::from(u32::MAX));
+        let sequence = self.sequence.checked_add(1);
+        // Invalidate proof even if reset cannot be published. No failure may
+        // retain an apparently current acknowledgement.
         self.health.acknowledged_generation = 0;
         self.completed_proof = None;
         self.signals
             .processed_generation
             .store(0, Ordering::Release);
+        self.available = false;
+        self.transition = true;
+        let (Some(epoch), Some(sequence)) = (next, sequence) else {
+            self.signals.failed.store(true, Ordering::Release);
+            self.region.latch_helper_failure();
+            return;
+        };
+        if self.region.timeline_epoch() != Ok(previous) {
+            self.signals.failed.store(true, Ordering::Release);
+            self.region.latch_helper_failure();
+            return;
+        }
+        self.epoch = epoch;
+        // Partially collected sequence must never later be published under the
+        // same number; gaps instruct the helper to reconstruct native controls.
+        self.sequence = sequence;
+        self.cursor = 0;
+        self.blocks_since_reset = 0;
+        self.dry.fill([0.0; 2]);
+        self.dry_cursor = 0;
         self.region.discard_before(self.sequence);
         self.begin_block();
+        // Reset linearizes here. All local old proof is gone; new READY cannot
+        // be submitted until this single strong CAS succeeds.
+        if self.region.publish_timeline_epoch(previous, epoch).is_err() {
+            self.signals.failed.store(true, Ordering::Release);
+            self.region.latch_helper_failure();
+        }
+    }
+    fn fail_timeline(&mut self) {
+        self.health.acknowledged_generation = 0;
+        self.completed_proof = None;
+        self.signals
+            .processed_generation
+            .store(0, Ordering::Release);
+        self.transition |= self.available;
+        self.available = false;
+        self.signals.failed.store(true, Ordering::Release);
+        self.region.latch_helper_failure();
     }
     pub fn set_transport(&mut self, transport: Transport) -> bool {
         if encode_transport(transport).is_err() {
@@ -413,6 +441,9 @@ impl Audio {
         if left.len() != right.len() {
             self.signals.failed.store(true, Ordering::Release);
             return;
+        }
+        if self.region.timeline_epoch() != Ok(self.epoch) {
+            self.fail_timeline();
         }
         for (left, right) in left.iter_mut().zip(right) {
             if self.cursor == 0 {
@@ -813,6 +844,110 @@ mod tests {
         }
         assert_eq!(audio.health().acknowledged_generation, 0);
         assert_eq!(audio.completed_proof(), None);
+    }
+    #[test]
+    fn reset_authority_exhaustion_and_corruption_clear_proof_without_wrap() {
+        use super::super::slots::WordStorage;
+        for failure in [0, 1, 2] {
+            let (mut audio, region) = make(Kind::Effect, 0);
+            audio.health.acknowledged_generation = 7;
+            audio.completed_proof = Some((1, 0, 7));
+            audio
+                .signals
+                .processed_generation
+                .store(7, Ordering::Release);
+            if failure == 0 {
+                audio.epoch = u64::from(u32::MAX);
+            } else if failure == 1 {
+                audio.sequence = u64::MAX;
+            } else {
+                // A foreign/corrupt header disagrees with this sole endpoint.
+                region.publish_timeline_epoch(1, 2).unwrap();
+            }
+            let desired = audio.desired_generation();
+            audio.reset_timeline();
+            assert!(audio.signals.failed.load(Ordering::Acquire));
+            assert!(region.helper_failed());
+            assert_eq!(audio.health.acknowledged_generation, 0);
+            assert_eq!(audio.completed_proof(), None);
+            assert_eq!(
+                audio.signals.processed_generation.load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(audio.desired_generation(), desired);
+            let mut left = [0.25; 512];
+            let mut right = left;
+            audio.process(&mut left, &mut right);
+            assert!(region.pending_sequence().is_none());
+            assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+        }
+        let storage = LocalWords::new();
+        let region = Region::initialize(storage.clone(), make(Kind::Effect, 0).1.config).unwrap();
+        let mut audio = Audio::new(region, Arc::new(Signals::default()), &[]).unwrap();
+        // Reach the actual maximum consistently, without billions of resets.
+        audio.epoch = u64::from(u32::MAX);
+        storage.words()[TIMELINE_EPOCH].store(u32::MAX.to_le(), Ordering::Release);
+        audio.reset_timeline();
+        assert_eq!(
+            u32::from_le(storage.words()[TIMELINE_EPOCH].load(Ordering::Acquire)),
+            u32::MAX
+        );
+        assert!(audio.signals.failed.load(Ordering::Acquire));
+    }
+    #[test]
+    fn corrupt_authority_cannot_collect_an_old_done_proof_without_a_reset_call() {
+        use super::super::slots::WordStorage;
+        let storage = LocalWords::new();
+        let region = Region::initialize(storage.clone(), make(Kind::Effect, 0).1.config).unwrap();
+        let mut audio = Audio::new(region.clone(), Arc::new(Signals::default()), &[]).unwrap();
+        audio.process(&mut [0.25; 128], &mut [0.25; 128]);
+        let mut input = InputBlock::new();
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        region.complete(
+            slot,
+            sequence,
+            &OutputBlock {
+                processed_generation: 1,
+                ..OutputBlock::silent()
+            },
+            OUTPUT_OK,
+        );
+        storage.words()[TIMELINE_EPOCH].store(2u32.to_le(), Ordering::Release);
+        audio.process(&mut [0.25; 64], &mut [0.25; 64]);
+        assert!(audio.signals.failed.load(Ordering::Acquire));
+        assert!(region.helper_failed());
+        assert_eq!(audio.completed_proof(), None);
+        assert_eq!(audio.health.acknowledged_generation, 0);
+    }
+    #[test]
+    fn persistent_failure_finishes_the_fallback_ramp_instead_of_restarting_it() {
+        let (mut audio, region) = make(Kind::Effect, 0);
+        let mut input = InputBlock::new();
+        for _ in 0..4 {
+            audio.process(&mut [0.25; 64], &mut [0.25; 64]);
+            let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+            region.complete(
+                slot,
+                sequence,
+                &OutputBlock {
+                    epoch: 1,
+                    processed_generation: input.control_end,
+                    left: [0.125; MAX_BLOCK],
+                    right: [0.125; MAX_BLOCK],
+                    native_drops: 0,
+                },
+                OUTPUT_OK,
+            );
+        }
+        region.latch_helper_failure();
+        audio.process(&mut [0.25; 64], &mut [0.25; 64]); // One 64-frame transition.
+        let mut left = [0.25; 64];
+        let mut right = left;
+        for _ in 0..4 {
+            audio.process(&mut left, &mut right);
+            assert_eq!(left, [0.25; 64]);
+            assert_eq!(right, left);
+        }
     }
     #[test]
     fn saturation_reserves_releases_and_retains_rejected_current_controls() {
