@@ -1,6 +1,9 @@
 # Monophonic pitch-analysis foundation
 
 API/resource contract, 2026-10-08; base `7027569f8b466242a75faf327381e6ac44c88d28`.
+R1 numerical repair is incremental from immutable
+`60327573326a27ebdf000588e0ff0a7239ec30c0`; integration remains CLOSED pending
+parent-owned fresh R2 review. Only pitch.rs, pitch_analysis.rs and this doc may change.
 This is the independent M3 signal foundation. The whole phases 0–7 / 342-row
 goal remains active. No job, inference, UI, IPC or project command is registered.
 M1 is accepted; Session/native factory attachment remains gated by P1 preparation
@@ -38,7 +41,7 @@ cell has Hz; an unvoiced cell has none. Segments cover the same half-open range,
 splitting on voicing, selected channel or adjacent pitch jumps (default 100 cents).
 Segment Hz is a geometric mean, confidence an arithmetic mean. These are detected
 regions, not MIDI notes or user edits; gradual glides can remain one region.
-Confidence is `1 - normalized_difference` at the chosen lag, bounded 0–1;
+Confidence is `1 - interpolated_CMND_minimum_depth`, bounded 0–1;
 it is a periodicity score, not a calibrated probability of correct pitch.
 Unvoiced confidence is zero; a strong periodic interferer or a dominant harmonic
 can have high confidence while being the wrong intended voice. There is no
@@ -52,7 +55,7 @@ validation and between bounded FFT calls. No realtime, live tuner or latency cla
 ## Algorithm and budgets
 
 Own implementation of fixed-comparison-window YIN steps: squared differences,
-cumulative mean normalization, first trough below a fixed threshold (default
+cumulative mean normalization, first interpolated trough below a fixed threshold (default
 0.15), and raw-difference parabolic lag interpolation (paper II.E). No forced
 best-lag fallback for noise.
 Subtract a constant window mean; no PCM sanitation. A centered RMS floor (default
@@ -142,7 +145,7 @@ large frame origins, empty/reset/partition behavior and resource limits are also
 covered. Separately measure allocator-request peaks and warmed CPU throughput;
 neither is an OS RSS or realtime deadline guarantee.
 
-## Measured checkpoint
+## Immutable 603 measured checkpoint (before R1 repair)
 
 2026-10-08, Windows x86_64 MSVC; rustc 1.99.0
 `b940084d7eb6a299eb4bfeb8e34901bc051e7ac4`, LLVM 23.1.1; Visual Studio 2022
@@ -232,12 +235,13 @@ inspects shorter lags and refuses its first above-range trough, with a regressio
 test. A first-trough estimate outside either requested frequency bound is
 unvoiced; no out-of-range Hz is clamped into range. Near an exact bound, small
 estimation error may therefore reject a cell. Clippy's test-iterator findings
-were fixed with `rfind`; no warnings were suppressed. No remaining known test
-failure. Real-vocal/formant-heavy/breathy/creaky and noisy-speech quality,
+were fixed with `rfind`; no warnings were suppressed. Those owner tests were
+green at 603; independent R1 subsequently found the missed octave case below.
+Real-vocal/formant-heavy/breathy/creaky and noisy-speech quality,
 listening, polyphony, universal octave robustness and platform CPU comparisons
 remain unmeasured and must not be inferred from these synthetic results.
 
-## Reproduction and source evidence
+## Immutable 603 reproduction and source evidence
 
 All Cargo commands below used Git Bash after `source scripts/msvc-env.sh`, with
 `CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=target/m3-native
@@ -283,3 +287,214 @@ one commented pinned dependency, and that lock reference. A local source-only
 commit records these six files; no push, PR, release, import or root mutation.
 Parent independent Standards/Spec review and precise later attachment grants
 remain required; this is not an M3 completion/parity claim.
+
+## R1 P2 numerical repair: contract and declared validation
+
+Spec R1 found sampled-depth thresholding could miss the fractional-period trough
+and choose an exactly repeated two-period lag. Standards R1 had no hard violation;
+its optional shared raw-difference helper is addressed only to keep the numerical
+paths coherent: interpolation now uses the same finite/negative-roundoff checks
+as CMND construction. No dependencies, limits, API shape, source-coordinate
+rules, PCM policy, preparation or registration seams change. The algorithm identity
+is `windfall-fixed-window-yin-fft-v2` because selection/confidence semantics change;
+v1 is preserved in immutable 603, with no amendment or parent import.
+
+The existing public `prepare/analyze` seam, explicitly granted by this repair
+brief, is used for RED/GREEN tests. No mocks, new test seams or child agents.
+The single 8 kHz / 8.5-sample / second harmonic 1.2x regression is compiled first
+against unchanged 603 pitch.rs. The bounded grid is declared before execution:
+rates 8/12/16/22.05/44.1/48/96/192 kHz; first period band starts at
+`ceil(rate/min(2000,rate/8))`, the other eight samples longer; fractions
+0.125/0.25/0.375/0.5/0.625/0.75/0.875; second-harmonic amplitudes 0/0.6/1.2/2.0
+times the fundamental; phases 0 and 0.7 radians. These 896 authored 0.1 s cases
+use analytic `F0=rate/period` truth and the unchanged default 0.15 threshold.
+Fixed acceptance: >=99% voiced recall, every voiced estimate within 25 cents,
+zero octave errors (>=600 cents). All cells/edges count, with no rate omissions.
+The original calibrated-note/dynamic/noise thresholds remain unchanged.
+
+Separate direct f64 squared-difference / quadratic-fit reference checks probe
+the supported threshold interval and both sides of interpolated acceptance and
+Hz-range boundaries. This bounded slow reference uses raw sample subtraction,
+no FFT, prefix energies or production helper. Frequency truth stays analytic;
+reference math verifies selection/refusal semantics rather than defining pitch
+quality from the product's own outputs. All original signal, lifecycle, reuse,
+cancellation and resource checks, including the explicit 30-minute run and strict
+scoped Clippy/owned fmt/diff, were rerun on frozen numerical source. Parent
+alone starts R2. This repair does not close foundation integration or any M3/parity row.
+
+## R1 RED/GREEN and equations
+
+The targeted command below was compiled and run twice before editing pitch.rs,
+while HEAD remained 603 and pitch.rs SHA256 was exactly
+`5fe34deb6f518d826c942f857aa1fdb3a920f03b5dab4800229ed7c08dacf730`.
+Only the new regression test was added then. Both runs failed on the reviewer's
+actual symptom; no threshold tuning was used to obtain RED. The first RED test
+executable SHA256 was
+`f88d4d54f18e328963bdaac4e8ba45836d093831eed5acb79c4a79e67bfd8a34`
+(a private build artifact, not shipped or committed).
+
+```text
+cargo test -p windfall-analysis --test pitch_analysis r1_fractional_period_harmonic_trough_does_not_skip_to_octave --locked --offline -- --exact --test-threads=1 --nocapture
+RED against 603:
+expected_hz=941.176470588, first_hz=470.5402486549174,
+first_confidence=1.000000000, voiced=30, octave_errors=30
+assertion failed: left=30, right=0
+test result: FAILED. 0 passed; 1 failed
+
+GREEN on repaired frozen numerical source:
+sampled_depth=0.171944363, interpolated_depth=0.075541284,
+lag17_depth=0.000000000
+expected_hz=941.176470588, first_hz=941.1764705882352,
+first_confidence=0.924458716, voiced=30, octave_errors=0
+test result: ok. 1 passed; 0 failed
+```
+
+The RED direct-math diagnostic initially fit around lag 9 (sampled depth
+0.188660976, unconstrained fitted depth 0.057602902). The final diagnostic
+correctly identifies lag 8 as the local sampled trough and fits its neighbors
+7/8/9, yielding the GREEN depths above. This diagnostic correction did not
+change the authored PCM, F0 truth, octave assertion or acceptance threshold.
+
+Cause: 603 required a **sampled** CMND value below 0.15 before interpolating,
+so it skipped the admissible first trough and selected the repeated period at
+17 samples. Independent direct f64 differences agree with the FFT difference
+test; raw-period interpolation alone cannot rescue a skipped candidate.
+[YIN §II.E](https://www.ee.columbia.edu/~dpwe/papers/deChevK02-yin.pdf) specifies
+using each interpolated CMND minimum's ordinate for selection and the
+corresponding raw-difference minimum's abscissa for period estimation.
+
+For lag k and fixed comparison W, the unchanged equations are
+`D[k]=sum(j=0..W-1)(x[j]-x[j+k])^2`, and
+`C[k]=k*D[k]/sum(i=1..k)D[i]`, with C[0]=1 and all-zero sums producing C=1.
+At a sampled local trough, put `a=C[k-1], b=C[k], c=C[k+1]` and
+`Q=a-2b+c`. The parabola is
+`p(u)=b + (c-a)*u/2 + Q*u^2/2`. Its vertex is
+`u=(a-c)/(2Q)` and its depth is `p(u)`. The detector traverses local troughs
+in lag order (strict descent, nonstrict ascent for the leftmost plateau),
+accepting the first whose interpolated depth is **strictly** below q. A valid
+local trough has Q>0 and its vertex lies within half a sample. A negative
+modeled depth is projected to zero, which cannot change acceptance because
+every supported q is positive; this does not sanitize any PCM.
+
+For the selected k, repeat that abscissa fit using raw D[k-1..k+1], retaining
+603's ±0.5-sample interpolation clamp and zero offset for nonpositive curvature.
+Return `rate/(k+u_raw)` only if it is within the exact requested Hz interval;
+otherwise return unvoiced and do not hunt for a later subharmonic. Confidence
+is now `clamp(1-p(u_CMND),0,1)`, a periodicity score, still not calibrated F0
+probability. No global-minimum/noise fallback was introduced. The shared raw
+helper retains the exact finite check and negative tolerance
+`-1e-10*max(total_window_energy,f64::MIN_POSITIVE)` from 603 and clamps only
+accepted derived roundoff to zero. It is used consistently for both normalization
+and period interpolation, addressing Standards' optional duplication concern.
+
+## R1 measured coverage and limitations
+
+The frozen-source scoped run passed **8 library + 30 existing lifecycle + 17
+pitch integration tests = 55 ordinary tests**, with one explicit long resource
+test ignored by default. The additional four pitch tests are the original
+reviewer regression, the 896-case rate/period/harmonic grid, direct threshold/Hz
+boundary probes, and the explicit wide-range stricter-threshold limitation.
+No mock/private helper supplies the analytic F0 truth; existing independent
+FFT/direct-difference math, stereo, PCM/range/refusal, reset/partition,
+cancellation/deadline and exact-charge tests all pass again.
+
+The expanded default-q=0.15 grid has **9,072/9,072 voiced cells (100%)**,
+p95 **5.890542901 cents**, max **8.276147615 cents**, and **zero octave errors**.
+It includes every declared rate, phase, fraction and harmonic mix, without
+discarding edge cells or failing configurations. Original stationary p95/max
+remain 0.063037/0.945309 cents; glide/vibrato p95 remain 5.972405/8.729498 cents;
+original noise false voicing remains **0/800** and boundary errors remain
+0/20/20 ms. Original thresholds, RMS floor and rate/channel limits are unchanged.
+
+Boundary probes use 18 authored combinations: periods 8.25/8.5/8.75, second
+harmonic ratios 0.6/1.2/2.0, phases 0/0.7. A one-cell 8 kHz / 900–1000 Hz
+window has independently known W/L/T=18/9/28 and support [386,414), timestamp
+400, also checked with absolute origin 2^54+17. Direct quadratic coefficients
+and derivatives predict selection/refusal without FFT or production helpers.
+There are **108 threshold probes**: 0.01, fundamental trough depth±1e-5, 0.15,
+0.29999 and 0.3. **Six** derived probes below the allowed 0.01 bound are checked
+configuration refusals (the modeled trough is zero), not omitted cases.
+Of **102 valid probes, 72 voice and 30 refuse**, agreeing with independent math
+and confidence, with no octave estimates. **72 Hz-boundary probes** bracket
+the independently fitted raw Hz by ±0.1 Hz on both minimum and maximum bounds;
+all agree with conservative admission/refusal and exact integer support.
+
+The narrow range cannot admit a 17-sample lag, so a separate full 50–1000 Hz
+grid records rather than hides the remaining threshold tradeoff. Its exact
+one-support selection (W/L/T=320/160/481) uses the same 8.5-sample signal:
+
+```text
+q=0.010000000: chosen lag17, 470.540248655 Hz, confidence1, OCTAVE ERROR
+q=0.075531284: chosen lag17, 470.540248655 Hz, confidence1, OCTAVE ERROR
+q=0.075551284: chosen lag8, 941.176470588 Hz, confidence0.924458716
+q=0.150000000: chosen lag8, 941.176470588 Hz, confidence0.924458716
+q=0.300000000: chosen lag8, 941.176470588 Hz, confidence0.924458716
+```
+
+These **two octave errors in five wide-range threshold probes** are explicitly
+expected by the primary selection equations: a stricter q rejects the true
+interpolated trough while its perfect two-period repetition remains admissible.
+They are not counted as correct pitch or folded into the default-q grid's zero
+octave claim. The limitation test passes because the public detector agrees
+with direct math and reports the errors; it is not evidence that stricter
+thresholds eliminate octave mistakes. Confidence near 1 on that wrong octave
+is a further reason not to interpret periodicity as F0 probability. Preventing
+all such harmonic/threshold errors would require further quality research or
+tracking policy, outside this numerical correction. The default-q reviewer
+case and bounded declared default grid are corrected, not universal F0 quality.
+
+No new allocations, FFT calls, plan caches or buffers are introduced. Memory
+and work formulas are unchanged. The new local-trough fit adds only bounded
+O(L) scalar work under existing conservative 32*(L+2)+128 and 32*N allowances;
+3*N-log-N transforms still dominate. The final 30 s run used preparation
+219 µs and analysis **503 ms / 59.6×** audio speed, with the same **1,093,504-byte
+requested heap peak, 13 allocation calls, 31,828,032,000 work units** and zero
+tracked bytes after drop. The final explicit 30-minute run passed on frozen
+pitch.rs/test hashes below: **33,282 ms / 54.1×** audio speed, **180,000 estimates
+/ one voiced segment**, borrowed source **345,600,000 bytes**, output capacity
+**24,480,000 bytes**, requested heap peak **25,165,504 bytes**, **13 allocation
+calls**, **1,909,681,920,000 work units**, zero tracked bytes after drop. An earlier
+repaired-source run before adding the final limitation test took 30,096 ms with
+the same heap/work figures; CPU timing varies with scheduling/load. These are
+worker measurements, not OS RSS, realtime deadlines or listening evidence.
+All real-vocal/listening, broader-platform, full M3 editor/render/warp and
+realtime-correction requirements remain open. Parent R2 review and attachment
+authorization remain separate; no parity row or integration gate is closed.
+
+## R1 frozen-source reproduction and hashes
+
+Same MSVC/Rust/CPU/build environment as 603, using msvc-env.sh, jobs=1 and the
+private target/m3-native (test-local TS_RS_EXPORT_DIR unchanged). Commands were
+serial, with no other Cargo owner in this worktree:
+
+```text
+cargo test -p windfall-analysis --test pitch_analysis r1_fractional_period_harmonic_trough_does_not_skip_to_octave --locked --offline -- --exact --test-threads=1 --nocapture
+# compiled RED against unchanged 603, then GREEN after selection correction
+cargo test -p windfall-analysis --locked --offline -- --test-threads=1 --nocapture
+# frozen-source final: 8 + 30 + 17 passed, one long test ignored
+cargo clippy -p windfall-analysis --all-targets --locked --offline -- -D warnings
+# frozen source: passed without suppression
+rustfmt --edition 2024 --check crates/windfall-analysis/src/pitch.rs crates/windfall-analysis/tests/pitch_analysis.rs
+# passed
+cargo test -p windfall-analysis --test pitch_analysis thirty_minute_valid_clip_measurement --locked --offline -- --ignored --exact --test-threads=1 --nocapture
+# explicit long resource test on frozen final numerical/test source
+git diff --check
+# passed; final incremental window is exactly three paths
+```
+
+Final source SHA256:
+
+```text
+crates/windfall-analysis/src/pitch.rs
+58a63912d2842f61e976867db1490b13cd0fb4b48373dd2f8b96d2e57bdd0f1f
+crates/windfall-analysis/tests/pitch_analysis.rs
+7ce54c56bd2bce5639d3d829ed232c173486d1dbe16b68dbdbf925743a1b40af
+```
+
+The incremental local source-only commit has direct parent
+`60327573326a27ebdf000588e0ff0a7239ec30c0`, preserving its direct base
+`7027569f8b466242a75faf327381e6ac44c88d28`. Only pitch.rs, pitch_analysis.rs and
+this doc change; lib.rs/Cargo.toml/Cargo.lock bytes remain exactly those of 603.
+No amendments, new dependencies, source/job/UI/IPC/registry edits, parent imports,
+push, PR, release, new agents or review threads. The full phases 0–7 / 342-row
+parent objective remains active; parent alone starts fresh R2.

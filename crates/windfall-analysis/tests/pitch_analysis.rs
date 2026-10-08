@@ -191,6 +191,393 @@ fn calibrated_notes_all_rates_and_harmonic_octave_traps() {
 }
 
 #[test]
+fn r1_fractional_period_harmonic_trough_does_not_skip_to_octave() {
+    // Spec reviewer case: period 8.5 samples at 8 kHz. The second partial is
+    // 1.2 times the fundamental. Both are below Nyquist; the fundamental's
+    // analytic period is 8.5, not the integer-aligned second period at 17.
+    let hz = 8000.0 / 8.5;
+    let pcm: Vec<_> = (0..2400)
+        .map(|j| {
+            let phase = TAU * j as f64 / 8.5;
+            (0.4 * phase.sin() + 0.48 * (2.0 * phase).sin()) as f32
+        })
+        .collect();
+    let cfg = config(8000);
+    assert_eq!(cfg.yin_threshold, 0.15);
+    // Direct f64 sample differences, independent of FFT/prefix-energy code.
+    // The first support starts at frame zero, W=320 for 8 kHz / min=50 Hz.
+    let cmnd = direct_cmnd(&pcm[..481], 320, 17);
+    let lag = if cmnd[8] < cmnd[9] { 8 } else { 9 };
+    let sampled = cmnd[lag];
+    let (_, depth) = reference_parabola(cmnd[lag - 1], cmnd[lag], cmnd[lag + 1]);
+    println!(
+        "R1 direct math: sampled_depth={sampled:.9}, interpolated_depth={depth:.9}, lag17_depth={:.9}",
+        cmnd[17]
+    );
+    assert!(sampled > 0.15 && depth < 0.15);
+    let result = analyze(&pcm, cfg, 1);
+    assert_complete(&result);
+    let measured: Vec<_> = result.estimates().iter().map(|e| e.f0_hz).collect();
+    let octave_errors = measured
+        .iter()
+        .filter(|f| f.is_some_and(|f| cents(f, hz) >= 600.0))
+        .count();
+    println!(
+        "R1 case: expected_hz={hz:.9}, first_hz={:?}, first_confidence={:.9}, voiced={}, octave_errors={octave_errors}",
+        measured[0],
+        result.estimates()[0].confidence,
+        measured.iter().filter(|f| f.is_some()).count()
+    );
+    assert_eq!(
+        octave_errors, 0,
+        "an 8.5-sample period must not be replaced by its 17-sample octave"
+    );
+    assert!(
+        measured
+            .iter()
+            .all(|f| f.is_some_and(|f| cents(f, hz) <= 25.0))
+    );
+}
+
+// Deliberately slow bounded test reference: no FFT, prefix energies, production
+// helpers or chosen Hz as truth. Raw PCM differences cancel any constant mean.
+fn direct_cmnd(pcm: &[f32], comparison: usize, max_lag: usize) -> Vec<f64> {
+    let mut scores = vec![1.0];
+    let mut total = 0.0;
+    for lag in 1..=max_lag {
+        let squared = direct_difference(pcm, comparison, lag);
+        total += squared;
+        scores.push(if total > 0.0 {
+            squared / (total / lag as f64)
+        } else {
+            1.0
+        });
+    }
+    scores
+}
+
+fn direct_difference(pcm: &[f32], comparison: usize, lag: usize) -> f64 {
+    pcm[..comparison]
+        .iter()
+        .zip(&pcm[lag..lag + comparison])
+        .map(|(a, b)| (f64::from(*a) - f64::from(*b)).powi(2))
+        .sum()
+}
+
+// Fit q(x)=quadratic*x^2+linear*x+constant through x=-1,0,+1;
+// solve q'(x)=0 and evaluate q at its vertex. Independent direct reference math.
+fn reference_parabola(left: f64, middle: f64, right: f64) -> (f64, f64) {
+    let quadratic = (left + right) / 2.0 - middle;
+    let linear = (right - left) / 2.0;
+    let x = -linear / (2.0 * quadratic);
+    (x, quadratic * x * x + linear * x + middle)
+}
+
+#[test]
+fn fractional_period_rate_and_harmonic_grid_has_no_octave_errors() {
+    // Declared before execution: all eight rates, two period bands, seven
+    // fractions, four second-partial ratios and two phases = 896 cases.
+    // F0 truth is rate/period; no detector or reference detector supplies it.
+    let mut errors = Vec::new();
+    let mut cells = 0;
+    let mut voiced = 0;
+    let mut octave_errors = 0;
+    let mut cases = 0;
+    for rate in [8000, 12000, 16000, 22050, 44100, 48000, 96000, 192000] {
+        let cfg = PitchConfig {
+            max_hz: 2000.0_f64.min(f64::from(rate) / 8.0),
+            ..config(rate)
+        };
+        assert_eq!(cfg.yin_threshold, 0.15);
+        let mut analyzer =
+            PitchAnalyzer::prepare(cfg, PitchLimits::default(), &mut work()).unwrap();
+        let first_period = (f64::from(rate) / cfg.max_hz).ceil();
+        for band in [0.0, 8.0] {
+            for fraction in [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875] {
+                let period = first_period + band + fraction;
+                let hz = f64::from(rate) / period;
+                for ratio in [0.0, 0.6, 1.2, 2.0] {
+                    for phase_offset in [0.0, 0.7] {
+                        let pcm: Vec<_> = (0..rate / 10)
+                            .map(|j| {
+                                let phase = TAU * f64::from(j) / period + phase_offset;
+                                (0.3 * phase.sin() + ratio * 0.3 * (2.0 * phase).sin()) as f32
+                            })
+                            .collect();
+                        let result = analyzer
+                            .analyze(source(&pcm, rate, 1), &mut work())
+                            .unwrap();
+                        assert_complete(&result);
+                        cases += 1;
+                        for estimate in result.estimates() {
+                            cells += 1;
+                            if let Some(f0) = estimate.f0_hz {
+                                voiced += 1;
+                                let error = cents(f0, hz);
+                                octave_errors += usize::from(error >= 600.0);
+                                errors.push(error);
+                                assert!(
+                                    error <= 25.0,
+                                    "rate={rate} period={period} ratio={ratio} phase={phase_offset}: expected={hz}, measured={f0}, cents={error}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 896);
+    let p95 = percentile(&mut errors, 0.95);
+    println!(
+        "fractional grid: cases={cases}, cells={cells}, voiced={voiced}, p95_cents={p95:.9}, max_cents={:.9}, octave_errors={octave_errors}",
+        errors.last().unwrap()
+    );
+    assert!(voiced as f64 / cells as f64 >= 0.99);
+    assert_eq!(octave_errors, 0);
+}
+
+#[test]
+fn interpolated_trough_threshold_and_hz_boundaries_match_direct_reference() {
+    // Eighteen independently synthesized short-window cases. A single cell's
+    // fixed geometry is known before analysis: W=18, L=9, T=28, center=400,
+    // support=[386,414). The range cannot admit a 17-sample subharmonic.
+    let base = PitchConfig {
+        min_hz: 900.0,
+        hop_frames: 800,
+        ..config(8000)
+    };
+    let origin = (1_u64 << 54) + 17;
+    let mut threshold_probes = 0;
+    let mut invalid_probes = 0;
+    let mut range_probes = 0;
+    let mut voiced = 0;
+    let mut refused = 0;
+    let mut boundary_octaves = 0;
+    for period in [8.25, 8.5, 8.75] {
+        for ratio in [0.6, 1.2, 2.0] {
+            for phase_offset in [0.0, 0.7] {
+                let pcm: Vec<_> = (0..800)
+                    .map(|j| {
+                        let p = TAU * j as f64 / period + phase_offset;
+                        (0.3 * p.sin() + 0.3 * ratio * (2.0 * p).sin()) as f32
+                    })
+                    .collect();
+                let window = &pcm[386..414];
+                let scores = direct_cmnd(window, 18, 10);
+                // Polynomial coefficients/derivative, not production helpers.
+                let troughs: Vec<_> = (2..=9)
+                    .filter(|k| scores[*k] < scores[*k - 1] && scores[*k] <= scores[*k + 1])
+                    .map(|k| {
+                        let (_, depth) =
+                            reference_parabola(scores[k - 1], scores[k], scores[k + 1]);
+                        let raw: Vec<_> = (k - 1..=k + 1)
+                            .map(|lag| direct_difference(window, 18, lag))
+                            .collect();
+                        let (offset, _) = reference_parabola(raw[0], raw[1], raw[2]);
+                        (
+                            k,
+                            depth.max(0.0),
+                            8000.0 / (k as f64 + offset.clamp(-0.5, 0.5)),
+                        )
+                    })
+                    .collect();
+                let fundamental = troughs.iter().find(|(k, _, _)| *k >= 8).unwrap();
+                // Bracket the independently calculated ordinate by 1e-5, plus
+                // exact supported config endpoints and the unchanged default.
+                for threshold in [
+                    0.01,
+                    fundamental.1 - 1e-5,
+                    fundamental.1 + 1e-5,
+                    0.15,
+                    0.29999,
+                    0.3,
+                ] {
+                    let cfg = PitchConfig {
+                        yin_threshold: threshold,
+                        ..base
+                    };
+                    threshold_probes += 1;
+                    if !(0.01..=0.3).contains(&threshold) {
+                        // A modeled zero trough is already below every valid
+                        // threshold; probing below it must refuse config.
+                        assert!(matches!(
+                            PitchAnalyzer::prepare(cfg, PitchLimits::default(), &mut work()),
+                            Err(PitchError::Invalid(_))
+                        ));
+                        invalid_probes += 1;
+                        continue;
+                    }
+                    let expected = troughs
+                        .iter()
+                        .find(|(_, depth, _)| *depth < threshold)
+                        .filter(|(_, _, hz)| (cfg.min_hz..=cfg.max_hz).contains(hz));
+                    let mut a =
+                        PitchAnalyzer::prepare(cfg, PitchLimits::default(), &mut work()).unwrap();
+                    assert_eq!(a.resources().support_frames, 28);
+                    let mut input = source(&pcm, 8000, 1);
+                    input.frame_origin = origin;
+                    let req = a.requirements(input).unwrap();
+                    let mut w = work();
+                    let result = a.analyze(input, &mut w).unwrap();
+                    assert_complete(&result);
+                    assert_eq!(w.completed(), req.work_units);
+                    assert_eq!(result.estimates().len(), 1);
+                    let e = result.estimates()[0];
+                    assert_eq!(
+                        e.support,
+                        FrameRange {
+                            start: origin + 386,
+                            end: origin + 414
+                        }
+                    );
+                    assert_eq!(e.center_frame, origin + 400);
+                    assert_eq!(
+                        e.f0_hz.is_some(),
+                        expected.is_some(),
+                        "threshold={threshold} period={period} ratio={ratio} phase={phase_offset}"
+                    );
+                    match expected {
+                        Some((_, depth, hz)) => {
+                            assert!((e.f0_hz.unwrap() - hz).abs() < 1e-8);
+                            assert!((e.confidence - (1.0 - depth).clamp(0.0, 1.0)).abs() < 1e-10);
+                            boundary_octaves +=
+                                usize::from(cents(e.f0_hz.unwrap(), 8000.0 / period) >= 600.0);
+                            voiced += 1;
+                        }
+                        None => {
+                            assert_eq!(e.confidence, 0.0);
+                            refused += 1;
+                        }
+                    }
+                }
+                let selected = troughs.iter().find(|(_, depth, _)| *depth < 0.15).unwrap();
+                assert!((900.0..1000.0).contains(&selected.2));
+                // Both sides of Hz admission using independently known raw-fit
+                // Hz. All four min bounds still imply L=9, so no window change.
+                for cfg in [
+                    PitchConfig {
+                        max_hz: selected.2 - 0.1,
+                        ..base
+                    },
+                    PitchConfig {
+                        max_hz: selected.2 + 0.1,
+                        ..base
+                    },
+                    PitchConfig {
+                        min_hz: selected.2 - 0.1,
+                        ..base
+                    },
+                    PitchConfig {
+                        min_hz: selected.2 + 0.1,
+                        ..base
+                    },
+                ] {
+                    range_probes += 1;
+                    let expected = (cfg.min_hz..=cfg.max_hz).contains(&selected.2);
+                    let result = analyze(&pcm, cfg, 1);
+                    assert_complete(&result);
+                    let e = result.estimates()[0];
+                    assert_eq!(
+                        e.support,
+                        FrameRange {
+                            start: 386,
+                            end: 414
+                        }
+                    );
+                    assert_eq!(
+                        e.f0_hz.is_some(),
+                        expected,
+                        "range [{},{}] vs {}",
+                        cfg.min_hz,
+                        cfg.max_hz,
+                        selected.2
+                    );
+                    if expected {
+                        assert!((e.f0_hz.unwrap() - selected.2).abs() < 1e-8);
+                    } else {
+                        assert_eq!(e.confidence, 0.0);
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "boundary grid: threshold_probes={threshold_probes}, invalid_config={invalid_probes}, voiced={voiced}, refused={refused}, range_probes={range_probes}, octave_errors={boundary_octaves}"
+    );
+    assert_eq!(threshold_probes, 108);
+    assert_eq!(range_probes, 72);
+    assert_eq!(boundary_octaves, 0);
+}
+
+#[test]
+fn wide_range_threshold_grid_records_strict_threshold_subharmonic_limit() {
+    // Do not hide the remaining threshold/periodicity tradeoff behind a narrow
+    // range. W=320, L=160, T=481 with one hop cell admits the 17-sample octave.
+    let cfg = PitchConfig {
+        hop_frames: 800,
+        ..config(8000)
+    };
+    let pcm: Vec<_> = (0..481)
+        .map(|j| {
+            let p = TAU * j as f64 / 8.5;
+            (0.4 * p.sin() + 0.48 * (2.0 * p).sin()) as f32
+        })
+        .collect();
+    let scores = direct_cmnd(&pcm, 320, 161);
+    let troughs: Vec<_> = (2..=160)
+        .filter(|k| scores[*k] < scores[*k - 1] && scores[*k] <= scores[*k + 1])
+        .map(|k| {
+            let (_, depth) = reference_parabola(scores[k - 1], scores[k], scores[k + 1]);
+            let raw: Vec<_> = (k - 1..=k + 1)
+                .map(|lag| direct_difference(&pcm, 320, lag))
+                .collect();
+            let (offset, _) = reference_parabola(raw[0], raw[1], raw[2]);
+            (
+                k,
+                depth.max(0.0),
+                8000.0 / (k as f64 + offset.clamp(-0.5, 0.5)),
+            )
+        })
+        .collect();
+    let depth = troughs.iter().find(|(k, _, _)| *k == 8).unwrap().1;
+    assert!((0.01..0.15).contains(&depth));
+    let mut octave_errors = 0;
+    for threshold in [0.01, depth - 1e-5, depth + 1e-5, 0.15, 0.3] {
+        let selected = troughs.iter().find(|(_, d, _)| *d < threshold).unwrap();
+        let result = analyze(
+            &pcm,
+            PitchConfig {
+                yin_threshold: threshold,
+                ..cfg
+            },
+            1,
+        );
+        assert_complete(&result);
+        assert_eq!(result.estimates().len(), 1);
+        let measured = result.estimates()[0].f0_hz.unwrap();
+        assert!((measured - selected.2).abs() < 1e-8);
+        let octave = cents(measured, 8000.0 / 8.5) >= 600.0;
+        octave_errors += usize::from(octave);
+        println!(
+            "wide threshold: q={threshold:.9}, reference_lag={}, hz={measured:.9}, confidence={:.9}, octave_error={octave}",
+            selected.0,
+            result.estimates()[0].confidence
+        );
+        // At and above the unchanged default this case must recover F0; stricter
+        // than the directly known first-trough depth records, rather than
+        // suppresses, the remaining primary-selection subharmonic limitation.
+        if threshold > depth {
+            assert!(!octave);
+        } else {
+            assert!(octave);
+        }
+    }
+    println!("wide threshold grid: probes=5, octave_errors={octave_errors}");
+    assert_eq!(octave_errors, 2);
+}
+
+#[test]
 fn glide_and_vibrato_phase_derivative_reference() {
     for vibrato in [false, true] {
         // Vibrato frequency = 220 + depth*sin(2*pi*5*t), exactly ±35 cents

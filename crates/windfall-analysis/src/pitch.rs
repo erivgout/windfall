@@ -5,7 +5,7 @@ use rustfft::{Fft, FftDirection, algorithm::Radix4, num_complex::Complex};
 use std::mem::size_of;
 use thiserror::Error;
 
-pub const ALGORITHM_VERSION: &str = "windfall-fixed-window-yin-fft-v1";
+pub const ALGORITHM_VERSION: &str = "windfall-fixed-window-yin-fft-v2";
 const VALIDATION_CHUNK: usize = 4096;
 
 pub type PitchResult<T> = std::result::Result<T, PitchError>;
@@ -102,7 +102,7 @@ pub struct PitchConfig {
     pub max_hz: f64,
     pub hop_frames: u32,
     pub channel_policy: ChannelPolicy,
-    /// First normalized-difference trough strictly below this threshold.
+    /// First interpolated normalized-difference trough strictly below this threshold.
     pub yin_threshold: f64,
     pub rms_floor: f64,
     /// Adjacent voiced cells farther apart than this start a new region.
@@ -166,7 +166,8 @@ pub struct PitchEstimate {
     pub support: FrameRange,
     pub channel: u16,
     pub f0_hz: Option<f64>,
-    /// Periodicity, not a probability of correct F0. Zero on rejected cells.
+    /// One minus interpolated CMND trough depth, not a probability of correct F0.
+    /// Zero on rejected cells.
     pub confidence: f64,
     pub rms: f64,
 }
@@ -596,21 +597,25 @@ impl PitchAnalyzer {
         self.inverse
             .process_with_scratch(&mut self.a, &mut self.scratch);
         work.check()?;
-        let w = self.resources.comparison_frames;
-        let scale = self.resources.fft_len as f64;
         self.difference[0] = 0.0;
         for lag in 1..self.difference.len() {
-            let energy = self.energy[w] + self.energy[w + lag] - self.energy[lag];
-            let d = energy - 2.0 * self.a[lag].re / scale;
-            // Only roundoff in the derived sum may be clamped; PCM is untouched.
-            if !d.is_finite()
-                || d < -1e-10 * self.energy[self.resources.support_frames].max(f64::MIN_POSITIVE)
-            {
-                return Err(PitchError::Numerical);
-            }
-            self.difference[lag] = d.max(0.0);
+            self.difference[lag] = self.raw_difference(lag)?;
         }
         Ok(())
+    }
+
+    // Use identical checked raw math for CMND and final period interpolation.
+    fn raw_difference(&self, lag: usize) -> PitchResult<f64> {
+        let w = self.resources.comparison_frames;
+        let energy = self.energy[w] + self.energy[w + lag] - self.energy[lag];
+        let d = energy - 2.0 * self.a[lag].re / self.resources.fft_len as f64;
+        // Only roundoff in this derived sum may be clamped; PCM is untouched.
+        if !d.is_finite()
+            || d < -1e-10 * self.energy[self.resources.support_frames].max(f64::MIN_POSITIVE)
+        {
+            return Err(PitchError::Numerical);
+        }
+        Ok(d.max(0.0))
     }
 
     fn detect(&mut self, work: &Work) -> PitchResult<(Option<f64>, f64)> {
@@ -627,34 +632,31 @@ impl PitchAnalyzer {
         // interpolated Hz itself must be inside the requested bounds.
         let mut lag = 2;
         while lag <= self.resources.max_lag {
-            if self.difference[lag] < self.config.yin_threshold {
-                while lag < self.resources.max_lag
-                    && self.difference[lag + 1] < self.difference[lag]
-                {
-                    lag += 1;
-                }
+            let left = self.difference[lag - 1];
+            let middle = self.difference[lag];
+            let right = self.difference[lag + 1];
+            // YIN II.E selects on the INTERPOLATED CMND minimum's ordinate.
+            // A sampled trough can exceed threshold at fractional periods even
+            // though its interpolated minimum is admissible. Strict descent
+            // and nonstrict ascent choose the leftmost point of a flat trough.
+            let depth = if middle < left && middle <= right {
+                parabolic_minimum(left, middle, right).1
+            } else {
+                1.0
+            };
+            if depth < self.config.yin_threshold {
                 // YIN II.E: CMND chooses the trough; raw differences interpolate
                 // its abscissa to avoid normalization's fine bias. Correlation
                 // and energies remain available, so no extra lag buffer.
-                let raw = |k: usize| {
-                    let w = self.resources.comparison_frames;
-                    (self.energy[w] + self.energy[w + k]
-                        - self.energy[k]
-                        - 2.0 * self.a[k].re / self.resources.fft_len as f64)
-                        .max(0.0)
-                };
-                let a = raw(lag - 1);
-                let b = raw(lag);
-                let c = raw(lag + 1);
-                let denominator = a - 2.0 * b + c;
-                let offset = if denominator > 0.0 {
-                    (0.5 * (a - c) / denominator).clamp(-0.5, 0.5)
-                } else {
-                    0.0
-                };
+                let offset = parabolic_minimum(
+                    self.raw_difference(lag - 1)?,
+                    self.raw_difference(lag)?,
+                    self.raw_difference(lag + 1)?,
+                )
+                .0;
                 let hz = f64::from(self.config.sample_rate) / (lag as f64 + offset);
                 if (self.config.min_hz..=self.config.max_hz).contains(&hz) {
-                    return Ok((Some(hz), (1.0 - self.difference[lag]).clamp(0.0, 1.0)));
+                    return Ok((Some(hz), (1.0 - depth).clamp(0.0, 1.0)));
                 }
                 // An out-of-range first trough must not turn into a subharmonic.
                 return Ok((None, 0.0));
@@ -663,4 +665,19 @@ impl PitchAnalyzer {
         }
         Ok((None, 0.0))
     }
+}
+
+/// Three points at -1,0,+1. CMND uses the ordinate; raw differences use only
+/// the abscissa. Clamping the vertex keeps interpolation between neighbors;
+/// clamping a negative modeled depth preserves the periodicity score's 0..1
+/// domain without changing threshold acceptance (all thresholds are positive).
+fn parabolic_minimum(left: f64, middle: f64, right: f64) -> (f64, f64) {
+    let curvature = left - 2.0 * middle + right;
+    let offset = if curvature > 0.0 {
+        (0.5 * (left - right) / curvature).clamp(-0.5, 0.5)
+    } else {
+        0.0
+    };
+    let depth = middle + 0.5 * offset * (right - left + offset * curvature);
+    (offset, depth.max(0.0))
 }
