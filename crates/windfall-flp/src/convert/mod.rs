@@ -497,34 +497,6 @@ impl<'a> Builder<'a> {
             );
         }
 
-        let pattern_markers = flp.patterns.iter().flat_map(|pattern| &pattern.markers);
-        let (mut plain, mut signatures) = (0_u32, 0_u32);
-        for marker in pattern_markers {
-            if marker.is_time_signature() {
-                signatures += 1;
-            } else {
-                plain += 1;
-            }
-        }
-        if plain > 0 {
-            self.report.count(section, Outcome::Dropped, plain);
-            self.report.say(
-                section,
-                Outcome::Dropped,
-                format!("{plain} pattern markers were left out: per-pattern timelines are not supported yet."),
-            );
-        }
-        if signatures > 0 {
-            self.report.count(section, Outcome::Dropped, signatures);
-            self.report.say(
-                section,
-                Outcome::Dropped,
-                format!(
-                    "{signatures} pattern changes of time signature were left out: per-pattern meter maps are not supported yet."
-                ),
-            );
-        }
-
         let recorded: usize = flp
             .patterns
             .iter()

@@ -1,6 +1,6 @@
 import { create } from "zustand"
 
-import type { ChopStep, Note, NoteEdge, NoteTransform } from "@/bindings"
+import type { ChopStep, Note, NoteEdge, NoteMusicalGrid, NoteTransform } from "@/bindings"
 import { useProjectStore } from "@/lib/store/project"
 import { onProjectReplaced } from "@/lib/store/replaced"
 
@@ -97,6 +97,19 @@ export const NOTE_TOOLS: {
   },
 ]
 
+NOTE_TOOLS.push(
+  { value: "randomize", label: "Randomize / humanize", description: "Apply seeded pitch, velocity, pan, timing and length offsets to the selected notes. Expression and color groups stay with their source notes." },
+  { value: "generateRandom", label: "Generate random notes", description: "Replace the selection with seeded grid hits from a chord map within its time span. Generated notes inherit source pan, expression and color groups." },
+)
+
+/** Semitone classes relative to the chosen root: 0,4,7 is a major triad. */
+export function parseChordMap(text: string): number | null {
+  if (!text.trim() || text.length > 128) return null
+  const parts = text.split(",").map((part) => part.trim())
+  if (parts.length > 12 || parts.some((part) => !/^(?:[0-9]|1[01])$/.test(part))) return null
+  return parts.reduce((mask, part) => mask | 1 << Number(part), 0)
+}
+
 /** Parse controls only; Rust owns every rhythmic calculation and output check. */
 export function parseChopSteps(
   text: string,
@@ -141,6 +154,7 @@ export type ToolRequest = {
   tool: NoteTool
   edge: NoteEdge
   grid: number
+  musical: NoteMusicalGrid
   pattern: number
   channel: number
   notes: Note[]
@@ -169,6 +183,7 @@ export function openNoteTools(tool: NoteTool, edge: NoteEdge = "start"): void {
       tool,
       edge,
       grid: session.editor.snapInterval || 240,
+      musical: session.editor.snapMusicalGrid ?? { signature: context.pattern.signature, meters: context.pattern.timeline?.meters ?? [], unit: "step", divisor: 1 },
       pattern: context.pattern.id,
       channel: context.channel,
       notes: notes.map((note) => ({ ...note })),

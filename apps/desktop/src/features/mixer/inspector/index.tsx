@@ -7,6 +7,13 @@ import {
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Fragment, useEffect, useRef } from "react"
+import { MixerRecordingPanel } from "../recording-input"
+import { ExternalOutputPanel } from "../external-output"
+import { LatencyOffsetPanel } from "../latency-offset"
+import { CurrentSourcePanel } from "../current-source"
+import { SidechainPanel } from "../sidechains"
+import { TrackPresetsPanel } from "../track-presets"
+import { TrackProcessingPanel } from "../track-processing"
 
 import type { TrackId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
@@ -44,7 +51,8 @@ function useTrackFace(id: TrackId | null) {
     (state) =>
       state.project.mixer.tracks.find((track) => track.id === id)?.color ?? 0
   )
-  return { name, color }
+  const current = useProjectStore((state) => state.project.mixer.tracks.find((track) => track.id === id)?.current ?? false)
+  return { name, color, current }
 }
 
 /** Frames the track's own effects delay it by, at the engine's rate. */
@@ -158,7 +166,7 @@ type EffectInspectorProps = {
  */
 export function EffectInspector({ enlarged = false }: EffectInspectorProps) {
   const selected = useUiStore((state) => state.selectedTrack)
-  const { name, color } = useTrackFace(selected)
+  const { name, color, current } = useTrackFace(selected)
   const count = useEffectIds(selected).length
   const root = useRef<HTMLElement>(null)
   // The effects are a scope of their own inside the mixer's. Delete and
@@ -234,6 +242,13 @@ export function EffectInspector({ enlarged = false }: EffectInspectorProps) {
             </ActionButton>
           </div>
         </header>
+        {current && <CurrentSourcePanel />}
+        {selected !== null && name !== null && <SidechainPanel key={`sidechain-${selected}`} track={selected} />}
+        {selected !== null && name !== null && <TrackPresetsPanel key={`presets-${selected}`} track={selected} />}
+        {selected !== null && name !== null && <TrackProcessingPanel key={`processing-${selected}`} track={selected} />}
+        {!current && selected !== null && name !== null && <MixerRecordingPanel key={`input-${selected}`} track={selected} />}
+        {!current && selected !== null && name !== null && <ExternalOutputPanel key={`output-${selected}`} track={selected} />}
+        {!current && selected !== null && name !== null && <LatencyOffsetPanel key={`latency-${selected}`} track={selected} />}
         {selected !== null && name !== null ? (
           // Keyed by track so a drag in flight never lands on another one.
           <Chain key={selected} track={selected} />

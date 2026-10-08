@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react"
+import { useMemo, useSyncExternalStore } from "react"
 
 import { scrollToReveal, STRIP_WIDTH } from "./layout"
 
@@ -20,7 +20,7 @@ const UNMEASURED: StripView = { width: 0, height: 0, offset: 0, scrollbar: 0 }
  * in. The scroll position is rounded to whole strips, so scrolling renders
  * the panel only when a strip comes into or leaves the view.
  */
-function createStripView() {
+function createStripView(width: number) {
   let element: HTMLElement | null = null
   let view = UNMEASURED
   const listeners = new Set<() => void>()
@@ -30,7 +30,7 @@ function createStripView() {
     const next: StripView = {
       width: element.clientWidth,
       height: element.clientHeight,
-      offset: Math.floor(element.scrollLeft / STRIP_WIDTH) * STRIP_WIDTH,
+      offset: Math.floor(element.scrollLeft / width) * width,
       scrollbar: Math.max(0, element.offsetHeight - element.clientHeight),
     }
     if (
@@ -73,7 +73,8 @@ function createStripView() {
       const target = scrollToReveal(
         index,
         element.scrollLeft,
-        element.clientWidth
+        element.clientWidth,
+        width
       )
       if (target === null) return
       element.scrollLeft = target
@@ -83,8 +84,8 @@ function createStripView() {
 }
 
 /** The view of the strip scroller, and the handle to attach and scroll it. */
-export function useStripView() {
-  const [store] = useState(createStripView)
+export function useStripView(width = STRIP_WIDTH) {
+  const store = useMemo(() => createStripView(width), [width])
   const view = useSyncExternalStore(store.subscribe, store.current)
   return { view, attach: store.attach, reveal: store.reveal }
 }

@@ -1,14 +1,19 @@
 import { logicalDelta, logicalWheel } from "@/lib/ui-scale"
 import {
   createPointerFrame,
+  hitTestPoint,
   type PointerFrame,
   type TimeGridView,
 } from "@/lib/canvas"
+import { useProjectStore } from "@/lib/store/project"
+import { useUiStore } from "@/lib/store/ui"
 
 import type { PointerInput } from "./editor"
 import { cursorFor } from "./intents"
 import type { PianoRollSession } from "./session"
 import { usePianoRollStore } from "./store"
+import { readContext } from "./create-session"
+import { buildGhostBatch } from "./ghosts"
 
 const WHEEL_ZOOM = 0.0015
 /** Dragging this close to an edge, or past it, scrolls the view along. */
@@ -168,6 +173,26 @@ export function attachGridInput(
     last = toInput(frame, event)
     pressed = last
     travelled = false
+    const preferences = usePianoRollStore.getState()
+    const editing = session.editing
+    if (event.button === 0 && editing && preferences.ghosts && preferences.editGhosts &&
+      !editor.busy && !editor.hasStampChoice && !hitTestPoint(view.viewport, editor.items, last.x, last.y)) {
+      const project = useProjectStore.getState().project
+      const pattern = project.patterns.find((pattern) => pattern.id === editing.patternId)
+      const lanes = pattern?.lanes.filter((lane) => lane.channel !== editing.channelId) ?? []
+      const ghosts = buildGhostBatch(lanes, view.theme)
+      const hit = ghosts ? hitTestPoint(view.viewport, ghosts, last.x, last.y) : null
+      const source = hit && lanes.find((lane) => lane.notes.some((note) => note.id === hit.id))
+      if (source && project.channels.some((channel) => channel.id === source.channel)) {
+        const context = readContext(editing.patternId, source.channel)
+        if (context) {
+          session.keepViewportForLane(`${editing.patternId}:${source.channel}`)
+          session.setEditing(editing.patternId, source.channel)
+          editor.setContext(context)
+          useUiStore.getState().selectChannel(source.channel)
+        }
+      }
+    }
     editor.pointerDown(last, event.button === 0 ? "left" : "right")
     if (!editor.hasPointerGesture) {
       stopAutoScroll()

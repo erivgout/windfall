@@ -15,6 +15,7 @@ use crate::blocks::shaper::soft_clip;
 use crate::blocks::smooth::LinearRamp;
 use crate::blocks::svf::{Svf, SvfCoeffs, cutoff_gain};
 use crate::instrument::Instrument;
+use crate::{NoteExpression, NoteInstanceId};
 use crate::param::{ParamSet, param_set};
 
 /// Most notes that can sound at full level at once.
@@ -616,10 +617,27 @@ enum Stage {
     Choked,
 }
 
-struct Voice {
-    stage: Stage,
+#[derive(Clone, Copy)]
+struct HeldNote {
+    id: NoteInstanceId,
     key: u8,
     velocity: f32,
+    pan: f32,
+    expression: NoteExpression,
+    pitch: f32,
+}
+
+impl HeldNote {
+    const EMPTY: Self = Self { id: NoteInstanceId(0), key: 0, velocity: 0.0, pan: 0.0, expression: NoteExpression::NEUTRAL, pitch: 0.0 };
+}
+
+struct Voice {
+    stage: Stage,
+    instance: NoteInstanceId,
+    key: u8,
+    velocity: f32,
+    expression: NoteExpression,
+    note_pan: f32,
     /// Counts up with every note, so the oldest voice can be found.
     order: u64,
     /// Pitch in keys. It advances once per control period, which is how a
@@ -713,8 +731,11 @@ impl Voice {
     fn silent(seed: u32) -> Self {
         Self {
             stage: Stage::Idle,
+            instance: NoteInstanceId(0),
             key: 60,
             velocity: 0.0,
+            expression: NoteExpression::default(),
+            note_pan: 0.0,
             order: 0,
             pitch: LinearRamp::new(60.0),
             oscillators: [OscillatorState::SILENT; OSCILLATORS],
@@ -747,7 +768,7 @@ impl Voice {
             amp.attack_ms.max(MIN_AMP_SEGMENT_MS),
             amp.decay_ms,
             amp.sustain,
-            amp.release_ms.max(MIN_AMP_SEGMENT_MS),
+            (amp.release_ms * self.expression.release_multiplier()).max(MIN_AMP_SEGMENT_MS),
             sample_rate * 2.0,
         );
         // The filter envelope is only read once per control period, so it
@@ -757,7 +778,7 @@ impl Voice {
             filter.attack_ms,
             filter.decay_ms,
             filter.sustain,
-            filter.release_ms,
+            filter.release_ms * self.expression.release_multiplier(),
             sample_rate / CONTROL_PERIOD as f32,
         );
     }
@@ -786,7 +807,7 @@ impl Voice {
         // waveform corrections are valid for.
         let highest = MAX_INCREMENT / patch.detune[patch.unison - 1].max(1.0);
         for (index, state) in self.oscillators.iter_mut().enumerate() {
-            let key = pitch + patch.semitones[index] + modulation.pitch_semitones;
+            let key = pitch + self.expression.fine_pitch_cents / 100.0 + patch.semitones[index] + modulation.pitch_semitones;
             let increment = (key_to_hz(key) / rate).min(highest);
             let width =
                 (params.oscillators[index].pulse_width + modulation.pulse_width).clamp(0.02, 0.98);
@@ -805,6 +826,7 @@ impl Voice {
         let octaves = filter.key_tracking * (pitch - 60.0) / 12.0
             + filter.envelope_octaves * envelope
             + modulation.cutoff_octaves
+            + self.expression.cutoff_octaves()
             + filter.velocity * VELOCITY_OCTAVES * (self.velocity - 1.0);
         let cutoff_hz = (filter.cutoff_hz * octaves.exp2()).clamp(16.0, 0.45 * rate.min(48_000.0));
         let cutoff = cutoff_gain(cutoff_hz, rate);
@@ -899,16 +921,17 @@ impl Voice {
         let [low, band, high] = patch.blend;
         // The band output peaks at Q. Scaling by the damping brings it
         // back to unity.
-        let band = band * patch.damping;
+        let damping = (patch.damping / self.expression.resonance_multiplier()).clamp(0.05, 20.0);
+        let band = band * damping;
         let filter_gain = patch.filter_gain;
         let [first, second] = &mut self.filters;
         // A cutoff that is standing still needs its coefficients only once.
         let moving = self.cutoff_step != 0.0;
-        let mut coeffs = SvfCoeffs::from_gain(self.cutoff, patch.damping);
+        let mut coeffs = SvfCoeffs::from_gain(self.cutoff, damping);
         for (left, right) in left.iter_mut().zip(right.iter_mut()) {
             if moving {
                 self.cutoff += self.cutoff_step;
-                coeffs = SvfCoeffs::from_gain(self.cutoff, patch.damping);
+                coeffs = SvfCoeffs::from_gain(self.cutoff, damping);
             }
             let blend = |filter: &mut Svf, input: f32| {
                 let out = filter.tick(&coeffs, input);
@@ -937,8 +960,9 @@ impl Voice {
         for index in 0..frames {
             self.level += self.level_step;
             let gain = self.amp.tick() * self.level * self.choke.tick();
-            bus_left[index] += left[index] * gain;
-            bus_right[index] += right[index] * gain;
+            let (pan_left, pan_right) = pan_gains(self.note_pan);
+            bus_left[index] += left[index] * gain * (pan_left * std::f32::consts::SQRT_2).min(1.0);
+            bus_right[index] += right[index] * gain * (pan_right * std::f32::consts::SQRT_2).min(1.0);
         }
 
         let faded = self.stage == Stage::Choked && self.choke.is_settled();
@@ -994,12 +1018,13 @@ pub struct SubtractiveSynth {
     decimators: [HalfbandDecimator; 2],
     gain_left: LinearRamp,
     gain_right: LinearRamp,
-    /// Keys held down in mono mode with their velocities, oldest first.
-    held: [(u8, f32); HELD_KEYS],
+    /// Instances held in mono mode with their complete voice controls.
+    held: [HeldNote; HELD_KEYS],
     held_len: usize,
     /// The key of the last note started, which is where a glide begins.
     last_key: Option<u8>,
     notes_started: u64,
+    legacy_instances: u64,
     until_control: usize,
     /// Output samples since a voice last sounded.
     quiet: usize,
@@ -1022,10 +1047,11 @@ impl Default for SubtractiveSynth {
             decimators: [HalfbandDecimator::default(); 2],
             gain_left: LinearRamp::new(0.0),
             gain_right: LinearRamp::new(0.0),
-            held: [(0, 0.0); HELD_KEYS],
+            held: [HeldNote::EMPTY; HELD_KEYS],
             held_len: 0,
             last_key: None,
             notes_started: 0,
+            legacy_instances: 0,
             until_control: 0,
             quiet: QUIET_SAMPLES + 1,
             amount: 1.0,
@@ -1182,7 +1208,8 @@ impl SubtractiveSynth {
 
     /// Starts a note in the voice at `index`. `glide_from` is the key to
     /// slide in from, if any.
-    fn start_voice(&mut self, index: usize, key: u8, velocity: f32, glide_from: Option<u8>) {
+    fn start_voice(&mut self, index: usize, note: HeldNote, glide_from: Option<u8>) {
+        let HeldNote { id, key, velocity, pan, expression, pitch } = note;
         let glide_steps = self.glide_steps();
         let voice = &mut self.voices[index];
         if voice.stage == Stage::Idle {
@@ -1205,15 +1232,18 @@ impl SubtractiveSynth {
         voice.choke.snap(1.0);
         voice.stage = Stage::Held;
         voice.key = key;
+        voice.instance = id;
         voice.velocity = velocity;
+        voice.expression = expression;
+        voice.note_pan = pan;
         voice.order = self.notes_started;
-        self.notes_started += 1;
+        self.notes_started = self.notes_started.wrapping_add(1);
         match glide_from {
             Some(from) if glide_steps > 0 => {
                 voice.pitch.snap(f32::from(from));
-                voice.pitch.set_target(f32::from(key), glide_steps);
+                voice.pitch.set_target(pitch - expression.fine_pitch_cents / 100.0, glide_steps);
             }
-            _ => voice.pitch.snap(f32::from(key)),
+            _ => voice.pitch.snap(pitch - expression.fine_pitch_cents / 100.0),
         }
         voice.configure_envelopes(&self.params, self.sample_rate);
         voice.amp.gate_on();
@@ -1229,7 +1259,7 @@ impl SubtractiveSynth {
         self.quiet = 0;
     }
 
-    fn start_poly(&mut self, key: u8, velocity: f32) {
+    fn start_poly(&mut self, note: HeldNote) {
         let limit = usize::from(self.params.polyphony).clamp(1, MAX_POLYPHONY);
         while self
             .voices
@@ -1244,16 +1274,17 @@ impl SubtractiveSynth {
             }
         }
         let index = self.free_voice();
-        self.start_voice(index, key, velocity, self.last_key);
+        self.start_voice(index, note, self.last_key);
     }
 
-    fn start_mono(&mut self, key: u8, velocity: f32) {
-        self.forget_key(key);
+    fn start_mono(&mut self, note: HeldNote) {
+        let HeldNote { id, key, velocity, pan, expression, pitch } = note;
+        self.forget_instance(id);
         if self.held_len == HELD_KEYS {
             self.held.copy_within(1.., 0);
             self.held_len -= 1;
         }
-        self.held[self.held_len] = (key, velocity);
+        self.held[self.held_len] = note;
         self.held_len += 1;
 
         let legato = self.params.voice_mode == VoiceMode::Legato;
@@ -1261,56 +1292,67 @@ impl SubtractiveSynth {
             let index = self.free_voice();
             // Legato only slides between notes that overlap.
             let glide_from = if legato { None } else { self.last_key };
-            self.start_voice(index, key, velocity, glide_from);
+            self.start_voice(index, note, glide_from);
             return;
         };
         let glide_steps = self.glide_steps();
         let voice = &mut self.voices[index];
         let overlapping = voice.stage == Stage::Held;
         if glide_steps > 0 && (!legato || overlapping) {
-            voice.pitch.set_target(f32::from(key), glide_steps);
+            voice.pitch.set_target(pitch - expression.fine_pitch_cents / 100.0, glide_steps);
         } else {
-            voice.pitch.snap(f32::from(key));
+            voice.pitch.snap(pitch - expression.fine_pitch_cents / 100.0);
         }
         voice.key = key;
+        voice.instance = id;
         voice.stage = Stage::Held;
+        voice.expression = expression;
+        voice.note_pan = pan;
+        voice.velocity = velocity;
+        voice.configure_envelopes(&self.params, self.sample_rate);
+        voice.order = self.notes_started;
+        self.notes_started = self.notes_started.wrapping_add(1);
         if !(legato && overlapping) {
-            voice.velocity = velocity;
             voice.amp.gate_on();
             voice.filter_envelope.gate_on();
         }
         self.last_key = Some(key);
     }
 
-    /// Removes a key from the list of held keys, if it is there.
-    fn forget_key(&mut self, key: u8) {
+    /// Removes just this occurrence, preserving other notes on the same key.
+    fn forget_instance(&mut self, id: NoteInstanceId) {
         if let Some(position) = self.held[..self.held_len]
             .iter()
-            .position(|(held, _)| *held == key)
+            .position(|held| held.id == id)
         {
             self.held.copy_within(position + 1..self.held_len, position);
             self.held_len -= 1;
         }
     }
 
-    fn release_mono(&mut self, key: u8) {
-        self.forget_key(key);
+    fn release_mono(&mut self, id: NoteInstanceId) {
+        self.forget_instance(id);
         let glide_steps = self.glide_steps();
-        let previous = self.held_len.checked_sub(1).map(|last| self.held[last].0);
+        let previous = self.held_len.checked_sub(1).map(|last| self.held[last]);
         for voice in &mut self.voices {
-            if voice.stage != Stage::Held || voice.key != key {
+            if voice.stage != Stage::Held || voice.instance != id {
                 continue;
             }
             match previous {
                 // Another key is still down: go back to it.
                 Some(previous) => {
-                    voice.key = previous;
+                    voice.instance = previous.id;
+                    voice.key = previous.key;
+                    voice.velocity = previous.velocity;
+                    voice.expression = previous.expression;
+                    voice.note_pan = previous.pan;
+                    voice.configure_envelopes(&self.params, self.sample_rate);
                     if glide_steps > 0 {
-                        voice.pitch.set_target(f32::from(previous), glide_steps);
+                        voice.pitch.set_target(previous.pitch - previous.expression.fine_pitch_cents / 100.0, glide_steps);
                     } else {
-                        voice.pitch.snap(f32::from(previous));
+                        voice.pitch.snap(previous.pitch - previous.expression.fine_pitch_cents / 100.0);
                     }
-                    self.last_key = Some(previous);
+                    self.last_key = Some(previous.key);
                 }
                 None => {
                     voice.stage = Stage::Released;
@@ -1355,6 +1397,7 @@ impl Instrument for SubtractiveSynth {
         self.held_len = 0;
         self.last_key = None;
         self.notes_started = 0;
+        self.legacy_instances = 0;
         self.until_control = 0;
         self.quiet = QUIET_SAMPLES + 1;
     }
@@ -1389,22 +1432,15 @@ impl Instrument for SubtractiveSynth {
     }
 
     fn note_on(&mut self, key: u8, velocity: f32) {
-        let key = key.min(127);
-        if velocity.is_nan() || velocity <= 0.0 {
-            self.note_off(key);
-            return;
-        }
-        let velocity = velocity.min(1.0);
-        match self.params.voice_mode {
-            VoiceMode::Poly => self.start_poly(key, velocity),
-            VoiceMode::Mono | VoiceMode::Legato => self.start_mono(key, velocity),
-        }
+        self.note_on_expression(key, velocity, 0.0, NoteExpression::default());
     }
 
     fn note_off(&mut self, key: u8) {
         let key = key.min(127);
         if self.params.voice_mode != VoiceMode::Poly {
-            self.release_mono(key);
+            while let Some(note) = self.held[..self.held_len].iter().find(|note| note.key == key).copied() {
+                self.release_mono(note.id);
+            }
             return;
         }
         for voice in &mut self.voices {
@@ -1412,6 +1448,82 @@ impl Instrument for SubtractiveSynth {
                 voice.stage = Stage::Released;
                 voice.amp.gate_off();
                 voice.filter_envelope.gate_off();
+            }
+        }
+    }
+
+    fn note_on_expression(&mut self, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+        if !velocity.is_finite() || velocity <= 0.0 { self.note_off(key); return; }
+        // Legacy key calls use a separate namespace from engine-owned ids.
+        self.legacy_instances = self.legacy_instances.wrapping_add(1) & (u64::MAX >> 1);
+        if self.legacy_instances == 0 { self.legacy_instances = 1; }
+        self.note_on_instance(NoteInstanceId(self.legacy_instances | (1 << 63)), key, velocity, pan, expression);
+    }
+
+    fn supports_note_instances(&self) -> bool { true }
+
+    fn note_on_instance(&mut self, id: NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+        if id.0 == 0 || !velocity.is_finite() || velocity <= 0.0 { return; }
+        let note = HeldNote {
+            id,
+            key: key.min(127),
+            velocity: velocity.min(1.0),
+            pan: if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 },
+            expression: expression.clamped(),
+            pitch: f32::from(key.min(127)) + expression.clamped().fine_pitch_cents / 100.0,
+        };
+        match self.params.voice_mode {
+            VoiceMode::Poly => self.start_poly(note),
+            VoiceMode::Mono | VoiceMode::Legato => self.start_mono(note),
+        }
+    }
+
+    fn note_off_instance(&mut self, id: NoteInstanceId, _key: u8) {
+        if self.params.voice_mode != VoiceMode::Poly { self.release_mono(id); return; }
+        for voice in &mut self.voices {
+            if voice.stage == Stage::Held && voice.instance == id {
+                voice.stage = Stage::Released;
+                voice.amp.gate_off();
+                voice.filter_envelope.gate_off();
+            }
+        }
+    }
+
+    fn set_note_expression(&mut self, id: NoteInstanceId, pan: f32, expression: NoteExpression) {
+        let expression = expression.clamped();
+        let pan = if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 };
+        for held in &mut self.held[..self.held_len] {
+            if held.id == id {
+                held.pitch += (expression.fine_pitch_cents - held.expression.fine_pitch_cents) / 100.0;
+                held.expression = expression;
+                held.pan = pan;
+            }
+        }
+        for voice in &mut self.voices {
+            if voice.stage != Stage::Idle && voice.instance == id {
+                let release_changed = voice.expression.release != expression.release;
+                let controls_changed = voice.expression.fine_pitch_cents != expression.fine_pitch_cents
+                    || voice.expression.modulation_x != expression.modulation_x
+                    || voice.expression.modulation_y != expression.modulation_y;
+                voice.expression = expression;
+                voice.note_pan = pan;
+                if release_changed { voice.configure_envelopes(&self.params, self.sample_rate); }
+                // Expression updates can arrive every output frame. Read the
+                // current control/envelope values without advancing their clocks.
+                if controls_changed { voice.control(&self.current, &self.patch, &self.modulation, self.sample_rate, true); }
+            }
+        }
+    }
+
+    fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) {
+        if !pitch.is_finite() { return; }
+        for held in &mut self.held[..self.held_len] {
+            if held.id == id { held.pitch = pitch.clamp(-12.0, 139.0); }
+        }
+        for voice in &mut self.voices {
+            if voice.stage != Stage::Idle && voice.instance == id {
+                voice.pitch.snap(pitch.clamp(-12.0, 139.0) - voice.expression.fine_pitch_cents / 100.0);
+                voice.control(&self.current, &self.patch, &self.modulation, self.sample_rate, true);
             }
         }
     }

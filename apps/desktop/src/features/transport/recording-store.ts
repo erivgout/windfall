@@ -13,6 +13,19 @@ export const useRecordingStore = create(() => ({
   right: -1,
   start: 0,
   track: -1,
+  synchronize: true,
+  driftCorrection: true,
+  offsetMs: 0,
+  inputRate: 0,
+  loopRecording: false,
+  loopEnd: 3840,
+  keepLatest: false,
+  excludedTakes: [] as number[],
+  monitor: false,
+  monitorTrack: 0,
+  monitorGain: 0.5,
+  monitorBufferMs: 20,
+  armedTracks: false,
   state: {
     active: false,
     frames: 0,
@@ -50,23 +63,35 @@ export function startRecording() {
   return work(async () => {
     const s = useRecordingStore.getState()
     const device = s.inputs[s.device]
-    if (!device) throw new Error("Select a native audio input.")
+    if (!device && !s.armedTracks) throw new Error("Select a native audio input.")
     const state = await backend.recordingStart(
       {
-        host: device.host,
-        device: device.device,
+        host: device?.host ?? "",
+        device: device?.device ?? "",
         left: s.left,
         right: s.right < 0 ? null : s.right,
+        alignment: {
+          synchronize: s.synchronize,
+          driftCorrection: s.driftCorrection,
+          offsetMs: s.offsetMs,
+          inputSampleRate: s.inputRate === 0 ? null : s.inputRate,
+        },
+        loopRecording: s.loopRecording ? { region: { start: s.start, end: s.loopEnd } } : undefined,
+        monitor: s.monitor ? { track: s.monitorTrack, gain: s.monitorGain, bufferMs: s.monitorBufferMs } : undefined,
+        armedTracks: s.armedTracks,
       },
       s.start,
       s.track < 0 ? null : s.track
     )
-    useRecordingStore.setState({ state })
+    useRecordingStore.setState({ state, excludedTakes: [] })
   })
 }
 export function stopRecording() {
   return work(async () => {
-    const result = await backend.recordingStop()
+    const s = useRecordingStore.getState()
+    const result = await backend.recordingStop(s.state.takes
+      ? s.keepLatest ? { type: "latest" } : { type: "except", indices: s.excludedTakes }
+      : undefined)
     receivePatch(result.patch)
     toast.success("Recording added to playlist")
   })

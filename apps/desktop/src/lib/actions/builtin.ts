@@ -44,6 +44,7 @@ import { selectedPatternId } from "@/lib/store/selectors"
 import {
   play,
   setPlayMode,
+  setMetronome,
   stop,
   togglePlayback,
   useTransportStore,
@@ -321,6 +322,15 @@ export const BUILTIN_ACTIONS: Action[] = [
     title: "Stop",
     section: "Transport",
     run: stop,
+  },
+  {
+    id: "transport.metronome",
+    title: "Metronome",
+    section: "Transport",
+    keywords: "click beat bar accent time signature",
+    checked: (state) => state.transport.metronome?.enabled ?? false,
+    enabled: () => !useRecordingStore.getState().state.active,
+    run: () => setMetronome({ enabled: !useTransportStore.getState().metronome?.enabled }),
   },
   {
     id: "transport.patternMode",

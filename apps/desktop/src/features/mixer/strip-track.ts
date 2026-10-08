@@ -33,6 +33,11 @@ export function useStripTrack(id: TrackId): StripTrack | undefined {
         solo,
         output,
         sends,
+        sidechains: track.sidechains,
+        recording: track.recording,
+        current: track.current,
+        externalOutput: track.externalOutput,
+        latencyOffsetMs: track.latencyOffsetMs,
       }
     })
   )

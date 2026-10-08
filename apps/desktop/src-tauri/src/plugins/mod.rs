@@ -449,6 +449,8 @@ impl PluginManager {
             .find(|entry| entry.path == path && entry.id == id && entry.usable)
             .ok_or_else(|| "Scan this plugin successfully before loading it".to_owned())?;
         self.runtime.discover(PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target,
             format: entry.format,
             path: entry.path,

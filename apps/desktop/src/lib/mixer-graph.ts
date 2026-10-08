@@ -13,10 +13,15 @@ export function targetsOf(
   track: MixerTrack,
   known: ReadonlySet<TrackId>
 ): TrackId[] {
-  if (track.id === MASTER_TRACK) return []
+  if (track.id === MASTER_TRACK || track.current) return []
   const targets = track.sends.map((send) => send.target)
-  if (track.output !== null) targets.push(track.output)
+  if (track.output !== null && !track.externalOutput?.exclusive) targets.push(track.output)
   return targets.filter((target) => target !== track.id && known.has(target))
+}
+
+/** All ordering dependencies, including detector-only routes. */
+export function dependencyTargets(track: MixerTrack, known: ReadonlySet<TrackId>): TrackId[] {
+  return [...targetsOf(track, known), ...(track.id === MASTER_TRACK || track.current ? [] : (track.sidechains ?? []).map((send) => send.target).filter((id) => id !== track.id && known.has(id)))]
 }
 
 function spread(
@@ -44,7 +49,7 @@ function spread(
  */
 export function soloSet(tracks: readonly MixerTrack[]): Set<TrackId> {
   const ids = new Set(tracks.map((track) => track.id))
-  const soloed = tracks.filter((track) => track.solo).map((track) => track.id)
+  const soloed = tracks.filter((track) => track.solo && !track.current).map((track) => track.id)
   if (soloed.length === 0) return ids
 
   const downstream = new Map<TrackId, TrackId[]>()
@@ -52,9 +57,9 @@ export function soloSet(tracks: readonly MixerTrack[]): Set<TrackId> {
   for (const track of tracks) {
     const targets = targetsOf(track, ids)
     downstream.set(track.id, targets)
-    for (const target of targets) {
+    for (const target of dependencyTargets(track, ids)) {
       upstream.set(target, [...(upstream.get(target) ?? []), track.id])
     }
   }
-  return new Set([...spread(soloed, downstream), ...spread(soloed, upstream)])
+  return new Set([...spread(soloed, downstream), ...spread(soloed, upstream), ...tracks.filter((track) => track.current).map((track) => track.id)])
 }

@@ -33,6 +33,8 @@ fn fixture(ppq: u16) -> FlpProject {
         ..Default::default()
     });
     p.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 1,
         length: Some(u32::from(ppq) * 4),
         notes: vec![note(u32::from(ppq), u32::from(ppq))],

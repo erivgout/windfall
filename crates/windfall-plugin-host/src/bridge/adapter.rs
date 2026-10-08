@@ -58,6 +58,7 @@ pub struct Health {
 }
 
 pub struct Audio {
+    sidechain_input: Option<u32>,
     region: Region,
     signals: Arc<Signals>,
     input: InputBlock,
@@ -111,6 +112,7 @@ impl Audio {
         }
         let latency = region.config.latency();
         let mut audio = Self {
+            sidechain_input: None,
             region,
             signals,
             input: InputBlock::new(),
@@ -138,6 +140,11 @@ impl Audio {
     }
     pub fn signals(&self) -> &Arc<Signals> {
         &self.signals
+    }
+    pub fn set_sidechain_input(&mut self, input: Option<u32>) {
+        self.sidechain_input = input.filter(|index| *index < 64);
+        // Commit at the next complete block, preserving collection phase.
+        if self.cursor == 0 { self.input.sidechain_input = self.sidechain_input; }
     }
     pub fn health(&self) -> Health {
         self.health
@@ -169,6 +176,7 @@ impl Audio {
         }
     }
     fn begin_block(&mut self) {
+        self.input.sidechain_input = self.sidechain_input;
         // A valid host position can advance past the explicit wire bound.
         // Exhaustion must never reach a fallible encoder on the callback.
         if encode_transport(self.transport).is_err() {
@@ -437,7 +445,8 @@ impl Audio {
         // discarded on a future boundary without native-generation ack.
         self.region.discard_before(expected + 1);
     }
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
+    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         if left.len() != right.len() {
             self.signals.failed.store(true, Ordering::Release);
             return;
@@ -445,13 +454,14 @@ impl Audio {
         if self.region.timeline_epoch() != Ok(self.epoch) {
             self.fail_timeline();
         }
-        for (left, right) in left.iter_mut().zip(right) {
+        for (index, (left, right)) in left.iter_mut().zip(right).enumerate() {
             if self.cursor == 0 {
                 self.choose_output();
             }
             let input = [finite_input(*left), finite_input(*right)];
             self.input.left[self.cursor] = input[0];
             self.input.right[self.cursor] = input[1];
+            self.input.key[self.cursor] = key.and_then(|key| key.get(index)).copied().unwrap_or([0.0; 2]).map(finite_input);
             let dry = self.dry[self.dry_cursor];
             self.dry[self.dry_cursor] = input;
             self.dry_cursor += 1;
@@ -531,17 +541,24 @@ impl Audio {
         )
     }
     // Private off-realtime scheduler seam for deterministic DONE/cancel races.
-    fn process_offline_with_scheduler(
+    fn process_offline_with_scheduler(&mut self, left: &mut [f32], right: &mut [f32], deadline: std::time::Instant, cancelled: &AtomicBool, now: impl FnMut() -> std::time::Instant, wait: impl FnMut()) -> Result<(), OfflineError> {
+        self.process_offline_key_with_scheduler(left, right, None, deadline, cancelled, now, wait)
+    }
+    pub fn process_offline_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>, deadline: std::time::Instant, cancelled: &AtomicBool) -> Result<(), OfflineError> {
+        self.process_offline_key_with_scheduler(left, right, key, deadline, cancelled, std::time::Instant::now, || std::thread::sleep(std::time::Duration::from_micros(200)))
+    }
+    fn process_offline_key_with_scheduler(
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
         deadline: std::time::Instant,
         cancelled: &AtomicBool,
         mut now: impl FnMut() -> std::time::Instant,
         mut wait: impl FnMut(),
     ) -> Result<(), OfflineError> {
         let result =
-            self.process_offline_inner(left, right, deadline, cancelled, &mut now, &mut wait);
+            self.process_offline_inner(left, right, key, deadline, cancelled, &mut now, &mut wait);
         if result.is_err() {
             // A staging caller receives no retained partial/fallback output.
             // It must still discard its complete render artifact on this error.
@@ -554,6 +571,7 @@ impl Audio {
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
         deadline: std::time::Instant,
         cancelled: &AtomicBool,
         now: &mut dyn FnMut() -> std::time::Instant,
@@ -577,9 +595,10 @@ impl Audio {
             let corrupt = self.health.corrupt_blocks;
             let full = self.health.full_blocks;
             let unknown = self.health.unknown_blocks;
-            self.process(
+            self.process_sidechain(
                 &mut left[offset..offset + frames],
                 &mut right[offset..offset + frames],
+                key.and_then(|key| key.get(offset..offset + frames)),
             );
             if self.health.corrupt_blocks != corrupt {
                 return Err(OfflineError::Corrupt);

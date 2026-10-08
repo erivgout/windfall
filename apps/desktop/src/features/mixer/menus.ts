@@ -22,6 +22,9 @@ const ADD_EFFECT: ContextItem = {
 
 /** Anywhere in the mixer that is not a control with a menu of its own. */
 export const MIXER_MENU: ContextItem[] = [
+  "mixer.renderSelected",
+  "mixer.renderArmed",
+  contextSeparator,
   "mixer.addTrack",
   ADD_EFFECT,
   contextSeparator,
@@ -36,7 +39,7 @@ export const MIXER_MENU: ContextItem[] = [
 ]
 
 /** A value of a track that a control on its strip is bound to. */
-export type TrackField = "volume" | "pan" | { send: TrackId }
+export type TrackField = "volume" | "pan" | { send: TrackId } | { sidechain: TrackId }
 
 /** What automation calls the thing a strip's control is bound to. */
 export function trackTarget(
@@ -45,7 +48,7 @@ export function trackTarget(
 ): AutomationTarget {
   if (field === "volume") return { type: "trackVolume", track }
   if (field === "pan") return { type: "trackPan", track }
-  return { type: "sendGain", track, target: field.send }
+  return "sidechain" in field ? { type: "sidechainGain", track, target: field.sidechain } : { type: "sendGain", track, target: field.send }
 }
 
 /**

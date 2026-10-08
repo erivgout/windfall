@@ -26,8 +26,11 @@ export function targetKey(target: AutomationTarget): string {
     case "trackVolume":
     case "trackPan":
       return `${target.type}:${target.track}`
+    case "trackParam":
+      return `trackParam:${target.track}:${target.param}`
     case "sendGain":
-      return `sendGain:${target.track}:${target.target}`
+    case "sidechainGain":
+      return `${target.type}:${target.track}:${target.target}`
     case "effectParam":
       return `effectParam:${target.effect}:${target.param}`
     case "effectMix":

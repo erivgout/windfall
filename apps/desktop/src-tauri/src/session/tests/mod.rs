@@ -247,6 +247,7 @@ impl FakeDevice {
         let buffer_frames = settings.buffer_frames.unwrap_or(480);
         let unplugged = settings.device.as_deref() == Some("Unplugged");
         EngineStatus {
+            output_channels: 0,
             running: !unplugged,
             host: settings.host.clone().unwrap_or_else(|| "Test".to_owned()),
             device: settings.device.clone().or(Some("Speakers".to_owned())),

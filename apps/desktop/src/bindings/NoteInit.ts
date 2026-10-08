@@ -3,4 +3,5 @@
 /**
  * A note to add. Missing fields take the defaults a step would get.
  */
-export type NoteInit = { start: number, length: number, key: number, velocity?: number, pan?: number, };
+import type { NoteExpression } from "./NoteExpression";
+export type NoteInit = { start: number, length: number, key: number, velocity?: number, pan?: number, expression?: NoteExpression, };

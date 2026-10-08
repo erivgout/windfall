@@ -8,4 +8,4 @@ sampleRates: Array<number>,
 /**
  * Smallest and largest buffer size in frames, when the driver says.
  */
-minBufferFrames: number | null, maxBufferFrames: number | null, };
+minBufferFrames: number | null, maxBufferFrames: number | null, outputChannels?: number[], };

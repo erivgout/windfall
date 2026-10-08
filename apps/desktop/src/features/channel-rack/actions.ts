@@ -39,6 +39,9 @@ import {
 } from "./note-preview-target"
 import { rackNoteView, useRackStore, type RackNoteView } from "./rack-store"
 import { matchingPreset, SYNTH_PRESETS } from "./synth/presets"
+import { openAdvancedFill } from "./advanced-fill"
+import { dispatch } from "@/lib/store/project"
+import { createChannelGroup, currentNamedGroup, openChannelGroups, removeChannelGroup, renameChannelGroup } from "./channel-groups"
 
 /** The palette section, and menu, of the built-in instrument sounds. */
 export const SOUNDS_SECTION = "Sounds"
@@ -183,6 +186,67 @@ const SYNTH_SOUND_ACTIONS = SYNTH_PRESETS.filter(
  * belong to the rack: they work while it has the keyboard.
  */
 export const CHANNEL_RACK_ACTIONS: Action[] = [
+  {
+    id: "channelRack.graph",
+    title: "Step graph editor",
+    section: "View",
+    scope: "channelRack",
+    defaultShortcut: "Alt+G",
+    keywords: "velocity pan note pitch length timing shift bars paint properties",
+    enabled: (state) => selectedNotePreviewLane(state) !== null,
+    whyDisabled: () => "Select a channel in a pattern",
+    checked: () => useRackStore.getState().graphOpen,
+    run: () => useRackStore.getState().setGraphOpen(!useRackStore.getState().graphOpen),
+  },
+  {
+    id: "channel.resetTiming",
+    title: "Reset channel note timing",
+    section: "Channels",
+    keywords: "gate shift swing mix reset defaults",
+    enabled: hasSelection,
+    run: withSelected((channel) => dispatch({ type: "updateChannel", id: channel.id, patch: { timing: { swingMix: 1, gateTicks: 0, shiftTicks: 0 } } }).then(() => {})),
+  },
+  {
+    id: "channelRack.groups",
+    title: "Channel groups…",
+    section: "Channels",
+    keywords: "organize filter category assign multiple channels",
+    run: openChannelGroups,
+  },
+  {
+    id: "channelRack.createGroup",
+    title: "Create channel group…",
+    section: "Channels",
+    keywords: "organize filter category new group",
+    enabled: hasSelection,
+    run: createChannelGroup,
+  },
+  {
+    id: "channelRack.renameGroup",
+    title: "Rename channel group…",
+    section: "Channels",
+    keywords: "organize filter category merge groups",
+    enabled: () => currentNamedGroup() !== null,
+    whyDisabled: () => "Select a named group or a grouped channel",
+    run: renameChannelGroup,
+  },
+  {
+    id: "channelRack.removeGroup",
+    title: "Remove channel group…",
+    section: "Channels",
+    keywords: "organize filter category ungroup channels",
+    enabled: () => currentNamedGroup() !== null,
+    whyDisabled: () => "Select a named group or a grouped channel",
+    run: removeChannelGroup,
+  },
+  {
+    id: "channelRack.showAllGroups",
+    title: "Show all channel groups",
+    section: "Channels",
+    keywords: "organize filter reveal all channels",
+    checked: () => useRackStore.getState().groupFilter === null,
+    run: () => useRackStore.getState().setGroupFilter(null),
+  },
   ...NOTE_VIEW_ACTIONS,
   {
     id: OPEN_NOTE_PREVIEW_ACTION,
@@ -194,6 +258,24 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     enabled: (state) => selectedNotePreviewLane(state) !== null,
     whyDisabled: () => "Select a channel in a pattern",
     run: () => runAction("view.pianoRoll"),
+  },
+  {
+    id: "channel.sendStepsToPianoRoll",
+    title: "Send steps to piano roll",
+    section: "Channels",
+    scope: "channelRack",
+    keywords: "convert step sequencer edit notes piano",
+    standsFor: () => "view.pianoRoll",
+    enabled: (state) => selectedNotePreviewLane(state) !== null,
+    whyDisabled: () => "Select a channel in a pattern",
+    run: async () => {
+      const lane = selectedNotePreviewLane(getAppState())
+      if (!lane) return
+      // Step notes already are piano notes. Select their existing lane;
+      // creating copies here would double playback and discard properties.
+      useRackStore.getState().setNoteView(lane, "notes")
+      await runAction("view.pianoRoll")
+    },
   },
   {
     id: "channel.addFromFile",
@@ -324,6 +406,16 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     run: withSelected((channel) => fillEvery(channel.id, every)),
   })),
   {
+    id: "channel.advancedFill",
+    title: "Advanced step fill…",
+    section: "Channels",
+    keywords: "rhythm euclidean random seeded pulses preview drum pattern",
+    enabled: (state) =>
+      hasSelection(state) && patternLength(state) !== undefined,
+    whyDisabled: () => "Select a channel in a pattern",
+    run: openAdvancedFill,
+  },
+  {
     id: "channel.shiftLeft",
     title: "Shift steps left",
     section: "Channels",
@@ -389,6 +481,8 @@ export function registerChannelRackActions(): () => void {
     invalidateActionsOn(useRackStore, (state) => [
       state.inspectorOpen,
       state.noteViews,
+      state.groupFilter,
+      state.graphOpen,
     ]),
     onProjectReplaced(() => registry.invalidate()),
   ]

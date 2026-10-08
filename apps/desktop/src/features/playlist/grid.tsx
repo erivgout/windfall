@@ -46,6 +46,9 @@ import { usePlaylistStore } from "./store"
 const CLIP_MENU: ContextItem[] = [
   "playlist.editPattern",
   "playlist.reverseClips",
+  "playlist.compAudio",
+  "playlist.compTakeGroup",
+  "playlist.groupAudioTakes",
   contextSeparator,
   "playlist.cut",
   "playlist.copy",

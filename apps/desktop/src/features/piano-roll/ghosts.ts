@@ -12,8 +12,8 @@ const GHOST_ALPHA = 0.3
 
 /**
  * The other channels' notes in the same pattern as one faint batch, drawn
- * behind the notes being edited. They show what else plays; they cannot be
- * clicked.
+ * behind the notes being edited. Saved note identities allow editable-ghost
+ * input to find their source lanes without duplicating project notes.
  */
 export function buildGhostBatch(
   lanes: readonly Lane[],
@@ -26,7 +26,7 @@ export function buildGhostBatch(
   const batch = new RectBatch(count)
   for (const lane of lanes) {
     for (const note of lane.notes) {
-      batch.push(-1, note.start, note.length, keyToRow(note.key), 1, color)
+      batch.push(note.id, note.start, note.length, keyToRow(note.key), 1, color)
     }
   }
   return indexBatch(batch)

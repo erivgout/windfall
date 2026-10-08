@@ -11,6 +11,8 @@ import { LEFT_WIDTH, MIN_STEP_PITCH } from "./layout"
 import { RackGrid } from "./rack-grid"
 import { useRackStore } from "./rack-store"
 import { RackToolbar } from "./rack-toolbar"
+import { AdvancedFillDialog } from "./advanced-fill-dialog"
+import { ChannelGroupsDialog } from "./channel-groups-ui"
 
 const LAYOUT_KEY = "channelRack:rows+settings"
 
@@ -27,6 +29,8 @@ export default function ChannelRackPanel() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" {...scope}>
       <RackToolbar />
+      <AdvancedFillDialog />
+      <ChannelGroupsDialog />
       <ResizablePanelGroup
         id="channel-rack"
         orientation="horizontal"

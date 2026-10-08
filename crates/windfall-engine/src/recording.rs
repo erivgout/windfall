@@ -9,6 +9,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use windfall_ipc::{RecordingInput, RecordingSource};
 
+#[path = "recording_timed.rs"]
+mod timed;
+pub use timed::{AlignmentMetrics, CaptureRoute};
+
 pub struct Capture {
     stop: Arc<AtomicBool>,
     fault: Arc<AtomicBool>,

@@ -16,7 +16,8 @@ use windfall_project::{
     ClipContent, ClipInit, Command, DEFAULT_KEY, InstrumentKind, MAX_AUTOMATION_POINTS,
     MAX_MIXER_TRACKS, MAX_PATTERN_TICKS, MAX_SONG_TICKS, MAX_TEMPO_BPM, MIN_TEMPO_BPM, NoteInit,
     PatternId, PatternPatch, PlaylistTrackId, Project, SampleId, SamplePath, SettingsPatch,
-    TICKS_PER_STEP, TimeSignature,
+    TICKS_PER_STEP, TimeSignature, Timeline, PatternTimelineEdit, MeterChange, MeterChangeId,
+    MarkerKind, TimelineMarker, TimelineMarkerId,
 };
 
 use crate::gm::{DrumKit, program_name};
@@ -120,6 +121,7 @@ pub struct ImportPlan {
     pub time_signature: Option<TimeSignature>,
     /// Ordered song meter events. Importing replaces the prior song map.
     pub meters: Vec<(u32, TimeSignature)>,
+    pub markers: Vec<(u32, String)>,
     /// The imported clip layout's length, rounded to whole bars of the
     /// tick-zero signature (4/4 before a late first event). Later meter
     /// changes keep their absolute ticks; pattern cutting uses this scalar grid.
@@ -188,6 +190,9 @@ pub enum PlannedSound {
 pub struct PlannedPattern {
     pub name: String,
     pub length_steps: u32,
+    pub time_signature: Option<TimeSignature>,
+    pub meters: Vec<(u32, TimeSignature)>,
+    pub markers: Vec<(u32, String)>,
     /// The notes of each channel that plays in the pattern.
     pub lanes: Vec<PlannedLane>,
 }
@@ -399,7 +404,7 @@ fn counted(count: usize, one: &str, many: &str) -> String {
 ///   beat unit of a whole note becomes a half note and anything shorter
 ///   than a sixteenth note a sixteenth.
 /// - Pitch bend, controllers other than the first volume and pan,
-///   aftertouch, program changes, key signatures and markers are not imported.
+///   aftertouch, program changes and key signatures are not imported.
 ///   The [`MidiSong`] still holds them. Ordered meter changes are imported,
 ///   with colliding and over-limit events reported.
 ///
@@ -438,6 +443,9 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
             tempo_bpm: None,
             time_signature: signature.filter(|_| options.time_signature),
             meters: Vec::new(),
+            markers: song.markers.iter().filter(|marker| marker.tick < MAX_SONG_TICKS)
+                .filter_map(|marker| marker_name(&marker.text).map(|name| (marker.tick, name)))
+                .take(windfall_project::MAX_TIMELINE_ITEMS).collect(),
             length,
             samples: Vec::new(),
             channels: Vec::new(),
@@ -450,6 +458,10 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
         limit,
         segment,
         share,
+        source_meters: if options.time_signature { song.time_signatures.iter().map(|event| {
+            let signature = fit_signature(event.numerator, event.denominator);
+            (event.tick, signature.numerator, signature.denominator)
+        }).take(windfall_project::MAX_TIMELINE_ITEMS).collect() } else { Vec::new() },
         room: MAX_IMPORTED_NOTES,
         fitted: Fitted::default(),
         drums: Vec::new(),
@@ -524,6 +536,17 @@ fn clean_name(name: &str) -> Option<String> {
     (!cut.is_empty()).then(|| cut.to_owned())
 }
 
+fn marker_name(name: &str) -> Option<String> {
+    let mut result = String::new();
+    for character in name.trim().chars() {
+        let character = if character.is_control() { ' ' } else { character };
+        if result.len() + character.len_utf8() > 256 { break; }
+        result.push(character);
+    }
+    let result = result.trim().to_owned();
+    (!result.is_empty()).then_some(result)
+}
+
 /// What a part is called. `shared` says that its track has notes on other
 /// channels too, so that the track's name is not this part's alone.
 fn part_name(track: &MidiTrack, index: usize, channel: u8, shared: bool) -> String {
@@ -555,11 +578,21 @@ struct Hit {
     key: u8,
     length: u32,
     velocity: u8,
+    release: u8,
+    midi_channel: u8,
 }
 
 /// The notes one channel plays in a pattern: the channel's index in the
 /// plan, and the notes in order.
 type LaneHits = (usize, Vec<Hit>);
+
+/// Phrase sharing includes its local labels and meter, as well as notes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LocalTimeline {
+    signature: Option<(u8, u8)>,
+    meters: Vec<(u32, u8, u8)>,
+    markers: Vec<(u32, String)>,
+}
 
 /// The notes of one channel of a part, by the stretch of the song they
 /// start in.
@@ -591,6 +624,7 @@ struct Builder<'a> {
     /// The length of a stretch of the song that gets a pattern.
     segment: u32,
     share: bool,
+    source_meters: Vec<(u32, u8, u8)>,
     /// How many more notes the plan may take.
     room: usize,
     fitted: Fitted,
@@ -617,7 +651,7 @@ impl Builder<'_> {
             self.room -= pieces;
             self.fitted.cut += usize::from(end < note.end());
             self.fitted.split += usize::from(pieces > 1);
-            kept.push((note.start, end, note.key, note.velocity));
+            kept.push((note.start, end, note.key, note.velocity, note.release));
         }
         if kept.is_empty() {
             return;
@@ -649,7 +683,7 @@ impl Builder<'_> {
 
         // The pads the part plays, by key, each with the sample it plays.
         let kit = options.drum_kit.as_ref().filter(|_| drums);
-        let keys: BTreeSet<u8> = kept.iter().map(|&(_, _, key, _)| key).collect();
+        let keys: BTreeSet<u8> = kept.iter().map(|&(_, _, key, _, _)| key).collect();
         let mut lanes: Vec<Lane> = Vec::new();
         let mut lane_of_key: HashMap<u8, usize> = HashMap::new();
         let mut lane_of_sample: HashMap<usize, usize> = HashMap::new();
@@ -694,7 +728,7 @@ impl Builder<'_> {
             }
         }
 
-        for (start, end, key, velocity) in kept {
+        for (start, end, key, velocity, release) in kept {
             let (lane, key) = match lane_of_key.get(&key) {
                 Some(&lane) => (lane, DEFAULT_KEY),
                 None => {
@@ -713,6 +747,8 @@ impl Builder<'_> {
                     key,
                     length,
                     velocity,
+                    release,
+                    midi_channel: channel,
                 });
                 at += length;
             }
@@ -732,11 +768,19 @@ impl Builder<'_> {
             .collect();
         let first_pattern = self.plan.patterns.len();
         // The patterns made so far, by their length and their notes.
-        let mut shared: HashMap<(u32, Vec<LaneHits>), usize> = HashMap::new();
+        let mut shared: HashMap<(u32, Vec<LaneHits>, LocalTimeline), usize> = HashMap::new();
         for stretch in stretches {
             let start = stretch * self.segment;
             let length = self.segment.min(self.plan.length - start);
             let length_steps = length / TICKS_PER_STEP;
+            let timeline = LocalTimeline {
+                signature: self.options.time_signature.then(|| self.source_meters.iter().rev()
+                    .find(|(tick, _, _)| *tick <= start).map(|(_, numerator, denominator)| (*numerator, *denominator)).unwrap_or((4, 4))),
+                meters: self.source_meters.iter().filter(|(tick, _, _)| *tick > start && *tick < start + length)
+                    .map(|(tick, numerator, denominator)| (*tick - start, *numerator, *denominator)).collect(),
+                markers: self.plan.markers.iter().filter(|(tick, _)| *tick >= start && *tick < start + length)
+                    .map(|(tick, name)| (*tick - start, name.clone())).collect(),
+            };
             let mut content = Vec::new();
             for lane in &mut lanes {
                 if let Some(mut hits) = lane.stretches.remove(&stretch) {
@@ -751,12 +795,15 @@ impl Builder<'_> {
                 plan.patterns.push(PlannedPattern {
                     name: String::new(),
                     length_steps,
+                    time_signature: timeline.signature.map(|(numerator, denominator)| TimeSignature { numerator, denominator }),
+                    meters: timeline.meters.iter().map(|&(tick, numerator, denominator)| (tick, TimeSignature { numerator, denominator })).collect(),
+                    markers: timeline.markers.clone(),
                     lanes: content.iter().map(planned_lane).collect(),
                 });
                 plan.patterns.len() - 1
             };
             let pattern = if self.share {
-                match shared.entry((length_steps, content)) {
+                match shared.entry((length_steps, content, timeline.clone())) {
                     Entry::Occupied(known) => *known.get(),
                     Entry::Vacant(unknown) => {
                         let pattern = new_pattern(&mut self.plan, &unknown.key().1);
@@ -893,7 +940,7 @@ impl Builder<'_> {
         left(Unsupported::Aftertouch, pressure);
         left(Unsupported::ProgramChanges, programs);
         left(Unsupported::KeySignatures, song.key_signatures.len());
-        left(Unsupported::Markers, song.markers.len());
+        left(Unsupported::Markers, song.markers.len().saturating_sub(self.plan.markers.len()));
 
         if let Some((changes, kept)) = fitted.tempo_thinned {
             list.push(Adjustment::TempoChangesThinned { changes, kept });
@@ -916,6 +963,7 @@ fn planned_lane((channel, hits): &LaneHits) -> PlannedLane {
                 key: hit.key,
                 velocity: Some(velocity_from_midi(hit.velocity)),
                 pan: None,
+                expression: Some(windfall_project::NoteExpression { release: f32::from(hit.release.min(127)) / 128.0, color_group: Some(hit.midi_channel), ..Default::default() }),
             })
             .collect(),
     }
@@ -1032,6 +1080,18 @@ impl ImportPlan {
                     ..PatternPatch::default()
                 },
             });
+            let mut timeline = Timeline::default();
+            if let Some(signature) = pattern.time_signature {
+                commands.push(Command::EditPatternTimeline { pattern: id, expected: timeline.clone(), expected_signature: None, edit: PatternTimelineEdit::SetSignature { signature: Some(signature) } });
+            }
+            for &(tick, signature) in &pattern.meters {
+                commands.push(Command::EditPatternTimeline { pattern: id, expected: timeline.clone(), expected_signature: pattern.time_signature, edit: PatternTimelineEdit::AddMeter { tick, signature } });
+                timeline.meters.push(MeterChange { id: MeterChangeId(ids.take()), tick, signature });
+            }
+            for (tick, name) in &pattern.markers {
+                commands.push(Command::EditPatternTimeline { pattern: id, expected: timeline.clone(), expected_signature: pattern.time_signature, edit: PatternTimelineEdit::AddMarker { tick: *tick, name: name.clone() } });
+                timeline.markers.push(TimelineMarker { id: TimelineMarkerId(ids.take()), tick: *tick, name: name.clone(), kind: MarkerKind::Named });
+            }
             for lane in &pattern.lanes {
                 let Some(&channel) = channels.get(lane.channel) else {
                     continue;
@@ -1103,6 +1163,7 @@ impl ImportPlan {
                     .map(|&(tick, signature)| Command::AddMeterChange { tick, signature }),
             );
         }
+        commands.extend(self.markers.iter().map(|(tick, name)| Command::AddTimelineMarker { tick: *tick, name: name.clone(), kind: MarkerKind::Named }));
         commands
     }
 }

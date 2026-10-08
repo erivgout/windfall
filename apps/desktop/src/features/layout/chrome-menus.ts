@@ -35,6 +35,7 @@ export const TRANSPORT_MENU: ContextItem[] = [
   "transport.patternMode",
   "transport.songMode",
   "playlist.loopSong",
+  "transport.metronome",
   contextSeparator,
   TEMPO_MENU,
   contextSeparator,

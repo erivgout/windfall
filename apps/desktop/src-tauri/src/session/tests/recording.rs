@@ -27,7 +27,12 @@ fn source() -> RecordingSource {
         device: "Fake".into(),
         left: 0,
         right: None,
+        armed_tracks: None,
+        mixer_tap: None,
     }
+    alignment: None,
+    loop_recording: None,
+    monitor: None,
 }
 fn synthetic(
     _source: RecordingSource,

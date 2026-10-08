@@ -96,6 +96,8 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
         .enumerate()
         {
             rig.project.plugins.push(PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
                 target,
                 format: format.into(),
                 path: "transport-probe".into(),

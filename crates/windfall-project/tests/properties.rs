@@ -484,6 +484,7 @@ impl Action {
                             } => ClipContent::Audio {
                                 sample: sample.among(&samples),
                                 mixer_track: mixer_track.among(&tracks),
+                                output: Default::default(),
                                 gain: *gain,
                                 pan: *pan,
                                 fade_in: *fade_in,
@@ -740,6 +741,8 @@ fn channel_patch() -> impl Strategy<Value = ChannelPatch> {
     )
         .prop_map(|(name, color, volume, pan, muted, solo)| ChannelPatch {
             name,
+            group: None,
+            timing: None,
             color,
             volume,
             pan,
@@ -825,6 +828,7 @@ fn note_init() -> impl Strategy<Value = NoteInit> {
             key,
             velocity,
             pan,
+            expression: None,
         },
     )
 }
@@ -843,6 +847,7 @@ fn note_patch() -> impl Strategy<Value = NotePatch> {
             key,
             velocity,
             pan,
+            expression: None,
         })
 }
 
@@ -862,6 +867,7 @@ fn mixer_track_patch() -> impl Strategy<Value = MixerTrackPatch> {
             pan,
             muted,
             solo,
+            ..MixerTrackPatch::default()
         })
 }
 
@@ -1222,6 +1228,7 @@ fn seed_project() -> Project {
                 content: ClipContent::Audio {
                     sample: project_sample,
                     mixer_track: tracks[1],
+                    output: Default::default(),
                     gain: 0.8,
                     pan: -0.25,
                     fade_in: 240,

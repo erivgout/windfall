@@ -25,6 +25,7 @@ pub struct PluginTransport {
 
 /// Prepared effects. Setup and destruction belong to the factory's owner thread.
 pub trait HostedEffect: Send {
+    fn set_sidechain_input(&mut self, _input: Option<u32>) {}
     /// Services an ownership exchange without processing sound. Called at
     /// callback/block boundaries for stopped, bypassed and retiring slots too.
     /// Must not allocate, lock, wait, deactivate or destroy native objects.
@@ -36,6 +37,7 @@ pub trait HostedEffect: Send {
     fn adopt_parameters(&mut self, _parameters: &[PluginParameter]) {}
     fn transport(&mut self, _transport: PluginTransport) {}
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+    fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], _key: Option<&[[f32; 2]]>) { self.process(left, right); }
     fn set_param(&mut self, id: u32, value: f32);
     fn set_tempo(&mut self, bpm: f32);
     fn latency(&self) -> usize;
@@ -48,6 +50,26 @@ pub trait HostedInstrument: HostedEffect {
     fn note_off(&mut self, key: u8);
     fn all_notes_off(&mut self);
     fn voices(&self) -> usize;
+    /// Providers opt in only when their event transport preserves ownership.
+    fn supports_note_instances(&self) -> bool { false }
+    fn supports_note_channels(&self) -> bool { false }
+    fn note_on_instance(&mut self, id: windfall_dsp::NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: windfall_dsp::NoteExpression) {
+        let _ = (id, pan, expression);
+        self.note_on(key, velocity);
+    }
+    fn note_off_instance(&mut self, id: windfall_dsp::NoteInstanceId, key: u8) {
+        let _ = id;
+        self.note_off(key);
+    }
+    fn note_off_on_channel(&mut self, id: windfall_dsp::NoteInstanceId, key: u8, channel: u8) {
+        let _ = channel;
+        self.note_off_instance(id, key);
+    }
+    fn set_note_expression(&mut self, id: windfall_dsp::NoteInstanceId, pan: f32, expression: windfall_dsp::NoteExpression) {
+        let _ = (id, pan, expression);
+    }
+    fn set_note_pitch(&mut self, id: windfall_dsp::NoteInstanceId, pitch: f32) { let _ = (id, pitch); }
+    fn supports_note_pitch(&self) -> bool { false }
 }
 
 /// Creates independent instances for playback and offline render, off the callback.
@@ -195,6 +217,7 @@ impl ExternalEffect {
     }
     pub fn apply(&mut self, binding: &PluginBinding) {
         if let Some(unit) = &mut self.unit {
+            unit.set_sidechain_input(binding.sidechain_input);
             unit.adopt_parameters(&binding.parameters);
         }
         for (cached, param) in self.params.iter_mut().zip(&binding.parameters) {
@@ -229,14 +252,15 @@ impl ExternalEffect {
         self.remaining = (self.sample_rate as usize / 200).max(1);
         self.step = (target - self.wet) / self.remaining as f32;
     }
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
+    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         let dry = &mut self.scratch[..left.len()];
         for ((frame, left), right) in dry.iter_mut().zip(left.iter()).zip(right.iter()) {
             *frame = [*left, *right];
         }
         self.dry.process(dry);
         if let Some(unit) = &mut self.unit {
-            unit.process(left, right);
+            unit.process_sidechain(left, right, key);
         }
         for index in 0..left.len() {
             if self.remaining > 0 {
@@ -364,7 +388,11 @@ mod tests {
         }
     }
     fn binding() -> PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
         PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target: PluginTarget::Instrument {
                 channel: ChannelId(0),
             },
@@ -402,6 +430,7 @@ mod tests {
                 key: 60,
                 velocity: 1.0,
                 pan: 0.0,
+                expression: Default::default(),
             }],
         });
         project.check().unwrap();

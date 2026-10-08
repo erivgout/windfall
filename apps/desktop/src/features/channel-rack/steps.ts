@@ -5,6 +5,7 @@ import type {
   NoteInit,
   PatternId,
   TimeSignature,
+  Timeline,
 } from "@/bindings"
 import {
   clamp,
@@ -12,6 +13,8 @@ import {
   MAX_PATTERN_STEPS,
   TICKS_PER_STEP,
 } from "@/lib/units"
+import { meterSegments, musicalPosition } from "@/lib/timeline"
+import { ticksPerBar, ticksPerBeat } from "@/lib/time"
 
 /*
  * The step sequencer and the piano roll edit the same notes. These helpers
@@ -189,8 +192,24 @@ export type RulerMark = {
 /** One mark per beat. Bars and beats count from 1. */
 export function rulerMarks(
   lengthSteps: number,
-  signature: TimeSignature
+  signature: TimeSignature,
+  timeline?: Timeline
 ): RulerMark[] {
+  if (timeline?.meters.length) {
+    const marks: RulerMark[] = []
+    const length = lengthSteps * TICKS_PER_STEP
+    for (const segment of meterSegments(signature, timeline.meters)) {
+      const beat = ticksPerBeat(segment.signature)
+      const bar = ticksPerBar(segment.signature)
+      for (let tick = segment.start; tick < Math.min(length, segment.end); tick += beat) {
+        const offset = tick - segment.start
+        const number = segment.bar + Math.floor(offset / bar)
+        const downbeat = offset % bar === 0
+        marks.push({ step: tick / TICKS_PER_STEP, label: downbeat ? String(number) : `${number}.${Math.floor((offset % bar) / beat) + 1}`, bar: downbeat })
+      }
+    }
+    return marks
+  }
   const beat = stepsPerBeat(signature)
   const bar = stepsPerBar(signature)
   const marks: RulerMark[] = []
@@ -206,11 +225,28 @@ export function rulerMarks(
   return marks
 }
 
+/** Saved meter changes can begin between step columns. Shade at each onset. */
+export function beatShades(lengthSteps: number, signature: TimeSignature, timeline?: Timeline): readonly boolean[] | undefined {
+  if (!timeline?.meters.length) return undefined
+  const segments = meterSegments(signature, timeline.meters)
+  return Array.from({ length: lengthSteps }, (_, step) => {
+    const tick = step * TICKS_PER_STEP
+    const segment = segments.findLast((item) => item.start <= tick) ?? segments[0]
+    return Math.floor((tick - segment.start) / ticksPerBeat(segment.signature)) % 2 === 1
+  })
+}
+
 /** "1 bar", "2 bars", "1 bar and 4 steps", "12 steps". */
 export function describeLength(
   lengthSteps: number,
-  signature: TimeSignature
+  signature: TimeSignature,
+  timeline?: Timeline
 ): string {
+  if (timeline?.meters.length) {
+    const position = musicalPosition(lengthSteps * TICKS_PER_STEP, signature, timeline.meters)
+    if (position.beat === 1 && position.tick === 0) return `${position.bar - 1} ${position.bar === 2 ? "bar" : "bars"}`
+    return `ends at ${position.bar}.${position.beat}${position.tick ? ` + ${position.tick} ticks` : ""}`
+  }
   const bar = stepsPerBar(signature)
   const bars = Math.floor(lengthSteps / bar)
   const rest = lengthSteps % bar

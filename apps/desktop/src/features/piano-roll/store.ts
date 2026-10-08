@@ -2,9 +2,12 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
 import { onProjectReplaced } from "@/lib/store/replaced"
+import type { NoteArticulation } from "@/bindings"
+import { isNoteArticulation } from "@/lib/note-expression"
+import { isNoteColorGroup } from "@/lib/note-colors"
 import { DEFAULT_VELOCITY, TICKS_PER_STEP } from "@/lib/units"
 
-import type { LaneKind } from "./lane-math"
+import { LANE_KINDS, type LaneKind } from "./lane-math"
 import { DEFAULT_SNAP, isSnapId, type SnapId } from "./snap"
 import { isScaleId, isScaleRoot, type ScaleId } from "./scales"
 
@@ -25,6 +28,7 @@ type PianoRollState = {
   snapToScale: boolean
   /** Show the other channels' notes behind this one's. */
   ghosts: boolean
+  editGhosts: boolean
   /** Scroll along with the playhead. */
   follow: boolean
   laneKind: LaneKind
@@ -32,17 +36,24 @@ type PianoRollState = {
   /** Length and velocity the next drawn note gets: those of the last one touched. */
   lastLength: number
   lastVelocity: number
+  drawArticulation: NoteArticulation
+  drawGlideTicks: number
+  drawColorGroup: number | null
   /** Mirrors of editor state, so buttons and menus can follow them. */
   selectionCount: number
   clipboardCount: number
 
   setTool(tool: Tool): void
+  setDrawArticulation(articulation: NoteArticulation): void
+  setDrawGlideTicks(ticks: number): void
+  setDrawColorGroup(group: number | null): void
   setSnap(snap: SnapId): void
   setScaleRoot(root: number): void
   setScaleId(id: ScaleId): void
   setHighlightScale(enabled: boolean): void
   setSnapToScale(enabled: boolean): void
   setGhosts(ghosts: boolean): void
+  setEditGhosts(enabled: boolean): void
   setFollow(follow: boolean): void
   setLaneKind(kind: LaneKind): void
   setLaneHeight(height: number): void
@@ -64,15 +75,28 @@ export const usePianoRollStore = create<PianoRollState>()(
       highlightScale: false,
       snapToScale: false,
       ghosts: true,
+      editGhosts: false,
       follow: false,
       laneKind: "velocity",
       laneHeight: DEFAULT_LANE_HEIGHT,
       lastLength: TICKS_PER_STEP,
       lastVelocity: DEFAULT_VELOCITY,
+      drawArticulation: "normal",
+      drawGlideTicks: TICKS_PER_STEP,
+      drawColorGroup: null,
       selectionCount: 0,
       clipboardCount: 0,
 
       setTool: (tool) => set({ tool }),
+      setDrawArticulation: (drawArticulation) => {
+        if (isNoteArticulation(drawArticulation)) set({ drawArticulation })
+      },
+      setDrawGlideTicks: (ticks) => {
+        if (Number.isFinite(ticks)) set({ drawGlideTicks: Math.round(Math.min(245760, Math.max(1, ticks))) })
+      },
+      setDrawColorGroup: (drawColorGroup) => {
+        if (drawColorGroup === null || isNoteColorGroup(drawColorGroup)) set({ drawColorGroup })
+      },
       setSnap: (snap) => set({ snap }),
       setScaleRoot: (scaleRoot) => {
         if (isScaleRoot(scaleRoot)) set({ scaleRoot })
@@ -83,6 +107,7 @@ export const usePianoRollStore = create<PianoRollState>()(
       setHighlightScale: (highlightScale) => set({ highlightScale }),
       setSnapToScale: (snapToScale) => set({ snapToScale }),
       setGhosts: (ghosts) => set({ ghosts }),
+      setEditGhosts: (editGhosts) => set((state) => ({ editGhosts, ghosts: editGhosts || state.ghosts })),
       setFollow: (follow) => set({ follow }),
       setLaneKind: (laneKind) => set({ laneKind }),
       setLaneHeight: (height) =>
@@ -107,6 +132,7 @@ export const usePianoRollStore = create<PianoRollState>()(
         highlightScale: state.highlightScale,
         snapToScale: state.snapToScale,
         ghosts: state.ghosts,
+        editGhosts: state.editGhosts,
         follow: state.follow,
         laneKind: state.laneKind,
         laneHeight: state.laneHeight,
@@ -132,11 +158,12 @@ export const usePianoRollStore = create<PianoRollState>()(
               : current.snapToScale,
           ghosts:
             typeof stored.ghosts === "boolean" ? stored.ghosts : current.ghosts,
+          editGhosts: typeof stored.editGhosts === "boolean" ? stored.editGhosts : current.editGhosts,
           follow:
             typeof stored.follow === "boolean" ? stored.follow : current.follow,
           laneKind:
-            stored.laneKind === "velocity" || stored.laneKind === "pan"
-              ? stored.laneKind
+            LANE_KINDS.some((kind) => kind.id === stored.laneKind)
+              ? stored.laneKind!
               : current.laneKind,
           laneHeight:
             typeof stored.laneHeight === "number" &&
@@ -161,5 +188,8 @@ onProjectReplaced(() =>
   usePianoRollStore.setState({
     lastLength: TICKS_PER_STEP,
     lastVelocity: DEFAULT_VELOCITY,
+    drawArticulation: "normal",
+    drawGlideTicks: TICKS_PER_STEP,
+    drawColorGroup: null,
   })
 )

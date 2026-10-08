@@ -1,5 +1,5 @@
 import type { Channel, Clip, ClipId, MixerTrack, TrackId } from "@/bindings"
-import { soloSet, targetsOf } from "@/lib/mixer-graph"
+import { soloSet, dependencyTargets } from "@/lib/mixer-graph"
 import { MASTER_TRACK } from "@/lib/units"
 
 /*
@@ -50,7 +50,7 @@ export function reaches(tracks: Tracks, from: TrackId, to: TrackId): boolean {
     if (seen.has(id)) continue
     seen.add(id)
     const track = tracks.find((item) => item.id === id)
-    if (track) pending.push(...targetsOf(track, ids))
+    if (track) pending.push(...dependencyTargets(track, ids))
   }
   return false
 }
@@ -67,8 +67,8 @@ export type RoutingChoices = {
  * already lead back to it. The master leads nowhere, so it is always there.
  */
 export function outputChoices(tracks: Tracks, id: TrackId): RoutingChoices {
-  if (id === MASTER_TRACK) return { tracks: [], looping: 0 }
-  const others = tracks.filter((track) => track.id !== id)
+  if (id === MASTER_TRACK || tracks.find((track) => track.id === id)?.current) return { tracks: [], looping: 0 }
+  const others = tracks.filter((track) => track.id !== id && !track.current)
   const open = others.filter((track) => !reaches(tracks, track.id, id))
   return { tracks: open, looping: others.length - open.length }
 }

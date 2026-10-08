@@ -91,6 +91,7 @@ struct Slot {
     /// and its id.
     track: usize,
     track_id: TrackId,
+    direct_output: bool,
     region: Region,
     /// Frames into the region, in playing order.
     position: f64,
@@ -128,6 +129,7 @@ impl Slot {
             pitch: 0.0,
             track: 0,
             track_id: TrackId::MASTER,
+            direct_output: false,
             region: Region {
                 first: 0,
                 frames: 0,
@@ -162,6 +164,7 @@ impl Slot {
             && self.region.reverse == clip.reverse
             && self.pitch == clip.pitch
             && self.track_id == clip.track_id
+            && self.direct_output == clip.direct_output
     }
 
     /// Takes the ticks of the clip's edges and fades from the plan, as its
@@ -339,7 +342,7 @@ impl ClipPlayer {
     /// slots are bound to.
     pub fn destinations(&self) -> impl Iterator<Item = Heard> {
         let sounding = self.slots.iter().filter(|slot| slot.active);
-        sounding.map(|slot| Heard::Track(slot.track))
+        sounding.map(|slot| if slot.direct_output { Heard::Printed } else { Heard::Track(slot.track) })
     }
 
     /// Hands back audio that stopped slots could not return earlier.
@@ -396,6 +399,7 @@ impl ClipPlayer {
             pitch: clip.pitch,
             track: clip.track,
             track_id: clip.track_id,
+            direct_output: clip.direct_output,
             region: Region {
                 first: 0,
                 frames,
@@ -508,7 +512,8 @@ impl ClipPlayer {
             if !slot.active {
                 continue;
             }
-            let out = &mut mixer.track_mut(slot.track)[frames.clone()];
+            let buffer = if slot.direct_output { mixer.printed_mut() } else { mixer.track_mut(slot.track) };
+            let out = &mut buffer[frames.clone()];
             if slot.render(out, first, clock, self.declick) {
                 self.end(index, plan, garbage);
             }

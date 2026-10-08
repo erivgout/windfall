@@ -15,6 +15,7 @@ fn clip() -> Clip {
         content: ClipContent::Audio {
             sample: SampleId(2),
             mixer_track: TrackId(0),
+            output: Default::default(),
             gain: 0.7,
             pan: -0.3,
             fade_in: 0,

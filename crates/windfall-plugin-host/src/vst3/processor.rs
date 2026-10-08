@@ -7,7 +7,7 @@ use super::{
 use crate::{
     descriptor::{AudioPort, PluginLayout},
     error::PluginError,
-    events::{HostEvent, PluginEvent, Transport},
+    events::{HostEvent, PluginEvent, Transport, NoteExpressionKind, MAX_NOTE_INSTANCES},
     processor::{AudioIo, BlockResult, ProcessFailed, ProcessStatus, ProcessorBackend},
 };
 use std::{any::Any, sync::Arc};
@@ -16,11 +16,17 @@ use vst3::{
     Steinberg::{Vst::*, *},
 };
 
+#[derive(Clone, Copy)]
+struct NativeHeld { id: u32, key: u8, channel: u8 }
+impl NativeHeld { const EMPTY: Self = Self { id: 0, key: 0, channel: 0 }; }
+
 struct Ports {
     buffers: Vec<Vec<Vec<f32>>>,
     _pointers: Vec<Vec<*mut f32>>,
     buses: Vec<AudioBusBuffers>,
     main: Option<usize>,
+    key: Option<usize>,
+    auxiliary: Vec<usize>,
 }
 
 fn process_context(
@@ -67,6 +73,8 @@ impl Ports {
             _pointers: pointers,
             buses,
             main: ports.iter().position(|p| p.main && p.channels > 0),
+            key: ports.iter().position(|p| !p.main && p.channels > 0),
+            auxiliary: ports.iter().enumerate().filter_map(|(index, p)| (!p.main && p.channels > 0).then_some(index)).collect(),
         }
     }
     fn clear(&mut self, frames: usize) {
@@ -91,6 +99,20 @@ impl Ports {
                 bus[0][..left.len()].copy_from_slice(left);
                 bus[1][..right.len()].copy_from_slice(right);
             }
+        }
+    }
+    fn key_input(&mut self, key: Option<&[[f32; 2]]>, frames: usize) {
+        if let Some(bus) = self.key {
+            let channels = &mut self.buffers[bus];
+            let mono = channels.len() == 1;
+            for (side, channel) in channels.iter_mut().take(2).enumerate() {
+                for (index, output) in channel[..frames].iter_mut().enumerate() {
+                    let pair = key.and_then(|key| key.get(index)).copied().unwrap_or([0.0; 2]);
+                    let value = if mono { (pair[0] + pair[1]) * 0.5 } else { pair[side] };
+                    *output = if value.is_finite() { value.clamp(-1.0e6, 1.0e6) } else { 0.0 };
+                }
+            }
+            self.buses[bus].silenceFlags = if key.is_none() { u64::MAX } else { 0 };
         }
     }
     fn output(&self, left: &mut [f32], right: &mut [f32]) {
@@ -126,6 +148,9 @@ pub(super) struct VstProcessor {
     reset_notes: bool,
     held: [[bool; 128]; 16],
     event_input: bool,
+    instances: Box<[NativeHeld]>,
+    expression_masks: [u32; 16],
+    native_drops: u32,
 }
 // SAFETY: all mutable COM buffers are exclusively owned by this processor,
 // moved to one audio thread, and used synchronously in process only. Rc in
@@ -270,6 +295,19 @@ impl VstProcessor {
         let event_ptr = events.to_com_ptr::<IEventList>().expect("events");
         let output_events = Events::new();
         let output_event_ptr = output_events.to_com_ptr::<IEventList>().expect("events");
+        let mut expression_masks = [0; 16];
+        if let Some(controller) = objects.controller.as_ref().and_then(|controller| controller.cast::<INoteExpressionController>()) {
+            for channel in 0..16 {
+                let count = unsafe { controller.getNoteExpressionCount(0, channel as i16) }.clamp(0, 256);
+                for index in 0..count {
+                    let mut info: NoteExpressionTypeInfo = unsafe { std::mem::zeroed() };
+                    if unsafe { controller.getNoteExpressionInfo(0, channel as i16, index, &mut info) } == kResultOk
+                        && info.typeId <= 5 {
+                        expression_masks[channel] |= 1 << info.typeId;
+                    }
+                }
+            }
+        }
         Ok(Self {
             objects,
             unprocessed: vec![None; values.len()].into_boxed_slice(),
@@ -290,6 +328,9 @@ impl VstProcessor {
             reset_notes: false,
             held: [[false; 128]; 16],
             event_input: layout.note_inputs > 0,
+            instances: vec![NativeHeld::EMPTY; MAX_NOTE_INSTANCES].into_boxed_slice(),
+            expression_masks,
+            native_drops: 0,
         })
     }
     fn value(&self, id: u32) -> Option<&Value> {
@@ -324,8 +365,12 @@ impl VstProcessor {
             .saturating_add(self.output_parameters.dropped())
             .saturating_add(self.events.dropped())
             .saturating_add(self.output_events.dropped())
+            .saturating_add(self.native_drops)
     }
     fn note(&self, time: u32, key: u8, channel: u8, velocity: f32, on: bool) {
+        self.note_with_id(time, key, channel, velocity, on, i32::from(channel) * 128 + i32::from(key));
+    }
+    fn note_with_id(&self, time: u32, key: u8, channel: u8, velocity: f32, on: bool, id: i32) {
         if !self.event_input {
             return;
         }
@@ -334,7 +379,6 @@ impl VstProcessor {
         let mut event: Event = unsafe { std::mem::zeroed() };
         event.sampleOffset = time as i32;
         event.flags = 1;
-        let id = i32::from(channel) * 128 + i32::from(key);
         if on {
             event.r#type = 0;
             event.__field0.noteOn = NoteOnEvent {
@@ -357,11 +401,50 @@ impl VstProcessor {
         }
         self.events.push(event);
     }
+    fn instance(&mut self, time: u32, id: u32, key: u8, channel: u8, velocity: f32, on: bool) {
+        if on {
+            let slot = self.instances.iter().position(|note| note.id == id)
+                .or_else(|| self.instances.iter().position(|note| note.id == 0));
+            let Some(slot) = slot else { self.native_drops = self.native_drops.saturating_add(1); return; };
+            self.instances[slot] = NativeHeld { id, key, channel };
+        } else if let Some(note) = self.instances.iter_mut().find(|note| note.id == id) { *note = NativeHeld::EMPTY; }
+        self.note_with_id(time, key, channel, velocity, on, id as i32);
+    }
+    fn expression(&self, time: u32, id: u32, channel: u8, kind: NoteExpressionKind, value: f64) {
+        if !self.event_input || self.expression_masks[channel as usize] & kind.mask() == 0 { return; }
+        let value = match kind { NoteExpressionKind::Tuning => value / 240.0 + 0.5,
+            NoteExpressionKind::Volume => value / 4.0, _ => value };
+        let mut event: Event = unsafe { std::mem::zeroed() };
+        event.sampleOffset = time as i32;
+        event.flags = 1;
+        event.r#type = 4;
+        event.__field0.noteExpressionValue = NoteExpressionValueEvent { typeId: kind as u32, noteId: id as i32, value };
+        self.events.push(event);
+    }
+    fn release_instances(&mut self, time: u32) {
+        for index in 0..self.instances.len() {
+            let note = self.instances[index];
+            if note.id != 0 { self.note_with_id(time, note.key, note.channel, 0.0, false, note.id as i32); }
+        }
+        self.instances.fill(NativeHeld::EMPTY);
+    }
 }
 impl ProcessorBackend for VstProcessor {
-    fn process(
+    fn supports_note_instances(&self) -> bool { self.event_input }
+    fn note_expression_mask(&self, channel: u8) -> u32 { self.expression_masks[channel.min(15) as usize] }
+    fn set_sidechain_input(&mut self, input: Option<u32>) {
+        self.inputs.key = match input {
+            Some(index) => self.inputs.auxiliary.iter().copied().find(|port| *port == index as usize),
+            None => self.inputs.auxiliary.first().copied(),
+        };
+    }
+    fn process(&mut self, audio: AudioIo<'_>, events: &[HostEvent], transport: &Transport, steady_time: u64, out: &mut dyn FnMut(PluginEvent)) -> Result<BlockResult, ProcessFailed> {
+        self.process_sidechain(audio, None, events, transport, steady_time, out)
+    }
+    fn process_sidechain(
         &mut self,
         audio: AudioIo<'_>,
+        key: Option<&[[f32; 2]]>,
         events: &[HostEvent],
         transport: &Transport,
         steady_time: u64,
@@ -375,6 +458,7 @@ impl ProcessorBackend for VstProcessor {
         self.output_parameters.clear();
         self.events.clear();
         self.output_events.clear();
+        self.native_drops = 0;
         // SAFETY: processor has one exclusive audio owner, lifecycle calls
         // occur here rather than on the concurrent controller/main thread.
         if !self.started {
@@ -406,6 +490,7 @@ impl ProcessorBackend for VstProcessor {
             }
         }
         if self.reset_notes {
+            self.release_instances(0);
             for channel in 0..16 {
                 for key in 0..128 {
                     if self.held[channel][key] {
@@ -430,6 +515,9 @@ impl ProcessorBackend for VstProcessor {
         }
         for event in events {
             match *event {
+                HostEvent::NoteOnInstance { time, id, key, channel, velocity } => self.instance(time, id, key, channel, velocity, true),
+                HostEvent::NoteOffInstance { time, id, key, channel, velocity } => self.instance(time, id, key, channel, velocity, false),
+                HostEvent::NoteExpression { time, id, channel, kind, value, .. } => self.expression(time, id, channel, kind, value),
                 HostEvent::Param { time, id, value } => {
                     if let Some(v) = self.value(id) {
                         if !v.writable {
@@ -458,6 +546,7 @@ impl ProcessorBackend for VstProcessor {
                     self.held[channel as usize][key as usize] = false;
                 }
                 HostEvent::AllNotesOff { time } => {
+                    self.release_instances(time);
                     for channel in 0..16 {
                         for key in 0..128 {
                             if self.held[channel][key] {
@@ -471,7 +560,7 @@ impl ProcessorBackend for VstProcessor {
         }
         // A valid block fits by construction. An unexpected translation
         // refusal is a failed block, never a successful control acknowledgement.
-        if self.parameters.dropped() != 0 {
+        if self.parameters.dropped() != 0 || self.events.dropped() != 0 || self.native_drops != 0 {
             self.retain_failed_block();
             return Err(ProcessFailed);
         }
@@ -490,6 +579,7 @@ impl ProcessorBackend for VstProcessor {
                 (left, right)
             }
         };
+        self.inputs.key_input(key, frames);
         let mut data = ProcessData {
             processMode: 0,
             symbolicSampleSize: 0,

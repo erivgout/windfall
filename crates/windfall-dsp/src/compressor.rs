@@ -38,6 +38,10 @@ pub enum DetectorMode {
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct CompressorParams {
+    /// Use the track's detector-only key bus; silence when no key arrives.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub sidechain: bool,
     /// Level above which the signal is turned down, in dB relative to full
     /// scale. -60 to 0, default -18.
     pub threshold_db: f32,
@@ -69,6 +73,7 @@ pub struct CompressorParams {
 impl Default for CompressorParams {
     fn default() -> Self {
         Self {
+            sidechain: false,
             threshold_db: -18.0,
             ratio: 4.0,
             attack_ms: 10.0,
@@ -94,6 +99,7 @@ param_set!(CompressorParams, "Compressor", {
         DetectorMode, Peak, [Peak "peak" "Peak", Rms "rms" "RMS"]
     }
     float [mix] "mix" "Mix" { Fraction, Linear, 0.0, 1.0, 1.0 }
+    toggle [sidechain] "sidechain" "External sidechain" { false }
 });
 
 /// The share of every dB over the threshold that is taken away: 0 at a
@@ -214,6 +220,38 @@ impl Compressor {
     }
 }
 
+impl Compressor {
+    fn process_detector(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
+        self.fresh = false;
+        let peak_mode = self.params.detector == DetectorMode::Peak;
+        let mut deepest = 0.0_f32;
+        for (index, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+            let input = if self.params.sidechain { key.and_then(|key| key.get(index)).copied().unwrap_or([0.0; 2]) } else { [*left, *right] };
+            // The RMS average runs in both modes so that switching to it
+            // does not start from a stale value.
+            let rms = self.rms.tick_db(input[0], input[1]);
+            let level = if peak_mode {
+                peak_db(input[0], input[1])
+            } else {
+                rms
+            };
+            let wanted = reduction_db(
+                level - self.threshold.tick(),
+                self.slope.tick(),
+                self.knee.tick(),
+            );
+            let reduction = self.reduction.tick(wanted);
+            deepest = deepest.max(reduction);
+            let gain = db_to_gain_exp(self.makeup.tick() - reduction);
+            let mix = self.mix.tick();
+            *left += (*left * gain - *left) * mix;
+            *right += (*right * gain - *right) * mix;
+        }
+        self.meter.raise(deepest);
+    }
+
+}
+
 impl Effect for Compressor {
     type Params = CompressorParams;
 
@@ -235,33 +273,8 @@ impl Effect for Compressor {
         self.apply();
     }
 
-    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        self.fresh = false;
-        let peak_mode = self.params.detector == DetectorMode::Peak;
-        let mut deepest = 0.0_f32;
-        for (left, right) in left.iter_mut().zip(right.iter_mut()) {
-            // The RMS average runs in both modes so that switching to it
-            // does not start from a stale value.
-            let rms = self.rms.tick_db(*left, *right);
-            let level = if peak_mode {
-                peak_db(*left, *right)
-            } else {
-                rms
-            };
-            let wanted = reduction_db(
-                level - self.threshold.tick(),
-                self.slope.tick(),
-                self.knee.tick(),
-            );
-            let reduction = self.reduction.tick(wanted);
-            deepest = deepest.max(reduction);
-            let gain = db_to_gain_exp(self.makeup.tick() - reduction);
-            let mix = self.mix.tick();
-            *left += (*left * gain - *left) * mix;
-            *right += (*right * gain - *right) * mix;
-        }
-        self.meter.raise(deepest);
-    }
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_detector(left, right, None); }
+    fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) { self.process_detector(left, right, key); }
 
     fn gap_samples(&self) -> usize {
         // While the compressor lets go, a tail that is dying away can get

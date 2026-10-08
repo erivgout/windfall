@@ -28,6 +28,16 @@ pub struct PluginParameter {
     pub automatable: bool,
 }
 
+/// A discovered auxiliary audio input in the native input list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PluginAuxInput {
+    pub index: u32,
+    pub name: String,
+    pub channels: u32,
+}
+
 /// Everything needed to reopen an instance. Missing files retain this data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -44,11 +54,25 @@ pub struct PluginBinding {
     pub state: Vec<u8>,
     #[serde(default)]
     pub parameters: Vec<PluginParameter>,
+    /// None selects the first auxiliary input. The index is in the native input list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sidechain_input: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<PluginAuxInput>>", optional)]
+    pub auxiliary_inputs: Vec<PluginAuxInput>,
 }
 
 impl PluginBinding {
     /// Validates bounded saved data before it reaches native code.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self.sidechain_input.is_some_and(|index| index >= 64)
+            || self.auxiliary_inputs.len() > 64
+            || self.auxiliary_inputs.iter().any(|input| input.index >= 64 || input.channels == 0 || input.channels > 64)
+            || self.auxiliary_inputs.iter().enumerate().any(|(at, input)| self.auxiliary_inputs[..at].iter().any(|other| input.index == other.index))
+        {
+            return Err("the plugin auxiliary input list or selection is invalid");
+        }
         if !["clap", "vst3"].contains(&self.format.as_str())
             || self.id.is_empty()
             || self.path.is_empty()

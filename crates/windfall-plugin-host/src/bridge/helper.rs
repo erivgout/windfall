@@ -189,6 +189,7 @@ impl Native {
             .as_mut()
             .ok_or_else(|| error("native processor unavailable"))?;
         processor.set_transport(input.transport);
+        processor.set_sidechain_input(input.sidechain_input);
         let mut admitted = true;
         output.native_drops = 0;
         if discontinuity || needs_parameters || self.notes_uncertain {
@@ -214,9 +215,10 @@ impl Native {
                 let mut event = input.events[event_at];
                 event.set_time(0);
                 match event {
-                    HostEvent::NoteOff {
-                        key, channel: 0, ..
-                    } => processor.release_note(key),
+                    HostEvent::NoteOff { key, channel, .. } => processor.release_note_on_channel(key, channel),
+                    HostEvent::NoteOffInstance { id, key, channel, velocity, .. } => {
+                        admitted &= processor.release_note_instance(id, key, channel, velocity);
+                    }
                     HostEvent::AllNotesOff { .. } => processor.release_all_notes(),
                     _ => {
                         let accepted = processor.push_event(event);
@@ -244,7 +246,7 @@ impl Native {
             // erase them. A nonempty successful native call is mandatory.
             let before = processor.health();
             dropped_evidence(before.dropped_events, before.dropped_events)?;
-            let status = processor.process(&mut output.left[at..end], &mut output.right[at..end]);
+            let status = processor.process_sidechain(&mut output.left[at..end], &mut output.right[at..end], Some(&input.key[at..end]));
             let after = processor.health();
             output.native_drops = output
                 .native_drops

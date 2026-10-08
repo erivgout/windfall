@@ -176,6 +176,7 @@ mod tests {
         let mut store = SettingsStore::load(file.clone());
         store.update(|settings| {
             settings.audio = AudioSettings {
+                output_channels: None,
                 host: Some("WASAPI".to_owned()),
                 device: None,
                 sample_rate: Some(44_100),

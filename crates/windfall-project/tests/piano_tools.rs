@@ -12,6 +12,7 @@ fn note(id: u32, start: u32, length: u32, key: u8) -> Note {
         key,
         velocity: 0.5,
         pan: -0.25,
+        expression: Default::default(),
     }
 }
 
@@ -218,6 +219,7 @@ fn range_transposes_clamps_or_folds_with_a_deliberate_narrow_range_fallback() {
 #[test]
 fn quantize_strength_grooves_ties_and_boundaries() {
     let q = |edge, groove, strength| NoteTransform::Quantize {
+        musical: None,
         grid: 240,
         strength,
         edge,
@@ -366,6 +368,7 @@ fn fixture() -> (Document, ChannelId, ChannelId) {
                         key: 60,
                         velocity: Some(0.5),
                         pan: Some(-0.25),
+                        expression: None,
                     },
                     NoteInit {
                         start: 3840,
@@ -373,6 +376,7 @@ fn fixture() -> (Document, ChannelId, ChannelId) {
                         key: 64,
                         velocity: Some(0.7),
                         pan: Some(0.25),
+                        expression: None,
                     },
                 ],
             },
@@ -415,6 +419,7 @@ fn each_tool_is_one_atomic_undoable_persistable_command() {
         },
         NoteTransform::ScaleVelocity { factor: 2.0 },
         NoteTransform::Quantize {
+            musical: None,
             grid: 240,
             strength: 0.75,
             edge: NoteEdge::Start,
@@ -439,6 +444,7 @@ fn each_tool_is_one_atomic_undoable_persistable_command() {
                         key: first.key,
                         velocity: Some(first.velocity),
                         pan: Some(first.pan),
+                        expression: None,
                     }],
                 },
                 None,
@@ -616,18 +622,21 @@ fn every_parameter_is_checked_and_results_are_order_independent() {
             octaves: false,
         },
         NoteTransform::Quantize {
+            musical: None,
             grid: 0,
             strength: 1.0,
             edge: NoteEdge::Start,
             groove: NoteGroove::Straight,
         },
         NoteTransform::Quantize {
+            musical: None,
             grid: 240,
             strength: f64::NAN,
             edge: NoteEdge::End,
             groove: NoteGroove::Swing,
         },
         NoteTransform::Quantize {
+            musical: None,
             grid: 240,
             strength: 1.1,
             edge: NoteEdge::Start,
@@ -656,6 +665,7 @@ fn every_parameter_is_checked_and_results_are_order_independent() {
         },
         NoteTransform::ScaleVelocity { factor: 4.0 },
         NoteTransform::Quantize {
+            musical: None,
             grid: 240,
             strength: 0.5,
             edge: NoteEdge::End,

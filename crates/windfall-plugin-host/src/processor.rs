@@ -30,10 +30,10 @@ use crate::events::{HostEvent, PluginEvent, Transport};
 /// bounded reserve.
 pub const EVENT_CAPACITY: usize = 1024;
 
-/// The instrument adapter releases channel-zero keys at frame zero. Once
+/// The instrument adapter releases channel/key pairs at frame zero. Once
 /// ordinary admission stops, no new note-ons can intervene, so at most one
-/// release per key and one global panic need extra space.
-pub(crate) const IMMEDIATE_RELEASE_CAPACITY: usize = 128 + 1;
+/// release per channel/key pair and one global panic need extra space.
+pub(crate) const IMMEDIATE_RELEASE_CAPACITY: usize = 16 * 128 + 2 * crate::events::MAX_NOTE_INSTANCES + 1;
 
 /// A tail length that stands for "never ends".
 pub(crate) const ENDLESS_TAIL: u32 = u32::MAX;
@@ -95,6 +95,9 @@ pub(crate) struct ProcessFailed;
 /// One plugin format's way of running a block. The processor calls these
 /// on the audio thread only, never two at once.
 pub(crate) trait ProcessorBackend: Send + 'static {
+    fn supports_note_instances(&self) -> bool { false }
+    fn note_expression_mask(&self, _channel: u8) -> u32 { 0 }
+    fn set_sidechain_input(&mut self, _input: Option<u32>) {}
     /// Processes one block of at most the block size the plugin was
     /// activated with. `events` are sorted by time and all lie inside the
     /// block. Must not allocate, lock or block in the host's own code.
@@ -106,6 +109,11 @@ pub(crate) trait ProcessorBackend: Send + 'static {
         steady_time: u64,
         out: &mut dyn FnMut(PluginEvent),
     ) -> Result<BlockResult, ProcessFailed>;
+
+    /// Optional auxiliary audio, copied into format-owned input buffers.
+    fn process_sidechain(&mut self, audio: AudioIo<'_>, _key: Option<&[[f32; 2]]>, events: &[HostEvent], transport: &Transport, steady_time: u64, out: &mut dyn FnMut(PluginEvent)) -> Result<BlockResult, ProcessFailed> {
+        self.process(audio, events, transport, steady_time, out)
+    }
 
     /// Translation drops from the just-failed block must still reach health.
     /// Defaults to zero for backends with no separate translation buffers.
@@ -174,6 +182,19 @@ pub(crate) struct ProcessorParts {
 }
 
 impl PluginProcessor {
+    pub fn supports_note_instances(&self) -> bool { self.backend.supports_note_instances() }
+    pub fn note_expression_mask(&self, channel: u8) -> u32 { self.backend.note_expression_mask(channel.min(15)) }
+    /// All-or-nothing admission keeps a note-on and its initial controls on
+    /// the same frame without exposing a partially initialized voice.
+    pub fn push_events(&mut self, events: &[HostEvent]) -> bool {
+        if events.iter().any(|event| !event.valid()) || self.pending.len().saturating_add(events.len()) > EVENT_CAPACITY {
+            self.shared.health.dropped_events.fetch_add(events.len().min(u32::MAX as usize) as u32, Ordering::Relaxed);
+            return false;
+        }
+        for event in events { let at = self.pending.partition_point(|queued| queued.time() <= event.time()); self.pending.insert(at, *event); }
+        true
+    }
+    pub fn set_sidechain_input(&mut self, input: Option<u32>) { self.backend.set_sidechain_input(input); }
     pub(crate) fn backend_mut(&mut self) -> &mut dyn ProcessorBackend {
         self.backend.as_mut()
     }
@@ -266,22 +287,25 @@ impl PluginProcessor {
                     .iter()
                     .rev()
                     .find_map(|queued| match (event, *queued) {
+                        (HostEvent::NoteOffInstance { id, .. }, HostEvent::NoteOnInstance { id: other, .. }) if id == other => Some(false),
+                        (HostEvent::NoteOffInstance { id, .. }, HostEvent::NoteOffInstance { id: other, .. }) if id == other => Some(true),
+                        (HostEvent::AllNotesOff { .. }, HostEvent::NoteOnInstance { .. }) => Some(false),
                         (
-                            HostEvent::NoteOff { key, .. },
+                            HostEvent::NoteOff { key, channel, .. },
                             HostEvent::NoteOn {
                                 key: other,
-                                channel: 0,
+                                channel: other_channel,
                                 ..
                             },
-                        ) if key == other => Some(false),
+                        ) if key == other && channel == other_channel => Some(false),
                         (
-                            HostEvent::NoteOff { key, .. },
+                            HostEvent::NoteOff { key, channel, .. },
                             HostEvent::NoteOff {
                                 key: other,
-                                channel: 0,
+                                channel: other_channel,
                                 ..
                             },
-                        ) if key == other => Some(true),
+                        ) if key == other && channel == other_channel => Some(true),
                         (HostEvent::AllNotesOff { .. }, HostEvent::NoteOn { .. }) => Some(false),
                         (_, HostEvent::AllNotesOff { .. }) => Some(true),
                         _ => None,
@@ -290,17 +314,21 @@ impl PluginProcessor {
                 return;
             }
         }
-        // Every additional event is a distinct key release or a panic, and
+        // Every additional event is a distinct channel/key release or a panic, and
         // ordinary push_event cannot add note-ons while this reserve is used.
         debug_assert!(self.pending.len() < EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY);
         self.pending.insert(at, event);
     }
 
     pub(crate) fn release_note(&mut self, key: u8) {
+        self.release_note_on_channel(key, 0);
+    }
+
+    pub(crate) fn release_note_on_channel(&mut self, key: u8, channel: u8) {
         self.push_immediate_release(HostEvent::NoteOff {
             time: 0,
             key: key.min(127),
-            channel: 0,
+            channel: channel.min(15),
             velocity: 0.0,
         });
     }
@@ -309,13 +337,24 @@ impl PluginProcessor {
         self.push_immediate_release(HostEvent::AllNotesOff { time: 0 });
     }
 
+    pub fn release_note_instance(&mut self, id: u32, key: u8, channel: u8, velocity: f32) -> bool {
+        let event = HostEvent::NoteOffInstance { time: 0, id, key, channel, velocity };
+        if !event.valid() || !self.supports_note_instances() { return false; }
+        self.push_immediate_release(event);
+        true
+    }
+
     /// Starts a note on frame `time` of the next block. `velocity` runs
     /// from 0 to 1.
     pub fn note_on(&mut self, time: u32, key: u8, velocity: f32) -> bool {
+        self.note_on_channel(time, key, 0, velocity)
+    }
+
+    pub fn note_on_channel(&mut self, time: u32, key: u8, channel: u8, velocity: f32) -> bool {
         self.push_event(HostEvent::NoteOn {
             time,
             key: key.min(127),
-            channel: 0,
+            channel,
             velocity: velocity.clamp(0.0, 1.0),
         })
     }
@@ -429,7 +468,9 @@ impl PluginProcessor {
     /// [`max_block`](Self::max_block) is handed to the plugin in pieces.
     /// Events queued with a time at or past the end of the block take
     /// effect on its last frame.
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) -> ProcessStatus {
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) -> ProcessStatus { self.process_sidechain(left, right, None) }
+
+    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) -> ProcessStatus {
         let frames = left.len().min(right.len());
         let (left, right) = (&mut left[..frames], &mut right[..frames]);
         self.take_main_thread_events();
@@ -503,8 +544,9 @@ impl PluginProcessor {
             let started = Instant::now();
             let result = {
                 let _flush = NoDenormals::enter();
-                backend.process(
+                backend.process_sidechain(
                     audio,
+                    key.and_then(|key| key.get(done..done + length)),
                     &pending[..due],
                     &self.transport,
                     self.steady_time,

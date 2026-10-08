@@ -43,7 +43,7 @@ pub const MAX_KEPT_EVENTS: usize = 16_384;
 pub const MAX_CHANNELS: usize = 8_192;
 /// Most patterns read from one file.
 pub const MAX_PATTERNS: usize = 8_192;
-/// Most mixer inserts read from one file. FL Studio has 127.
+/// Most mixer inserts read from one file; includes modern 500-insert projects.
 pub const MAX_INSERTS: usize = 512;
 /// Most effect slots read for one insert. FL Studio has 10.
 pub const MAX_SLOTS: usize = 32;

@@ -97,6 +97,7 @@ fn an_audio_clip_from_a_file_is_one_undo_step_and_plays_in_the_song() {
             content: ClipContent::Audio {
                 sample: SampleId(sample),
                 mixer_track: TrackId(mixer_track),
+                output: Default::default(),
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

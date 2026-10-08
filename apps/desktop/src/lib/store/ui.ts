@@ -40,6 +40,10 @@ export type CenterOverlay = "effects"
 export type PanelSizes = Record<string, number>
 
 type UiState = {
+  mixerMeterMode: "level" | "waveform"
+  setMixerMeterMode(mode: "level" | "waveform"): void
+  mixerLayout: string
+  setMixerLayout(layout: string): void
   uiScale: UiScale
   theme: Theme
   keymap: KeymapPreset
@@ -113,6 +117,10 @@ export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
       uiScale: DEFAULT_UI_SCALE,
+      mixerLayout: "adaptive",
+      mixerMeterMode: "level",
+      setMixerMeterMode: (mixerMeterMode) => set({ mixerMeterMode }),
+      setMixerLayout: (mixerLayout) => set({ mixerLayout }),
       theme: "dark",
       keymap: "windfall",
       panels: DEFAULT_PANELS,
@@ -163,6 +171,8 @@ export const useUiStore = create<UiState>()(
           centerOverlay: null,
           activeScope: null,
           layouts: {},
+          mixerLayout: "adaptive",
+          mixerMeterMode: "level",
           layoutGeneration: state.layoutGeneration + 1,
         })),
       selectChannel: (selectedChannel) => set({ selectedChannel }),
@@ -177,6 +187,8 @@ export const useUiStore = create<UiState>()(
       version: 1,
       partialize: (state) => ({
         uiScale: state.uiScale,
+        mixerLayout: state.mixerLayout,
+        mixerMeterMode: state.mixerMeterMode,
         theme: state.theme,
         keymap: state.keymap,
         panels: state.panels,
@@ -190,6 +202,8 @@ export const useUiStore = create<UiState>()(
           ...current,
           ...saved,
           uiScale: validUiScale((saved as Partial<UiState>).uiScale),
+          mixerMeterMode: (saved as Partial<UiState>).mixerMeterMode === "waveform" ? "waveform" : "level",
+          mixerLayout: ["adaptive", "compact", "compact2", "narrow", "standard", "wide", "extraWide", "large", "extraLarge"].includes((saved as Partial<UiState>).mixerLayout ?? "") ? (saved as Partial<UiState>).mixerLayout! : "adaptive",
         }
       },
     }

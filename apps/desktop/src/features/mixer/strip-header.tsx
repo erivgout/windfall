@@ -20,6 +20,7 @@ import { TRACK_COLORS } from "./colors"
 import { addEffectActionId } from "./effect-actions"
 import { useMixerUi } from "./mixer-ui"
 import { renameTrack, setTrackColor, startRename } from "./operations"
+import { RecordArm } from "./recording-input"
 
 /** The effects that can be added to the selected track. */
 const ADD_EFFECT: ContextItem = {
@@ -28,6 +29,12 @@ const ADD_EFFECT: ContextItem = {
 }
 
 const INSERT_MENU: ContextItem[] = [
+  "mixer.renderSelected",
+  "mixer.renderArmed",
+  contextSeparator,
+  "mixer.toggleRecordArm",
+  "mixer.recordArmed",
+  contextSeparator,
   "mixer.renameTrack",
   "mixer.changeColor",
   contextSeparator,
@@ -48,6 +55,12 @@ const INSERT_MENU: ContextItem[] = [
 ]
 
 const MASTER_MENU: ContextItem[] = [
+  "mixer.renderSelected",
+  "mixer.renderArmed",
+  contextSeparator,
+  "mixer.toggleRecordArm",
+  "mixer.recordArmed",
+  contextSeparator,
   "mixer.renameTrack",
   "mixer.changeColor",
   contextSeparator,
@@ -236,6 +249,7 @@ export function StripHeader({
             </span>
           )}
           {trailing}
+          <RecordArm track={id} />
         </div>
       </div>
     </ContextActions>

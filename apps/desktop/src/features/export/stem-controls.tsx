@@ -1,5 +1,8 @@
 import type { ExportStems } from "@/bindings"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/components/ui/button"
+import { selectedMixerTracks, useMixerUi } from "@/features/mixer/mixer-ui"
+import { useUiStore } from "@/lib/store/ui"
 import {
   Field,
   FieldDescription,
@@ -30,7 +33,11 @@ export function StemControls({
   onChange(value: ExportStems | undefined): void
 }) {
   const mixer = useProjectStore((state) => state.project.mixer)
-  const tracks = mixer.tracks.filter((track) => track.id !== MASTER_TRACK)
+  const tracks = mixer.tracks.filter((track) => track.id !== MASTER_TRACK && !track.current)
+  const selection = useMixerUi((state) => state.selected)
+  const primary = useUiStore((state) => state.selectedTrack)
+  const selected = tracks.filter((track) => (selection.length ? selection : [primary]).includes(track.id))
+  const armed = tracks.filter((track) => track.recording?.armed)
   const set = <K extends keyof ExportStems>(key: K, next: ExportStems[K]) => {
     if (value) onChange({ ...value, [key]: next })
   }
@@ -95,6 +102,11 @@ export function StemControls({
                 }
               />
             </Field>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={disabled || !selected.length} onClick={() => set("tracks", selectedMixerTracks().filter((track) => track.id !== MASTER_TRACK && !track.current).map((track) => track.id))}>Use mixer selection ({selected.length})</Button>
+              <Button type="button" size="sm" variant="outline" disabled={disabled || !armed.length} onClick={() => set("tracks", tracks.filter((track) => track.recording?.armed).map((track) => track.id))}>Use armed tracks ({armed.length})</Button>
+              {value.tracks !== undefined && <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => set("tracks", [])}>Clear track selection</Button>}
+            </div>
             {value.tracks !== undefined && (
               <FieldSet>
                 <FieldLegend variant="label">Selected tracks</FieldLegend>

@@ -339,6 +339,7 @@ fn other_eq() -> EqParams {
 
 fn busy_compressor() -> CompressorParams {
     CompressorParams {
+        sidechain: false,
         threshold_db: -30.0,
         ratio: 6.0,
         attack_ms: 3.0,

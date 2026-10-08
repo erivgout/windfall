@@ -1,5 +1,25 @@
 /** Width of an insert strip in pixels. Every strip is the same width. */
 export const STRIP_WIDTH = 80
+export const MIXER_LAYOUTS = [
+  { value: "adaptive", label: "Adaptive", width: 80 },
+  { value: "compact", label: "Compact", width: 36, mode: "mini" },
+  { value: "compact2", label: "Compact 2", width: 48, mode: "flat" },
+  { value: "narrow", label: "Narrow", width: 64, mode: "tight" },
+  { value: "standard", label: "Standard", width: 80, mode: "compact" },
+  { value: "wide", label: "Wide", width: 104, mode: "full" },
+  { value: "extraWide", label: "Extra wide", width: 128, mode: "full" },
+  { value: "large", label: "Large", width: 152, mode: "full" },
+  { value: "extraLarge", label: "Extra large", width: 176, mode: "full" },
+] as const
+
+export function chosenStripLayout(choice: string, height: number, sends: number, effects: number): StripLayout & { width: number } {
+  const selected = MIXER_LAYOUTS.find((layout) => layout.value === choice) ?? MIXER_LAYOUTS[0]
+  const automatic = stripLayout(height, sends, effects)
+  const order: StripMode[] = ["full", "compact", "tight", "flat", "mini"]
+  const wanted = "mode" in selected ? selected.mode : automatic.mode
+  const mode = order.indexOf(wanted) > order.indexOf(automatic.mode) ? wanted : automatic.mode
+  return { ...automatic, mode, sendRows: mode === "full" ? automatic.sendRows : 0, effectRows: mode === "mini" || mode === "flat" ? 0 : automatic.effectRows, width: selected.width }
+}
 export const MASTER_WIDTH = 92
 /** Width of the "add track" column after the last strip. */
 export const ADD_WIDTH = 44
@@ -146,10 +166,11 @@ export type StripRange = {
 export function visibleRange(
   scrollLeft: number,
   viewWidth: number,
-  count: number
+  count: number,
+  width = STRIP_WIDTH
 ): StripRange {
-  const first = Math.floor(Math.max(0, scrollLeft) / STRIP_WIDTH)
-  const last = Math.ceil((Math.max(0, scrollLeft) + viewWidth) / STRIP_WIDTH)
+  const first = Math.floor(Math.max(0, scrollLeft) / width)
+  const last = Math.ceil((Math.max(0, scrollLeft) + viewWidth) / width)
   return {
     start: Math.max(0, Math.min(count, first - OVERSCAN)),
     end: Math.max(0, Math.min(count, last + OVERSCAN)),
@@ -163,10 +184,11 @@ export function visibleRange(
 export function scrollToReveal(
   index: number,
   scrollLeft: number,
-  viewWidth: number
+  viewWidth: number,
+  width = STRIP_WIDTH
 ): number | null {
-  const left = index * STRIP_WIDTH
-  const right = left + STRIP_WIDTH
+  const left = index * width
+  const right = left + width
   if (left < scrollLeft) return left
   if (right > scrollLeft + viewWidth) return Math.max(0, right - viewWidth)
   return null

@@ -90,7 +90,8 @@ export function noteLabelPainter(session: PianoRollSession): OverlayPainter {
         row -= preview.keys
       }
       if (row < rows.first || row >= rows.last) continue
-      const text = noteName(rowToKey(row))
+      const articulation = editor.notes[i]?.expression?.articulation ?? "normal"
+      const text = `${articulation === "slide" ? "↗ " : articulation === "portamento" ? "~ " : ""}${noteName(rowToKey(row))}`
       let width = widths.get(text)
       if (width === undefined) {
         width = Math.ceil(ctx.measureText(text).width)

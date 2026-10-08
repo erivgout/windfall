@@ -19,6 +19,7 @@ export interface TimeGridSpec {
   readonly ticksPerStep: number
   readonly stepsPerBeat: number
   readonly beatsPerBar: number
+  readonly segments?: readonly (Omit<TimeGridSpec, "segments"> & { start: number; end: number })[]
 }
 
 /** 4/4 at 960 PPQ with sixteenth-note steps. */
@@ -127,14 +128,17 @@ export function writeGrid(
     )
   }
 
-  const levels = gridLevels(viewport.pxPerTick, spec)
   const ticks = visibleTicks(viewport)
   const flatColumn = RECT_FLAT | RECT_FULL_HEIGHT | RECT_VLINE
-  const first = Math.ceil(ticks.start / levels.minor) * levels.minor
-  for (let tick = first; tick <= ticks.end; tick += levels.minor) {
-    let color = theme.gridMinor
-    if (tick % levels.strong === 0) color = theme.gridBar
-    else if (tick % levels.mid === 0) color = theme.gridBeat
-    out.push(-1, tick, 0, 0, 0, color, flatColumn)
+  for (const segment of spec.segments ?? [{ ...spec, start: 0, end: Infinity }]) {
+    const levels = gridLevels(viewport.pxPerTick, segment)
+    const first = segment.start + Math.max(0, Math.ceil((ticks.start - segment.start) / levels.minor)) * levels.minor
+    for (let tick = first; tick <= ticks.end && tick < segment.end; tick += levels.minor) {
+      const offset = tick - segment.start
+      let color = theme.gridMinor
+      if (offset % levels.strong === 0) color = theme.gridBar
+      else if (offset % levels.mid === 0) color = theme.gridBeat
+      out.push(-1, tick, 0, 0, 0, color, flatColumn)
+    }
   }
 }

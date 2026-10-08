@@ -1,4 +1,6 @@
+import { watchMixerWaveforms } from "@/features/mixer/waveform-meter"
 import { reportError } from "@/lib/errors"
+import { watchCurrentSource } from "@/features/mixer/current-source"
 import { backend } from "@/lib/ipc"
 
 import { receiveEngineStatus, refreshEngineStatus } from "./engine"
@@ -29,6 +31,8 @@ export function connectStores(): () => void {
   }
 
   const disconnect = [
+    watchCurrentSource(),
+    watchMixerWaveforms(),
     backend.onProjectPatch((patch) => {
       receivePatch(patch)
       if (patch.mixer || patch.channels) refreshLatencySoon()

@@ -1,4 +1,5 @@
 import type { Note, NoteUpdate } from "@/bindings"
+import { DEFAULT_NOTE_EXPRESSION } from "@/lib/note-expression"
 
 import { clampPan, clampVelocity } from "./edit-math"
 
@@ -7,11 +8,15 @@ import { clampPan, clampVelocity } from "./edit-math"
  * its pan. This is the arithmetic of drawing and editing those bars.
  */
 
-export type LaneKind = "velocity" | "pan"
+export type LaneKind = "velocity" | "pan" | "release" | "finePitchCents" | "modulationX" | "modulationY"
 
 export const LANE_KINDS: { id: LaneKind; label: string }[] = [
   { id: "velocity", label: "Velocity" },
   { id: "pan", label: "Pan" },
+  { id: "release", label: "Release" },
+  { id: "finePitchCents", label: "Fine pitch" },
+  { id: "modulationX", label: "Modulation X" },
+  { id: "modulationY", label: "Modulation Y" },
 ]
 
 type Range = { min: number; max: number }
@@ -19,19 +24,27 @@ type Range = { min: number; max: number }
 const RANGES: Record<LaneKind, Range> = {
   velocity: { min: 0, max: 1 },
   pan: { min: -1, max: 1 },
+  release: { min: 0, max: 1 },
+  finePitchCents: { min: -1200, max: 1200 },
+  modulationX: { min: 0, max: 1 },
+  modulationY: { min: 0, max: 1 },
 }
 
 /** Space kept above and below the bars so a full bar's cap stays in view. */
 export const LANE_PAD_PX = 5
 
 export function laneValue(note: Note, kind: LaneKind): number {
-  return kind === "velocity" ? note.velocity : note.pan
+  if (kind === "velocity" || kind === "pan") return note[kind]
+  return (note.expression ?? DEFAULT_NOTE_EXPRESSION)[kind]
 }
 
 export function clampLaneValue(value: number, kind: LaneKind): number {
   // Two decimals are finer than anyone can drag and keep the file readable.
   const rounded = Math.round(value * 100) / 100
-  return kind === "velocity" ? clampVelocity(rounded) : clampPan(rounded)
+  if (kind === "velocity") return clampVelocity(rounded)
+  if (kind === "pan") return clampPan(rounded)
+  if (kind === "finePitchCents") return Math.min(1200, Math.max(-1200, Math.round(value)))
+  return Math.min(1, Math.max(0, rounded))
 }
 
 /** The value a y coordinate stands for. The top of the lane is the maximum. */
@@ -167,7 +180,7 @@ export function laneUpdates(
     if (value === undefined || value === laneValue(note, kind)) continue
     updates.push({
       id: note.id,
-      patch: kind === "velocity" ? { velocity: value } : { pan: value },
+      patch: kind === "velocity" || kind === "pan" ? { [kind]: value } : { expression: { ...(note.expression ?? DEFAULT_NOTE_EXPRESSION), [kind]: value } },
     })
   }
   return updates

@@ -56,6 +56,11 @@ pub(super) fn start_recording_session(session: &crate::session::Session) {
                 device: "Fake".into(),
                 left: 0,
                 right: None,
+                alignment: None,
+                loop_recording: None,
+                monitor: None,
+                armed_tracks: None,
+                mixer_tap: None,
             },
             960,
             None,
@@ -212,6 +217,8 @@ fn all_audio_origins_edited_and_sliced_sources_survive_removal_and_archive_open(
 fn missing_plugins_retain_opaque_state_and_parameters_without_bundling_binaries() {
     let rig = Rig::new();
     let plugin = PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
         target: PluginTarget::Instrument {
             channel: ChannelId(0),
         },

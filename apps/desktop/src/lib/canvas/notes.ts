@@ -1,4 +1,5 @@
-import type { Rgba } from "./color"
+import { mix, rgbFromInt, type Rgba } from "./color"
+import { isNoteColorGroup, NOTE_COLOR_GROUPS } from "@/lib/note-colors"
 import { RECT_SELECTED, RectBatch } from "./rect-batch"
 import { levelColor, type GridTheme } from "./theme"
 import { keyToRow } from "./viewport"
@@ -10,6 +11,7 @@ export interface NoteLike {
   readonly length: number
   readonly key: number
   readonly velocity: number
+  readonly expression?: { readonly colorGroup?: number | null }
 }
 
 /**
@@ -51,13 +53,17 @@ export function buildNoteBatch(
   const batch = new RectBatch(Math.max(16, notes.length))
   for (const note of notes) {
     const level = Math.round(Math.min(1, Math.max(0, note.velocity)) * top)
+    const group = note.expression?.colorGroup
+    const color = isNoteColorGroup(group)
+      ? mix(palette[0], rgbFromInt(NOTE_COLOR_GROUPS[group]), 0.35 + 0.65 * Math.min(1, Math.max(0, note.velocity)))
+      : palette[level]
     batch.push(
       note.id,
       note.start,
       note.length,
       keyToRow(note.key, rowCount),
       1,
-      palette[level],
+      color,
       selected?.has(note.id) ? RECT_SELECTED : 0
     )
   }

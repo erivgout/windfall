@@ -18,7 +18,7 @@
 use std::collections::BTreeSet;
 
 use windfall_project::{
-    Command, EffectSlotPatch, MAX_EFFECT_SLOTS, MAX_MIXER_TRACKS, MixerTrackPatch, TrackId,
+    Command, EffectSlotPatch, MAX_EFFECT_SLOTS, MAX_MIXER_SIGNAL_TRACKS, MixerTrackPatch, TrackId,
 };
 
 use super::{
@@ -50,7 +50,7 @@ impl Builder<'_> {
                 self.fader(insert, index);
                 continue;
             }
-            if self.tracks.len() >= MAX_MIXER_TRACKS {
+            if self.tracks.len() >= MAX_MIXER_SIGNAL_TRACKS {
                 left_out += 1;
                 continue;
             }
@@ -68,7 +68,7 @@ impl Builder<'_> {
                 ReportSection::Mixer,
                 Outcome::Dropped,
                 format!(
-                    "Windfall's mixer holds {MAX_MIXER_TRACKS} tracks. {left_out} more were left out, and what played into them plays into the master."
+                    "Windfall's mixer holds {MAX_MIXER_SIGNAL_TRACKS} tracks. {left_out} more were left out, and what played into them plays into the master."
                 ),
             );
         }
@@ -169,6 +169,8 @@ impl Builder<'_> {
             pan: Some(insert_pan(insert.pan.unwrap_or(0))),
             muted: Some(!insert.enabled()),
             solo: Some(insert.solo()),
+            recording: None,
+            ..MixerTrackPatch::default()
         };
         let command = Command::UpdateMixerTrack { id: track, patch };
         if self

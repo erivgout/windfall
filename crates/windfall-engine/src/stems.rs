@@ -158,7 +158,7 @@ pub fn stems(project: &Project, options: &StemOptions) -> Result<Vec<Stem>, Stem
                 if id == TrackId::MASTER {
                     return Err(StemError::Master);
                 }
-                if project.mixer.track(id).is_none() {
+                if project.mixer.track(id).is_none_or(|track| track.current) {
                     return Err(StemError::UnknownTrack(id));
                 }
             }
@@ -223,7 +223,7 @@ fn sources(project: &Project, through: bool) -> Vec<bool> {
         .clips
         .iter()
         .filter_map(|clip| match clip.content {
-            ClipContent::Audio { mixer_track, .. } => Some(mixer_track),
+            ClipContent::Audio { mixer_track, output, .. } if output.is_mixer() => Some(mixer_track),
             _ => None,
         });
     for index in channels.chain(clips).filter_map(place) {
@@ -236,7 +236,8 @@ fn sources(project: &Project, through: bool) -> Vec<bool> {
                 continue;
             }
             let sends = track.sends.iter().map(|send| send.target);
-            for target in track.output.into_iter().chain(sends).filter_map(place) {
+            let output = track.output.filter(|_| !track.external_output.is_some_and(|route| route.exclusive));
+            for target in output.into_iter().chain(sends).filter_map(place) {
                 gives[target] = true;
             }
         }
@@ -425,7 +426,7 @@ impl Plan {
             }
         }
         for clip in &mut self.audio_clips {
-            if Some(clip.track) != track {
+            if clip.direct_output || Some(clip.track) != track {
                 clip.gain = 0.0;
             }
         }
@@ -720,6 +721,11 @@ mod tests {
 
     fn track(id: u32, name: &str, output: Option<u32>) -> MixerTrack {
         MixerTrack {
+            dock: windfall_project::MixerDock::default(),
+            external_output: None,
+            processing: windfall_dsp::TrackParams::default(),
+            current: false,
+            latency_offset_ms: 0.0,
             id: TrackId(id),
             name: name.to_owned(),
             color: 0,
@@ -728,8 +734,10 @@ mod tests {
             muted: false,
             solo: false,
             output: output.map(TrackId),
+            sidechains: Vec::new(),
             sends: Vec::new(),
             effects: Vec::new(),
+            recording: None,
         }
     }
 
@@ -742,6 +750,8 @@ mod tests {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId(track),
             source: ChannelSource::Sampler(SamplerSettings::default()),
         }

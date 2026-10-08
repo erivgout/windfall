@@ -460,6 +460,7 @@ impl Session {
         }
         let controller = self.controller();
         controller.stop();
+        controller.set_current_track(None);
 
         let project = document.project();
         let first_pattern = project.patterns.first().map(|pattern| pattern.id);
@@ -504,6 +505,7 @@ impl Session {
             slice_ticket: state.slice_ticket,
         };
         controller.set_prepared_project(state.document.project(), prepared);
+        self.refresh_input_monitor_signature(&state);
         if let Some(staged) = staged {
             staged.install_document();
         }

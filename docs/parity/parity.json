@@ -40,7 +40,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "Native mono/stereo input capture streams to WAV and creates a normal playlist clip with undo/save support. Start/stop/discard, channel selection, overflow/error rejection and ownership guards are tested with synthetic capture. Placement uses a chosen start tick; input/output latency and separate device clocks are uncompensated. Hardware capture, monitoring, count-in and multitrack takes remain. See docs/RECORDING.md."
+      "notes": "Native mono/stereo WAV capture and playlist attachment. Feature-pass source adds ADC/DAC alignment, count-in, rate/drift correction, offsets, tail drain, routed monitoring, multitrack hardware/mixer disk sources and atomic selected-loop attachment. External outputs, standalone monitoring, printed-master playback routing, comping and logger workflows remain. Artifacts and all new QA deferred. See docs/RECORDING.md."
     },
     {
       "id": "core-audio-clips",
@@ -196,7 +196,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Checked persisted song meter maps, shortened-bar conversions, MIDI/FLP song maps and anchored engine/CLAP/VST3 transport metadata are integrated. Undo, legacy loading, native ABI bar boundaries and malformed-map publication refusal are tested. Per-pattern signatures, scalar snap/grid refinement, combined native plugin/device acceptance and P1 off-lock preparation remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
+      "notes": "Persisted song meter maps and anchored engine/CLAP/VST3 transport metadata were integrated previously. Pattern base signatures, local meter maps/markers, ruler/grid segments, pointer snapping and MIDI/FL pattern metadata conversion are now implemented in source. Remaining segmented metrical workflows, native plugin/device acceptance and P1 off-lock preparation stay open; current source artifacts and all new QA are deferred. See docs/TIMELINE-REGIONS.md and docs/PATTERN-TIMELINES.md."
     },
     {
       "id": "core-midi-support",
@@ -313,10 +313,10 @@
       "summary": "Per-step bars for editing note, velocity, release, fine pitch, modulation and shift values.",
       "windfall_name": "Step graph editor",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Source includes note/velocity/release/fine-pitch/modulation X/Y/pan/length/shift graphs, chord bars, interpolated paint, reset, keyboard edits and captured native note transactions. Expression reaches built-in sampler/synth voices. Artifact builds, QA and reviews deferred. See docs/STEP-GRAPH.md and docs/NOTE-EXPRESSION.md."
     },
     {
       "id": "win-rack-channel-controls",
@@ -364,7 +364,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Global swing only; no per-channel swing mix yet."
+      "notes": "Global swing plus implemented per-channel swing mix in the shared native playback/MIDI timing kernel and channel inspector. Implementation-first QA and artifact regeneration are deferred; see docs/CHANNEL-TIMING.md."
     },
     {
       "id": "win-rack-channel-groups",
@@ -373,10 +373,10 @@
       "summary": "Sorts channels into named groups and shows one group at a time.",
       "windfall_name": "Channel groups",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Implemented saved group membership, atomic bulk assign/rename/merge/remove commands, rack filtering, multi-channel manager and row/palette actions. QA and shared-WASM regeneration deferred; see docs/CHANNEL-GROUPS.md."
     },
     {
       "id": "win-rack-channel-menu",
@@ -400,7 +400,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Fill every 2, 4 or 8 steps and shift left or right. No advanced fill tool yet."
+      "notes": "Regular fills and shift tools plus an implemented Advanced step fill dialog: regular, Euclidean and seeded rhythms, rotated/repeated ranges, velocity/key/gate controls, replacement/overlay preview, and native captured-lane admission with one undo step. QA deferred under the user's feature-first instruction; see docs/ADVANCED-FILL.md."
     },
     {
       "id": "win-rack-cut-groups",
@@ -457,10 +457,10 @@
       "summary": "Converts a channel's active steps into piano roll notes.",
       "windfall_name": "Steps to notes",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Explicit Send steps to piano roll row/palette action selects the existing note lane and note preview without duplicating notes or adding history. UI/native navigation QA deferred; see docs/FEATURE-PASS.md."
     },
     {
       "id": "win-rack-channel-envelopes",
@@ -517,10 +517,10 @@
       "summary": "Truncates notes to a set length, offsets their start and scales how much swing applies to the channel.",
       "windfall_name": "Channel note timing",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Implemented persisted gate, signed shift and per-channel swing mix with inspector controls/reset and a shared Rust timing path for native playback and MIDI export. QA and artifact regeneration deferred; see docs/CHANNEL-TIMING.md."
     },
     {
       "id": "win-rack-sampler-stretch",
@@ -676,7 +676,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Velocity and pan lanes. Other note properties are not in the model yet."
+      "notes": "Source includes velocity/pan/release/fine-pitch/modulation X/Y lanes and bulk note-properties dialog with captured native transactions. Stored expression reaches built-in voices, clipboard/transforms and MIDI release import/export. Runtime instance identity and hosted/live expression remain separate implementation work. Artifact builds, QA and reviews deferred. See docs/NOTE-EXPRESSION.md."
     },
     {
       "id": "win-piano-slide-porta",
@@ -685,10 +685,10 @@
       "summary": "Notes that bend an already playing note to a new pitch, and a per-note glide switch.",
       "windfall_name": "Slide notes",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Source implementation: native sampler/built-in slides and portamento, musical-tick glides, draw/paint and captured-selection controls, FL slide import. Hosted-plugin/MIDI pitch transport remains. All checks/artifact builds deferred by user; see docs/NOTE-ARTICULATION.md."
     },
     {
       "id": "win-piano-note-colors",
@@ -697,10 +697,10 @@
       "summary": "Tags notes with one of 16 colors that double as MIDI channels for routing and selection.",
       "windfall_name": "Note colors",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Source implementation: 16 persisted color/MIDI groups, draw/paint/stamp picker, selection recoloring/selection by group, velocity-shaded canvas, native glide group targeting, MIDI/FL import/export and CLAP/VST3 channel-event routing with owner-exchange replay. Live MIDI output remains. All checks/artifact builds deferred by user; see docs/NOTE-COLORS.md."
     },
     {
       "id": "win-piano-ghost-notes",
@@ -709,10 +709,10 @@
       "summary": "Shows notes from the other channels in the pattern as faint references that can be made editable.",
       "windfall_name": "Ghost notes",
       "phase": 2,
-      "status": "done",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Existing ghost display is retained. New source implementation adds persisted Edit ghost notes mode, source-lane hit switching and ordinary edit gestures without copying notes or jumping the viewport. Broader editable-ghost acceptance awaits user-deferred QA; see docs/EDITABLE-GHOSTS.md."
     },
     {
       "id": "win-piano-scale-highlighting",
@@ -745,10 +745,10 @@
       "summary": "Labels positions inside a pattern and lets a pattern carry its own time signatures.",
       "windfall_name": "Pattern markers",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Pattern local markers/meters and editing, ruler/grid and snapping, captured musical quantize/grooves, segmented painting/paste/nudge, rack labels/shading, native metronome/transport and MIDI/FL metadata implemented in source. Artifacts and all QA deferred. See docs/PATTERN-TIMELINES.md."
     },
     {
       "id": "win-piano-waveform-helper",
@@ -757,10 +757,10 @@
       "summary": "Shows an audio waveform behind the grid as a timing reference.",
       "windfall_name": "Waveform helper",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Source implementation: project-audio waveform reference behind notes/ghosts, original/pattern/custom duration, signed offset and height/center/opacity controls, cached native peaks and shared renderer underlay. No runtime/QA checks ran under the user's feature-first priority; see docs/PIANO-WAVEFORM-HELPER.md."
     },
     {
       "id": "win-piano-quantize",
@@ -889,10 +889,10 @@
       "summary": "Generates random notes from a chord map and randomizes pan, velocity and pitch.",
       "windfall_name": "Randomize",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Source implementation: deterministic seeded property randomizer/humanizer and chord-map note generation with grid/density/gate/key range/velocity controls, source expression/color preservation and captured native undo transaction. All checks/artifact builds deferred by user; see docs/PIANO-RANDOMIZER.md."
     },
     {
       "id": "win-piano-scale-levels",
@@ -913,10 +913,10 @@
       "summary": "Writes an LFO shape into the event lane as automation data.",
       "windfall_name": "LFO tool",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Source implementation: six-shape musical LFO with phase/center/depth/width/seed, shared native event-onset sampling and continuous automation range writer, captured undo edits and UI shape preview. Continuous per-note expression and recorded pattern events remain separate work. All checks/artifact builds deferred by user; see docs/CURVE-LFO.md."
     },
     {
       "id": "win-piano-riff-machine",
@@ -1453,10 +1453,10 @@
       "summary": "Chooses which sound card input feeds a track and which output it plays through.",
       "windfall_name": "Track audio I/O",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Feature-pass source adds saved per-track external hardware input and mono/stereo mapping, shared-device multitrack capture, independent-device alignment and per-track recording monitor routes. External output ports and standalone monitoring remain implementation work. Artifacts and all QA deferred. See docs/MULTITRACK-RECORDING.md."
     },
     {
       "id": "win-mixer-record-arm",
@@ -1465,10 +1465,10 @@
       "summary": "Arms tracks so their audio is recorded to files.",
       "windfall_name": "Record arm",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "Feature-pass source adds saved arms and dry/post-effects/post-fader recording choices, hardware and mixer-only capture, native frame/processing-latency gates, common count-in/loop selection and one atomic kept-source transaction. Printed clips feed Master; printed-master bypass playback and comping remain implementation work. Artifacts and all QA deferred. See docs/MIXER-DISK-RECORDING.md and docs/MULTITRACK-RECORDING.md."
     },
     {
       "id": "win-mixer-render-tracks",
@@ -2435,12 +2435,12 @@
       "area": "effect",
       "fl_feature": "Fruity Chorus",
       "summary": "A basic chorus that layers detuned, delayed copies of the signal.",
-      "windfall_name": null,
+      "windfall_name": "Chorus",
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Original three-voice stereo modulated delay with independent rates, depth, base delay, stereo phase and mix. All controls persist, undo and automate through the generic editor; real engine live/offline/both stem modes and callback allocation guards pass. Independently reviewed, including the shared frame-clock contract; combined parent WASM/UI tests pass. See docs/MODULATION-EFFECTS.md. This is the basic chorus row; specialist chorus variants remain separate."
     },
     {
       "id": "fx-fruity-compressor",
@@ -2531,12 +2531,12 @@
       "area": "effect",
       "fl_feature": "Fruity Flanger",
       "summary": "A flanger that mixes the signal with a short modulated delay.",
-      "windfall_name": null,
+      "windfall_name": "Flanger",
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Original short modulated stereo delay with signed feedback/polarity, stereo phase and mix. Independent impulse/comb references, automation, reset/partition and tail tests cover the real DSP. All controls persist and undo; combined live/offline/both stem and actual shared-WASM generic UI checks pass with zero callback allocation. See docs/MODULATION-EFFECTS.md. Through-zero and specialist flanging remain separate."
     },
     {
       "id": "fx-fruity-flangus",
@@ -2687,12 +2687,12 @@
       "area": "effect",
       "fl_feature": "Fruity Phaser",
       "summary": "A phaser that sweeps notches through the signal.",
-      "windfall_name": null,
+      "windfall_name": "Phaser",
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Original stereo allpass cascade sweeps notches with frequency endpoints, rate, signed feedback, stereo phase and mix. Independent allpass/feedback references, frame-clock automation and retained-history tail reentry pass; the reviewed reentry discontinuity is fixed without relaxing its bound. Persistence/history, actual generic UI/shared-WASM and live/offline/both stem modes pass. See docs/MODULATION-EFFECTS.md."
     },
     {
       "id": "fx-fruity-reeverb-2",
@@ -3664,7 +3664,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Play, stop, pattern/song mode and song position are available. Record opens native input/channel selection and explicit start/stop/discard controls. Initial capture uses manual playlist placement without hardware latency/clock compensation; monitoring, count-in and multitrack takes remain."
+      "notes": "Play, stop, pattern/song mode and song position are available. Native recording feature-pass source now adds timestamped synchronized capture, count-in, input monitoring and loop take selection. Multitrack workflows remain. Artifacts and all new QA deferred. See docs/RECORDING.md."
     },
     {
       "id": "wf-tempo",
@@ -3685,10 +3685,10 @@
       "summary": "Plays a click on each beat.",
       "windfall_name": "Metronome",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Native sample-clock beat triggers, pattern/song meter maps and tempo warp, short accented clicks, runtime output mixing and toolbar/menu/palette gain/accent controls are implemented in source. Artifacts and all QA deferred. See docs/METRONOME-COUNT-IN.md."
     },
     {
       "id": "wf-typing-keyboard",
@@ -3901,10 +3901,10 @@
       "summary": "Plays metronome bars before recording starts.",
       "windfall_name": "Count-in",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Native meter/tempo count-in, pre-opened timestamped ADC capture, exact DAC-frame start, progress and zero-bar synchronized recording are implemented in source. Native-rate conversion, independent clock drift fitting, signed offsets and stop-tail draining are included. Artifacts and all QA deferred. See docs/METRONOME-COUNT-IN.md and docs/RECORDING-ALIGNMENT.md."
     },
     {
       "id": "wf-loop-recording",
@@ -3913,10 +3913,10 @@
       "summary": "Records repeated passes over a looped section and keeps each pass as a take.",
       "windfall_name": "Loop recording",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "Feature-pass source adds chosen-region loop playback, cumulative tempo-map frame boundaries, complete/final-partial take metadata, all/latest/only/except selection, separate kept WAVs, one atomic source/clip undo step and muted earlier takes. Comping and multitrack arms remain separate work. Artifacts and all QA deferred. See docs/LOOP-RECORDING.md."
     },
     {
       "id": "wf-automation-recording",

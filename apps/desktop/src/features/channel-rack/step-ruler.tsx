@@ -1,8 +1,8 @@
 import { memo, type PointerEvent, type Ref } from "react"
 
-import type { TimeSignature } from "@/bindings"
+import type { TimeSignature, Timeline } from "@/bindings"
 import { useHint } from "@/lib/store/hint"
-import { seek } from "@/lib/store/transport"
+import { seek, useTransportStore } from "@/lib/store/transport"
 import { clamp, TICKS_PER_STEP } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
@@ -12,6 +12,7 @@ import { rulerMarks } from "./steps"
 type StepRulerProps = {
   lengthSteps: number
   signature: TimeSignature
+  timeline?: Timeline
   /** The playhead mark. The rack moves it without rendering. */
   caretRef: Ref<HTMLDivElement>
 }
@@ -24,15 +25,16 @@ type StepRulerProps = {
 export const StepRuler = memo(function StepRuler({
   lengthSteps,
   signature,
+  timeline,
   caretRef,
 }: StepRulerProps) {
-  const marks = rulerMarks(lengthSteps, signature)
+  const marks = rulerMarks(lengthSteps, signature, timeline)
   const hint = useHint(
     "Bars and beats of the pattern. Click to move the playhead there"
   )
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return
+    if (event.button !== 0 || useTransportStore.getState().mode !== "pattern") return
     const { left, width } = event.currentTarget.getBoundingClientRect()
     const step = clamp(
       Math.floor(((event.clientX - left) / width) * lengthSteps),

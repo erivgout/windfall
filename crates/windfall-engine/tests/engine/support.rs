@@ -54,6 +54,11 @@ impl Rig {
     pub fn track(&mut self) -> TrackId {
         let id = TrackId(self.id());
         self.project.mixer.tracks.push(MixerTrack {
+            dock: windfall_project::MixerDock::default(),
+            external_output: None,
+            processing: windfall_dsp::TrackParams::default(),
+            current: false,
+            latency_offset_ms: 0.0,
             id,
             name: String::new(),
             color: 0,
@@ -62,8 +67,10 @@ impl Rig {
             muted: false,
             solo: false,
             output: Some(TrackId::MASTER),
+            sidechains: Vec::new(),
             sends: Vec::new(),
             effects: Vec::new(),
+            recording: None,
         });
         id
     }
@@ -80,6 +87,8 @@ impl Rig {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: track,
             source: ChannelSource::Sampler(SamplerSettings {
                 sample: Some(sample),
@@ -151,6 +160,8 @@ impl Rig {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: track,
             source: ChannelSource::Instrument {
                 params: InstrumentParams::SubtractiveSynth(params),
@@ -168,6 +179,7 @@ impl Rig {
     }
 
     pub fn track_mut(&mut self, id: TrackId) -> &mut MixerTrack {
+        dock: windfall_project::MixerDock::default(),
         self.project
             .mixer
             .tracks
@@ -187,6 +199,9 @@ impl Rig {
     pub fn pattern(&mut self, length_steps: u32) -> PatternId {
         let id = PatternId(self.id());
         self.project.patterns.push(Pattern {
+            note_curves: Vec::new(),
+        time_signature: None,
+        timeline: Default::default(),
             id,
             name: String::new(),
             color: 0,
@@ -234,6 +249,7 @@ impl Rig {
             key: DEFAULT_KEY,
             velocity: 1.0,
             pan: 0.0,
+            expression: Default::default(),
         });
         notes.sort_by_key(Note::sort_key);
         notes
@@ -312,6 +328,7 @@ impl Rig {
             content: ClipContent::Audio {
                 sample,
                 mixer_track,
+                output: Default::default(),
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,
@@ -343,6 +360,7 @@ impl Rig {
             reverse,
             pitch,
             stretch,
+            output,
         } = self.clip_mut(id).content
         else {
             panic!("the clip is not an audio clip");
@@ -367,6 +385,7 @@ impl Rig {
             reverse: settings.reverse,
             pitch: settings.pitch,
             stretch,
+            output,
         };
     }
 

@@ -821,7 +821,7 @@ fn published_registry_slot_and_all_new_control_automation_are_realtime_safe() {
     let kind = EffectKind::Lofi;
     assert_eq!(kind as usize, 15);
     assert_eq!(serde_json::to_value(kind).unwrap(), "lofi");
-    assert_eq!(EffectKind::ALL.last(), Some(&kind));
+    assert_eq!(EffectKind::ALL.get(15), Some(&kind));
     assert_eq!(kind.name(), LofiParams::NAME);
     assert_eq!(kind.descriptors(), LofiParams::descriptors());
     assert_eq!(kind.max_latency_samples(192_000.0), 0);

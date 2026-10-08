@@ -3,7 +3,10 @@ import type {
   Command,
   DispatchResult,
   Note,
+  NoteArticulation,
+  NoteExpression,
   NoteInit,
+  NoteMusicalGrid,
   NoteTransform,
   NoteUpdate,
 } from "@/bindings"
@@ -23,13 +26,17 @@ import {
   type Viewport,
 } from "@/lib/canvas"
 import { ignoresSnap } from "@/lib/edit-modifiers"
+import { DEFAULT_NOTE_EXPRESSION } from "@/lib/note-expression"
 import { MAX_PATTERN_STEPS } from "@/lib/units"
+import { meterSegments } from "@/lib/timeline"
 
 import { readClipboard, writeClipboard } from "./clipboard"
 import {
   cellsBetween,
   clampKey,
   copyNotes,
+  curveInserts,
+  noteInsertionCommand,
   duplicateRight,
   endAfterUpdates,
   endOfInits,
@@ -62,7 +69,7 @@ import {
   selectedNotes,
   type Scene,
 } from "./scene"
-import { snapFloor } from "./snap"
+import { snapFloor, snapRound } from "./snap"
 import { nearestScaleKey, scaleMoveKeys, type PitchScale } from "./scales"
 import { placeStamp, type Stamp, type StampPlacement } from "./stamps"
 import type { Tool } from "./store"
@@ -97,8 +104,14 @@ export type EditorSettings = {
   tool: Tool
   /** Snap interval in ticks. 0 is off. */
   snap: number
+  snapOrigin?: number
+  snapEnd?: number
+  musicalGrid?: NoteMusicalGrid | null
   lastLength: number
   lastVelocity: number
+  articulation?: NoteArticulation
+  glideTicks?: number
+  colorGroup?: number | null
   /** Opt-in pitch policy, independent of the time grid. */
   pitchScale?: PitchScale | null
 }
@@ -109,7 +122,7 @@ export type EditorHost = {
   dispatch(command: Command): Promise<DispatchResult | null>
   /** What is being edited, read from the project right now. */
   context(): EditorContext | null
-  settings(): EditorSettings
+  settings(tick?: number): EditorSettings
   remember(length: number, velocity: number): void
   /** Tells the user an edit was not made. */
   refuse(what: string, why: string): void
@@ -160,7 +173,8 @@ function sameStampContext(a: EditorContext, b: EditorContext | null): boolean {
     a.notes === b.notes &&
     a.pattern.lengthSteps === b.pattern.lengthSteps &&
     a.pattern.signature.numerator === b.pattern.signature.numerator &&
-    a.pattern.signature.denominator === b.pattern.signature.denominator
+    a.pattern.signature.denominator === b.pattern.signature.denominator &&
+    a.pattern.timeline === b.pattern.timeline
   )
 }
 
@@ -210,8 +224,10 @@ type Gesture =
       spacing: number
       length: number
       velocity: number
+      expression?: NoteExpression
       cells: Map<number, Note>
       lastCell: number
+      lastTick: number
       /** The stroke reached past the longest pattern, where nothing is painted. */
       pastEnd: boolean
     }
@@ -228,6 +244,16 @@ const PROVISIONAL_ID = -1000
 const ERASED_ALPHA = 0.22
 
 const noSnap = ignoresSnap
+
+function drawnExpression(settings: EditorSettings): NoteExpression | undefined {
+  if ((!settings.articulation || settings.articulation === "normal") && settings.colorGroup == null) return undefined
+  return {
+    ...DEFAULT_NOTE_EXPRESSION,
+    articulation: settings.articulation ?? "normal",
+    glideTicks: settings.glideTicks ?? 240,
+    colorGroup: settings.colorGroup ?? undefined,
+  }
+}
 
 /**
  * The piano roll without its canvas: the notes on screen, the selection,
@@ -399,7 +425,8 @@ export class Editor {
         previous.pattern.signature.numerator !==
           next.pattern.signature.numerator ||
         previous.pattern.signature.denominator !==
-          next.pattern.signature.denominator)
+          next.pattern.signature.denominator ||
+        previous.pattern.timeline !== next.pattern.timeline)
     ) {
       this.cancel()
     }
@@ -468,10 +495,10 @@ export class Editor {
       return { kind: "draw" }
     }
     if (this.gesture.kind !== "idle") this.cancel()
-    const settings = this.host.settings()
+    const tick = xToTick(surface.viewport, input.x)
+    const settings = this.host.settings(tick)
     const hit = this.hitAt(input)
     const intent = pressIntent(settings.tool, button, hit?.part ?? null, input)
-    const tick = xToTick(surface.viewport, input.x)
     const row = yToRow(surface.viewport, input.y)
     const press = { x: input.x, y: input.y }
 
@@ -557,11 +584,14 @@ export class Editor {
       case "move": {
         if (!gesture.moved && !pastDeadZone(gesture.press, input)) return
         gesture.moved = true
-        const snap = noSnap(input) ? 0 : this.host.settings().snap
+        const anchor = gesture.grabbed.start + tick - gesture.tick
+        const settings = this.host.settings(anchor)
+        const snap = noSnap(input) ? 0 : settings.snap
+        const local = !!this.ctx?.pattern.timeline?.meters.length
         const delta = moveDelta(
-          tick - gesture.tick,
+          local ? snapRound(anchor, snap, settings.snapOrigin) - gesture.grabbed.start : tick - gesture.tick,
           Math.floor(gesture.row) - Math.floor(row),
-          snap,
+          local ? 0 : snap,
           gesture.limits
         )
         const rawKeys = gesture.provisional
@@ -592,12 +622,15 @@ export class Editor {
       case "resize": {
         if (!gesture.moved && !pastDeadZone(gesture.press, input)) return
         gesture.moved = true
-        const snap = noSnap(input) ? 0 : this.host.settings().snap
+        const anchor = gesture.edge === "start" ? gesture.grabbed.start : noteEnd(gesture.grabbed)
+        const settings = this.host.settings(anchor + tick - gesture.tick)
+        const snap = noSnap(input) ? 0 : settings.snap
         const delta = resizeDelta(
           gesture.edge,
           tick - gesture.tick,
           snap,
-          gesture.notes
+          gesture.notes,
+          this.ctx?.pattern.timeline?.meters.length ? { anchor, origin: settings.snapOrigin ?? 0 } : undefined
         )
         gesture.delta = delta
         surface.setDragResize(delta.start, delta.end, delta.minLength)
@@ -606,10 +639,17 @@ export class Editor {
         return
       }
       case "paint": {
+        if (this.ctx?.pattern.timeline?.meters.length && !noSnap(input)) {
+          this.paintCells(gesture, this.meterPaintStarts(gesture, gesture.lastTick, tick), row, input)
+          gesture.lastTick = tick
+          this.setHover(tick, this.keyAt(input.y), { kind: "paint" })
+          return
+        }
         const cell = Math.floor((tick - gesture.origin) / gesture.spacing)
         const cells = cellsBetween(gesture.lastCell, cell)
         gesture.lastCell = cell
-        this.paintCells(gesture, cells, row, input)
+        gesture.lastTick = tick
+        this.paintCells(gesture, cells.map((cell) => gesture.origin + cell * gesture.spacing), row, input)
         this.setHover(tick, this.keyAt(input.y), { kind: "paint" })
         return
       }
@@ -645,12 +685,13 @@ export class Editor {
         const stamp = this.armedStamp
         if (!stamp || stamp.error) break
         const notes: NoteInit[] = this.provisional.map(
-          ({ start, length, key, velocity, pan }) => ({
+          ({ start, length, key, velocity, pan, expression }) => ({
             start,
             length,
             key,
             velocity,
             pan,
+            expression: expression ? { ...expression } : undefined,
           })
         )
         this.cancel()
@@ -812,7 +853,7 @@ export class Editor {
   }
 
   copy(): boolean {
-    const contents = copyNotes(this.selectedNotes())
+    const contents = copyNotes(this.selectedNotes(), this.ctx?.pattern.noteCurves)
     if (!contents) return false
     writeClipboard(contents)
     return true
@@ -831,7 +872,9 @@ export class Editor {
       contents,
       target,
       this.host.settings().snap,
-      ctx.pattern.signature
+      ctx.pattern.signature,
+      ctx.pattern.timeline,
+      (tick) => this.host.settings(tick)
     )
     let notes = pasteInits(contents, start)
     const scale = this.host.settings().pitchScale
@@ -854,12 +897,7 @@ export class Editor {
     if (!initsFit(notes)) return this.refusePastEnd()
     await this.commit(
       withExtension(
-        {
-          type: "addNotes",
-          pattern: ctx.pattern.id,
-          channel: ctx.channel,
-          notes,
-        },
+        noteInsertionCommand({ pattern: ctx.pattern.id, channel: ctx.channel }, notes, contents.curves),
         "Paste notes",
         ctx.pattern,
         endOfInits(notes)
@@ -872,20 +910,16 @@ export class Editor {
   async duplicate(): Promise<void> {
     const ctx = this.ctx
     if (!ctx) return
+    const sources = this.selectedNotes()
     const { inits } = duplicateRight(
-      this.selectedNotes(),
+      sources,
       this.host.settings().snap
     )
     if (inits.length === 0) return
     if (!initsFit(inits)) return this.refusePastEnd()
     await this.commit(
       withExtension(
-        {
-          type: "addNotes",
-          pattern: ctx.pattern.id,
-          channel: ctx.channel,
-          notes: inits,
-        },
+        noteInsertionCommand({ pattern: ctx.pattern.id, channel: ctx.channel }, inits, curveInserts(sources, ctx.pattern.noteCurves)),
         "Duplicate notes",
         ctx.pattern,
         endOfInits(inits)
@@ -895,7 +929,11 @@ export class Editor {
   }
 
   get snapInterval(): number {
-    return this.host.settings().snap
+    return this.host.settings(this.selectedNotes()[0]?.start ?? 0).snap
+  }
+
+  get snapMusicalGrid(): NoteMusicalGrid | null {
+    return this.host.settings(this.selectedNotes()[0]?.start ?? 0).musicalGrid ?? null
   }
 
   /** Shared Rust tools validate captured notes and commit once, without previews. */
@@ -920,7 +958,7 @@ export class Editor {
 
   /** Quick straight quantize, selection only; the action opens the options dialog. */
   async quantize(edge: ResizeEdge): Promise<void> {
-    const { snap } = this.host.settings()
+    const { snap, musicalGrid } = this.host.settings(this.selectedNotes()[0]?.start ?? 0)
     if (snap <= 0) return
     await this.transformNotes(this.selectedNotes(), {
       type: "quantize",
@@ -928,16 +966,26 @@ export class Editor {
       strength: 1,
       edge,
       groove: "straight",
+      musical: musicalGrid,
     })
   }
 
   /** Moves the selection by snap intervals and semitones. */
   async nudge(steps: number, keys: number): Promise<void> {
     const notes = this.selectedNotes()
-    const { snap } = this.host.settings()
+    const anchor = notes.reduce((earliest, note) => Math.min(earliest, note.start), Infinity)
+    const { snap } = this.host.settings(Number.isFinite(anchor) ? anchor : 0)
+    let target = anchor
+    for (let remaining = Math.min(1024, Math.abs(steps)); Number.isFinite(target) && remaining > 0; remaining--) {
+      const settings = this.host.settings(steps < 0 ? Math.max(0, target - 1) : target)
+      const spacing = settings.snap > 0 ? settings.snap : 1
+      const origin = settings.snapOrigin ?? 0
+      const candidate = steps < 0 ? origin + (Math.ceil((target - origin) / spacing) - 1) * spacing : origin + (Math.floor((target - origin) / spacing) + 1) * spacing
+      target = Math.max(0, steps < 0 ? Math.max(origin, candidate) : Math.min(settings.snapEnd ?? Infinity, candidate))
+    }
     // With snap off a nudge is the finest move there is: one tick.
     const delta = moveDelta(
-      steps * (snap > 0 ? snap : 1),
+      this.ctx?.pattern.timeline?.meters.length && notes.length > 0 ? target - anchor : steps * (snap > 0 ? snap : 1),
       keys,
       0,
       moveLimits(notes)
@@ -1011,16 +1059,18 @@ export class Editor {
       live?.notes !== lane.notes ||
       live?.pattern.lengthSteps !== lane.pattern.lengthSteps ||
       live?.pattern.signature.numerator !== lane.pattern.signature.numerator ||
-      live?.pattern.signature.denominator !== lane.pattern.signature.denominator
+      live?.pattern.signature.denominator !== lane.pattern.signature.denominator ||
+      live?.pattern.timeline !== lane.pattern.timeline
     ) {
       this.cancel()
       return null
     }
-    const settings = this.host.settings()
+    const settings = this.host.settings(xToTick(surface.viewport, input.x))
     const tick = Math.round(
       snapFloor(
         xToTick(surface.viewport, input.x),
-        noSnap(input) ? 0 : settings.snap
+        noSnap(input) ? 0 : settings.snap,
+        settings.snapOrigin
       )
     )
     const rawKey = rowToKey(Math.floor(yToRow(surface.viewport, input.y)))
@@ -1028,13 +1078,17 @@ export class Editor {
       !noSnap(input) && settings.pitchScale && rawKey >= 0 && rawKey <= 127
         ? (nearestScaleKey(rawKey, settings.pitchScale) ?? rawKey)
         : rawKey
-    const placement = placeStamp(
+    const rawPlacement = placeStamp(
       armed.stamp,
       tick,
       key,
       settings.lastLength,
       settings.lastVelocity
     )
+    const placement: StampPlacement = {
+      ...rawPlacement,
+      notes: rawPlacement.notes.map((note) => ({ ...note, expression: note.expression ?? drawnExpression(settings) })),
+    }
     if (armed.error !== placement.error) {
       this.armedStamp = { ...armed, error: placement.error }
       this.emit("stamp")
@@ -1047,7 +1101,10 @@ export class Editor {
           note.start !== shown.start ||
           note.key !== shown.key ||
           note.length !== shown.length ||
-          note.velocity !== shown.velocity
+          note.velocity !== shown.velocity ||
+          (note.expression?.colorGroup ?? null) !== (shown.expression?.colorGroup ?? null) ||
+          (note.expression?.articulation ?? "normal") !== (shown.expression?.articulation ?? "normal") ||
+          (note.expression?.glideTicks ?? 240) !== (shown.expression?.glideTicks ?? 240)
         )
       })
     if (changed) {
@@ -1253,7 +1310,7 @@ export class Editor {
       if (!initsFit(inits)) return this.refusePastEnd()
       this.commitDrag(
         withExtension(
-          { type: "addNotes", ...target, notes: inits },
+          noteInsertionCommand(target, inits, curveInserts(notes, ctx.pattern.noteCurves)),
           "Add note",
           ctx.pattern,
           endOfInits(inits)
@@ -1277,7 +1334,7 @@ export class Editor {
       if (!initsFit(inits)) return this.refusePastEnd()
       this.commitDrag(
         withExtension(
-          { type: "addNotes", ...target, notes: inits },
+          noteInsertionCommand(target, inits, curveInserts(notes, ctx.pattern.noteCurves)),
           "Duplicate notes",
           ctx.pattern,
           endOfInits(inits)
@@ -1340,11 +1397,12 @@ export class Editor {
     const snap = noSnap(input) ? 0 : settings.snap
     const note: Note = {
       id: PROVISIONAL_ID,
-      start: Math.max(0, snapFloor(tick, snap)),
+      start: Math.max(0, snapFloor(tick, snap, settings.snapOrigin)),
       length: Math.max(1, settings.lastLength),
       key,
       velocity: settings.lastVelocity,
       pan: 0,
+      expression: drawnExpression(settings),
     }
     this.provisional = [note]
     this.selected = new Set([note.id])
@@ -1364,7 +1422,7 @@ export class Editor {
       provisional: true,
       moved: false,
     }
-    this.sound(key, note.velocity)
+    if (note.expression?.articulation !== "slide") this.sound(key, note.velocity)
   }
 
   private beginPaint(
@@ -1376,22 +1434,46 @@ export class Editor {
     const snap = noSnap(input) ? 0 : settings.snap
     const gesture: Extract<Gesture, { kind: "paint" }> = {
       kind: "paint",
-      origin: Math.max(0, snapFloor(tick, snap)),
+      origin: Math.max(0, snapFloor(tick, snap, settings.snapOrigin)),
       spacing: paintSpacing(snap, settings.lastLength),
       length: Math.max(1, settings.lastLength),
       velocity: settings.lastVelocity,
+      expression: drawnExpression(settings),
       cells: new Map(),
       lastCell: 0,
+      lastTick: tick,
       pastEnd: false,
     }
     this.gesture = gesture
     if (this.selected.size > 0) this.setSelection([])
-    this.paintCells(gesture, [0], row, input)
+    this.paintCells(gesture, [gesture.origin], row, input)
+  }
+
+  private meterPaintStarts(gesture: Extract<Gesture, { kind: "paint" }>, from: number, to: number): number[] {
+    const pattern = this.ctx!.pattern
+    const low = Math.max(0, Math.min(from, to))
+    const high = Math.min(MAX_PATTERN_TICKS, Math.max(from, to))
+    const starts: number[] = []
+    for (const segment of meterSegments(pattern.signature, pattern.timeline?.meters ?? [])) {
+      if (segment.start > high || segment.end <= low) continue
+      const settings = this.host.settings(segment.start)
+      const spacing = paintSpacing(settings.snap, gesture.length)
+      const origin = gesture.origin >= segment.start && gesture.origin < segment.end ? gesture.origin : segment.start
+      const first = Math.max(segment.start, low)
+      const last = Math.min(high, segment.end - 1)
+      const cell0 = Math.floor((first - origin) / spacing)
+      const cell1 = Math.floor((last - origin) / spacing)
+      for (let cell = cell0; cell <= cell1 && starts.length < 16384; cell++) {
+        const start = origin + cell * spacing
+        if (start >= segment.start && start < segment.end) starts.push(start)
+      }
+    }
+    return to < from ? starts.reverse() : starts
   }
 
   private paintCells(
     gesture: Extract<Gesture, { kind: "paint" }>,
-    cells: readonly number[],
+    starts: readonly number[],
     row: number,
     input: PointerInput
   ): void {
@@ -1404,9 +1486,8 @@ export class Editor {
         : rawKey
     const keyRow = keyToRow(key)
     let added = false
-    for (const cell of cells) {
-      if (gesture.cells.has(cell)) continue
-      const start = gesture.origin + cell * gesture.spacing
+    for (const start of starts) {
+      if (gesture.cells.has(start)) continue
       if (start < 0) continue
       if (start + gesture.length > MAX_PATTERN_TICKS) {
         gesture.pastEnd = true
@@ -1421,13 +1502,14 @@ export class Editor {
         keyRow + 1
       )
       if (taken.length > 0) continue
-      gesture.cells.set(cell, {
+      gesture.cells.set(start, {
         id: PROVISIONAL_ID - gesture.cells.size,
         start,
         length: gesture.length,
         key,
         velocity: gesture.velocity,
         pan: 0,
+        expression: gesture.expression ? { ...gesture.expression } : undefined,
       })
       added = true
     }
@@ -1435,7 +1517,7 @@ export class Editor {
     this.provisional = [...gesture.cells.values()]
     this.rebuild()
     this.sound(null)
-    this.sound(key, gesture.velocity)
+    if (gesture.expression?.articulation !== "slide") this.sound(key, gesture.velocity)
   }
 
   private markErased(indices: readonly number[]): void {

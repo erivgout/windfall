@@ -1,8 +1,28 @@
 # Windfall implementation roadmap
 
+## Current execution priority — user instruction, 2026-10-08
+
+New implementation coverage and deferred artifact/QA work are tracked in
+[FEATURE-PASS.md](FEATURE-PASS.md).
+
+Implement every feature in `WINDFALL_PLAN.md` and all non-excluded parity rows
+first. The user explicitly deferred QA, independent reviews, builds and test
+execution until the complete feature implementation pass is finished. Do not
+gate new feature work on review rounds or verification. Record implemented
+features awaiting QA without presenting them as verified or release-ready.
+No GitHub CI or Actions may be added, enabled, dispatched or run. Historical
+verification commands below are deferred follow-up work, not current gates.
+
+The full project objective remains in scope. Native plugin integration,
+remaining instruments/effects, analysis workflows, editing/recording tools,
+extras and release functionality remain required; defer verification rather
+than reducing feature requirements or replacing real behavior with placeholders.
+
 Planned against **`c37ae0b938a60ce90b3f86878467b5670b35c24e`**, 2026-10-07. This is an implementation handoff, produced with the improve skill. It changes neither the parity matrix nor source code. Reconcile it against the integrated branch before dispatching work; the six active areas below are reservations, not claims that their work has landed.
 
 The objective remains the whole of `WINDFALL_PLAN.md`, phases 0–7, and every row of `docs/parity/parity.json`. The base matrix has **342 rows: 59 done, 28 in progress, 253 todo, and two justified won't-do rows**. Its 17.8% accounting score is not a measure of acoustic equivalence, platform coverage, or release readiness. The plan's headline 39 instruments/71 effects/6 visuals is smaller than the matrix's 41/80/7 because the matrix also includes manual-only entries. Do not delete those entries to improve the score.
+
+Current integrated status is tracked in [PARITY.md](parity/PARITY.md) and the [completion audit](integration/2026-10-08-completion-audit.md). The inventory below preserves the original planning snapshot, including its original statuses.
 
 ## 1. Dispatch order and ownership
 
@@ -452,13 +472,13 @@ The following table is an exhaustive snapshot from base `docs/parity/parity.json
 | `win-piano-stamp` | Piano roll: Chord stamp | 2 | todo | A-PIANO |
 | `win-piano-keyboard` | Piano roll: preview keyboard and key labels | 2 | done | B |
 | `win-piano-event-editor` | Piano roll: event editor lane and note properties | 2 | in-progress | A-PIANO / T2 |
-| `win-piano-slide-porta` | Piano roll: slide and portamento notes | 2 | todo | A-PIANO / T2 |
-| `win-piano-note-colors` | Piano roll: note colors (16 color groups) | 2 | todo | A-PIANO / T2 |
-| `win-piano-ghost-notes` | Piano roll: ghost notes | 2 | done | B |
+| `win-piano-slide-porta` | Piano roll: slide and portamento notes | 2 | in-progress | A-PIANO / T2; source pass in NOTE-ARTICULATION.md, platform transport pending |
+| `win-piano-note-colors` | Piano roll: note colors (16 color groups) | 2 | in-progress | A-PIANO / T2; source pass in NOTE-COLORS.md, artifact/QA deferred |
+| `win-piano-ghost-notes` | Piano roll: ghost notes | 2 | in-progress | A-PIANO; editable source pass in EDITABLE-GHOSTS.md, QA deferred |
 | `win-piano-scale-highlighting` | Piano roll: scale highlighting and snap to scale | 2 | todo | A-PIANO |
 | `win-piano-snap` | Piano roll: snap to grid | 2 | done | B |
 | `win-piano-time-markers` | Piano roll: time markers and per-pattern time signatures | 2 | todo | T1 |
-| `win-piano-waveform-helper` | Piano roll: waveform helper view | 2 | todo | A-PIANO / A-EDITOR |
+| `win-piano-waveform-helper` | Piano roll: waveform helper view | 2 | in-progress | A-PIANO / A-EDITOR; source pass in PIANO-WAVEFORM-HELPER.md, QA deferred |
 | `win-piano-quantize` | Piano roll: Quantizer tool | 2 | in-progress | A-PIANO |
 | `win-piano-articulate` | Piano roll: Articulator tool and Quick legato | 2 | todo | A-PIANO |
 | `win-piano-chop` | Piano roll: Chopper tool and Quick chop | 2 | todo | A-PIANO |
@@ -469,9 +489,9 @@ The following table is an exhaustive snapshot from base `docs/parity/parity.json
 | `win-piano-claw` | Piano roll: Claw machine tool | 2 | todo | A-PIANO |
 | `win-piano-limit` | Piano roll: Key limiter tool | 2 | todo | A-PIANO |
 | `win-piano-flip` | Piano roll: Flip tool | 2 | todo | A-PIANO |
-| `win-piano-randomize` | Piano roll: Randomizer tool | 2 | todo | A-PIANO |
+| `win-piano-randomize` | Piano roll: Randomizer tool | 2 | in-progress | A-PIANO; source pass in PIANO-RANDOMIZER.md, artifact/QA deferred |
 | `win-piano-scale-levels` | Piano roll: Scale levels tool | 2 | todo | A-PIANO |
-| `win-piano-lfo` | Piano roll: LFO tool | 2 | todo | A-PIANO / T2 |
+| `win-piano-lfo` | Piano roll: LFO tool | 2 | in-progress | A-PIANO / T2; shared event/automation source pass in CURVE-LFO.md, artifact/QA deferred |
 | `win-piano-riff-machine` | Piano roll: Riff machine | 6 | todo | X2 |
 | `win-piano-scripting` | Piano roll scripting (Python) | 6 | todo | X1 |
 | `win-piano-score-sheet` | Piano roll: export as score sheet | 6 | todo | X2 |
@@ -634,7 +654,7 @@ The following table is an exhaustive snapshot from base `docs/parity/parity.json
 | `fx-fruity-scratcher` | Fruity Scratcher | 5 | todo | E6 |
 | `fx-fruity-send` | Fruity Send | 5 | todo | E7 / T2 / T7 |
 | `fx-fruity-soft-clipper` | Fruity Soft Clipper | 5 | todo | N2 |
-| `fx-fruity-squeeze` | Fruity Squeeze | 5 | done | E4 |
+| `fx-fruity-squeeze` | Fruity Squeeze | 5 | todo | E4 |
 | `fx-fruity-stereo-enhancer` | Fruity Stereo Enhancer | 5 | todo | E1 |
 | `fx-fruity-stereo-shaper` | Fruity Stereo Shaper | 5 | todo | N2 |
 | `fx-fruity-vocoder` | Fruity Vocoder | 5 | todo | E5 / M3 |
@@ -737,7 +757,7 @@ The following table is an exhaustive snapshot from base `docs/parity/parity.json
 | `wf-themes` | Themes | 1 | done | B |
 | `wf-ui-scaling` | Interface scaling | 1 | todo | R1 |
 | `wf-hint-bar` | Hint bar | 1 | done | B |
-| `wf-toolbar-meters` | Output meter and CPU/memory panels | 1 | done | T0 |
+| `wf-toolbar-meters` | Output meter and CPU/memory panels | 1 | in-progress | T0 |
 | `wf-undo-history` | Undo and edit history | 2 | done | B |
 | `wf-multithreading` | Multithreaded processing | 2 | todo | P1 |
 | `wf-global-snap` | Global snap | 2 | todo | T5 |

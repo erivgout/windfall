@@ -18,6 +18,7 @@ import { RoutingSection } from "./routing-section"
 import { SampleSection } from "./sample-section"
 import { SoundSection } from "./sound-section"
 import { SamplerProcessingSection } from "./processing-section"
+import { TimingSection } from "./timing-section"
 
 /**
  * The settings of the selected channel, docked beside the rack: a sampler's
@@ -90,6 +91,7 @@ export function ChannelInspector() {
               )
             )}
             <KeyboardSection channel={channel} />
+            <TimingSection channel={channel} />
             <RoutingSection channel={channel} />
           </div>
         ) : (

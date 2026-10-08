@@ -8,6 +8,7 @@ import type {
   Project,
 } from "@/bindings"
 import descriptors from "@/bindings/descriptors.json"
+import { DEFAULT_TRACK_PROCESSING, TRACK_PROCESSING_INFO } from "@/lib/track-processing"
 
 import {
   GAIN_RANGE,
@@ -138,6 +139,18 @@ export function targetState(
       const found = track(target.track)
       return found ? { range: PAN_RANGE, stored: found.pan, info: null } : null
     }
+    case "trackParam": {
+      const found = track(target.track)
+      const info = TRACK_PROCESSING_INFO[target.param]
+      const stored = found && info ? readSetting(found.processing ?? DEFAULT_TRACK_PROCESSING, info) : null
+      return info && stored !== null ? { range: paramRange(info), stored, info } : null
+    }
+    case "sidechainGain": {
+      const send = track(target.track)?.sidechains?.find(
+        (item) => item.target === target.target
+      )
+      return send ? { range: GAIN_RANGE, stored: send.gain, info: null } : null
+    }
     case "sendGain": {
       const send = track(target.track)?.sends.find(
         (item) => item.target === target.target
@@ -246,8 +259,12 @@ export function describeTarget(
       return `${track(target.track)} → volume`
     case "trackPan":
       return `${track(target.track)} → pan`
+    case "trackParam":
+      return `${track(target.track)} · ${TRACK_PROCESSING_INFO[target.param]?.name ?? "Track setting"}`
     case "sendGain":
       return `${track(target.track)} → send to ${track(target.target)}`
+    case "sidechainGain":
+      return `${track(target.track)} → sidechain to ${track(target.target)}`
     case "effectParam": {
       const info = targetState(project, target)?.info
       return `${effectLabel(project, target.effect)} · ${info?.name ?? "setting"}`

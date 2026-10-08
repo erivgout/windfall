@@ -71,6 +71,7 @@ export function CompressorEditor({
           description="Peak reacts to the loudest sample, RMS to the average over about 10 ms"
         />
       </div>
+      <ParamControl {...bind("sidechain")} layout="inline" className="col-span-2" description="Use the mixer's detector-only key input. With no key signal, gain reduction releases." />
       <ParamRow
         columns={5}
         className="col-span-2 @min-[26rem]/editor:col-span-1 @min-[26rem]/editor:col-start-2"

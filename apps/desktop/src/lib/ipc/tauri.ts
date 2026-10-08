@@ -62,6 +62,17 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    mixerWaveformTracks: (tracks, generation, revision) => call("mixer_waveform_tracks", { tracks, generation, revision }),
+    mixerPresetCapture: (id, generation, revision) => call("mixer_preset_capture", { id, generation, revision }),
+    mixerPresetSave: async (preset) => {
+      const path = await save({ defaultPath: `${preset.name.replace(/[<>:"/\\|?*]/g, "_") || "Mixer track"}.wfmixer`, filters: [{ name: "Windfall mixer preset", extensions: ["wfmixer"] }] })
+      return path ? call("mixer_preset_write", { path, preset }) : null
+    },
+    mixerPresetLoad: async () => {
+      const path = await open({ multiple: false, filters: [{ name: "Windfall mixer preset", extensions: ["wfmixer"] }] })
+      return typeof path === "string" ? call("mixer_preset_read", { path }) : null
+    },
+    currentMixerTarget: (track, generation, revision) => call("current_mixer_target", { track, generation, revision }),
     timelineState: () => call("timeline_state"),
     timelineRegion: (region, generation, revision, request, cancel) =>
       call("timeline_region", {
@@ -151,10 +162,13 @@ export function createTauriBackend(): Backend {
     engineStatus: () => call("engine_status"),
     processMemory: () => call("process_memory"),
     recordingInputs: () => call("recording_inputs"),
+    inputMonitorStart: () => call("input_monitor_start"),
+    inputMonitorStop: () => call("input_monitor_stop"),
+    inputMonitorState: () => call("input_monitor_state"),
     recordingState: () => call("recording_state"),
     recordingStart: (source, start, track) =>
       call("recording_start", { source, start, track }),
-    recordingStop: () => call("recording_stop"),
+    recordingStop: (takes) => call("recording_stop", { takes: takes ?? null }),
     recordingCancel: () => call("recording_cancel"),
     engineDevices: () => call("engine_devices"),
     engineConfigure: (settings) => call("engine_configure", { settings }),

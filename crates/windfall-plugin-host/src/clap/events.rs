@@ -5,7 +5,7 @@
 //! carries more events than any block before it.
 
 use clack_host::events::event_types::{
-    MidiEvent, NoteChokeEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent,
+    MidiEvent, NoteChokeEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent, NoteExpressionEvent, NoteExpressionType,
 };
 use clack_host::events::io::{InputEventBuffer, OutputEventBuffer, TryPushError};
 use clack_host::events::spaces::CoreEventSpace;
@@ -33,6 +33,7 @@ enum Slot {
     Choke(NoteChokeEvent),
     Param(ParamValueEvent),
     Midi(MidiEvent),
+    Expression(NoteExpressionEvent),
 }
 
 impl Slot {
@@ -43,6 +44,7 @@ impl Slot {
             Self::Choke(event) => event.as_unknown(),
             Self::Param(event) => event.as_unknown(),
             Self::Midi(event) => event.as_unknown(),
+            Self::Expression(event) => event.as_unknown(),
         }
     }
 }
@@ -68,7 +70,7 @@ impl EventList {
             Dialect::None => EVENT_CAPACITY,
             Dialect::Clap => EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY,
             // Every ordinary event could be a panic. The adapter reserve
-            // adds at most 128 note-offs and one further 32-message panic.
+            // adds at most 2048 channel/key note-offs and one further 32-message panic.
             // Translation must not silently drop an admitted release.
             Dialect::Midi => {
                 EVENT_CAPACITY * ALL_NOTES_OFF_MESSAGES + IMMEDIATE_RELEASE_CAPACITY - 1
@@ -105,6 +107,26 @@ impl EventList {
                     }
                 }
                 (_, Dialect::None) => {}
+                (HostEvent::NoteOnInstance { time, id, key, channel, velocity }, Dialect::Clap) => {
+                    let target = Pckn::new(0_u16, u16::from(channel), u16::from(key), id);
+                    self.push(Slot::NoteOn(NoteOnEvent::new(time, target, f64::from(velocity))));
+                }
+                (HostEvent::NoteOffInstance { time, id, key, channel, velocity }, Dialect::Clap) => {
+                    let target = Pckn::new(0_u16, u16::from(channel), u16::from(key), id);
+                    self.push(Slot::NoteOff(NoteOffEvent::new(time, target, f64::from(velocity))));
+                }
+                (HostEvent::NoteExpression { time, id, key, channel, kind, value }, Dialect::Clap) => {
+                    use crate::events::NoteExpressionKind as Kind;
+                    let expression = match kind { Kind::Volume => NoteExpressionType::Volume, Kind::Pan => NoteExpressionType::Pan,
+                        Kind::Tuning => NoteExpressionType::Tuning, Kind::Vibrato => NoteExpressionType::Vibrato,
+                        Kind::Expression => NoteExpressionType::Expression, Kind::Brightness => NoteExpressionType::Brightness,
+                        Kind::Pressure => NoteExpressionType::Pressure };
+                    let target = Pckn::new(0_u16, u16::from(channel), u16::from(key), id);
+                    self.push(Slot::Expression(NoteExpressionEvent::new(time, target, expression, value)));
+                }
+                (HostEvent::NoteOnInstance { .. } | HostEvent::NoteOffInstance { .. } | HostEvent::NoteExpression { .. }, Dialect::Midi) => {
+                    self.dropped = self.dropped.saturating_add(1);
+                }
                 (
                     HostEvent::NoteOn {
                         time,

@@ -5,7 +5,7 @@ import type { GainReduction } from "./GainReduction";
 /**
  * What the engine reports to the UI 60 times a second.
  */
-export type RealtimeFrame = { playing: boolean, 
+export type RealtimeFrame = { waveforms?: import("./MixerWaveform").MixerWaveform[], playing: boolean, 
 /**
  * Playhead in ticks. In pattern mode it is the position inside the
  * pattern; in song mode it is the position on the playlist.

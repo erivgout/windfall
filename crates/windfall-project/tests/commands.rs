@@ -220,6 +220,7 @@ fn note(start: u32, key: u8) -> NoteInit {
         key,
         velocity: None,
         pan: None,
+        expression: None,
     }
 }
 
@@ -1065,6 +1066,7 @@ fn renaming_a_channel_leaves_a_track_that_is_not_its_own_alone() {
         content: ClipContent::Audio {
             sample,
             mixer_track: kick_track,
+            output: Default::default(),
             gain: 1.0,
             pan: 0.0,
             fade_in: 0,
@@ -1813,6 +1815,7 @@ fn toggle_step_adds_then_removes_a_note() {
             key: DEFAULT_KEY,
             velocity: DEFAULT_VELOCITY,
             pan: 0.0,
+            expression: Default::default(),
         }]
     );
 
@@ -1972,6 +1975,7 @@ fn add_notes_creates_ids_in_order_and_keeps_the_lane_sorted() {
                     key: 60,
                     velocity: Some(0.5),
                     pan: Some(-0.25),
+                    expression: None,
                 },
                 note(0, 60),
             ],
@@ -2540,6 +2544,8 @@ fn update_mixer_track_changes_each_field() {
                 pan: Some(0.25),
                 muted: Some(true),
                 solo: Some(true),
+                recording: None,
+                ..MixerTrackPatch::default()
             },
         ),
     );
@@ -2929,6 +2935,7 @@ fn audio(sample: SampleId, mixer_track: TrackId) -> ClipContent {
     ClipContent::Audio {
         sample,
         mixer_track,
+        output: Default::default(),
         gain: 1.0,
         pan: 0.0,
         fade_in: 0,
@@ -2971,6 +2978,7 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
     let content = ClipContent::Audio {
         sample: vocal,
         mixer_track: bus,
+        output: Default::default(),
         gain: 0.5,
         pan: -0.25,
         fade_in: 240,
@@ -3005,6 +3013,7 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
     let wild = ClipContent::Audio {
         sample: vocal,
         mixer_track: TrackId::MASTER,
+        output: Default::default(),
         gain: 9.0,
         pan: -4.0,
         fade_in: u32::MAX,
@@ -3020,6 +3029,7 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
         ClipContent::Audio {
             sample: vocal,
             mixer_track: TrackId::MASTER,
+            output: Default::default(),
             gain: MAX_GAIN,
             pan: -1.0,
             fade_in: MAX_SONG_TICKS,
@@ -3148,6 +3158,7 @@ fn update_audio_clips_changes_what_is_particular_to_audio() {
         ClipContent::Audio {
             sample: vocal,
             mixer_track: bus,
+            output: Default::default(),
             gain: 0.5,
             pan: 0.5,
             fade_in: 240,

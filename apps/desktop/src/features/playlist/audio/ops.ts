@@ -146,7 +146,7 @@ export async function routeSelectionToNewTrack(): Promise<void> {
   await dispatch(
     {
       type: "updateAudioClips",
-      updates: clips.map((clip) => ({ id: clip.id, patch: { mixerTrack } })),
+      updates: clips.map((clip) => ({ id: clip.id, patch: { mixerTrack, output: "mixer" } })),
     },
     gesture
   )

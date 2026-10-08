@@ -251,6 +251,16 @@ impl Project {
             AutomationTarget::TrackPan { track } => {
                 (AutomationRange::PAN, self.mixer.track(track)?.pan)
             }
+            AutomationTarget::TrackParam { track, param } => {
+                use windfall_dsp::ParamSet;
+                let info = windfall_dsp::TrackParams::descriptors().get(param as usize)?;
+                (AutomationRange::of_param(info), self.mixer.track(track)?.processing.get(param as usize)?)
+            }
+            AutomationTarget::SidechainGain { track, target } => {
+                let sends = &self.mixer.track(track)?.sidechains;
+                let send = sends.iter().find(|send| send.target == target)?;
+                (AutomationRange::GAIN, send.gain)
+            }
             AutomationTarget::SendGain { track, target } => {
                 let sends = &self.mixer.track(track)?.sends;
                 let send = sends.iter().find(|send| send.target == target)?;

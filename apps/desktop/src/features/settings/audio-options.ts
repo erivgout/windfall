@@ -97,6 +97,9 @@ export function sampleRateOptions(
 ): Option<number>[] {
   return withDefault(sampleRatesFor(device), stored, formatSampleRate)
 }
+export function outputChannelOptions(device: AudioDevice | undefined, stored: number | null | undefined): Option<number>[] {
+  return withDefault(device?.outputChannels ?? [], stored, (channels) => `${channels} output ${channels === 1 ? "channel" : "channels"}`)
+}
 
 /** `sampleRate` is the one in use, to say what each size costs in latency. */
 export function bufferOptions(
@@ -140,6 +143,7 @@ export function withField<K extends keyof AudioSettings>(
   if (request.device != null) next.device = request.device
   if (request.sampleRate != null) next.sampleRate = request.sampleRate
   if (request.bufferFrames != null) next.bufferFrames = request.bufferFrames
+  if (request.outputChannels != null) next.outputChannels = request.outputChannels
   if (value === DEFAULT_TEXT || value === DEFAULT_NUMBER) delete next[field]
   else next[field] = value as AudioSettings[K]
   return next

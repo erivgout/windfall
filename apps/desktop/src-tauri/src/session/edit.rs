@@ -259,6 +259,7 @@ impl Session {
         touched: &Touched,
         prepared: Option<windfall_engine::PreparedProject>,
     ) -> ProjectPatch {
+        self.refresh_input_monitor_signature(state);
         let patch = if prepared.is_some() && touched.is_empty() {
             state.document.unchanged_patch()
         } else {
@@ -305,6 +306,7 @@ impl Session {
     /// transport off a pattern that no longer exists, and the UI is told of
     /// that before it hears of the edit that removed the pattern.
     pub(super) fn push_project(&self, state: &State) {
+        self.refresh_input_monitor_signature(state);
         if state
             .pool
             .needs_sampler_preparation(state.document.project())

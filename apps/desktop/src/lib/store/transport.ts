@@ -2,12 +2,18 @@ import { create } from "zustand"
 
 import type {
   PatternId,
+  MetronomeSettings,
   PlayMode,
   TransportPatch,
   TransportState,
 } from "@/bindings"
 import { reportError } from "@/lib/errors"
 import { backend } from "@/lib/ipc"
+
+export const DEFAULT_METRONOME: MetronomeSettings = { enabled: false, gain: 0.25, accent: true }
+export function setMetronome(patch: Partial<MetronomeSettings>): Promise<void> {
+  return setTransport({ metronome: { ...DEFAULT_METRONOME, ...useTransportStore.getState().metronome, ...patch } })
+}
 
 /** What the transport is doing, as last reported by the backend. */
 export const useTransportStore = create<TransportState>(() => ({

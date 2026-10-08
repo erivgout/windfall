@@ -8,12 +8,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ValueContextItems } from "@/components/value-context-menu"
 import { useAutomation } from "@/features/automation/live"
 import { useGestureValue } from "@/features/mixer/use-gesture-value"
 import { reportError } from "@/lib/errors"
 import { backend } from "@/lib/ipc"
-import { useProjectStore } from "@/lib/store"
+import { dispatch, useProjectStore } from "@/lib/store"
 import { openPluginManager, sameTarget } from "./store"
 
 function Parameter({
@@ -165,6 +166,30 @@ export function PluginControls({ binding }: { binding: PluginBinding }) {
         </Button>
       </div>
       <FieldGroup>
+        {binding.target.type === "effect" && (
+          <Field>
+            <FieldLabel>Sidechain input</FieldLabel>
+            <Select
+              value={binding.sidechainInput ?? -1}
+              items={[
+                { value: -1, label: "First auxiliary input" },
+                ...(binding.auxiliaryInputs ?? []).map((input) => ({ value: input.index, label: `${input.name || `Input ${input.index + 1}`} · ${input.channels === 1 ? "Mono" : input.channels === 2 ? "Stereo" : `${input.channels} channels`}` })),
+                ...(binding.sidechainInput != null && !(binding.auxiliaryInputs ?? []).some((input) => input.index === binding.sidechainInput) ? [{ value: binding.sidechainInput, label: `Saved input ${binding.sidechainInput + 1} (unavailable)` }] : []),
+              ]}
+              onValueChange={(input: number | null) => {
+                if (input !== null) void dispatch({ type: "setPluginSidechainInput", target: binding.target, input: input < 0 ? null : input }).catch((error: unknown) => reportError(error, "Could not choose the plugin sidechain input"))
+              }}
+            >
+              <SelectTrigger aria-label="Plugin sidechain input"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value={-1}>First auxiliary input</SelectItem>
+                {(binding.auxiliaryInputs ?? []).map((input) => <SelectItem key={input.index} value={input.index}>{input.name || `Input ${input.index + 1}`} · {input.channels === 1 ? "Mono" : input.channels === 2 ? "Stereo" : `${input.channels} channels`}</SelectItem>)}
+                {binding.sidechainInput != null && !(binding.auxiliaryInputs ?? []).some((input) => input.index === binding.sidechainInput) && <SelectItem value={binding.sidechainInput} disabled>Saved input {binding.sidechainInput + 1} (unavailable)</SelectItem>}
+              </SelectGroup></SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Receives this track’s detector-only sends. {!(binding.auxiliaryInputs ?? []).length && "No auxiliary inputs were reported when this plugin was added."}</p>
+          </Field>
+        )}
         {binding.parameters.map((parameter, index) => (
           <Parameter
             key={parameter.id}

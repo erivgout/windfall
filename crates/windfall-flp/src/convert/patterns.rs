@@ -82,6 +82,7 @@ impl Builder<'_> {
             );
             self.patterns
                 .insert(pattern.iid, (id, steps * TICKS_PER_STEP));
+            self.pattern_timeline(id, &pattern.markers);
             let outcome = if scaled.exact && scaled.ticks == u64::from(steps * TICKS_PER_STEP) {
                 Outcome::Exact
             } else {
@@ -123,18 +124,18 @@ impl Builder<'_> {
                 } else {
                     Outcome::Approximated
                 };
-                if note.fine_pitch != 120
+                if note.fine_pitch > 240
                     || note.flags & 8 != 0
                     || note.mod_x != 128
                     || note.mod_y != 128
                     || note.release != 64
-                    || note.midi_channel != 0
+                    || note.midi_channel > 15
                     || note.group != 0
                     || note.velocity > 128
                     || note.pan > 128
                 {
                     outcome = Outcome::Approximated;
-                    self.report.say(ReportSection::Notes, outcome, "Per-note fine pitch, slide, modulation, release, MIDI channels or grouping have no Windfall equivalent; out-of-range levels were clamped.");
+                    self.report.say(ReportSection::Notes, outcome, "Modulation, release, slide flags and note-color MIDI channels were mapped to Windfall's controls. Source note-edit groups are not translated; out-of-range levels, color channels and fine pitch were clamped. Slide chord targeting and other source-instrument behavior may differ.");
                 }
                 for channel in targets {
                     let init = NoteInit {
@@ -143,6 +144,15 @@ impl Builder<'_> {
                         key: note.key as u8,
                         velocity: Some(units::note_velocity(note.velocity)),
                         pan: Some(units::note_pan(note.pan)),
+                        expression: Some(windfall_project::NoteExpression {
+                            release: f32::from(note.release.min(128)) / 128.0,
+                            fine_pitch_cents: (f32::from(note.fine_pitch.min(240)) - 120.0) * 10.0,
+                            modulation_x: f32::from(note.mod_x) / 256.0,
+                            modulation_y: f32::from(note.mod_y) / 256.0,
+                            articulation: if note.flags & 8 != 0 { windfall_dsp::NoteArticulation::Slide } else { windfall_dsp::NoteArticulation::Normal },
+                            glide_ticks: 240,
+                            color_group: Some(note.midi_channel.min(15)),
+                        }),
                     };
                     if self
                         .apply(
@@ -176,6 +186,7 @@ impl Builder<'_> {
                                 key: 60,
                                 velocity: None,
                                 pan: None,
+                                expression: None,
                             }],
                         },
                     );

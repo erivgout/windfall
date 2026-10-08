@@ -90,8 +90,9 @@ remain documented in [LOFI.md](../LOFI.md).
 The tracker is now **88 done, 41 in progress, 211 todo and 2 excluded**:
 **90/342 accounted for, 26.3%**; completed features alone are **25.7%**.
 This adds two delivered features to the earlier eighteen-row accounting audit.
-Chorus/Flanger/Phaser are delivered on a separate branch but await the concrete
-Phaser tail-reentry repair and parent composition, so their rows stay open.
+At that checkpoint, Chorus/Flanger/Phaser were still awaiting the concrete
+Phaser tail-reentry repair and parent composition. The later delivery below
+records their accepted integration.
 
 The independently reviewed ABI4 reset increment is composed at `a0e71327`.
 Parent local execution includes the original epoch-2/no-new-DSP capture oracle,
@@ -103,3 +104,33 @@ The user explicitly prohibited further GitHub Actions minutes. Automatic CI
 is disabled remotely; no workflow is dispatched or rerun for this batch.
 Verification continues locally. The last already-completed remote run remains
 separate provenance, and unexecuted platform/device gates remain open.
+
+
+## Integrated modulation family
+
+Chorus, Flanger and Phaser are now composed at `ce702032` + `b271bc43` with
+Lo-fi's original index 15 retained and the new kinds appended at 16..18. Independent
+Standards and the corrected Spec round have no actionable findings. Actual
+parent DSP, project/history/persistence/automation, real engine live/offline/
+both stems and allocation guards pass. The 15-file, 344-test UI run uses freshly
+generated 189-file bindings and the matching2,021,700-byte Rust WASM, covering
+all 22 controls, generic effect operations and the187-range automation inventory.
+The Phaser tail reentry repair preserves its declared numerical bound.
+
+The three basic modulation rows are done. The latest tracker is **91 done,
+41 in progress, 208 todo and 2 excluded**: **93/342 accounted for (27.2%)**,
+with completed features alone at **26.6%**. Specialist/vintage variants remain
+separate rows. Headless signal/throughput tests do not claim device/listening
+or all-platform qualification.
+
+The monophonic pitch kernel and its reviewed CMND correction are also integrated
+and17 parent numerical cases pass. The pitch editor, realtime correction/harmony
+and production app registration remain open; this foundation closes no such row.
+The compact capture-acknowledgement contract is composed without activating
+production 19f routing, and the parent reproduced/fixed its scanner-error loss.
+Actual native bookkeeping tests pass; P1 Session readiness, the parent warning
+follow-up review and other production/platform gates remain separate.
+
+No Actions minutes are used for this delivery. CI remains disabled and the
+private push carries `[skip ci]`. The roadmap inventory still records its
+original planning base; current status comes from the validated parity source.

@@ -81,6 +81,7 @@ impl Session {
                 key,
                 velocity: Some(1.0),
                 pan: None,
+                expression: None,
             })
             .collect();
         self.run(Command::AddNotes {
@@ -267,6 +268,7 @@ fn a_pattern_becomes_a_song_of_its_own_length() {
                 key: 60,
                 velocity: Some(0.5),
                 pan: Some(-1.0),
+                expression: None,
             },
             // Lasts past the end of the pattern, where it is cut.
             NoteInit {
@@ -275,6 +277,7 @@ fn a_pattern_becomes_a_song_of_its_own_length() {
                 key: 62,
                 velocity: Some(1.0),
                 pan: None,
+                expression: None,
             },
             // Starts at the end of the pattern, so it never plays.
             NoteInit {
@@ -283,6 +286,7 @@ fn a_pattern_becomes_a_song_of_its_own_length() {
                 key: 64,
                 velocity: None,
                 pan: None,
+                expression: None,
             },
         ],
     });

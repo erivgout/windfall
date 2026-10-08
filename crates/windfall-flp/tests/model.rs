@@ -340,6 +340,8 @@ fn a_curve_that_claims_more_points_than_it_has_gives_the_ones_it_has() {
 fn a_pattern_reads_its_name_colour_length_and_notes() {
     let mut expected = project(MODERN, 96);
     expected.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 2,
         name: Some("Verse".to_owned()),
         color: Some(0xFF_80_00),
@@ -390,6 +392,8 @@ fn patterns_come_out_in_the_order_of_their_numbers() {
 fn notes_of_files_older_than_9_are_20_bytes_each() {
     let mut expected = project("8.0.2", 96);
     expected.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 1,
         notes: vec![
             Note {
@@ -450,6 +454,8 @@ fn steps_of_the_oldest_files_are_kept_with_their_channel() {
         ..Channel::default()
     });
     expected.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 1,
         legacy_steps: vec![
             LegacyStep { channel: 4, raw: 0 },
@@ -474,6 +480,8 @@ fn recorded_control_changes_are_kept_and_name_what_they_change() {
     .encode();
     let mut expected = project(MODERN, 96);
     expected.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 1,
         control_events: vec![
             ControlEvent {
@@ -504,6 +512,8 @@ fn recorded_control_changes_are_kept_and_name_what_they_change() {
 fn markers_belong_to_the_pattern_or_arrangement_they_follow() {
     let mut expected = project(MODERN, 96);
     expected.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 4,
         markers: vec![TimeMarker {
             position: 0,

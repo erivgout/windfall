@@ -7,15 +7,17 @@
 //! inside the state they were last in to be dropped off the audio thread.
 
 use windfall_dsp::blocks::tap_crossfade::TapCrossfade;
-use windfall_dsp::{AnyEffect, AnyInstrument, EffectSlot, GainReductionMeter};
+use windfall_dsp::{AnyEffect, AnyInstrument, EffectSlot, GainReductionMeter, NoteArticulation, NoteExpression, NoteInstanceId};
 use windfall_project::{EffectKind, EffectParams, InstrumentKind, InstrumentParams, TrackId};
 
 use crate::mixer::{Frame, MAX_BLOCK};
-use crate::plan::{EffectLife, PlanEffect};
+use crate::plan::{EffectLife, PlanEffect, Plan};
 use crate::sequencer::Clock;
+use crate::voice::Origin;
+use crate::note_glide::NoteGlide;
 
-/// MIDI keys an instrument can be asked to play.
-const KEYS: usize = 128;
+/// Logical note owners, allocated before entering the audio callback.
+const MAX_HELD_NOTES: usize = 1024;
 
 /// How an effect is joining or leaving the chain it sits in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,18 +342,23 @@ impl EffectUnit {
 
     /// Processes one block in place. `dry_left` and `dry_right` are scratch
     /// space at least as long as the block.
-    pub fn process(
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32], dry_left: &mut [f32], dry_right: &mut [f32]) {
+        self.process_sidechain(left, right, dry_left, dry_right, None);
+    }
+
+    pub fn process_sidechain(
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
         dry_left: &mut [f32],
         dry_right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
     ) {
         match self.splice {
             Splice::Steady => {
                 self.heard = true;
                 self.life.hear();
-                self.process_slot(left, right);
+                self.process_slot(left, right, key);
                 return;
             }
             Splice::Gone => return,
@@ -361,7 +368,7 @@ impl EffectUnit {
         let (dry_left, dry_right) = (&mut dry_left[..frames], &mut dry_right[..frames]);
         dry_left.copy_from_slice(left);
         dry_right.copy_from_slice(right);
-        self.process_slot(left, right);
+        self.process_slot(left, right, key);
 
         let length = self.splice_frames as f32;
         for index in 0..frames {
@@ -383,11 +390,11 @@ impl EffectUnit {
         }
     }
 
-    fn process_slot(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn process_slot(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         if let Some(external) = &mut self.external {
-            external.process(left, right);
+            external.process_sidechain(left, right, key);
         } else {
-            self.slot.process(left, right);
+            self.slot.process_sidechain(left, right, key);
         }
     }
 }
@@ -399,20 +406,35 @@ impl EffectUnit {
 /// on its exact frame. A held note keeps the tick it ends on, not the
 /// frame, so a tempo change moves the end of a sounding note the way it
 /// does for a sampler voice.
+#[derive(Clone, Copy)]
+struct HeldInstrumentNote {
+    source: Option<crate::note_curves::CurveSource>,
+    active: bool,
+    id: NoteInstanceId,
+    key: u8,
+    velocity: f32,
+    pan: f32,
+    expression: NoteExpression,
+    end: f64,
+    origin: Origin,
+    pitch: f64,
+    glide: Option<NoteGlide>,
+}
+
+impl HeldInstrumentNote {
+    const EMPTY: Self = Self { source: None, active: false, id: NoteInstanceId(0), key: 0, velocity: 0.0,
+        pan: 0.0, expression: NoteExpression::NEUTRAL, end: f64::INFINITY, origin: Origin::Sequenced, pitch: 0.0, glide: None };
+}
+
 pub(crate) struct InstrumentUnit {
     external: Option<Option<Box<dyn crate::plugins::HostedInstrument>>>,
     plugin_params: Box<[(u32, f32)]>,
     instrument: AnyInstrument,
     params: InstrumentParams,
-    /// The clock tick on which the note on each key ends. NaN while the key
-    /// is not held. A key holds one note: a second note-on for it takes
-    /// over, and the key comes up when that second note ends.
-    ends: [f64; KEYS],
-    /// The note on the key was played by hand.
-    live: [bool; KEYS],
-    hardware: [bool; KEYS],
-    velocities: [f32; KEYS],
-    /// Keys held.
+    /// Separate end, origin and expression for every sounding occurrence.
+    notes: Box<[HeldInstrumentNote]>,
+    next_instance: u64,
+    /// Active logical note owners.
     held: usize,
     /// The output of the block being processed, a side each.
     left: Box<[f32]>,
@@ -434,10 +456,8 @@ impl InstrumentUnit {
             plugin_params: Box::new([]),
             instrument,
             params: *params,
-            ends: [f64::NAN; KEYS],
-            live: [false; KEYS],
-            hardware: [false; KEYS],
-            velocities: [0.0; KEYS],
+            notes: vec![HeldInstrumentNote::EMPTY; MAX_HELD_NOTES].into_boxed_slice(),
+            next_instance: 0,
             held: 0,
             left: vec![0.0; MAX_BLOCK].into_boxed_slice(),
             right: vec![0.0; MAX_BLOCK].into_boxed_slice(),
@@ -471,16 +491,13 @@ impl InstrumentUnit {
     /// changing its channel. Preserve the current engine note owners, not an
     /// old event log. Removed channels and different plugins never call this.
     pub fn inherit_plugin_notes(&mut self, before: &Self) {
-        self.ends = before.ends;
-        self.live = before.live;
-        self.hardware = before.hardware;
-        self.velocities = before.velocities;
+        self.notes.copy_from_slice(&before.notes);
+        self.next_instance = before.next_instance;
         self.held = before.held;
         if let Some(Some(unit)) = &mut self.external {
-            for key in 0..KEYS {
-                if !self.ends[key].is_nan() && self.ends[key] != f64::NEG_INFINITY {
-                    unit.note_on(key as u8, self.velocities[key]);
-                }
+            for note in self.notes.iter().filter(|note| note.active && note.end != f64::NEG_INFINITY) {
+                unit.note_on_instance(note.id, note.key, note.velocity, note.pan, note.expression);
+                if unit.supports_note_pitch() { unit.set_note_pitch(note.id, note.pitch as f32); }
             }
         }
     }
@@ -565,64 +582,108 @@ impl InstrumentUnit {
     /// Starts a note that ends on clock tick `end`, or never when that is
     /// infinity. A note with no velocity is silent and starts nothing.
     pub fn note_on(&mut self, key: u8, velocity: f32, end: f64, live: bool) {
-        if velocity <= 0.0 || end.is_nan() {
-            return;
-        }
-        let index = usize::from(key).min(KEYS - 1);
-        if self.ends[index].is_nan() {
-            self.held += 1;
-        }
-        self.ends[index] = end;
-        self.live[index] = live;
-        self.hardware[index] = false;
-        self.velocities[index] = velocity;
+        self.note_on_expression(key, velocity, 0.0, windfall_dsp::NoteExpression::default(), end, live);
+    }
+
+    pub fn note_on_expression(&mut self, key: u8, velocity: f32, pan: f32, expression: windfall_dsp::NoteExpression, end: f64, live: bool) {
+        let origin = if live { Origin::Live } else { Origin::Sequenced };
+        self.start_note(key, velocity, pan, expression, end, origin, 0.0, f64::from(expression.glide_ticks));
+    }
+
+    pub fn start_note(&mut self, key: u8, velocity: f32, pan: f32, expression: NoteExpression, end: f64, origin: Origin, at: f64, glide_end: f64) -> Option<NoteInstanceId> {
+        self.start_note_source(key, velocity, pan, expression, end, origin, at, glide_end, None)
+    }
+
+    pub fn start_note_source(&mut self, key: u8, velocity: f32, pan: f32, expression: NoteExpression, end: f64, origin: Origin, at: f64, glide_end: f64, source: Option<crate::note_curves::CurveSource>) -> Option<NoteInstanceId> {
+        if !velocity.is_finite() || velocity <= 0.0 || end.is_nan() { return None; }
+        let expression = expression.clamped();
+        let target_pitch = f64::from(key.min(127)) + f64::from(expression.fine_pitch_cents) / 100.0;
+        let from = self.notes.iter().filter(|note| note.active && note.origin == origin && note.expression.color_group.unwrap_or(0) == expression.color_group.unwrap_or(0) && note.end > at)
+            .max_by_key(|note| note.id.0).map(|note| note.glide.map_or(note.pitch, |glide| glide.at(at)));
+        let glide = if expression.articulation == NoteArticulation::Portamento {
+            from.map(|from| NoteGlide::new(at, glide_end, from, target_pitch))
+        } else { None };
+        let slot = if let Some(slot) = self.notes.iter().position(|note| !note.active) { slot }
+        else {
+            // At the fixed ownership ceiling, release the oldest owner first.
+            let slot = self.notes.iter().enumerate().min_by_key(|(_, note)| note.id.0).map(|(slot, _)| slot)?;
+            self.release_slot(slot);
+            slot
+        };
+        let id = loop {
+            self.next_instance = self.next_instance.wrapping_add(1) & (u64::MAX >> 1);
+            if self.next_instance != 0 && !self.notes.iter().any(|note| note.active && note.id.0 == self.next_instance) {
+                break NoteInstanceId(self.next_instance);
+            }
+        };
+        let note = HeldInstrumentNote {
+            source,
+            active: true, id, key: key.min(127), velocity: velocity.min(1.0),
+            pan: if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 }, expression, end, origin,
+            pitch: glide.map_or(target_pitch, |glide| glide.from), glide,
+        };
+        self.notes[slot] = note;
+        self.held += 1;
         if let Some(external) = &mut self.external {
             if let Some(unit) = external {
-                unit.note_on(key, velocity);
+                unit.note_on_instance(note.id, note.key, note.velocity, note.pan, note.expression);
             }
         } else {
-            self.instrument.note_on(key, velocity);
+            self.instrument.note_on_instance(note.id, note.key, note.velocity, note.pan, note.expression);
+        }
+        if note.glide.is_some() { self.set_pitch(note.id, note.pitch); }
+        Some(id)
+    }
+
+    /// A slide transposes the held chord from the most recent owner's pitch.
+    /// It starts no new note, retains source envelopes and original endings.
+    pub fn slide_notes(&mut self, key: u8, expression: NoteExpression, at: f64, end: f64, origin: Origin) {
+        let group = expression.color_group.unwrap_or(0);
+        let Some(anchor) = self.notes.iter().filter(|note| note.active && note.origin == origin && note.expression.color_group.unwrap_or(0) == group && note.end > at)
+            .max_by_key(|note| note.id.0) else { return; };
+        let delta = f64::from(key.min(127)) + f64::from(expression.clamped().fine_pitch_cents) / 100.0
+            - anchor.glide.map_or(anchor.pitch, |glide| glide.at(at));
+        for note in self.notes.iter_mut().filter(|note| note.active && note.origin == origin && note.expression.color_group.unwrap_or(0) == group && note.end > at) {
+            let from = note.glide.map_or(note.pitch, |glide| glide.at(at));
+            note.pitch = from;
+            note.glide = Some(NoteGlide::new(at, end, from, (from + delta).clamp(-12.0, 139.0)));
         }
     }
 
     /// Ends the note played by hand on `key`, on the next frame.
     pub fn release_live(&mut self, key: u8) {
-        let index = usize::from(key).min(KEYS - 1);
-        if self.live[index] && !self.hardware[index] && !self.ends[index].is_nan() {
-            // Before anything the clock can read.
-            self.ends[index] = f64::NEG_INFINITY;
+        for note in self.notes.iter_mut().filter(|note| note.active && note.key == key && note.origin == Origin::Live) {
+            note.end = f64::NEG_INFINITY;
         }
     }
 
     pub fn mark_hardware(&mut self, key: u8) {
-        self.hardware[usize::from(key)] = true;
+        if let Some(note) = self.notes.iter_mut().filter(|note| note.active && note.key == key && note.origin == Origin::Live).max_by_key(|note| note.id.0) {
+            note.origin = Origin::Hardware;
+        }
     }
 
     pub fn release_hardware(&mut self, key: u8) {
-        let index = usize::from(key);
-        if self.hardware[index] && !self.ends[index].is_nan() {
-            self.ends[index] = f64::NEG_INFINITY;
+        for note in self.notes.iter_mut().filter(|note| note.active && note.key == key && note.origin == Origin::Hardware) {
+            note.end = f64::NEG_INFINITY;
         }
     }
 
     pub fn silence_hardware(&mut self) {
-        let any = (0..KEYS).any(|key| self.hardware[key]);
+        let any = self.notes.iter().any(|note| note.active && note.origin == Origin::Hardware);
         if !any {
             return;
         }
-        let others = (0..KEYS).any(|key| !self.hardware[key] && !self.ends[key].is_nan());
+        let others = self.notes.iter().any(|note| note.active && note.origin != Origin::Hardware);
         if !others {
             self.silence();
         } else {
-            for key in 0..KEYS {
-                if self.hardware[key] && !self.ends[key].is_nan() {
-                    self.ends[key] = f64::NAN;
-                    self.held -= 1;
-                    self.release_key(key as u8);
+            for slot in 0..self.notes.len() {
+                if self.notes[slot].active && self.notes[slot].origin == Origin::Hardware {
+                    self.release_slot(slot);
                 }
             }
         }
-        self.hardware.fill(false);
     }
 
     /// Stops every note with a short fade, as when the transport stops.
@@ -634,10 +695,7 @@ impl InstrumentUnit {
         } else {
             self.instrument.all_notes_off();
         }
-        self.ends = [f64::NAN; KEYS];
-        self.live.fill(false);
-        self.hardware.fill(false);
-        self.velocities.fill(0.0);
+        self.notes.fill(HeldInstrumentNote::EMPTY);
         self.held = 0;
     }
 
@@ -646,16 +704,14 @@ impl InstrumentUnit {
     /// short fade; otherwise each is let go, so the hand-held notes carry
     /// on.
     pub fn end_sequenced(&mut self) {
-        let any_live = (0..KEYS).any(|key| self.live[key] && !self.ends[key].is_nan());
+        let any_live = self.notes.iter().any(|note| note.active && note.origin != Origin::Sequenced);
         if !any_live {
             self.silence();
             return;
         }
-        for key in 0..KEYS {
-            if !self.live[key] && !self.ends[key].is_nan() {
-                self.ends[key] = f64::NAN;
-                self.held -= 1;
-                self.release_key(key as u8);
+        for slot in 0..self.notes.len() {
+            if self.notes[slot].active && self.notes[slot].origin == Origin::Sequenced {
+                self.release_slot(slot);
             }
         }
     }
@@ -664,8 +720,10 @@ impl InstrumentUnit {
     /// clock read that much more.
     pub fn shift_ends(&mut self, ticks: f64) {
         if self.held > 0 {
-            for end in &mut self.ends {
-                *end += ticks;
+            for note in self.notes.iter_mut().filter(|note| note.active) {
+                note.end += ticks;
+                if let Some(source) = &mut note.source { source.shift(ticks); }
+                if let Some(glide) = &mut note.glide { glide.shift(ticks); }
             }
         }
     }
@@ -675,8 +733,10 @@ impl InstrumentUnit {
     /// the song.
     pub fn move_ends(&mut self, moved: impl Fn(f64) -> f64) {
         if self.held > 0 {
-            for end in self.ends.iter_mut().filter(|end| !end.is_nan()) {
-                *end = moved(*end);
+            for note in self.notes.iter_mut().filter(|note| note.active) {
+                note.end = moved(note.end);
+                if let Some(source) = &mut note.source { source.move_clock(&moved); }
+                if let Some(glide) = &mut note.glide { glide.move_clock(&moved); }
             }
         }
     }
@@ -685,35 +745,93 @@ impl InstrumentUnit {
     /// into the unit's own buffer, letting go of each held note on the
     /// frame `clock` puts its end on.
     pub fn render(&mut self, clock: Clock, base: u64, from: usize, to: usize) {
+        self.render_with_plan(None, clock, base, from, to);
+    }
+    pub fn render_curves(&mut self, plan: &Plan, clock: Clock, base: u64, from: usize, to: usize) {
+        self.render_with_plan(Some(plan), clock, base, from, to);
+    }
+    pub fn refresh_curve_sources(&mut self, plan: &Plan) {
+        for note in self.notes.iter_mut().filter(|note| note.active) {
+            if let Some(source) = &mut note.source { source.refresh(plan); }
+        }
+    }
+    fn render_with_plan(&mut self, plan: Option<&Plan>, clock: Clock, base: u64, from: usize, to: usize) {
         let mut at = from;
         while self.held > 0 {
             // The note that ends first. Of notes that end on one frame the
-            // lowest key goes first, which keeps the order fixed.
+            // earliest-created owner goes first, which keeps the order fixed.
             let mut next: Option<(u64, usize)> = None;
-            for key in 0..KEYS {
-                if self.ends[key].is_nan() {
+            for (slot, note) in self.notes.iter().enumerate() {
+                if !note.active {
                     continue;
                 }
-                let frame = clock.frame_of(self.ends[key]);
-                if frame < base + to as u64 && next.is_none_or(|(first, _)| frame < first) {
-                    next = Some((frame, key));
+                let frame = clock.frame_of(note.end);
+                if frame < base + to as u64 && next.is_none_or(|(first, before)| (frame, note.id.0) < (first, self.notes[before].id.0)) {
+                    next = Some((frame, slot));
                 }
             }
-            let Some((frame, key)) = next else {
+            let Some((frame, slot)) = next else {
                 break;
             };
             // An end that is already behind takes effect now.
             let split = (frame.saturating_sub(base) as usize).clamp(at, to);
-            self.process(base, at, split);
+            self.process(plan, clock, base, at, split);
             at = split;
-            self.ends[key] = f64::NAN;
-            self.held -= 1;
-            self.release_key(key as u8);
+            // Evaluate the boundary too: a held last segment may jump at 100%,
+            // and its release value must be installed before key-up.
+            let note = self.notes[slot];
+            if let Some((pan, expression)) = note.source.filter(|source| source.active)
+                .and_then(|source| plan.map(|plan| source.controls(plan, clock.tick_at(base + split as u64)))) {
+                if pan != note.pan || expression != note.expression {
+                    self.set_note_expression(note.id, pan, expression);
+                    if !self.external.as_ref().is_some_and(|unit| unit.as_ref().is_none_or(|unit| !unit.supports_note_pitch())) {
+                        self.set_pitch(note.id, self.notes[slot].pitch);
+                    }
+                }
+            }
+            self.release_slot(slot);
         }
-        self.process(base, at, to);
+        self.process(plan, clock, base, at, to);
     }
 
-    fn process(&mut self, base: u64, from: usize, to: usize) {
+    fn process(&mut self, plan: Option<&Plan>, clock: Clock, base: u64, from: usize, to: usize) {
+        let pitch_supported = !self.external.as_ref().is_some_and(|unit| unit.as_ref().is_none_or(|unit| !unit.supports_note_pitch()));
+        if !self.notes.iter().any(|note| note.active && (pitch_supported && note.glide.is_some() || plan.is_some() && note.source.is_some_and(|source| source.active))) {
+            self.process_audio(base, from, to);
+            return;
+        }
+        // Musical pitch is evaluated at the exact output frame, so changing
+        // tempo or callback block size does not change the glide trajectory.
+        for frame in from..to {
+            let tick = clock.tick_at(base + frame as u64);
+            for slot in 0..self.notes.len() {
+                let before = self.notes[slot];
+                if !before.active { continue; }
+                let controls = before.source.filter(|source| source.active).and_then(|source| plan.map(|plan| source.controls(plan, tick)));
+                let mut pitch_changed = false;
+                if let Some((pan, expression)) = controls {
+                    pitch_changed = expression.fine_pitch_cents != before.expression.fine_pitch_cents;
+                    if pan != before.pan || expression != before.expression { self.set_note_expression(before.id, pan, expression); }
+                }
+                let note = &mut self.notes[slot];
+                let gliding = pitch_supported && note.glide.is_some();
+                if let Some(glide) = note.glide.filter(|_| pitch_supported) {
+                    note.pitch = glide.at(tick);
+                    if tick >= glide.end { note.glide = None; }
+                }
+                let (id, pitch) = (note.id, note.pitch);
+                if pitch_supported && (gliding || pitch_changed) { self.set_pitch(id, pitch); }
+            }
+            self.process_audio(base, frame, frame + 1);
+        }
+    }
+
+    fn set_pitch(&mut self, id: NoteInstanceId, pitch: f64) {
+        if let Some(Some(unit)) = &mut self.external { unit.set_note_pitch(id, pitch as f32); }
+        else if self.external.is_none() { self.instrument.set_note_pitch(id, pitch as f32); }
+    }
+
+    fn process_audio(&mut self, base: u64, from: usize, to: usize) {
         if from >= to {
             return;
         }
@@ -736,13 +854,52 @@ impl InstrumentUnit {
         }
     }
 
-    fn release_key(&mut self, key: u8) {
+    fn release_slot(&mut self, slot: usize) {
+        let note = self.notes[slot];
+        if !note.active { return; }
+        self.notes[slot].active = false;
+        self.held -= 1;
+        let other_on_key = self.notes.iter().any(|other| other.active && other.key == note.key);
         if let Some(external) = &mut self.external {
             if let Some(unit) = external {
-                unit.note_off(key);
+                let other_on_key = if unit.supports_note_channels() {
+                    self.notes.iter().any(|other| other.active && other.key == note.key
+                        && other.expression.color_group.unwrap_or(0) == note.expression.color_group.unwrap_or(0))
+                } else { other_on_key };
+                // A key-only provider cannot address the shorter overlap.
+                // Keep that key down until its final logical owner ends.
+                if unit.supports_note_instances() || !other_on_key {
+                    unit.note_off_on_channel(note.id, note.key, note.expression.color_group.unwrap_or(0));
+                }
             }
         } else {
-            self.instrument.note_off(key);
+            if self.instrument.supports_note_instances() || !other_on_key {
+                self.instrument.note_off_instance(note.id, note.key);
+            }
+        }
+    }
+
+    pub fn set_note_expression(&mut self, id: NoteInstanceId, pan: f32, expression: NoteExpression) {
+        let expression = expression.clamped();
+        let pan = if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 };
+        if let Some(note) = self.notes.iter_mut().find(|note| note.active && note.id == id) {
+            let moved = f64::from(expression.fine_pitch_cents - note.expression.fine_pitch_cents) / 100.0;
+            note.pitch += moved;
+            if let Some(glide) = &mut note.glide {
+                glide.from += moved;
+                glide.to += moved;
+            }
+            note.pan = pan;
+            note.expression = expression;
+        }
+        if let Some(Some(unit)) = &mut self.external { unit.set_note_expression(id, pan, expression); }
+        else if self.external.is_none() { self.instrument.set_note_expression(id, pan, expression); }
+    }
+
+    /// Schedule a release without touching any sibling occurrence on its key.
+    pub fn release_instance(&mut self, id: NoteInstanceId) {
+        if let Some(note) = self.notes.iter_mut().find(|note| note.active && note.id == id) {
+            note.end = f64::NEG_INFINITY;
         }
     }
 

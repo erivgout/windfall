@@ -60,6 +60,7 @@ mod eq;
 pub mod filter_family;
 pub mod frequency_delay;
 mod instrument;
+mod note_expression;
 mod limiter;
 pub mod lofi;
 pub mod modulation;
@@ -69,6 +70,8 @@ mod reverb;
 mod soft_clipper;
 mod stereo_matrix;
 mod synth;
+mod track;
+pub use track::{TrackParams, TrackProcessor};
 
 pub use balance::{Balance, BalanceParams};
 pub use blocks::lfo::LfoShape;
@@ -85,6 +88,7 @@ pub use filter_family::{
     SelectableFilterMode, SelectableFilterParams,
 };
 pub use instrument::{AnyInstrument, Instrument, InstrumentKind, InstrumentParams};
+pub use note_expression::{NoteArticulation, NoteExpression, NoteInstanceId};
 pub use limiter::{Limiter, LimiterParams};
 pub use lofi::{FilterPlacement, Lofi, LofiParams, RunRelation};
 pub use modulation::{Chorus, ChorusParams, Flanger, FlangerParams, Phaser, PhaserParams};

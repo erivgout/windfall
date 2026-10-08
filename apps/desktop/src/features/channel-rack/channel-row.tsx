@@ -60,6 +60,7 @@ type ChannelRowProps = {
   lengthSteps: number
   /** Steps per beat, which the row shades in alternating groups. */
   groupSize: number
+  beatShades?: readonly boolean[]
   /** Some channel is soloed. */
   anySolo: boolean
   /** What a sample dragged over this row's button would do, if one is. */
@@ -173,6 +174,7 @@ export const ChannelRow = memo(function ChannelRow({
   pattern,
   lengthSteps,
   groupSize,
+  beatShades,
   anySolo,
   drop,
 }: ChannelRowProps) {
@@ -316,6 +318,7 @@ export const ChannelRow = memo(function ChannelRow({
               steps={steps}
               color={colorToCss(channel.color)}
               groupSize={groupSize}
+              beatShades={beatShades}
               aria-label={`${channel.name} steps`}
               stepLabel={stepLabel}
               onToggle={onToggle}

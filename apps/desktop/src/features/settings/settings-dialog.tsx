@@ -42,6 +42,7 @@ import {
   fixedBuffer,
   nameOptions,
   sampleRateOptions,
+  outputChannelOptions,
   shownDevice,
   withField,
   type Option,
@@ -106,7 +107,7 @@ function Choice<T extends string | number>({
 /** What the engine made of the request, in words. */
 function runningSummary(status: EngineStatus): string {
   const device = status.device ?? "the default device"
-  return `Running on ${device} at ${formatSampleRate(status.sampleRate)} with a buffer of ${status.bufferFrames} samples: ${status.latencyMs.toFixed(1)} ms of output latency.`
+  return `Running on ${device} at ${formatSampleRate(status.sampleRate)} with ${status.outputChannels ?? 2} output channels and a buffer of ${status.bufferFrames} samples: ${status.latencyMs.toFixed(1)} ms of output latency.`
 }
 
 /**
@@ -159,6 +160,9 @@ function AudioSection() {
           options={nameOptions(host?.devices ?? [], request.device)}
           onChange={(name) => change("device", name)}
         />
+      </Row>
+      <Row label="Output channels">
+        <Choice label="Output channel layout" value={request.outputChannels ?? DEFAULT_NUMBER} disabled={loading || !device} options={outputChannelOptions(device, request.outputChannels)} onChange={(channels) => change("outputChannels", channels)} />
       </Row>
       <Row label="Sample rate">
         <Choice

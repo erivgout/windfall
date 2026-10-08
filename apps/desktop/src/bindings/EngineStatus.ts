@@ -29,4 +29,4 @@ latencyFrames: number,
 /**
  * Why the stream is not running, when it is not.
  */
-error: string | null, };
+error: string | null, outputChannels?: number, };

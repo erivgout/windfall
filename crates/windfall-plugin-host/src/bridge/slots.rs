@@ -189,6 +189,7 @@ impl Region {
     }
     pub fn submit(&self, sequence: u64, block: &InputBlock) -> bool {
         if block.parameter_count > PARAM_CAPACITY
+            || block.sidechain_input.is_some_and(|index| index >= 64)
             || block.event_count > EVENT_CAPACITY
             || self.timeline_epoch() != Ok(block.epoch)
         {
@@ -216,6 +217,7 @@ impl Region {
         self.put(slot, PARAM_COUNT, block.parameter_count as u32);
         self.put(slot, FLAGS, u32::from(!block.controls_complete));
         self.put(slot, NOTE_CHANNEL, 0);
+        self.put(slot, SIDECHAIN_PORT, block.sidechain_input.map_or(0, |index| index + 1));
         self.write_sequence(slot, EPOCH, block.epoch);
         self.write_sequence(slot, CONTROL_START, block.control_start);
         self.write_sequence(slot, CONTROL_END, block.control_end);
@@ -224,6 +226,8 @@ impl Region {
             self.put(slot, TRANSPORT + index, *word);
         }
         for index in 0..self.config.block {
+            self.put(slot, KEY_INPUT + index, finite_input(block.key[index][0]).to_bits());
+            self.put(slot, KEY_INPUT + MAX_BLOCK + index, finite_input(block.key[index][1]).to_bits());
             self.put(
                 slot,
                 INPUT + index,
@@ -294,10 +298,14 @@ impl Region {
         block.transport = decode_transport(std::array::from_fn(|index| {
             self.get(slot, TRANSPORT + index)
         }))?;
+        let input = self.get(slot, SIDECHAIN_PORT);
+        if input > 64 { return Err(ProtocolError::Layout); }
+        block.sidechain_input = input.checked_sub(1);
         for index in 0..frames {
             block.left[index] = f32::from_bits(self.get(slot, INPUT + index));
             block.right[index] = f32::from_bits(self.get(slot, INPUT + MAX_BLOCK + index));
-            if !block.left[index].is_finite() || !block.right[index].is_finite() {
+            block.key[index] = [f32::from_bits(self.get(slot, KEY_INPUT + index)), f32::from_bits(self.get(slot, KEY_INPUT + MAX_BLOCK + index))];
+            if !block.left[index].is_finite() || !block.right[index].is_finite() || block.key[index].iter().any(|sample| !sample.is_finite()) {
                 return Err(ProtocolError::Audio);
             }
         }
@@ -473,6 +481,8 @@ pub struct InputBlock {
     pub controls_complete: bool,
     pub left: [f32; MAX_BLOCK],
     pub right: [f32; MAX_BLOCK],
+    pub key: [[f32; 2]; MAX_BLOCK],
+    pub sidechain_input: Option<u32>,
     pub transport: Transport,
     pub notes: [f32; 128],
     pub parameters: Box<[Parameter]>,
@@ -489,6 +499,8 @@ impl InputBlock {
             controls_complete: true,
             left: [0.0; MAX_BLOCK],
             right: [0.0; MAX_BLOCK],
+            key: [[0.0; 2]; MAX_BLOCK],
+            sidechain_input: None,
             transport: Transport::default(),
             notes: [0.0; 128],
             parameters: vec![Parameter { id: 0, value: 0.0 }; PARAM_CAPACITY].into_boxed_slice(),

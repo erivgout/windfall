@@ -9,8 +9,15 @@ import {
 import { LANE_KINDS } from "./lane-math"
 import { NOTE_TOOLS, openNoteTools } from "./note-tools"
 import { currentSession } from "./session"
+import { openNoteProperties, setSelectedArticulation, setSelectedColorGroup } from "./note-properties"
+import { openNoteCurves } from "./note-curves"
+import { NOTE_COLOR_GROUPS, noteColorGroupLabel } from "@/lib/note-colors"
+import { NOTE_ARTICULATIONS } from "@/lib/note-expression"
+import { openNoteLfo } from "@/features/automation/lfo-dialog"
 import { SNAP_OPTIONS } from "./snap"
 import { usePianoRollStore, type Tool } from "./store"
+import { openWaveformHelper } from "./waveform-helper"
+import { openPatternTimeline } from "./pattern-timeline"
 
 const SECTION = "Piano roll"
 
@@ -45,6 +52,72 @@ function capital(word: string): string {
 }
 
 const ACTIONS: Action[] = [
+  {
+    id: "pianoRoll.patternTimeline",
+    title: "Pattern markers and time signatures…",
+    section: SECTION,
+    keywords: "local meter change timeline pattern ruler",
+    enabled: inRoll,
+    run: () => openPatternTimeline(),
+  },
+  {
+    id: "pianoRoll.waveformHelper",
+    title: "Waveform helper…",
+    section: SECTION,
+    keywords: "audio waveform background timing reference",
+    enabled: inRoll,
+    run: openWaveformHelper,
+  },
+  {
+    id: "pianoRoll.lfo",
+    title: "Write note-event LFO…",
+    section: SECTION,
+    keywords: "sine triangle pulse random sample hold modulation event lane",
+    enabled: hasNotes,
+    run: openNoteLfo,
+  },
+  ...[null, ...NOTE_COLOR_GROUPS.map((_, group) => group)].flatMap((group): Action[] => [
+    {
+      id: `pianoRoll.color.${group ?? "auto"}`,
+      title: `Set selected notes: ${noteColorGroupLabel(group)}`,
+      section: SECTION,
+      keywords: "note color group MIDI channel routing",
+      enabled: hasSelection,
+      run: () => setSelectedColorGroup(group),
+    },
+    {
+      id: `pianoRoll.selectColor.${group ?? "auto"}`,
+      title: `Select notes: ${noteColorGroupLabel(group)}`,
+      section: SECTION,
+      keywords: "note color group MIDI channel selection",
+      enabled: hasNotes,
+      run: () => {
+        const current = editor()
+        if (!current || current.busy) return
+        current.setSelection(current.notes.filter((note) => (note.expression?.colorGroup ?? null) === group).map((note) => note.id))
+        currentSession()?.focusGrid()
+      },
+    },
+  ]),
+  ...NOTE_ARTICULATIONS.map((item): Action => ({
+    id: `pianoRoll.articulation.${item.value}`,
+    title: `Set selected notes: ${item.label.toLowerCase()}`,
+    section: SECTION,
+    keywords: "slide portamento glide articulation pitch bend",
+    enabled: hasSelection,
+    run: () => setSelectedArticulation(item.value),
+  })),
+  {
+    id: "pianoRoll.noteProperties",
+    title: "Note properties…",
+    section: SECTION,
+    defaultShortcut: "Alt+Enter",
+    keywords: "velocity pan pitch release modulation start length dialog",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: openNoteProperties,
+  },
+  { id: "pianoRoll.noteCurves", title: "Note expression curves…", section: SECTION, keywords: "continuous pan pitch release modulation envelope per note", enabled: hasSelection, whyDisabled: () => "Select source notes", run: openNoteCurves },
   ...TOOL_ACTIONS.map(({ tool, title, key, words }): Action => ({
     id: `pianoRoll.tool${capital(tool)}`,
     title,
@@ -268,6 +341,17 @@ const ACTIONS: Action[] = [
     keywords: "scroll auto playback",
     checked: () => roll().follow,
     run: () => roll().setFollow(!roll().follow),
+  },
+
+  {
+    id: "pianoRoll.editGhosts",
+    title: "Edit ghost notes",
+    section: SECTION,
+    defaultShortcut: "Alt+Shift+G",
+    keywords: "other channels source lane ghost editing",
+    enabled: inRoll,
+    checked: () => roll().editGhosts,
+    run: () => roll().setEditGhosts(!roll().editGhosts),
   },
 
   ...SNAP_OPTIONS.map((option): Action => ({

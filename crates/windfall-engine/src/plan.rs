@@ -29,13 +29,6 @@ use crate::voice::LoopRegion;
 /// Tempo used when a project carries one that is not a number.
 const FALLBACK_TEMPO_BPM: f64 = 120.0;
 
-/// Two sixteenth-note steps: the unit swing works on.
-const PAIR_TICKS: u32 = 2 * TICKS_PER_STEP;
-
-/// How far full swing delays the second step of a pair. It lands two thirds
-/// of the way through the pair, which is a triplet feel.
-const FULL_SWING_DELAY_TICKS: f64 = TICKS_PER_STEP as f64 / 3.0;
-
 /// Length a pattern-mode loop falls back to when the plan has no pattern.
 pub(crate) const FALLBACK_LOOP_TICKS: u32 = DEFAULT_PATTERN_STEPS * TICKS_PER_STEP;
 
@@ -155,7 +148,10 @@ pub(crate) struct PlanSampler {
 
 #[derive(Debug)]
 pub(crate) struct PlanPattern {
+    pub note_curves: Vec<windfall_project::NoteExpressionCurve>,
     pub id: PatternId,
+    pub signature: windfall_project::TimeSignature,
+    pub meters: Result<Vec<windfall_project::timeline::MeterSegment>, windfall_project::timeline::MeterMapError>,
     /// Loop length in ticks, at least one step.
     pub length: u32,
     /// Sorted by `tick`. Every tick is below `length`.
@@ -165,6 +161,7 @@ pub(crate) struct PlanPattern {
 /// A note with swing already applied.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NoteEvent {
+    pub source: windfall_project::NoteId,
     /// Start in ticks from the beginning of the pattern.
     pub tick: f64,
     /// Length in ticks, greater than zero.
@@ -174,10 +171,40 @@ pub(crate) struct NoteEvent {
     pub key: u8,
     pub velocity: f32,
     pub pan: f32,
+    pub expression: windfall_dsp::NoteExpression,
+}
+
+impl PlanPattern {
+    pub fn curves_for(&self, note: windfall_project::NoteId) -> &[windfall_project::NoteExpressionCurve] {
+        let from = self.note_curves.partition_point(|curve| curve.note < note);
+        let to = self.note_curves.partition_point(|curve| curve.note <= note);
+        &self.note_curves[from..to]
+    }
+}
+
+impl Plan {
+    /// Resolve the saved source independently of event order or repeated clips.
+    /// Runtime occurrences supply their own normalized musical position.
+    pub fn note_curve_controls(&self, pattern: PatternId, note: windfall_project::NoteId, position: f64, mut pan: f32, mut expression: windfall_dsp::NoteExpression) -> (f32, windfall_dsp::NoteExpression) {
+        let Some(index) = self.pattern_ids.get(pattern.0) else { return (pan, expression); };
+        for curve in self.patterns[index].curves_for(note) {
+            let Some(value) = curve.value_at(position) else { continue; };
+            match curve.parameter {
+                windfall_project::NoteCurveParameter::Pan => pan = value,
+                windfall_project::NoteCurveParameter::Release => expression.release = value,
+                windfall_project::NoteCurveParameter::FinePitchCents => expression.fine_pitch_cents = value,
+                windfall_project::NoteCurveParameter::ModulationX => expression.modulation_x = value,
+                windfall_project::NoteCurveParameter::ModulationY => expression.modulation_y = value,
+            }
+        }
+        (pan.clamp(-1.0, 1.0), expression.clamped())
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct PlanTrack {
+    pub processing: windfall_dsp::TrackParams,
+    pub current: bool,
     pub id: TrackId,
     /// Fader gain, or zero when mute or solo silences the track.
     pub gain: f32,
@@ -191,6 +218,8 @@ pub(crate) struct PlanTrack {
     pub effects: Vec<PlanEffect>,
     /// Indices of the channels whose instruments play into this track.
     pub instruments: Vec<usize>,
+    pub external_output: Option<windfall_project::ExternalOutputRoute>,
+    pub latency_offset_ms: f64,
 }
 
 /// Only progress is shared: this never grants access to a plugin owner.
@@ -247,6 +276,7 @@ pub(crate) struct PlanEffect {
 
 #[derive(Debug)]
 pub(crate) struct PlanEdge {
+    pub sidechain: bool,
     /// Index of the receiving track.
     pub target: usize,
     pub target_id: TrackId,
@@ -284,6 +314,7 @@ pub(crate) struct PlanAudioClip {
     /// Index of the mixer track the clip plays into, and that track's id.
     pub track: usize,
     pub track_id: TrackId,
+    pub direct_output: bool,
     pub gain: f32,
     pub pan: f32,
     /// Length of the fade in, in ticks from the start.
@@ -545,7 +576,7 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let patterns: Vec<PlanPattern> = project
         .patterns
         .iter()
-        .map(|pattern| compile_pattern(pattern, &channel_ids, swing))
+        .map(|pattern| compile_pattern(pattern, &channel_ids, &project.channels, swing, project.settings.time_signature))
         .collect();
     let pattern_ids = IdIndex::new(patterns.iter().map(|pattern| pattern.id.0));
 
@@ -706,35 +737,38 @@ fn compile_sampler(settings: &SamplerSettings, pool: &SamplePool) -> PlanSampler
     }
 }
 
-fn compile_pattern(pattern: &Pattern, channel_ids: &IdIndex, swing: f64) -> PlanPattern {
+fn compile_pattern(pattern: &Pattern, channel_ids: &IdIndex, source_channels: &[Channel], swing: f64, legacy: windfall_project::TimeSignature) -> PlanPattern {
     let length = pattern.length_steps.max(1).saturating_mul(TICKS_PER_STEP);
-    // A trailing step with no partner is left alone, so swing can never push
-    // a note past the end of the pattern.
-    let swung_length = f64::from(length / PAIR_TICKS * PAIR_TICKS);
-    let warp = |tick: f64| swing_warp(tick, swing, swung_length);
 
     let mut events = Vec::new();
     for lane in &pattern.lanes {
         let Some(channel) = channel_ids.get(lane.channel.0) else {
             continue;
         };
+        let timing = source_channels[channel].timing;
         for note in lane.notes.iter().filter(|note| note.start < length) {
-            let start = f64::from(note.start);
-            let tick = warp(start);
+            let Some((tick, duration)) = timing.place(note.start, note.length, length, swing) else { continue; };
             events.push(NoteEvent {
+                source: note.id,
                 tick,
-                length: warp(start + f64::from(note.length.max(1))) - tick,
+                length: duration,
                 channel,
                 key: note.key.min(MAX_KEY),
                 velocity: unit(note.velocity),
                 pan: pan(note.pan),
+                expression: note.expression.clamped(),
             });
         }
     }
     // The sort is stable, so notes on the same tick keep lane order.
     events.sort_by(|a, b| a.tick.total_cmp(&b.tick));
+    let mut note_curves = pattern.note_curves.clone();
+    note_curves.sort_by_key(|curve| (curve.note, curve.parameter));
     PlanPattern {
+        note_curves,
         id: pattern.id,
+        signature: pattern.effective_signature(legacy),
+        meters: windfall_project::MeterMap::checked(pattern.effective_signature(legacy), &pattern.timeline.meters).map(|map| map.segments().to_vec()),
         length,
         events,
     }
@@ -746,21 +780,9 @@ fn compile_pattern(pattern: &Pattern, channel_ids: &IdIndex, swing: f64) -> Plan
 /// swing delay and the second shrinks by it, so the pair keeps its length, a
 /// note on the second step lands late by exactly the delay, and notes between
 /// steps keep their order. Ticks at or past `swung_length` are left alone.
+#[cfg(test)]
 fn swing_warp(tick: f64, swing: f64, swung_length: f64) -> f64 {
-    if swing <= 0.0 || tick >= swung_length {
-        return tick;
-    }
-    let pair = f64::from(PAIR_TICKS);
-    let step = f64::from(TICKS_PER_STEP);
-    let delay = swing * FULL_SWING_DELAY_TICKS;
-    let pair_start = (tick / pair).floor() * pair;
-    let local = tick - pair_start;
-    let warped = if local < step {
-        local * (step + delay) / step
-    } else {
-        step + delay + (local - step) * (step - delay) / step
-    };
-    pair_start + warped
+    windfall_project::note_timing::swing_warp(tick, swing, swung_length)
 }
 
 fn compile_playlist(
@@ -828,6 +850,7 @@ fn compile_audio_clips(
         let ClipContent::Audio {
             sample,
             mixer_track,
+            output,
             gain: clip_gain,
             pan: clip_pan,
             fade_in,
@@ -869,6 +892,7 @@ fn compile_audio_clips(
             sample: buffer.clone(),
             track: track.unwrap_or(0),
             track_id: track.map_or(TrackId::MASTER, |_| mixer_track),
+            direct_output: output == windfall_project::ClipAudioOutput::Direct,
             gain: gain(clip_gain),
             pan: pan(clip_pan),
             fade_in,
@@ -899,6 +923,11 @@ fn compile_audio_clips(
 /// soloed track's signal on toward the master.
 fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
     let fallback_master = [MixerTrack {
+        dock: windfall_project::MixerDock::default(),
+        external_output: None,
+        processing: windfall_dsp::TrackParams::default(),
+        current: false,
+        latency_offset_ms: 0.0,
         id: TrackId::MASTER,
         name: String::new(),
         color: 0,
@@ -907,8 +936,10 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
         muted: false,
         solo: false,
         output: None,
+        sidechains: Vec::new(),
         sends: Vec::new(),
         effects: Vec::new(),
+        recording: None,
     }];
     let source: &[MixerTrack] = if mixer.tracks.is_empty() {
         &fallback_master
@@ -924,22 +955,24 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
         .iter()
         .enumerate()
         .map(|(index, track)| {
-            let edge = |target_id: TrackId, send: bool, gain: f32| {
+            let edge = |target_id: TrackId, send: bool, sidechain: bool, gain: f32| {
                 let target = ids.get(target_id.0)?;
                 // The master is the end of the chain, and nothing feeds itself.
-                (index != 0 && target != index).then_some(PlanEdge {
+                (index != 0 && target != index && !track.current && !source[target].current).then_some(PlanEdge {
                     target,
                     target_id,
                     send,
+                    sidechain,
                     gain,
                     slot: 0,
                 })
             };
-            let output = track.output.and_then(|target| edge(target, false, 1.0));
+            let output = track.output.filter(|_| !track.external_output.is_some_and(|route| route.exclusive)).and_then(|target| edge(target, false, false, 1.0));
             let sends = track
                 .sends
                 .iter()
-                .filter_map(|send| edge(send.target, true, gain(send.gain)));
+                .filter_map(|send| edge(send.target, true, false, gain(send.gain)));
+            let keys = track.sidechains.iter().filter_map(|send| edge(send.target, true, true, gain(send.gain)));
             let effects = track
                 .effects
                 .iter()
@@ -961,24 +994,29 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
                 })
                 .collect();
             PlanTrack {
+                processing: track.processing,
+                current: track.current,
                 id: track.id,
                 gain: gain(track.volume),
                 audible: true,
                 pan: pan(track.pan),
-                edges: output.into_iter().chain(sends).collect(),
+                edges: output.into_iter().chain(sends).chain(keys).collect(),
                 effects,
                 instruments: Vec::new(),
+                external_output: track.external_output,
+                latency_offset_ms: track.latency_offset_ms,
             }
         })
         .collect();
 
-    let order = route(&mut tracks);
+    let mut order = route(&mut tracks);
+    order.sort_by_key(|&index| tracks[index].current);
 
-    let soloed: Vec<bool> = source.iter().map(|track| track.solo).collect();
+    let soloed: Vec<bool> = source.iter().map(|track| track.solo && !track.current).collect();
     let heard = solo_set(&tracks, &soloed);
     let mut slot = 0;
     for (index, track) in tracks.iter_mut().enumerate() {
-        if source[index].muted || !heard[index] {
+        if source[index].muted || !track.current && !heard[index] {
             track.gain = 0.0;
             track.audible = false;
         }
@@ -1049,7 +1087,7 @@ fn solo_set(tracks: &[PlanTrack], soloed: &[bool]) -> Vec<bool> {
         }
         reached
     };
-    let downstream = spread(&|index| tracks[index].edges.iter().map(|edge| edge.target).collect());
+    let downstream = spread(&|index| tracks[index].edges.iter().filter(|edge| !edge.sidechain).map(|edge| edge.target).collect());
     let upstream = spread(&|index| feeders[index].clone());
     downstream
         .iter()
@@ -1099,6 +1137,11 @@ mod tests {
 
     fn track(id: u32, output: Option<u32>, sends: &[u32]) -> MixerTrack {
         MixerTrack {
+            dock: windfall_project::MixerDock::default(),
+            external_output: None,
+            processing: windfall_dsp::TrackParams::default(),
+            current: false,
+            latency_offset_ms: 0.0,
             id: TrackId(id),
             name: String::new(),
             color: 0,
@@ -1107,6 +1150,7 @@ mod tests {
             muted: false,
             solo: false,
             output: output.map(TrackId),
+            sidechains: Vec::new(),
             sends: sends
                 .iter()
                 .map(|&target| Send {
@@ -1115,6 +1159,7 @@ mod tests {
                 })
                 .collect(),
             effects: Vec::new(),
+            recording: None,
         }
     }
 
@@ -1225,6 +1270,8 @@ mod tests {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId::MASTER,
             source: ChannelSource::Sampler(SamplerSettings::default()),
         });
@@ -1242,6 +1289,7 @@ mod tests {
                     key: 60,
                     velocity: 1.0,
                     pan: 0.0,
+                    expression: Default::default(),
                 })
                 .collect(),
         });

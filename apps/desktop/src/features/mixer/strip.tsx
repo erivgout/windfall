@@ -1,6 +1,6 @@
 import { ArrowRight02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { memo, useMemo } from "react"
+import { memo, useMemo, useRef } from "react"
 
 import type { TrackId } from "@/bindings"
 import { MuteSolo, PanControl, ToggleLed } from "@/components/audio"
@@ -23,14 +23,15 @@ import { EffectBadge, EffectRack } from "./effect-rack"
 import { SEND_ROW_HEIGHT, type StripMode } from "./layout"
 import { LevelSection, type LevelLayout } from "./level-section"
 import { trackValueItems } from "./menus"
-import { clampPan, patchTrack } from "./operations"
+import { patchTrack } from "./operations"
 import { OutputSelect } from "./output-select"
 import { heardTracks, type Audibility } from "./routing"
 import { RoutingButton } from "./routing-popover"
 import { AddSendMenu, SendList } from "./sends"
 import { StripHeader } from "./strip-header"
 import { useStripTrack, type StripTrack } from "./strip-track"
-import { useGestureValue } from "./use-gesture-value"
+import { useTrackGroupGesture } from "./group-gesture"
+import { useMixerUi, selectMixerTrack } from "./mixer-ui"
 
 /** Fades the parts of a strip that solo on another track has silenced. */
 const DIMMED =
@@ -43,15 +44,7 @@ function PanKnob({
   track: StripTrack
   showValue: boolean
 }) {
-  const pan = useGestureValue(
-    track.pan,
-    (value) => ({
-      type: "updateMixerTrack",
-      id: track.id,
-      patch: { pan: value },
-    }),
-    clampPan
-  )
+  const pan = useTrackGroupGesture(track.id, "pan")
   const hint = useHint("Pan. Drag, or double-click to center")
   // What the knob is bound to adds its own entries to the knob's menu.
   const items = useMemo(() => trackValueItems(track.id, "pan"), [track.id])
@@ -81,12 +74,12 @@ function PanKnob({
 
 function MuteButtons({ track, small }: { track: StripTrack; small: boolean }) {
   const hint = useHint(
-    track.id === MASTER_TRACK
+    track.current ? "Mute the Current utility copy" : track.id === MASTER_TRACK
       ? "Mute silences everything"
       : "Mute silences this track. Solo leaves only it and what it needs to be heard"
   )
   const size = small ? "sm" : "md"
-  if (track.id === MASTER_TRACK) {
+  if (track.id === MASTER_TRACK || track.current) {
     return (
       <ToggleLed
         size={size}
@@ -142,6 +135,7 @@ function MasterOutput() {
 /** The output selector and the sends, inline. Every strip is equally tall. */
 function Routing({ track, sendRows }: { track: StripTrack; sendRows: number }) {
   const master = track.id === MASTER_TRACK
+  if (track.current) return <div className="shrink-0 px-1 text-[10px] text-muted-foreground" style={{ height: 38 + sendRows * SEND_ROW_HEIGHT }}>Follows selection</div>
   return (
     <div
       data-slot="track-routing-inline"
@@ -211,7 +205,10 @@ export const MixerStrip = memo(function MixerStrip({
 }: MixerStripProps) {
   const track = useStripTrack(id)
   const index = useMixerTrackIndex(id)
+  const number = useProjectStore((state) => state.project.mixer.tracks.filter((track) => !track.current).findIndex((track) => track.id === id))
   const selected = useUiStore((state) => state.selectedTrack === id)
+  const groupSelected = useMixerUi((state) => state.selected.includes(id))
+  const pointerSelecting = useRef(false)
   const heard = useProjectStore((state) =>
     heardTracks(state.project.mixer.tracks).has(id)
   )
@@ -234,7 +231,7 @@ export const MixerStrip = memo(function MixerStrip({
   // so the routing button moves down beside mute and solo.
   const mini = mode === "mini"
   const routing =
-    mode !== "full" && (!master || !chips) ? (
+    !track.current && mode !== "full" && (!master || !chips) ? (
       <RoutingButton track={track} withChannels={!chips} />
     ) : null
 
@@ -251,11 +248,12 @@ export const MixerStrip = memo(function MixerStrip({
       data-mode={mode}
       data-audible={audible}
       data-selected={selected || undefined}
+      data-group-selected={groupSelected || undefined}
       data-linked={linked ? "" : undefined}
       data-drop={drop.gap === null ? undefined : ""}
       tabIndex={0}
-      onPointerDownCapture={select}
-      onFocus={select}
+      onPointerDownCapture={(event) => { pointerSelecting.current = true; setTimeout(() => { pointerSelecting.current = false }, 0); selectMixerTrack(id, event.button === 0 && (event.ctrlKey || event.metaKey), event.button === 0 && event.shiftKey) }}
+      onFocus={() => { if (!pointerSelecting.current) select() }}
       {...drop.zone}
       className={cn(
         // `outline-none` alone would switch the focus outline off for good:
@@ -264,6 +262,7 @@ export const MixerStrip = memo(function MixerStrip({
         low ? "gap-0.5" : "gap-1.5 pb-1.5",
         "data-linked:bg-[color-mix(in_oklch,var(--wf-brand)_10%,transparent)]",
         "data-selected:bg-accent data-selected:shadow-[inset_0_-2px_0_var(--wf-brand)]",
+        "data-group-selected:bg-accent/60 data-group-selected:shadow-[inset_0_-2px_0_var(--wf-brand)]",
         // An effect dragged over the strip would land on this track.
         "data-drop:bg-[color-mix(in_oklch,var(--wf-brand)_9%,transparent)]"
       )}
@@ -272,7 +271,7 @@ export const MixerStrip = memo(function MixerStrip({
         id={id}
         name={track.name}
         color={track.color}
-        number={master ? "M" : String(index)}
+        number={track.current ? "C" : master ? "M" : String(number)}
         master={master}
         trailing={mini ? <EffectBadge track={id} showEmpty={false} /> : routing}
       />

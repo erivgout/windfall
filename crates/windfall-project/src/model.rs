@@ -15,9 +15,11 @@ pub use windfall_dsp::{EffectKind, EffectParams, InstrumentKind, InstrumentParam
 /// Version of the on-disk project format.
 pub const FORMAT_VERSION: u32 = 1;
 
-/// Mixer tracks including the master. The engine sizes its meter storage
-/// from this, so it is a hard limit.
-pub const MAX_MIXER_TRACKS: usize = 128;
+/// Five hundred inserts, Master and one Current utility. The engine sizes its
+/// bounded mixer buffers and meter storage from this hard limit.
+pub const MAX_MIXER_TRACKS: usize = 502;
+/// Master plus the five hundred audible inserts; Current has its own seat.
+pub const MAX_MIXER_SIGNAL_TRACKS: usize = 501;
 
 /// Effects one mixer track can hold.
 pub const MAX_EFFECT_SLOTS: usize = 10;
@@ -32,6 +34,9 @@ pub const DEFAULT_PATTERN_STEPS: u32 = 16;
 
 /// Longest pattern, in sixteenth-note steps.
 pub const MAX_PATTERN_STEPS: u32 = 1024;
+
+/// UTF-8 bytes in a channel group name. Empty means no group.
+pub const MAX_CHANNEL_GROUP_NAME_BYTES: usize = 128;
 
 /// Length of the longest pattern in ticks. A note that starts at or past
 /// this tick could never play in any pattern, so no edit may put one there.
@@ -240,6 +245,9 @@ impl Project {
             samples: Vec::new(),
             channels: Vec::new(),
             patterns: vec![Pattern {
+            note_curves: Vec::new(),
+                time_signature: None,
+                timeline: Default::default(),
                 id: pattern,
                 name: "Pattern 1".to_owned(),
                 color: palette_color(0),
@@ -248,6 +256,11 @@ impl Project {
             }],
             mixer: Mixer {
                 tracks: vec![MixerTrack {
+                    dock: crate::MixerDock::default(),
+                    external_output: None,
+                    processing: windfall_dsp::TrackParams::default(),
+                    current: false,
+                    latency_offset_ms: 0.0,
                     id: TrackId::MASTER,
                     name: "Master".to_owned(),
                     color: MASTER_COLOR,
@@ -256,14 +269,17 @@ impl Project {
                     muted: false,
                     solo: false,
                     output: None,
+                    sidechains: Vec::new(),
                     sends: Vec::new(),
                     effects: Vec::new(),
+                    recording: None,
                 }],
             },
             playlist: Playlist {
                 tracks: Vec::new(),
                 clips: Vec::new(),
                 timeline: crate::Timeline::default(),
+                take_groups: Vec::new(),
             },
             automations: Vec::new(),
             plugins: Vec::new(),
@@ -315,6 +331,10 @@ pub struct TimeSignature {
 }
 
 impl TimeSignature {
+    /// Length of the notated beat in ticks.
+    pub fn ticks_per_beat(self) -> u32 {
+        PPQ * 4 / self.denominator as u32
+    }
     /// Length of one bar in ticks.
     pub fn ticks_per_bar(self) -> u32 {
         self.numerator as u32 * PPQ * 4 / self.denominator as u32
@@ -383,6 +403,14 @@ pub(crate) fn relative_path_problem(path: &str) -> Option<&'static str> {
 pub struct Channel {
     pub id: ChannelId,
     pub name: String,
+    /// Named rack group. The empty string is the ungrouped category.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub group: String,
+    /// Non-destructive gate, shift and per-channel swing.
+    #[serde(default, skip_serializing_if = "crate::ChannelTiming::is_default")]
+    #[ts(as = "Option<crate::ChannelTiming>", optional)]
+    pub timing: crate::ChannelTiming,
     /// Display color as 0xRRGGBB.
     pub color: u32,
     /// Linear gain, 0 to [`MAX_GAIN`].
@@ -404,8 +432,7 @@ pub struct Channel {
 pub enum ChannelSource {
     Sampler(SamplerSettings),
     /// A built-in instrument that turns the channel's notes into sound. A
-    /// note's velocity is the instrument's velocity, and its pan is not
-    /// used: an instrument places its own voices.
+    /// note's velocity, pan and expression are sent to the instrument's voices.
     #[serde(rename_all = "camelCase")]
     Instrument {
         /// The instrument and its settings, with every value inside its
@@ -601,6 +628,9 @@ impl Default for Envelope {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Pattern {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<crate::NoteExpressionCurve>>", optional)]
+    pub note_curves: Vec<crate::NoteExpressionCurve>,
     pub id: PatternId,
     pub name: String,
     /// Display color as 0xRRGGBB.
@@ -609,12 +639,30 @@ pub struct Pattern {
     /// length, and notes that start at or after it do not play. They are
     /// kept, so making the pattern longer again brings them back.
     pub length_steps: u32,
+    /// None inherits the project's base meter. Tick-zero changes may override it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub time_signature: Option<TimeSignature>,
+    #[serde(default, skip_serializing_if = "crate::Timeline::is_empty")]
+    #[ts(as = "Option<crate::Timeline>", optional)]
+    pub timeline: crate::Timeline,
     /// Notes per channel, sorted by channel id. Channels with no notes have
     /// no lane.
     pub lanes: Vec<Lane>,
 }
 
 impl Pattern {
+    pub fn effective_signature(&self, legacy: TimeSignature) -> TimeSignature { self.time_signature.unwrap_or(legacy) }
+
+    pub fn check_musical(&self, legacy: TimeSignature, next_id: u32) -> Result<(), String> {
+        crate::note_curves::check(self)?;
+        self.timeline.check(self.effective_signature(legacy), next_id)?;
+        if self.timeline.meters.iter().any(|meter| meter.tick > MAX_PATTERN_TICKS) ||
+            self.timeline.markers.iter().any(|marker| marker.tick > MAX_PATTERN_TICKS || marker.kind != crate::MarkerKind::Named) {
+            return Err("pattern meters and named markers must fit the maximum pattern span".to_owned());
+        }
+        Ok(())
+    }
     pub fn length_ticks(&self) -> u32 {
         self.length_steps * TICKS_PER_STEP
     }
@@ -658,6 +706,10 @@ pub struct Note {
     pub velocity: f32,
     /// -1 is hard left, 1 is hard right. Added to the channel pan.
     pub pan: f32,
+    /// Per-note release, fine pitch and two modulation controls.
+    #[serde(default, skip_serializing_if = "crate::NoteExpression::is_default")]
+    #[ts(as = "Option<crate::NoteExpression>", optional)]
+    pub expression: crate::NoteExpression,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -678,6 +730,17 @@ impl Mixer {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct MixerTrack {
+    #[serde(default, skip_serializing_if = "MixerDock::is_middle")]
+    #[ts(as = "Option<MixerDock>", optional)]
+    pub dock: MixerDock,
+    /// Integrated post-slot EQ and stereo utilities, before the fader.
+    #[serde(default, skip_serializing_if = "windfall_dsp::TrackParams::is_default")]
+    #[ts(as = "Option<windfall_dsp::TrackParams>", optional)]
+    pub processing: windfall_dsp::TrackParams,
+    /// Utility-only strip fed by the current selection, with no audible routes.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub current: bool,
     pub id: TrackId,
     pub name: String,
     /// Display color as 0xRRGGBB.
@@ -693,6 +756,10 @@ pub struct MixerTrack {
     pub output: Option<TrackId>,
     /// Extra copies of the post-fader signal sent to other tracks.
     pub sends: Vec<Send>,
+    /// Post-fader detector-only copies; they are never summed into the audible input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<Send>>", optional)]
+    pub sidechains: Vec<Send>,
     /// The track's effects, in the order the signal passes through them,
     /// at most [`MAX_EFFECT_SLOTS`]. They come before the fader: what
     /// arrives on the track runs through the effects, then the fader and
@@ -700,9 +767,90 @@ pub struct MixerTrack {
     /// master has effects like any other track.
     #[serde(default)]
     pub effects: Vec<EffectSlot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub recording: Option<MixerRecording>,
+    /// Post-fader hardware destination on the currently selected output device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub external_output: Option<ExternalOutputRoute>,
+    /// Signed correction to the track's declared output latency, in milliseconds.
+    /// This compensates other routes; it does not add an audible delay here.
+    #[serde(default)]
+    #[ts(as = "Option<f64>", optional)]
+    pub latency_offset_ms: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ExternalOutputRoute {
+    pub left: u16,
+    /// None folds stereo to mono on `left`.
+    pub right: Option<u16>,
+    /// Suppress the ordinary output edge; explicit sends remain available.
+    pub exclusive: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MixerDock { Left, #[default] Middle, Right }
+impl MixerDock { pub fn is_middle(&self) -> bool { *self == Self::Middle } }
+impl ExternalOutputRoute {
+    pub fn check(&self) -> Result<(), String> {
+        if self.left >= 256 || self.right.is_some_and(|right| right >= 256 || right == self.left) {
+            return Err("Choose distinct hardware output ports below 256, or mono".into());
+        }
+        Ok(())
+    }
+}
+
+/// A saved hardware route. Device availability is resolved when opening input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioInputRoute { pub host: String, pub device: String, pub left: u16, pub right: Option<u16> }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MixerRecording {
+    pub input: Option<AudioInputRoute>,
+    pub armed: bool,
+    pub monitor: bool,
+    pub monitor_gain: f32,
+    pub monitor_buffer_ms: u16,
+    pub offset_ms: f64,
+    #[serde(default, skip_serializing_if = "MixerRecordMode::is_input")]
+    #[ts(as = "Option<MixerRecordMode>", optional)]
+    pub mode: MixerRecordMode,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MixerRecordMode { #[default] Input, PostEffects, PostFader }
+impl MixerRecordMode { pub fn is_input(&self) -> bool { *self == Self::Input } }
+impl Default for MixerRecording {
+    fn default() -> Self { Self { input: None, armed: false, monitor: false, monitor_gain: 0.5, monitor_buffer_ms: 20, offset_ms: 0.0, mode: MixerRecordMode::Input } }
+}
+impl MixerRecording {
+    pub fn check(&self) -> Result<(), String> {
+        if !self.monitor_gain.is_finite() || !(0.0..=1.0).contains(&self.monitor_gain) || !(5..=100).contains(&self.monitor_buffer_ms) {
+            return Err("monitor gain must be 0–1 and buffering 5–100 ms".into());
+        }
+        if !self.offset_ms.is_finite() || self.offset_ms.abs() > 1000.0 { return Err("recording offset must be -1000 to 1000 ms".into()); }
+        if let Some(input) = &self.input {
+            if input.host.trim().is_empty() || input.device.trim().is_empty() || input.host.len() > 1024 || input.device.len() > 4096 {
+                return Err("input host and device must have usable names".into());
+            }
+            if input.left >= 256 || input.right.is_some_and(|right| right >= 256) { return Err("hardware input channels must be below 256".into()); }
+        }
+        Ok(())
+    }
 }
 
 impl MixerTrack {
+    dock: crate::MixerDock::default(),
     pub fn effect(&self, id: EffectId) -> Option<&EffectSlot> {
         self.effects.iter().find(|effect| effect.id == id)
     }
@@ -753,6 +901,10 @@ pub struct Playlist {
     #[serde(default, skip_serializing_if = "crate::Timeline::is_empty")]
     #[ts(as = "Option<crate::Timeline>", optional)]
     pub timeline: crate::Timeline,
+    /// Retained recording passes and the latest editable composite.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<crate::AudioTakeGroup>>", optional)]
+    pub take_groups: Vec<crate::AudioTakeGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -888,6 +1040,10 @@ pub enum ClipContent {
         /// The mixer track the clip plays into, through its effects, its
         /// fader and its sends.
         mixer_track: TrackId,
+        /// Mixer routing, or a finished print summed after the Master strip.
+        #[serde(default, skip_serializing_if = "ClipAudioOutput::is_mixer")]
+        #[ts(as = "Option<ClipAudioOutput>", optional)]
+        output: ClipAudioOutput,
         /// Linear gain, 0 to [`MAX_GAIN`].
         gain: f32,
         /// -1 is hard left, 1 is hard right.
@@ -954,6 +1110,23 @@ pub enum ClipContent {
     /// hand.
     #[serde(rename_all = "camelCase")]
     Automation { automation: AutomationId },
+}
+
+/// Playback destination for audio clips. Direct prints retain their own gain,
+/// pan, fades and playlist mute, and bypass all mixer strips and effects.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ClipAudioOutput {
+    #[default]
+    Mixer,
+    Direct,
+}
+
+impl ClipAudioOutput {
+    pub fn is_mixer(&self) -> bool {
+        *self == Self::Mixer
+    }
 }
 
 impl ClipContent {
@@ -1047,10 +1220,13 @@ pub enum AutomationTarget {
     /// A mixer track's pan: `2 * value - 1`.
     #[serde(rename_all = "camelCase")]
     TrackPan { track: TrackId },
+    #[serde(rename_all = "camelCase")]
+    TrackParam { track: TrackId, param: u32 },
     /// The level of the send from `track` to `target`: linear gain
     /// `2 * value * value`. The send has to exist.
     #[serde(rename_all = "camelCase")]
     SendGain { track: TrackId, target: TrackId },
+    SidechainGain { track: TrackId, target: TrackId },
     /// One setting of an effect. `param` is its index in the descriptors
     /// of the effect's kind, and the value maps onto the descriptor's
     /// `min` to `max`: linearly, or in equal ratios

@@ -14,7 +14,7 @@ use windfall_project::{
 
 use crate::mix::{pan_to_midi, velocity_to_midi, volume_to_midi};
 use crate::song::{
-    CC_PAN, CC_VOLUME, ControlCurve, ControlKind, ControlPoint, DEFAULT_RELEASE, DRUM_CHANNEL,
+    CC_PAN, CC_VOLUME, ControlCurve, ControlKind, ControlPoint, DRUM_CHANNEL,
     MidiNote, MidiSong, MidiTrack, TempoChange, TimeSignatureChange, micros_per_quarter,
 };
 
@@ -25,13 +25,6 @@ pub const MAX_EXPORTED_NOTES: usize = 4_000_000;
 /// The most steps a gliding tempo is written in. A song long enough to
 /// need more at [`ExportOptions::tempo_step`] gets longer steps.
 const MAX_TEMPO_STEPS: u32 = 100_000;
-
-/// Two sixteenth-note steps: the unit swing works on.
-const PAIR_TICKS: u32 = 2 * TICKS_PER_STEP;
-
-/// How far full swing delays the second step of a pair: to two thirds of
-/// the way through the pair.
-const FULL_SWING_DELAY_TICKS: f64 = TICKS_PER_STEP as f64 / 3.0;
 
 /// Choices for representing project playback in MIDI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,19 +97,28 @@ pub fn export_pattern(
         .ok_or(ExportError::PatternNotFound(pattern))?;
     let length = pattern_length(pattern);
     let mut notes = Notes::default();
-    for played in played_notes(pattern, swing(project, options)) {
+    for played in played_notes(project, pattern, swing(project, options)) {
         let end = played.end.min(length);
         notes.add(played, played.start, end)?;
     }
     let tempo = TempoChange::from_bpm(0, project.settings.tempo_bpm);
-    Ok(song(
+    let mut result = song(
         project,
         &pattern.name,
         notes,
         vec![tempo],
         length,
         options,
-    ))
+    );
+    let signature = pattern.effective_signature(project.settings.time_signature);
+    result.time_signatures = vec![crate::TimeSignatureChange { tick: 0, numerator: signature.numerator, denominator: signature.denominator }];
+    for meter in pattern.timeline.meters.iter().filter(|meter| meter.tick < length) {
+        if meter.tick == 0 { result.time_signatures.clear(); }
+        result.time_signatures.push(crate::TimeSignatureChange { tick: meter.tick, numerator: meter.signature.numerator, denominator: meter.signature.denominator });
+    }
+    result.markers = pattern.timeline.markers.iter().filter(|marker| marker.tick <= length)
+        .map(|marker| crate::Marker { tick: marker.tick, text: marker.name.clone() }).collect();
+    Ok(result)
 }
 
 /// The playlist as a song, the way song mode plays it.
@@ -171,7 +173,7 @@ pub fn export_song(project: &Project, options: &ExportOptions) -> Result<MidiSon
         };
         let (pattern_length, played) = patterns
             .entry(pattern.id)
-            .or_insert_with(|| (pattern_length(pattern), played_notes(pattern, swing)));
+            .or_insert_with(|| (pattern_length(pattern), played_notes(project, pattern, swing)));
         if played.is_empty() {
             continue;
         }
@@ -216,6 +218,9 @@ pub fn export_song(project: &Project, options: &ExportOptions) -> Result<MidiSon
             denominator: meter.signature.denominator,
         });
     }
+    result.markers = project.playlist.timeline.markers.iter()
+        .filter(|marker| marker.tick <= length && marker.kind == windfall_project::MarkerKind::Named)
+        .map(|marker| crate::Marker { tick: marker.tick, text: marker.name.clone() }).collect();
     Ok(result)
 }
 
@@ -239,21 +244,9 @@ fn pattern_length(pattern: &Pattern) -> u32 {
 /// stretched inside each pair of steps, the first step growing by the
 /// swing delay and the second shrinking by it. Ticks at or past
 /// `swung_length` are left alone.
+#[cfg(test)]
 fn swing_warp(tick: f64, swing: f64, swung_length: f64) -> f64 {
-    if swing <= 0.0 || tick >= swung_length {
-        return tick;
-    }
-    let pair = f64::from(PAIR_TICKS);
-    let step = f64::from(TICKS_PER_STEP);
-    let delay = swing * FULL_SWING_DELAY_TICKS;
-    let pair_start = (tick / pair).floor() * pair;
-    let local = tick - pair_start;
-    let warped = if local < step {
-        local * (step + delay) / step
-    } else {
-        step + delay + (local - step) * (step - delay) / step
-    };
-    pair_start + warped
+    windfall_project::note_timing::swing_warp(tick, swing, swung_length)
 }
 
 /// A note of a pattern as it plays in one pass of the pattern.
@@ -266,25 +259,30 @@ struct Played {
     end: u32,
     key: u8,
     velocity: u8,
+    release: u8,
+    midi_channel: Option<u8>,
 }
 
 /// The notes of a pattern that play, in order of their starts.
-fn played_notes(pattern: &Pattern, swing: f64) -> Vec<Played> {
+fn played_notes(project: &Project, pattern: &Pattern, swing: f64) -> Vec<Played> {
     let length = pattern_length(pattern);
-    // A trailing step with no partner is not swung.
-    let swung_length = f64::from(length / PAIR_TICKS * PAIR_TICKS);
-    let place = |tick: u32| swing_warp(f64::from(tick), swing, swung_length).round() as u32;
     let mut played = Vec::new();
     for lane in &pattern.lanes {
+        let Some(channel) = project.channel(lane.channel) else { continue; };
         for note in lane.notes.iter().filter(|note| note.start < length) {
-            let start = place(note.start);
-            let end = place(note.start.saturating_add(note.length.max(1)));
+            // A slide is a control event, never an additional MIDI note-on.
+            if note.expression.articulation == windfall_project::NoteArticulation::Slide { continue; }
+            let Some((tick, duration)) = channel.timing.place(note.start, note.length, length, swing) else { continue; };
+            let start = tick.round() as u32;
+            let end = (tick + duration).round() as u32;
             played.push(Played {
                 channel: lane.channel,
                 start,
                 end: end.max(start.saturating_add(1)),
                 key: note.key.min(127),
                 velocity: velocity_to_midi(note.velocity),
+                release: (note.expression.clamped().release * 128.0).round().min(127.0) as u8,
+                midi_channel: note.expression.color_group,
             });
         }
     }
@@ -311,9 +309,9 @@ impl Notes {
             length: end.saturating_sub(start).max(1),
             key: played.key,
             velocity: played.velocity,
-            release: DEFAULT_RELEASE,
-            // Set when the channel is given its track.
-            channel: 0,
+            release: played.release,
+            // Untagged notes receive the track's automatic route in song().
+            channel: played.midi_channel.unwrap_or(u8::MAX),
         });
         Ok(())
     }
@@ -343,10 +341,13 @@ fn song(
         };
         let midi_channel = midi_channel(tracks.len());
         for note in &mut notes {
-            note.channel = midi_channel;
+            if note.channel == u8::MAX { note.channel = midi_channel; }
         }
         let controls = if options.channel_mix {
-            mix_controls(channel, midi_channel)
+            let mut used = [false; 16];
+            for note in &notes { used[usize::from(note.channel.min(15))] = true; }
+            used.into_iter().enumerate().filter(|(_, used)| *used)
+                .flat_map(|(route, _)| mix_controls(channel, route as u8)).collect()
         } else {
             Vec::new()
         };

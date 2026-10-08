@@ -244,6 +244,7 @@ fn configuring_the_engine_remembers_the_settings_and_announces_the_status() {
     rig.events.take();
 
     let settings = AudioSettings {
+        output_channels: None,
         host: None,
         device: None,
         sample_rate: Some(44_100),
@@ -570,6 +571,7 @@ fn the_audio_request_is_remembered_as_the_user_made_it() {
         name: "Test".to_owned(),
         is_default: true,
         devices: vec![windfall_ipc::AudioDevice {
+            output_channels: Vec::new(),
             name: "Speakers".to_owned(),
             is_default: true,
             sample_rates: vec![44_100, 48_000],
@@ -587,6 +589,7 @@ fn the_audio_request_is_remembered_as_the_user_made_it() {
     // A rate and a buffer size the device cannot do: it opens with its
     // own, and the request stays as it was made.
     let request = AudioSettings {
+        output_channels: None,
         host: None,
         device: None,
         sample_rate: Some(8_000),

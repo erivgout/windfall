@@ -14,6 +14,7 @@ import type {
   Note,
   PatternId,
   TimeSignature,
+  Timeline,
 } from "@/bindings"
 import { noteName, type PianoKeyboardHandle } from "@/components/audio"
 import { ContextActions } from "@/components/context-actions"
@@ -33,13 +34,16 @@ import { useProjectStore } from "@/lib/store/project"
 import { usePlayhead } from "@/lib/store/realtime"
 import { useChannel, useLane, usePattern } from "@/lib/store/selectors"
 import { useTransportStore } from "@/lib/store/transport"
-import { ticksPerBar, ticksPerBeat } from "@/lib/time"
-import { colorToCss, TICKS_PER_STEP } from "@/lib/units"
+import { ticksPerBar } from "@/lib/time"
+import { meterSegments, musicalPosition } from "@/lib/timeline"
+import { colorToCss, MAX_PATTERN_STEPS, TICKS_PER_STEP } from "@/lib/units"
 
 import { SessionContext } from "./context"
 import { noteEnd } from "./edit-math"
-import { createSession, currentSignature, readContext } from "./create-session"
-import { buildGhostBatch } from "./ghosts"
+import { createSession, readContext } from "./create-session"
+import { closePatternTimeline } from "./pattern-timeline"
+import { useSampleInfo } from "@/features/channel-rack/inspector/sample-info"
+import { buildPianoUnderlay, helperDurationTicks, useWaveformHelper } from "./waveform-helper"
 import { attachGridInput } from "./grid-input"
 import { showHint } from "./hint"
 import { hintFor } from "./intents"
@@ -48,6 +52,9 @@ import { KeyLights } from "./key-lights"
 import { LaneHeader, LaneResizer } from "./lane-header"
 import { NOTE_MENU, PANEL_MENU } from "./menu"
 import { NoteToolsDialog } from "./note-tools-dialog"
+import { closeNoteLfo } from "@/features/automation/lfo-dialog"
+import { closeNoteProperties, NotePropertiesDialog } from "./note-properties"
+import { closeNoteCurves, NoteCurvesDialog } from "./note-curves"
 import { closeNoteTools } from "./note-tools"
 import {
   duplicateOutlinePainter,
@@ -75,19 +82,15 @@ import {
 } from "./view-math"
 
 const GUTTER_WIDTH = 68
-const RULER_HEIGHT = 22
+const RULER_HEIGHT = 38
 const SCROLLBAR_SIZE = 11
 const EMPTY_NOTES: readonly Note[] = []
 const NO_LANES: readonly Lane[] = []
 
 /** `3.2.120`: bar and beat from 1, then ticks into the beat. */
-function formatPosition(tick: number, signature: TimeSignature): string {
-  const whole = Math.max(0, Math.round(tick))
-  const bar = ticksPerBar(signature)
-  const beat = ticksPerBeat(signature)
-  const inBar = whole % bar
-  const rest = String(inBar % beat).padStart(3, "0")
-  return `${Math.floor(whole / bar) + 1}.${Math.floor(inBar / beat) + 1}.${rest}`
+function formatPosition(tick: number, signature: TimeSignature, timeline?: Timeline): string {
+  const position = musicalPosition(Math.round(tick), signature, timeline?.meters)
+  return `${position.bar}.${position.beat}.${String(position.tick).padStart(3, "0")}`
 }
 
 type WorkspaceProps = {
@@ -105,14 +108,22 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   const pattern = usePattern(patternId)
   const lane = useLane(patternId, channelId)
   const channel = useChannel(channelId)
-  const signature = useProjectStore(
+  const inheritedSignature = useProjectStore(
     (state) => state.project.settings.timeSignature
   )
+  const signature = pattern?.timeSignature ?? inheritedSignature
+  const timeline = pattern?.timeline
+  const noteCurves = pattern?.noteCurves
   const snapId = usePianoRollStore((state) => state.snap)
   const scaleRoot = usePianoRollStore((state) => state.scaleRoot)
   const scaleId = usePianoRollStore((state) => state.scaleId)
   const highlightScale = usePianoRollStore((state) => state.highlightScale)
   const ghosts = usePianoRollStore((state) => state.ghosts)
+  const helper = useWaveformHelper()
+  const helperAsset = useProjectStore((state) => state.project.samples.find((sample) => sample.id === helper.sample))
+  const helperState = useSampleInfo(helper.visible || helper.open ? helperAsset : undefined)
+  const helperInfo = helperState?.status === "ready" ? helperState.info : null
+  const tempo = useProjectStore((state) => state.project.settings.tempoBpm)
   const laneKind = usePianoRollStore((state) => state.laneKind)
   const laneHeight = usePianoRollStore((state) => state.laneHeight)
   const ghostLanes = useProjectStore(
@@ -152,7 +163,9 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
       ),
     [lane]
   )
-  const scrollable = contentTicks(lengthSteps, lastEnd, ticksPerBar(signature))
+  const helperEnd = helper.visible && helperInfo
+    ? Math.min(MAX_PATTERN_STEPS * TICKS_PER_STEP, Math.max(0, helper.start + helperDurationTicks(helper, helperInfo, tempo, lengthSteps * TICKS_PER_STEP))) : 0
+  const scrollable = contentTicks(lengthSteps, Math.max(lastEnd, helperEnd), ticksPerBar(signature))
 
   const [options] = useState<TimeGridViewOptions>(() => ({
     renderer: "auto",
@@ -178,13 +191,17 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
     session.editor.setContext(readContext(patternId, channelId))
     session.notifyView()
     session.view?.invalidate("overlay")
-  }, [session, patternId, channelId, lane, lengthSteps, signature])
+  }, [session, patternId, channelId, lane, lengthSteps, signature, timeline, noteCurves])
 
   useEffect(() => {
     setCurrentSession(session)
     return () => {
       setCurrentSession(null)
       closeNoteTools()
+      closeNoteProperties()
+      closeNoteCurves()
+      closeNoteLfo()
+      closePatternTimeline()
       showHint(null)
       session.editor.dispose()
       session.dispose()
@@ -242,17 +259,14 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   // The finest grid lines follow the snap for as long as the zoom shows them.
   useEffect(() => {
     if (!view) return
-    const apply = () =>
-      view.setTimeGrid(
-        gridSpecFor(
-          snapTicks(snapId, signature),
-          view.viewport.pxPerTick,
-          signature
-        )
-      )
+    const apply = () => {
+      const px = view.viewport.pxPerTick
+      const base = gridSpecFor(snapTicks(snapId, signature), px, signature)
+      view.setTimeGrid({ ...base, segments: timeline?.meters.length ? meterSegments(signature, timeline.meters).map((segment) => ({ ...gridSpecFor(snapTicks(snapId, segment.signature), px, segment.signature), start: segment.start, end: segment.end })) : undefined })
+    }
     apply()
     return view.onViewportChange(apply)
-  }, [view, snapId, signature])
+  }, [view, snapId, signature, timeline])
 
   useEffect(() => {
     if (!view) return
@@ -265,10 +279,10 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   useEffect(() => {
     if (!view) return
     const apply = () =>
-      view.setUnderlay(buildGhostBatch(ghostLanes, view.theme))
+      view.setUnderlay(buildPianoUnderlay(ghostLanes, view.theme, helper, helperInfo, tempo, lengthSteps * TICKS_PER_STEP))
     apply()
     return view.onThemeChange(apply)
-  }, [view, ghostLanes])
+  }, [view, ghostLanes, helper, helperInfo, tempo, lengthSteps])
 
   // What is under the pointer and what is selected, shown around the grid.
   useEffect(() => {
@@ -283,7 +297,8 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
         // The last position stays up when the pointer leaves the grid.
         const readout = readoutRef.current
         if (readout && hover) {
-          readout.textContent = `${formatPosition(hover.tick, currentSignature())}  ${noteName(hover.key)}`
+          const pattern = editor.context?.pattern
+          if (pattern) readout.textContent = `${formatPosition(hover.tick, pattern.signature, pattern.timeline)}  ${noteName(hover.key)}`
         }
         return
       }
@@ -351,6 +366,8 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   return (
     <SessionContext value={session}>
       <NoteToolsDialog />
+      <NotePropertiesDialog />
+      <NoteCurvesDialog />
       <ContextActions items={PANEL_MENU}>
         <div
           className="flex h-full min-h-0 min-w-0 flex-col bg-background"

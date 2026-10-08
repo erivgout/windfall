@@ -14,13 +14,13 @@ As of 2026-10-08. Sources:
 
 ## Summary
 
-**90 of 342 rows accounted for (26.3%).** A row is accounted for when it is done or won't do.
+**93 of 342 rows accounted for (27.2%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 211 |
+| Todo | 208 |
 | In progress | 41 |
-| Done | 88 |
+| Done | 91 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
@@ -28,7 +28,7 @@ As of 2026-10-08. Sources:
 | Core features | 23 | 12 | 8 | 2 | 1 |
 | Main windows | 113 | 47 | 13 | 52 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 62 | 5 | 13 | 0 |
+| Effects | 80 | 59 | 5 | 16 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
@@ -41,7 +41,7 @@ As of 2026-10-08. Sources:
 | 2. Write a song | 99 | 40 | 18 | 41 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
-| 5. The long tail | 129 | 116 | 2 | 11 | 0 |
+| 5. The long tail | 129 | 113 | 2 | 14 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -266,7 +266,7 @@ As of 2026-10-08. Sources:
 | Frequency Splitter | TBD | 5 | todo |  |
 | Fruity Balance | Balance | 5 | done | Integrated chain-position gain/balance processor, generic controls, checked persistence/history and automation. Signal/RT, PDC and live/offline/stem tests pass; utility R7 and root composition are accepted. See docs/UTILITY-EFFECTS.md, docs/UTILITY-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Blood Overdrive | TBD | 5 | todo |  |
-| Fruity Chorus | TBD | 5 | todo |  |
+| Fruity Chorus | Chorus | 5 | done | Original three-voice stereo modulated delay with independent rates, depth, base delay, stereo phase and mix. All controls persist, undo and automate through the generic editor; real engine live/offline/both stem modes and callback allocation guards pass. Independently reviewed, including the shared frame-clock contract; combined parent WASM/UI tests pass. See docs/MODULATION-EFFECTS.md. This is the basic chorus row; specialist chorus variants remain separate. |
 | Fruity Compressor | Compressor | 2 | done | Phase-2 core compressor per the plan. |
 | Fruity Convolver | TBD | 5 | todo | Impulse responses shipped with FL are Image-Line content; needs own. |
 | Fruity Delay 2 | TBD | 5 | todo |  |
@@ -274,7 +274,7 @@ As of 2026-10-08. Sources:
 | Fruity Delay Bank | Echo bank | 5 | in-progress | A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet. |
 | Fruity Fast Dist | Drive distortion | 5 | done | Distinct drive/shape/output distortion processor with measured oversampled alias reduction and CPU throughput. Controls, persistence/history, automation, reported 32-frame PDC, callback guards and live/offline/stem parity pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Filter | TBD | 5 | todo |  |
-| Fruity Flanger | TBD | 5 | todo |  |
+| Fruity Flanger | Flanger | 5 | done | Original short modulated stereo delay with signed feedback/polarity, stereo phase and mix. Independent impulse/comb references, automation, reset/partition and tail tests cover the real DSP. All controls persist and undo; combined live/offline/both stem and actual shared-WASM generic UI checks pass with zero callback allocation. See docs/MODULATION-EFFECTS.md. Through-zero and specialist flanging remain separate. |
 | Fruity Flangus | TBD | 5 | todo |  |
 | Fruity Formula Controller | TBD | 5 | todo |  |
 | Fruity HTML NoteBook | TBD | 5 | todo |  |
@@ -287,7 +287,7 @@ As of 2026-10-08. Sources:
 | Fruity PanOMatic | TBD | 5 | todo |  |
 | Fruity Parametric EQ | TBD | 5 | todo |  |
 | Fruity Parametric EQ2 | Parametric EQ | 2 | in-progress | Seven-band EQ processing and interactive filter-response editing are implemented. The displayed response is calculated from parameters; a live audio spectrum is still pending. See roadmap T8. |
-| Fruity Phaser | TBD | 5 | todo |  |
+| Fruity Phaser | Phaser | 5 | done | Original stereo allpass cascade sweeps notches with frequency endpoints, rate, signed feedback, stereo phase and mix. Independent allpass/feedback references, frame-clock automation and retained-history tail reentry pass; the reviewed reentry discontinuity is fixed without relaxing its bound. Persistence/history, actual generic UI/shared-WASM and live/offline/both stem modes pass. See docs/MODULATION-EFFECTS.md. |
 | Fruity Reeverb 2 | Reverb | 2 | done | Phase-2 core reverb per the plan. |
 | Fruity Scratcher | TBD | 5 | todo |  |
 | Fruity Send | TBD | 5 | todo |  |

@@ -1390,3 +1390,110 @@ LOCAL, and subsequent pushes preserve disabled CI and use `[skip ci]`.
 Full P1 Session readiness/retirement, production N4 activation, ordinary-global
 Windows namespace authority, macOS native loader execution, hardware/editor/
 installer and remaining roadmap gates stay open.
+
+## Modulation delivery and numerical correction
+
+Fixed feature source `b2fef7d1d16d25920ff8945726bc5c1b9f79ec9e` is composed at
+`ce702032`; the three-path correction `0d3fe02b6bf088e34a65d6a7cfef808cbb78c21a`
+is composed at `b271bc43`. Parent composition preserves Lo-fi at discriminant
+15 and appends Chorus, Flanger and Phaser at 16, 17 and 18. Existing persisted
+control orders and the original effect order remain intact.
+
+The independent Standards R1 reported no actionable findings. Spec R1 found a
+Phaser tail re-entry discontinuity: resumed input reset the wet-history gain
+immediately while the existing 10 ms controls were still ramping. The declared
+48 kHz, 20 Hz, zero-rate, 0.85-feedback reproduction jumped `0.0032153316`.
+The correction ramps recovery from the current wet gain on each channel's
+frame clock. Its compiled owner result was `0.0000070671`, with the original
+`1e-4` bound retained. Spec R2 against immutable `0d3fe02b` reported no remaining
+actionable findings. Review inspected source and tests; it did not claim a
+physical listening or device deadline test.
+
+## Monophonic pitch foundation
+
+The numerical foundation `60327573326a27ebdf000588e0ff0a7239ec30c0` and correction
+`c79fb9ed2a6b960d06ccc32c6008542a809463ba` are composed at `280f0b0e` and `07a57a49`.
+The only lock change is the existing pinned RustFFT dependency reference in
+windfall-analysis; no dependency version changes.
+
+Standards R1 found no hard issue. Spec R1 found that thresholding sampled CMND
+before interpolation could select an octave error for an 8 kHz, fractional
+8.5-sample-period fundamental with a stronger second harmonic. The repair
+selects interpolated CMND trough depth before period interpolation. Spec R2
+against immutable `c79fb9ed` reported no actionable findings. Bounds, work and
+memory admission, exact endpoint policy, and the explicitly stricter threshold
+policy remain documented in [PITCH-ANALYSIS.md](../PITCH-ANALYSIS.md).
+This is a numerical analysis foundation, not the completed pitch editor,
+correction/harmony effect or production analysis-app registration.
+
+## Capture acknowledgement follow-up remains open
+
+The private contract/Manager increments `e075bb4d` and `11267d6` are composed
+at `6d774375` and `3c518d4f`, without importing production 19f routing. Their independent Standards review found no actionable
+issue. Spec identified P2 error loss: writing a pending acknowledgement warning
+into stored manager status overwrites a scanner failure, and terminal
+acknowledgement then clears it. The required follow-up keeps the warning as a
+separate latch over returned snapshots and proves the schedule pending ack,
+scanner failure, then terminal ack retains the scanner error. The compact
+16-byte token/captured-serial ticket and no-recapture contract remain unchanged.
+This finding is not waived by the existing bookkeeping tests.
+
+During this integration turn T3 messaging returned `parent_not_active`; the
+attempted implementation-owner follow-up was not delivered. Local source work
+and verification continue; no duplicate owner or review was started to mask
+that orchestration failure.
+
+
+## Parent modulation, pitch and acknowledgement execution
+
+Parent native checks passed 135 DSP library cases, 26 delay-family cases,
+166 DSP integration cases,13 filter-family cases,six filter registry cases and
+21 lo-fi cases. Eight optional measurement cases remain ignored. The initial
+all-target DSP invocation found one stale append-only assertion: Lo-fi was
+expected to be the last effect. The assertion now checks its unchanged index 15;
+its discriminant/tag/control/allocator assertions remain intact. The lo-fi file
+then passed all 21 cases. This is the recorded broad run plus focused correction,
+not a second full DSP run after the assertion migration.
+
+Project checks passed four modulation and four lo-fi cases. Real engine checks
+passed all five modulation cases (including every automated control and
+live/offline/both stem identity) and all eight realtime cases across 19 kinds.
+The pitch foundation passed 17 cases; its separate 30-minute resource measurement
+remains explicitly ignored in this parent run. Four-package all-target strict
+Clippy (DSP/project/engine/analysis) passed.
+
+Parent-generated artifacts contain 189 files. The actual 2,021,700-byte simulator
+has SHA-256 `2667c6cb1dbf9310f435e161c141ce9f4eb47815f47db2a3792f4fff7f8d6784`
+and source inputs `86de19c9c76384ca420bfd252bbaa9b5982505751a538d0b2aac6c1613d81850`.
+Freshness passes. All 344 focused actual shared-WASM tests in 15 files pass,
+covering effects, descriptors/access/format, mixer effect operations and
+all 187 automation ranges. TypeScript and full desktop ESLint pass. No child
+artifacts were imported and no GitHub Actions job was triggered.
+
+The acknowledgement Spec P2 was reproduced through the real PluginManager
+status publication and returned snapshot: after pending delivery, another
+producer writes `Scanner executable failed`; terminal acknowledgement lost
+that error (`None`). The compiled regression failed at this exact comparison,
+not at setup or compilation. The fix reserves stored status for underlying
+errors and overlays the separate acknowledgement latch only on state()'s clone.
+Worker publication is encapsulated so the regression runs its actual path.
+All 15 acknowledgement cases pass, including all four explicitly invoked native
+fixture units; no ignored case is counted as a pass. Desktop lib/tests strict
+Clippy and workspace formatting pass. Compact tickets, retry timing, accepted
+restart, old-serial protection and native control/proof semantics are unchanged.
+The five existing recording/capture cases pass (206.69s including historical
+fixture setup), and five existing runtime-repair cases pass (1.62s). Those suites
+execute the actual rebuilt native test binary directly, allowing their
+historical fixture builder to be the only Cargo process.
+
+Logs remain outside source at `C:/Temp/windfall-root-modulation-native.log`,
+`windfall-root-modulation-ui.log`, and `windfall-root-capture-ack-{red,green}.log`.
+The native feature log SHA-256 is
+`5a2988e81056f645b19fa725f8dff755a4837f47aed693aaa3607b054fcd1ce5`;
+the UI log is `3afaefcc758a1e95ca06c81c57de2a04945c21e22064a907e02f5f70d6900f0f`.
+The acknowledgement RED log is
+`82cc096e85c092d7f6a5818d17e6ebf77a471f9bb358f9281e1ddf2d152b434c`;
+GREEN is `2ae027f8c8170b9a0eab7bd6545990596b6eaebc278018c022d1af342482481f`.
+The new parent warning repair awaits the next available independent review;
+T3's current parent-not-active error prevents starting or steering that round.
+P1's whole ready-publication contract and production N4 activation remain open.

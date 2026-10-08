@@ -21,6 +21,7 @@ import { showHint } from "./hint"
 import { BarColumns } from "./lane-bars"
 import {
   baselineY,
+  LANE_KINDS,
   laneUpdates,
   laneValue,
   nearestBar,
@@ -54,12 +55,20 @@ const GUIDES: Record<LaneKind, { value: number; strong: boolean }[]> = {
     { value: 0, strong: true },
     { value: -1, strong: false },
   ],
+  release: [{ value: 1, strong: false }, { value: 0.5, strong: true }, { value: 0, strong: false }],
+  finePitchCents: [{ value: 1200, strong: false }, { value: 0, strong: true }, { value: -1200, strong: false }],
+  modulationX: [{ value: 1, strong: false }, { value: 0.5, strong: true }, { value: 0, strong: false }],
+  modulationY: [{ value: 1, strong: false }, { value: 0.5, strong: true }, { value: 0, strong: false }],
 }
 
 const HINTS: Record<LaneKind, string> = {
   velocity:
     "Drag to set velocity; drag across bars to paint them. With notes selected only they change, and dragging one of them scales them together",
   pan: "Drag to set note pan; drag across bars to paint them. With notes selected only they change, and dragging one of them shifts them together",
+  release: "Paint each note's release amount. The midpoint preserves the instrument's release time; lower values shorten it and higher values lengthen it",
+  finePitchCents: "Paint fine pitch in cents around the note's MIDI key. Selected notes keep their pitch differences when shifted together",
+  modulationX: "Paint per-note modulation X, which offsets cutoff in the built-in voices. The midpoint applies no offset",
+  modulationY: "Paint per-note modulation Y, which offsets resonance in the built-in voices. The midpoint applies no offset",
 }
 
 type Stroke = {
@@ -360,7 +369,7 @@ export function ValueLane({ kind, color }: ValueLaneProps) {
       .update(
         editor.notes,
         updates,
-        current.kind === "velocity" ? "Change velocity" : "Change note pan"
+        `Change note ${LANE_KINDS.find((item) => item.id === current.kind)?.label.toLowerCase() ?? current.kind}`
       )
       .finally(clear)
   }
@@ -373,7 +382,7 @@ export function ValueLane({ kind, color }: ValueLaneProps) {
   return (
     <canvas
       ref={canvasRef}
-      aria-label={kind === "velocity" ? "Note velocities" : "Note pans"}
+      aria-label={`Note ${LANE_KINDS.find((item) => item.id === kind)?.label.toLowerCase() ?? kind} values`}
       className="block h-full w-full cursor-crosshair touch-none"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

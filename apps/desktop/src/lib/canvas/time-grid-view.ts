@@ -309,7 +309,8 @@ export class TimeGridView {
     if (
       spec.ticksPerStep === current.ticksPerStep &&
       spec.stepsPerBeat === current.stepsPerBeat &&
-      spec.beatsPerBar === current.beatsPerBar
+      spec.beatsPerBar === current.beatsPerBar &&
+      spec.segments === current.segments
     ) {
       return
     }

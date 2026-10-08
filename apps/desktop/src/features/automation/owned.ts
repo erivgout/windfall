@@ -23,6 +23,7 @@ export type Owner =
   | { type: "track"; track: TrackId }
   | { type: "effect"; effect: EffectId }
   | { type: "send"; track: TrackId; target: TrackId }
+  | { type: "sidechain"; track: TrackId; target: TrackId }
 
 export type Owned = {
   /** The automations that are deleted with the owner. */
@@ -49,6 +50,8 @@ function belongsTo(
         (target.type === "effectParam" || target.type === "effectMix") &&
         target.effect === owner.effect
       )
+    case "sidechain":
+      return target.type === "sidechainGain" && target.track === owner.track && target.target === owner.target
     case "send":
       return (
         target.type === "sendGain" &&
@@ -59,9 +62,11 @@ function belongsTo(
       switch (target.type) {
         case "trackVolume":
         case "trackPan":
+        case "trackParam":
           return target.track === owner.track
         // A send goes when either end of it does.
         case "sendGain":
+        case "sidechainGain":
           return target.track === owner.track || target.target === owner.track
         // An effect is the track's for as long as it sits in its chain,
         // wherever the automation was made.

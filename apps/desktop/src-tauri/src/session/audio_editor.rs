@@ -242,7 +242,7 @@ impl Session {
                 clips: vec![clip.id],
             });
         }
-        let ClipContent::Audio { mixer_track, .. } = clip.content else {
+        let ClipContent::Audio { mixer_track, output, .. } = clip.content else {
             unreachable!()
         };
         commands.push(Command::AddClips {
@@ -255,6 +255,7 @@ impl Session {
                 content: ClipContent::Audio {
                     sample,
                     mixer_track,
+                    output,
                     gain: 1.0,
                     pan: 0.0,
                     fade_in: 0,

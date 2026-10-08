@@ -44,6 +44,11 @@ pub struct Processor {
     clips: ClipPlayer,
     mixer: Mixer,
     triggers: Triggers,
+    metronome: crate::metronome::Metronome,
+    count_in: Option<crate::metronome::CountIn>,
+    input_monitors: Box<[Box<crate::recording_monitor::MonitorReader>]>,
+    disk_taps: Box<[crate::recording_disk::DiskWriter]>,
+    hardware_output: Option<crate::hardware_output::HardwareOutput>,
     /// Gain applied after the master track and its meter.
     output_gain: Ramp,
     fades: Fades,
@@ -106,6 +111,11 @@ impl Processor {
             clips: ClipPlayer::new(sample_rate),
             mixer: Mixer::new(),
             triggers: Triggers::new(),
+            metronome: crate::metronome::Metronome::new(),
+            count_in: None,
+            input_monitors: Vec::new().into_boxed_slice(),
+            disk_taps: Vec::new().into_boxed_slice(),
+            hardware_output: None,
             output_gain: Ramp::at_rest(output_gain),
             fades: Fades::at(sample_rate),
             transport_sequence: 0,
@@ -125,6 +135,15 @@ impl Processor {
         self.sample_rate
     }
 
+    pub(crate) fn output_frame(&self) -> u64 { self.frame }
+    /// Configure off the callback, before the device starts processing.
+    pub(crate) fn set_output_channels(&mut self, channels: usize) {
+        self.hardware_output = Some(crate::hardware_output::HardwareOutput::new(channels));
+    }
+    pub(crate) fn hardware_samples(&self) -> &[f32] {
+        self.hardware_output.as_ref().map_or(&[], |output| output.samples())
+    }
+
     /// Fills `out`, interleaved stereo, with the next `out.len() / 2` frames.
     ///
     /// Requests from the controller take effect at the start of the call.
@@ -135,6 +154,7 @@ impl Processor {
         self.voices.sweep(&self.plan, &mut self.garbage);
         self.clips.sweep(&self.plan, &mut self.garbage);
         self.handle_messages();
+        if let Some(output) = &mut self.hardware_output { output.rewind(); }
         if let Some(taps) = &mut self.taps {
             taps.rewind();
         }
@@ -143,8 +163,10 @@ impl Processor {
         let mut rest = frames;
         let mut navigation_left = crate::timeline::MAX_NAVIGATION_TRANSITIONS;
         while !rest.is_empty() {
+            self.finish_count_in();
             self.apply_navigation(&mut navigation_left);
             let most = self.next_block(rest.len());
+            let most = self.count_in.as_ref().map_or(most, |count| most.min(count.end().saturating_sub(self.frame).max(1) as usize));
             let next = self.navigation_boundary().map_or(most, |(frame, _, _)| {
                 most.min(frame.saturating_sub(self.frame).max(1) as usize)
             });
@@ -152,10 +174,11 @@ impl Processor {
             self.process_block(block);
             rest = later;
         }
+        self.finish_count_in();
         self.apply_navigation(&mut navigation_left);
         self.publish_automation();
         self.shared
-            .publish_transport(self.transport_sequence, self.sequencer.playing());
+            .publish_transport(self.transport_sequence, self.sequencer.playing() || self.count_in.is_some());
         // The playhead is where the sound now leaving the engine was in the
         // song, which is behind what is being worked out by the latency of
         // the instruments and effects.
@@ -338,6 +361,7 @@ impl Processor {
         // at the stored values.
         let lets_go = match &message {
             Message::Play { .. }
+            | Message::CountIn { .. }
             | Message::Stop { .. }
             | Message::Seek(_)
             | Message::NoteOn { .. }
@@ -351,23 +375,48 @@ impl Processor {
             | Message::NoteOff { .. }
             | Message::HardwareNote { .. }
             | Message::StopPreview
+            | Message::SetInputMonitors(_)
+            | Message::SetDiskTaps(_)
             | Message::SetOutputGain(_) => false,
         };
         if lets_go {
             self.hold = None;
         }
         match message {
+            Message::CountIn { sequence, bars, capture } => {
+                self.sequencer.set_recording(capture.is_some());
+                self.transport_sequence = sequence;
+                self.hold_for_good = false;
+                self.sequencer.stop();
+                self.end_sequenced();
+                let tick = self.sequencer.tick(&self.plan, now);
+                let song = self.sequencer.mode() == windfall_ipc::PlayMode::Song;
+                let (signature, meters) = if song { (self.plan.signature, &self.plan.meters) }
+                    else { self.sequencer.pattern(&self.plan).map_or((self.plan.signature, &self.plan.meters), |pattern| (pattern.signature, &pattern.meters)) };
+                let signature = meters.as_ref().ok().and_then(|meters| meters.iter().rev().find(|segment| f64::from(segment.start_tick()) <= tick)).map_or(signature, |segment| segment.signature());
+                let tempo = if song { self.plan.tempo_map.as_ref().map_or(self.plan.tempo_bpm, |map| map.tempo_at(tick)) } else { self.plan.tempo_bpm };
+                let beats = u32::from(signature.numerator) * u32::from(bars);
+                let frames_per_beat = f64::from(self.sample_rate) * 60.0 * 4.0 / (tempo * f64::from(signature.denominator));
+                let count = crate::metronome::CountIn { start: now, frames_per_beat, beats, beats_per_bar: u32::from(signature.numerator), emitted: 0 };
+                if let Some(ticket) = capture { self.shared.recording_clock.schedule(ticket, count.end().saturating_add(self.state.latency as u64)); }
+                self.count_in = Some(count);
+                self.shared.count_in_remaining.store(beats, Ordering::Release);
+            }
             Message::SetPlan { plan, state } => self.adopt(plan, state),
             Message::Play {
                 sequence,
                 passes,
                 from,
             } => {
+                self.sequencer.set_recording(false);
                 self.transport_sequence = sequence;
+                self.cancel_count_in();
                 self.hold_for_good = passes.is_some();
                 self.sequencer.play(&self.plan, now, passes, from);
             }
             Message::Stop { sequence } => {
+                self.sequencer.set_recording(false);
+                self.cancel_count_in();
                 self.transport_sequence = sequence;
                 self.sequencer.stop();
                 self.clips.release_all();
@@ -379,6 +428,7 @@ impl Processor {
                 }
             }
             Message::Seek(tick) => {
+                self.cancel_count_in();
                 self.ignored_pause = None;
                 if self.sequencer.seek(tick, &self.plan, now) {
                     self.end_sequenced();
@@ -396,7 +446,10 @@ impl Processor {
                 mode,
                 pattern,
                 loop_song,
+                metronome,
             } => {
+                self.metronome.configure(metronome);
+                self.sequencer.set_metronome(metronome.enabled);
                 if self
                     .sequencer
                     .set_transport(mode, pattern, loop_song, &self.plan, now)
@@ -412,11 +465,13 @@ impl Processor {
                 if let Some(channel) = self.plan.channel(channel) {
                     let note = Note {
                         channel,
+                        source: None,
                         key,
                         velocity,
                         pan: 0.0,
                         end: f64::INFINITY,
                         origin: Origin::Live,
+                        expression: Default::default(),
                     };
                     self.start(note, now);
                 }
@@ -449,11 +504,13 @@ impl Processor {
                         self.start(
                             Note {
                                 channel,
+                                source: None,
                                 key,
                                 velocity: f32::from(velocity) / 127.0,
                                 pan: 0.0,
                                 end: f64::INFINITY,
                                 origin: Origin::Hardware,
+                                expression: Default::default(),
                             },
                             now,
                         );
@@ -463,6 +520,13 @@ impl Processor {
             Message::Preview(sample) => self.preview(sample),
             Message::StopPreview => self.voices.fade_origin(Origin::Preview),
             Message::SetOutputGain(gain) => self.set_output_gain(gain),
+            Message::SetInputMonitors(monitors) => {
+                let old = std::mem::replace(&mut self.input_monitors, monitors);
+                retire(&mut self.garbage, Garbage::InputMonitors(old));
+            },
+            Message::SetDiskTaps(taps) => {
+                let old = std::mem::replace(&mut self.disk_taps, taps); retire(&mut self.garbage, Garbage::DiskTaps(old));
+            },
         }
         // Whatever moved the playhead moved the clock under the notes that
         // are still sounding.
@@ -509,7 +573,7 @@ impl Processor {
                 },
             )
         });
-        if self.sequencer.navigation_enabled() {
+        if self.sequencer.navigation_enabled() && self.shared.recording_clock.active_ticket().is_none() {
             for point in &self.plan.navigation {
                 if self.ignored_pause == Some(point.tick)
                     || (point.looping && (region.is_some() || !self.sequencer.song_looping()))
@@ -563,8 +627,9 @@ impl Processor {
                         .sequencer
                         .region()
                         .map_or(destination, |r| destination.min(r.end));
-                    self.sequencer
-                        .seek(f64::from(destination), &self.plan, self.frame);
+                    let recording_wrap = self.sequencer.region().is_some_and(|r| tick == r.end && destination == r.start)
+                        && self.sequencer.wrap_recording_region(&self.plan);
+                    if !recording_wrap { self.sequencer.seek(f64::from(destination), &self.plan, self.frame); }
                     let shift = self.sequencer.take_clock_shift();
                     self.voices.shift_ends(shift);
                     for unit in self.state.instrument_units() {
@@ -602,18 +667,31 @@ impl Processor {
     }
 
     /// Starts a note on frame `now`: on its channel's instrument if it has
-    /// one, and as a sampler voice otherwise. An instrument places its own
-    /// voices, so the note's pan is not used there.
-    fn start(&mut self, note: Note, now: u64) {
+    /// one, and as a sampler voice otherwise, including per-voice expression.
+    fn start(&mut self, mut note: Note, now: u64) {
+        let clock = self.sequencer.clock();
+        let at = clock.tick_at(now);
+        if let Some(source) = note.source.filter(|source| source.active) {
+            (note.pan, note.expression) = source.controls(&self.plan, at);
+        }
+        let glide_ticks = f64::from(note.expression.glide_ticks.clamp(1, 245760));
+        let glide_end = if self.sequencer.in_song() {
+            let pass = self.sequencer.pass_start();
+            pass + self.plan.warp(self.plan.unwarp(at - pass) + glide_ticks)
+        } else { at + glide_ticks };
+        if note.expression.articulation == windfall_dsp::NoteArticulation::Slide {
+            if let Some(unit) = self.state.instrument(note.channel) {
+                unit.slide_notes(note.key, note.expression, at, note.end, note.origin);
+            } else {
+                self.voices.slide_notes(self.plan.channels[note.channel].id, note.key, note.expression, at, note.end, note.origin);
+            }
+            return;
+        }
         match self.state.instrument(note.channel) {
             Some(unit) => {
-                let live = note.origin != Origin::Sequenced;
-                unit.note_on(note.key, note.velocity, note.end, live);
-                if note.origin == Origin::Hardware {
-                    unit.mark_hardware(note.key);
-                }
+                unit.start_note_source(note.key, note.velocity, note.pan, note.expression, note.end, note.origin, at, glide_end, note.source);
             }
-            None => self.voices.start(&self.plan, &mut self.garbage, note, now),
+            None => self.voices.start(&self.plan, &mut self.garbage, note, now, clock, glide_end),
         }
     }
 
@@ -655,6 +733,7 @@ impl Processor {
             }
         }
         let old_plan = std::mem::replace(&mut self.plan, plan);
+        for unit in state.instrument_units() { unit.refresh_curve_sources(&self.plan); }
         let old_state = std::mem::replace(&mut self.state, state);
         retire(&mut self.garbage, Garbage::Plan(old_plan));
         retire(&mut self.garbage, Garbage::State(old_state));
@@ -704,23 +783,21 @@ impl Processor {
     fn process_block(&mut self, out: &mut [Frame]) {
         // Failed preparations are refused on the control side. Keep this
         // internal invariant fail-closed without manufacturing native anchors.
-        let Ok(meters) = &self.plan.meters else {
+        let in_song = self.sequencer.mode() == windfall_ipc::PlayMode::Song;
+        let (base_signature, selected_meters) = if in_song { (self.plan.signature, &self.plan.meters) }
+            else { self.sequencer.pattern(&self.plan).map_or((self.plan.signature, &self.plan.meters), |pattern| (pattern.signature, &pattern.meters)) };
+        let Ok(meters) = selected_meters else {
             out.fill([0.0; 2]);
             return;
         };
         let tick = self.sequencer.tick(&self.plan, self.frame);
-        let warped = self
+        let warped = if in_song { self
             .plan
             .tempo_map
             .as_ref()
-            .map_or(tick, |map| map.warp(tick));
-        let segment = if self.sequencer.mode() == windfall_ipc::PlayMode::Song {
-            meters[..meters.partition_point(|segment| f64::from(segment.start_tick()) <= tick)]
-                .last()
-        } else {
-            None
-        };
-        let signature = segment.map_or(self.plan.signature, |segment| segment.signature());
+            .map_or(tick, |map| map.warp(tick)) } else { tick };
+        let segment = meters[..meters.partition_point(|segment| f64::from(segment.start_tick()) <= tick)].last();
+        let signature = segment.map_or(base_signature, |segment| segment.signature());
         let transport = crate::plugins::PluginTransport {
             playing: self.sequencer.playing(),
             tempo_bpm: self.state.tempo(),
@@ -755,6 +832,10 @@ impl Processor {
         let base = self.frame;
         let end = base + frames as u64;
         self.mixer.clear(self.plan.tracks.len(), frames);
+        for monitor in &mut self.input_monitors {
+            if let Some(track) = self.plan.track_ids.get(monitor.settings.track.0) { monitor.render(&mut self.mixer.track_mut(track)[..frames]); }
+        }
+        self.metronome.clear_block();
 
         // Voices and instruments are rendered up to each note's frame
         // before the note starts, so everything a note-on does, cutting
@@ -776,20 +857,25 @@ impl Processor {
                 self.render_voices(base, rendered, offset);
                 rendered = offset;
                 match trigger.what {
+                    Fire::Click { accent } => self.metronome.trigger(accent, self.sample_rate),
                     Fire::Note {
+                        source,
                         channel,
                         key,
                         velocity,
                         pan,
                         end,
+                        expression,
                     } => {
                         let note = Note {
+                            source: Some(source),
                             channel,
                             key,
                             velocity,
                             pan,
                             end,
                             origin: Origin::Sequenced,
+                            expression,
                         };
                         self.start(note, trigger.frame);
                     }
@@ -814,16 +900,41 @@ impl Processor {
         self.render_voices(base, rendered, frames);
 
         self.mixer
-            .mix(&self.plan, &mut self.state, &self.shared, base, out);
+            .mix(&self.plan, &mut self.state, &self.shared, base, out, &mut self.disk_taps);
         if let Some(taps) = &mut self.taps {
             taps.collect(&mut self.mixer, frames);
         }
+        self.mixer.publish_waveforms(&self.plan, &self.shared, base, self.sample_rate, out);
+        self.metronome.mix(out);
         self.finish_output(base, out);
+        self.collect_hardware(base, out);
         self.frame = end;
+    }
+
+    fn collect_hardware(&mut self, base: u64, out: &[Frame]) {
+        let Some(output) = &mut self.hardware_output else { return; };
+        let first = output.position();
+        let master = self.plan.tracks[0].external_output.unwrap_or(windfall_project::ExternalOutputRoute { left: 0, right: (output.channels() > 1).then_some(1), exclusive: false });
+        for (offset, frame) in out.iter().enumerate() { output.add(master, first + offset, *frame); }
+        for (index, track) in self.plan.tracks.iter().enumerate().skip(1) {
+            let Some(route) = track.external_output else { continue; };
+            let frames = out.len();
+            output.scratch[..frames].copy_from_slice(&self.mixer.track_mut(index)[..frames]);
+            if let Some(line) = &mut self.state.external[index].line { line.process(&mut output.scratch[..frames]); }
+            for offset in 0..frames {
+                let mut frame = output.scratch[offset]; let gain = self.output_gain.at(base + offset as u64);
+                frame[0] *= gain; frame[1] *= gain;
+                output.add(route, first + offset, frame);
+            }
+        }
+        output.advance(out.len());
     }
 
     fn render_voices(&mut self, base: u64, from: usize, to: usize) {
         if from < to {
+            if let Some(count) = &mut self.count_in {
+                self.metronome.render_count_in(count, &self.shared, base, from, to, self.sample_rate);
+            } else { self.metronome.render(from, to); }
             let clock = self.sequencer.clock();
             self.voices.render(
                 &self.plan,
@@ -836,7 +947,7 @@ impl Processor {
                     frames: from..to,
                 },
             );
-            self.state.render_instruments(clock, base, from..to);
+            self.state.render_instrument_curves(&self.plan, clock, base, from..to);
             self.clips.render(
                 &self.plan,
                 clock,
@@ -847,6 +958,18 @@ impl Processor {
                     frames: from..to,
                 },
             );
+        }
+    }
+
+    fn cancel_count_in(&mut self) {
+        self.count_in = None;
+        self.shared.count_in_remaining.store(0, Ordering::Release);
+    }
+
+    fn finish_count_in(&mut self) {
+        if self.count_in.as_ref().is_some_and(|count| self.frame >= count.end()) {
+            self.cancel_count_in();
+            self.sequencer.play(&self.plan, self.frame, None, None);
         }
     }
 

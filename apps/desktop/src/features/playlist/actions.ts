@@ -10,6 +10,8 @@ import {
 import { activeMetrics, activeSession, zoomBy, zoomToFit } from "./active"
 import type { Tool } from "./intents"
 import { patchSelectedAudioClips, selectedAudioClips } from "./audio/ops"
+import { openAudioComp, openTakeGroupComp } from "./audio/comp-dialog"
+import { groupSelectedAudioTakes } from "./audio/take-group-controls"
 import {
   addTrack,
   copySelection,
@@ -320,12 +322,37 @@ const ACTIONS: Action[] = [
     },
   },
   {
+    id: "playlist.compAudio",
+    title: "Comp selected audio takes…",
+    section: SECTION,
+    keywords: "recording loop take composite ranges crossfade",
+    enabled: (state) => inPlaylist(state) && selectedAudioClips().length > 0 && selectedAudioClips().length <= 256,
+    whyDisabled: () => "Select 1–256 audio source clips",
+    run: openAudioComp,
+  },
+  {
     id: "playlist.clipInspector",
     title: "Audio clip settings",
     section: SECTION,
     keywords: "inspector gain pan pitch fade route show hide",
     checked: () => ui().inspectorOpen,
     run: () => ui().toggleInspector(),
+  },
+  {
+    id: "playlist.groupAudioTakes",
+    title: "Group selected audio takes",
+    section: SECTION,
+    keywords: "recording retained multitrack link passes",
+    enabled: (state) => inPlaylist(state) && selectedAudioClips().length > 0 && selectedAudioClips().length <= 256,
+    run: groupSelectedAudioTakes,
+  },
+  {
+    id: "playlist.compTakeGroup",
+    title: "Comp the selected recording group…",
+    section: SECTION,
+    keywords: "linked synchronized multitrack takes crossfade",
+    enabled: (state) => inPlaylist(state) && (state.document.project.playlist.takeGroups ?? []).some((group) => group.lanes.length > 0 && (group.lanes.some((lane) => lane.takes.some((take) => ui().selection.has(take.clip))) || group.comp?.some((clip) => ui().selection.has(clip)))),
+    run: () => openTakeGroupComp(),
   },
   {
     id: "playlist.tallTracks",

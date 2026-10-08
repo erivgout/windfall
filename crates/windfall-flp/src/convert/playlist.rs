@@ -331,6 +331,7 @@ impl Builder<'_> {
                                 contents.push(ClipContent::Audio {
                                     sample,
                                     mixer_track: source.mixer_track,
+                                    output: Default::default(),
                                     gain: source.gain
                                         * extra.map_or(1.0, |e| {
                                             if e.gain.is_finite() { e.gain } else { 1.0 }

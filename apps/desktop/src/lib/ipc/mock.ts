@@ -15,6 +15,7 @@ import type {
   TransportState,
 } from "@/bindings"
 
+import { DEFAULT_TRACK_PROCESSING } from "@/lib/track-processing"
 import { mixerTrackOfSample } from "@/lib/audio-clips"
 import { ticksPerBar } from "@/lib/time"
 import {
@@ -181,6 +182,7 @@ function storedSettings(settings: StoredAudioSettings): StoredAudioSettings {
     device: settings.device ?? null,
     sampleRate: settings.sampleRate ?? null,
     bufferFrames: settings.bufferFrames ?? null,
+    outputChannels: settings.outputChannels ?? null,
   }
 }
 
@@ -577,7 +579,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     // on theirs, as the shell does.
     let mixerTrack = place.mixerTrack ?? mixerTrackOfSample(project, sample)
     if (mixerTrack === undefined) {
-      if (project.mixer.tracks.length < MAX_MIXER_TRACKS) {
+      if (project.mixer.tracks.filter((track) => !track.current).length < MAX_MIXER_TRACKS) {
         commands.push({ type: "addMixerTrack", name })
         mixerTrack = allocate()
       } else {
@@ -614,6 +616,49 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    mixerWaveformTracks: (tracks, generation, revision) => ipc(() => {
+      const state = timelineState()
+      if (state.generation !== generation || state.revision !== revision) throw new Error("The project changed before waveform selection could update")
+      if (tracks.length > 128 || new Set(tracks).size !== tracks.length || tracks.some((id) => !doc.project().mixer.tracks.some((track) => track.id === id))) throw new Error("Invalid waveform track selection")
+      // The browser has no native audio callback. It publishes no waveform PCM.
+    }),
+    mixerPresetCapture: async (id, generation, revision) => {
+      const ticket = timelineState()
+      if (generation !== ticket.generation || revision !== ticket.revision) throw new Error("The project changed before preset capture")
+      const project = doc.project()
+      const track = project.mixer.tracks.find((track) => track.id === id)
+      if (!track) throw new Error("Preset source track no longer exists")
+      return structuredClone({ version: 1, name: track.name, color: track.color, volume: track.volume, pan: track.pan, muted: track.muted, processing: track.processing ?? DEFAULT_TRACK_PROCESSING, latencyOffsetMs: track.latencyOffsetMs ?? 0, effects: track.effects, plugins: (project.plugins ?? []).filter((plugin) => { const target = plugin.target; return target.type === "effect" && track.effects.some((slot) => slot.id === target.effect) }) })
+    },
+    mixerPresetSave: async (preset) => {
+      if (typeof document === "undefined") throw new Error("Preset downloads require a browser")
+      const name = `${preset.name.replace(/[<>:"/\\|?*]/g, "_") || "Mixer track"}.wfmixer`
+      const url = URL.createObjectURL(new Blob([JSON.stringify(preset, null, 2)], { type: "application/json" }))
+      const anchor = document.createElement("a"); anchor.href = url; anchor.download = name
+      document.body.append(anchor); anchor.click(); anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      return name
+    },
+    mixerPresetLoad: async () => {
+      if (typeof document === "undefined") throw new Error("Preset import requires a browser")
+      const file = await new Promise<File | null>((resolve) => {
+        const input = document.createElement("input"); input.type = "file"; input.accept = ".wfmixer,application/json"; input.hidden = true
+        const finish = (file: File | null) => { input.remove(); resolve(file) }
+        input.addEventListener("change", () => finish(input.files?.[0] ?? null), { once: true })
+        input.addEventListener("cancel", () => finish(null), { once: true })
+        document.body.append(input); input.click()
+      })
+      if (!file) return null
+      if (file.size > 256 * 1024 * 1024) throw new Error("Preset file exceeds 256 MiB")
+      const preset = JSON.parse(await file.text()) as import("@/bindings").MixerTrackPreset
+      if (preset.version !== 1 || !Array.isArray(preset.effects) || !Array.isArray(preset.plugins)) throw new Error("Invalid mixer preset")
+      return preset
+    },
+    currentMixerTarget: (track, generation, revision) => ipc(() => {
+      const state = timelineState()
+      if (generation !== state.generation || revision !== doc.snapshot(null).revision) throw new Error("Project changed before Current could follow selection.")
+      if (track !== null && !doc.project().mixer.tracks.some((item) => item.id === track && !item.current)) throw new Error("Current source no longer exists.")
+    }),
     projectSaveNewVersion: async () => {
       throw new Error("Numbered saves require the desktop app.")
     },
@@ -914,6 +959,9 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     engineStatus: () => ipc(() => currentEngine()),
     processMemory: async () => null,
     recordingInputs: async () => [],
+    inputMonitorState: async () => ({ active: false, sampleRate: 0, tracks: [], error: null }),
+    inputMonitorStop: async () => ({ active: false, sampleRate: 0, tracks: [], error: null }),
+    inputMonitorStart: async () => { throw new Error("Input monitoring requires the native desktop app.") },
     recordingState: async () => ({
       active: false,
       frames: 0,

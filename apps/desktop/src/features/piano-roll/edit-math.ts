@@ -1,13 +1,18 @@
 import type {
   Command,
+  ChannelId,
+  NoteCurveInsert,
+  NoteExpressionCurve,
   Note,
   NoteInit,
   NoteUpdate,
   PatternId,
   TimeSignature,
+  Timeline,
 } from "@/bindings"
 import { resizedSpan } from "@/lib/canvas"
 import { ticksPerBar } from "@/lib/time"
+import { meterSegments } from "@/lib/timeline"
 import { clamp, MAX_PATTERN_STEPS, TICKS_PER_STEP } from "@/lib/units"
 
 import { snapCeil, snapRound } from "./snap"
@@ -147,6 +152,7 @@ export function movedCopies(
     key: clampKey(note.key + delta.keys),
     velocity: clampVelocity(note.velocity),
     pan: clampPan(note.pan),
+    expression: note.expression ? { ...note.expression } : undefined,
   }))
 }
 
@@ -174,9 +180,10 @@ export function resizeDelta(
   edge: ResizeEdge,
   rawTicks: number,
   snap: number,
-  notes: readonly Note[]
+  notes: readonly Note[],
+  absolute?: { anchor: number; origin: number }
 ): ResizeDelta {
-  const ticks = snapRound(rawTicks, snap)
+  const ticks = absolute ? snapRound(absolute.anchor + rawTicks, snap, absolute.origin) - absolute.anchor : snapRound(rawTicks, snap)
   const minLength = resizeMinLength(snap)
   if (edge === "end") return { start: 0, end: ticks, minLength }
   const earliest = notes.reduce(
@@ -264,15 +271,30 @@ export function duplicateRight(
 export type ClipNote = Omit<Note, "id">
 
 export type ClipContents = {
+  curves?: NoteCurveInsert[]
   notes: ClipNote[]
   /** Where the group started in the pattern it was copied from. */
   origin: number
 }
 
-export function copyNotes(notes: readonly Note[]): ClipContents | null {
+export function curveInserts(notes: readonly Note[], curves: readonly NoteExpressionCurve[] = []): NoteCurveInsert[] {
+  const indices = new Map(notes.map((note, index) => [note.id, index]))
+  return curves.flatMap((curve) => {
+    const noteIndex = indices.get(curve.note)
+    return noteIndex === undefined ? [] : [{ noteIndex, parameter: curve.parameter, points: curve.points.map((point) => ({ ...point })) }]
+  })
+}
+
+export function noteInsertionCommand(target: { pattern: PatternId; channel: ChannelId }, notes: NoteInit[], curves: NoteCurveInsert[] = []): Command {
+  return curves.length ? { type: "addNotesWithCurves", ...target, notes, curves } : { type: "addNotes", ...target, notes }
+}
+
+export function copyNotes(notes: readonly Note[], sourceCurves: readonly NoteExpressionCurve[] = []): ClipContents | null {
   const extent = notesExtent(notes)
   if (!extent) return null
+  const curves = curveInserts(notes, sourceCurves)
   return {
+    ...(curves.length ? { curves } : {}),
     origin: extent.start,
     notes: notes.map((note) => ({
       start: note.start - extent.start,
@@ -280,6 +302,7 @@ export function copyNotes(notes: readonly Note[]): ClipContents | null {
       key: note.key,
       velocity: note.velocity,
       pan: note.pan,
+      expression: note.expression ? { ...note.expression } : undefined,
     })),
   }
 }
@@ -295,8 +318,26 @@ export function pasteStart(
   clip: ClipContents,
   target: PasteTarget,
   snap: number,
-  signature: TimeSignature
+  signature: TimeSignature,
+  timeline?: Timeline,
+  settingsAt?: (tick: number) => { snap: number; snapOrigin?: number }
 ): number {
+  if (timeline?.meters.length) {
+    const raw = target.at === "playhead" ? target.tick : target.leftTick
+    const segments = meterSegments(signature, timeline.meters)
+    const segment = segments.findLast((item) => item.start <= raw) ?? segments[0]
+    if (target.at === "playhead") {
+      const settings = settingsAt?.(raw)
+      return clampStart(Math.min(segment.end, snapRound(raw, settings?.snap ?? snap, settings?.snapOrigin ?? segment.start)))
+    }
+    const bar = ticksPerBar(segment.signature)
+    const first = segment.start + Math.ceil((Math.max(segment.start, raw) - segment.start) / bar) * bar
+    const destination = first >= segment.end ? segments.find((item) => item.start === segment.end) ?? segment : segment
+    const origin = segments.findLast((item) => item.start <= clip.origin) ?? segments[0]
+    const offset = (clip.origin - origin.start) % ticksPerBar(origin.signature)
+    const start = first >= segment.end ? destination.start : first
+    return clampStart(start + Math.min(offset, ticksPerBar(destination.signature) - 1))
+  }
   if (target.at === "playhead") {
     return clampStart(snapRound(target.tick, snap))
   }
@@ -312,6 +353,7 @@ export function pasteInits(clip: ClipContents, start: number): NoteInit[] {
     key: clampKey(note.key),
     velocity: clampVelocity(note.velocity),
     pan: clampPan(note.pan),
+    expression: note.expression ? { ...note.expression } : undefined,
   }))
 }
 
@@ -387,9 +429,11 @@ export function updatesFit(
 }
 
 export type PatternInfo = {
+  noteCurves?: readonly NoteExpressionCurve[]
   id: PatternId
   lengthSteps: number
   signature: TimeSignature
+  timeline?: Timeline
 }
 
 /**
@@ -402,11 +446,19 @@ export function withExtension(
   pattern: PatternInfo,
   endTick: number
 ): Command {
-  const lengthSteps = extendedLengthSteps(
+  let lengthSteps = extendedLengthSteps(
     pattern.lengthSteps,
     endTick,
     pattern.signature
   )
+  if (lengthSteps !== null && pattern.timeline?.meters.length) {
+    const segment = meterSegments(pattern.signature, pattern.timeline.meters).findLast((item) => item.start < endTick)
+    if (segment) {
+      const bar = ticksPerBar(segment.signature)
+      const end = segment.start + Math.ceil((endTick - segment.start) / bar) * bar
+      lengthSteps = clamp(Math.ceil(end / TICKS_PER_STEP), 1, MAX_PATTERN_STEPS)
+    }
+  }
   if (lengthSteps === null) return command
   return {
     type: "batch",

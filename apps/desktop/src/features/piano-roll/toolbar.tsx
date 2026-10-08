@@ -13,6 +13,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 
 import type { ChannelId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
+import { NumberField } from "@/components/audio/number-field"
 import { ContextActions } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -42,6 +43,7 @@ import { useHint } from "@/lib/store/hint"
 import { useProjectStore } from "@/lib/store/project"
 import { useUiStore } from "@/lib/store/ui"
 import { colorToCss } from "@/lib/units"
+import { isNoteArticulation, NOTE_ARTICULATIONS } from "@/lib/note-expression"
 
 import { useSession } from "./context"
 import { VIEW_MENU } from "./menu"
@@ -49,6 +51,8 @@ import { isSnapId, SNAP_OPTIONS, type SnapOption } from "./snap"
 import { usePianoRollStore } from "./store"
 import { ScaleControls } from "./scale-controls"
 import { StampMenu } from "./stamp-menu"
+import { NoteColorPicker } from "./note-color-picker"
+import { WaveformHelperControl } from "./waveform-helper"
 
 type RollButtonProps = {
   action: string
@@ -206,6 +210,46 @@ type ToolbarProps = {
   readoutRef: Ref<HTMLOutputElement>
 }
 
+function ArticulationPicker() {
+  const session = useSession()
+  const articulation = usePianoRollStore((state) => state.drawArticulation)
+  const glideTicks = usePianoRollStore((state) => state.drawGlideTicks)
+  const setArticulation = usePianoRollStore((state) => state.setDrawArticulation)
+  const setGlideTicks = usePianoRollStore((state) => state.setDrawGlideTicks)
+  return (
+    <Group label="New note articulation">
+      <Select items={NOTE_ARTICULATIONS} value={articulation} onValueChange={(next) => {
+        if (isNoteArticulation(next)) setArticulation(next)
+        session.focusGrid()
+      }}>
+        <SelectTrigger size="sm" aria-label="New note articulation" className="w-36">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false} align="start">
+          <SelectGroup>
+            {NOTE_ARTICULATIONS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      {articulation === "portamento" && <NumberField
+        size="sm" aria-label="Portamento duration" value={glideTicks}
+        onValueChange={setGlideTicks} min={1} max={245760} step={1}
+        coarseStep={60} unit="ticks" className="w-24"
+      />}
+    </Group>
+  )
+}
+
+function DrawColorPicker() {
+  const session = useSession()
+  const color = usePianoRollStore((state) => state.drawColorGroup)
+  const setColor = usePianoRollStore((state) => state.setDrawColorGroup)
+  return <NoteColorPicker compact value={color} onChange={(value) => {
+    if (value !== "keep") setColor(value)
+    session.focusGrid()
+  }} />
+}
+
 /** The strip above the grid: channel, tools, snap, view switches, readout. */
 export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
   const readoutHint = useHint(
@@ -227,13 +271,17 @@ export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
           <RollButton action="pianoRoll.toolErase" icon={Eraser01Icon} />
         </Group>
         <SnapPicker />
+        <ArticulationPicker />
+        <DrawColorPicker />
         <ScaleControls />
         <StampMenu />
+        <WaveformHelperControl />
         <ActionButton action="pianoRoll.quantize" variant="outline" size="sm">
           Note tools
         </ActionButton>
         <Group label="View">
           <RollButton action="pianoRoll.ghosts" icon={GhostIcon} />
+          <ActionButton action="pianoRoll.editGhosts" variant="ghost" size="sm">Edit ghosts</ActionButton>
           <RollButton action="pianoRoll.follow" icon={ArrowRightDoubleIcon} />
           <RollButton action="pianoRoll.zoomFit" icon={FitToScreenIcon} />
           <RollButton action="pianoRoll.zoomSelection" icon={ZoomInAreaIcon} />

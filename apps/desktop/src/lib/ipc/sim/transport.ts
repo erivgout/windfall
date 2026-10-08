@@ -9,6 +9,7 @@ import type {
 import { automatedAt, compileLanes, type Lane } from "@/lib/automation/lanes"
 import { songTempoMap } from "@/lib/automation/tempo-map"
 import { soloSet } from "@/lib/mixer-graph"
+import { playedNoteTiming } from "@/lib/note-timing"
 import { MASTER_TRACK, PPQ, TICKS_PER_STEP } from "@/lib/units"
 
 import { simulatedGainReductions } from "./effects"
@@ -24,11 +25,15 @@ const METER_CEILING = 1.4
 /** The level a simulated audio clip plays at, at unity gain. */
 const AUDIO_CLIP_LEVEL = 0.55
 
-function patternOnsets(pattern: Pattern, from: number, to: number): Onset[] {
+function patternOnsets(project: Project, pattern: Pattern, from: number, to: number): Onset[] {
   const onsets: Onset[] = []
   for (const lane of pattern.lanes) {
+    const channel = project.channels.find((channel) => channel.id === lane.channel)
+    if (!channel) continue
     for (const note of lane.notes) {
-      if (note.start >= from && note.start < to) {
+      if (note.expression?.articulation === "slide") continue
+      const timing = playedNoteTiming(channel, note, pattern.lengthSteps * TICKS_PER_STEP, project.settings.swing)
+      if (timing && timing.start >= from && timing.start < to) {
         onsets.push({ channel: lane.channel, velocity: note.velocity })
       }
     }
@@ -71,10 +76,14 @@ function songOnsets(project: Project, from: number, to: number): Onset[] {
     if (!pattern) continue
     const length = pattern.lengthSteps * TICKS_PER_STEP
     for (const lane of pattern.lanes) {
+      const channel = project.channels.find((channel) => channel.id === lane.channel)
+      if (!channel) continue
       for (const note of lane.notes) {
-        if (note.start >= length) continue
+        if (note.expression?.articulation === "slide") continue
+        const timing = playedNoteTiming(channel, note, length, project.settings.swing)
+        if (!timing) continue
         // The clip loops its pattern, so a note sounds once per pass.
-        let at = clip.start + note.start - (clip.offset % length)
+        let at = clip.start + timing.start - (clip.offset % length)
         if (at < clip.start) at += length
         for (; at < clip.start + clip.length; at += length) {
           if (at >= from && at < to) {
@@ -184,6 +193,8 @@ export class TransportSim {
       mode: patch.mode ?? this.state.mode,
       pattern: patch.pattern ?? this.state.pattern,
       loopSong: patch.loopSong ?? this.state.loopSong,
+      metronome: patch.metronome ?? this.state.metronome,
+      countInBars: patch.countInBars ?? this.state.countInBars,
     }
     // A place in a pattern means nothing on the playlist, and the other
     // way round.
@@ -367,7 +378,7 @@ export class TransportSim {
       this.state.mode === "song"
         ? songOnsets(project, low, high)
         : pattern
-          ? patternOnsets(pattern, low, high)
+          ? patternOnsets(project, pattern, low, high)
           : []
 
     if (to < length) {

@@ -68,7 +68,9 @@ mod files;
 mod flp;
 mod library;
 mod midi;
+mod mixer_presets;
 mod midi_hardware;
+mod input_monitor;
 mod realtime;
 mod recording;
 mod sampler_processing;
@@ -186,6 +188,8 @@ struct Inner {
     cache: SampleCache,
     factory_dir: PathBuf,
     recording: Mutex<Option<recording::Take>>,
+    input_monitors: Mutex<input_monitor::Monitors>,
+    input_monitor_signature: Arc<std::sync::atomic::AtomicU64>,
     exporting: AtomicBool,
     preparing_clips: AtomicBool,
     preparing_samplers: AtomicBool,
@@ -376,6 +380,8 @@ impl Session {
                 cache,
                 factory_dir,
                 recording: Mutex::new(None),
+                input_monitors: Mutex::new(input_monitor::Monitors::default()),
+                input_monitor_signature: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 exporting: AtomicBool::new(false),
                 preparing_clips: AtomicBool::new(false),
                 preparing_samplers: AtomicBool::new(false),

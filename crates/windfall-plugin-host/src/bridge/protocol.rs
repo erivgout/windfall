@@ -1,14 +1,14 @@
-//! Explicit version-four words. These offsets, not Rust object layouts, are the ABI.
+//! Explicit version-six words. These offsets, not Rust object layouts, are the ABI.
 
 use crate::{HostEvent, Transport};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 6;
 pub const DEFAULT_BLOCK: usize = 256;
 pub const MAGIC: u32 = u32::from_le_bytes(*b"WFBR");
 pub const SLOT_COUNT: usize = 4;
 pub const MAX_BLOCK: usize = 512;
 pub const ORDINARY_EVENTS: usize = 1024;
-pub const EVENT_CAPACITY: usize = ORDINARY_EVENTS + 129;
+pub const EVENT_CAPACITY: usize = ORDINARY_EVENTS + 16 * 128 + 2 * crate::MAX_NOTE_INSTANCES + 1;
 pub const PARAM_CAPACITY: usize = 4096;
 pub const HEADER_WORDS: usize = 64;
 pub const HELPER_FAILURE: usize = 26;
@@ -16,11 +16,12 @@ pub const OWNER_COMPLETIONS: usize = 27;
 pub const TIMELINE_EPOCH: usize = 28;
 pub const META_WORDS: usize = 64;
 pub const INPUT: usize = META_WORDS;
-pub const OUTPUT: usize = INPUT + MAX_BLOCK * 2;
+pub const KEY_INPUT: usize = INPUT + MAX_BLOCK * 2;
+pub const OUTPUT: usize = KEY_INPUT + MAX_BLOCK * 2;
 pub const NOTES: usize = OUTPUT + MAX_BLOCK * 2;
 pub const PARAMETERS: usize = NOTES + 128;
 pub const EVENTS: usize = PARAMETERS + PARAM_CAPACITY * 3;
-pub const EVENT_WORDS: usize = 6;
+pub const EVENT_WORDS: usize = 8;
 pub const SLOT_WORDS: usize = (EVENTS + EVENT_CAPACITY * EVENT_WORDS).next_multiple_of(16);
 pub const REGION_WORDS: usize = HEADER_WORDS + SLOT_COUNT * SLOT_WORDS;
 pub const REGION_BYTES: usize = REGION_WORDS * 4;
@@ -43,6 +44,7 @@ pub const REPLY_STATUS: usize = 43;
 pub const REPLY_EPOCH: usize = 44;
 pub const PROCESSED_GENERATION: usize = 46;
 pub const NATIVE_DROPS: usize = 52;
+pub const SIDECHAIN_PORT: usize = 53;
 pub const EMPTY: u32 = 0;
 pub const HOST_WRITE: u32 = 1;
 pub const READY: u32 = 2;
@@ -239,13 +241,22 @@ pub fn encode_event(event: HostEvent, frames: usize) -> Result<[u32; EVENT_WORDS
             words[4] = value.to_bits() as u32;
             words[5] = (value.to_bits() >> 32) as u32;
         }
+        HostEvent::NoteOnInstance { id, key, channel, velocity, .. }
+        | HostEvent::NoteOffInstance { id, key, channel, velocity, .. } => {
+            words[0] = if matches!(event, HostEvent::NoteOnInstance { .. }) { 5 } else { 6 };
+            words[2] = id; words[3] = u32::from(key); words[4] = u32::from(channel); words[5] = velocity.to_bits();
+        }
+        HostEvent::NoteExpression { id, key, channel, kind, value, .. } => {
+            words[0] = 7; words[2] = id; words[3] = u32::from(key); words[4] = u32::from(channel); words[5] = kind as u32;
+            words[6] = value.to_bits() as u32; words[7] = (value.to_bits() >> 32) as u32;
+        }
     }
     Ok(words)
 }
 
 pub fn decode_event(words: [u32; EVENT_WORDS], frames: usize) -> Result<HostEvent, ProtocolError> {
     let event = match words[0] {
-        1 | 2 if words[2] <= 127 && words[3] <= 15 && words[5] == 0 => {
+        1 | 2 if words[2] <= 127 && words[3] <= 15 && words[5..].iter().all(|word| *word == 0) => {
             let time = words[1];
             let key = words[2] as u8;
             let channel = words[3] as u8;
@@ -267,11 +278,19 @@ pub fn decode_event(words: [u32; EVENT_WORDS], frames: usize) -> Result<HostEven
             }
         }
         3 if words[2..].iter().all(|word| *word == 0) => HostEvent::AllNotesOff { time: words[1] },
-        4 if words[3] == 0 => HostEvent::Param {
+        4 if words[3] == 0 && words[6..].iter().all(|word| *word == 0) => HostEvent::Param {
             time: words[1],
             id: words[2],
             value: f64::from_bits(pair(words[4], words[5])),
         },
+        5 | 6 if words[3] <= 127 && words[4] <= 15 && words[6..].iter().all(|word| *word == 0) => {
+            let time = words[1]; let id = words[2]; let key = words[3] as u8; let channel = words[4] as u8; let velocity = f32::from_bits(words[5]);
+            if words[0] == 5 { HostEvent::NoteOnInstance { time, id, key, channel, velocity } }
+            else { HostEvent::NoteOffInstance { time, id, key, channel, velocity } }
+        }
+        7 if words[3] <= 127 && words[4] <= 15 => HostEvent::NoteExpression {
+            time: words[1], id: words[2], key: words[3] as u8, channel: words[4] as u8,
+            kind: crate::NoteExpressionKind::from_raw(words[5]).ok_or(ProtocolError::Event)?, value: f64::from_bits(pair(words[6], words[7])) },
         _ => return Err(ProtocolError::Event),
     };
     encode_event(event, frames)?;

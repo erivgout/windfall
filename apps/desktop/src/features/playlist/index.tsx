@@ -7,6 +7,8 @@ import { useTransportStore } from "@/lib/store/transport"
 
 import { setActiveMetrics } from "./active"
 import { ClipInspector } from "./audio/clip-inspector"
+import { AudioCompDialog } from "./audio/comp-dialog"
+import { TakeGroupControls } from "./audio/take-group-controls"
 import { PlaylistGrid } from "./grid"
 import { HEADER_WIDTH, RULER_HEIGHT, SCROLLBAR_SIZE } from "./layout"
 import { PANEL_MENU } from "./menu"
@@ -72,7 +74,9 @@ function Playlist() {
       >
         <PlaylistToolbar metrics={metrics} />
         <TimelineControls />
+        <TakeGroupControls />
         <ClipInspector />
+        <AudioCompDialog />
         <div className="flex min-h-0 flex-1">
           {pickerOpen && <PatternPicker />}
           <div className="grid min-h-0 min-w-0 flex-1" style={GRID_TEMPLATE}>

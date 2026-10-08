@@ -38,6 +38,44 @@ use crate::model::{
 )]
 #[ts(export)]
 pub enum Command {
+    AddNotesWithCurves { pattern: PatternId, channel: ChannelId, notes: Vec<NoteInit>, curves: Vec<crate::NoteCurveInsert> },
+    SetNoteExpressionCurves {
+        pattern: PatternId,
+        channel: ChannelId,
+        expected: Vec<crate::Note>,
+        expected_curves: Vec<crate::NoteExpressionCurve>,
+        curves: Vec<crate::NoteExpressionCurve>,
+    },
+    SetPluginSidechainInput { target: crate::PluginTarget, input: Option<u32> },
+    SetSidechain { from: TrackId, to: TrackId, #[ts(optional)] gain: Option<f32> },
+    ApplyMixerTrackPreset { id: TrackId, expected: crate::MixerTrack, preset: crate::MixerTrackPreset, name_color: bool },
+    MoveMixerTracks { expected: Vec<TrackId>, ids: Vec<TrackId>, before: Option<TrackId> },
+    SetTrackParam { id: TrackId, param: u32, value: f32 },
+    /// Creates the saved follow-selection utility, or selects its existing id.
+    EnsureCurrentMixerTrack,
+    SetTrackExternalOutput { id: TrackId, route: Option<crate::ExternalOutputRoute> },
+    CreateAudioTakeGroup { name: String, lanes: Vec<crate::AudioTakeLane> },
+    RenameAudioTakeGroup { id: u32, name: String },
+    RemoveAudioTakeGroup { id: u32 },
+    AuditionAudioTakeGroup { id: u32, pass: Option<u16> },
+    CompAudioTakeGroup {
+        expected: crate::AudioTakeGroup,
+        sources: Vec<crate::Clip>,
+        ranges: Vec<crate::TakeCompRange>,
+        name: String,
+        fade_ticks: u32,
+        mute_sources: bool,
+        replace_comp: bool,
+    },
+    /// Build editable audio ranges from captured retained takes as one undo step.
+    CompAudioClips {
+        sources: Vec<crate::Clip>,
+        segments: Vec<crate::AudioCompSegment>,
+        destination: Option<PlaylistTrackId>,
+        name: String,
+        fade_ticks: u32,
+        mute_sources: bool,
+    },
     /// Adds a meter change without moving any notes, clips or automation.
     AddMeterChange {
         tick: u32,
@@ -83,6 +121,13 @@ pub enum Command {
         state: Vec<u8>,
     },
     // Project
+    /// Captured pattern-local signature, meter changes and named labels.
+    EditPatternTimeline {
+        pattern: PatternId,
+        expected: crate::Timeline,
+        expected_signature: Option<TimeSignature>,
+        edit: crate::PatternTimelineEdit,
+    },
     UpdateSettings {
         patch: SettingsPatch,
     },
@@ -155,6 +200,23 @@ pub enum Command {
     UpdateChannel {
         id: ChannelId,
         patch: ChannelPatch,
+    },
+    /// Moves every listed channel to a named group in one undo entry.
+    /// An empty group name means ungrouped. All channel ids are checked
+    /// before any membership changes; repeated ids are ignored.
+    SetChannelGroup {
+        channels: Vec<ChannelId>,
+        group: String,
+    },
+    /// Renames a nonempty existing group; an existing target name merges
+    /// the groups without changing rack order or musical data.
+    RenameChannelGroup {
+        name: String,
+        new_name: String,
+    },
+    /// Clears this group's memberships. Channels and their music stay.
+    RemoveChannelGroup {
+        name: String,
     },
     /// Fails on an instrument channel.
     SetChannelSample {
@@ -238,6 +300,24 @@ pub enum Command {
         channel: ChannelId,
         notes: Vec<NoteInit>,
     },
+    /// Applies a reviewed step fill to [start_step, end_step). The complete
+    /// lane and pattern length must still match the preview. Replacement
+    /// changes only notes whose starts are in the range; overlay keeps all
+    /// existing notes and skips occupied onsets. Notes outside the range,
+    /// including hidden notes past the pattern end, retain their identities.
+    /// Output must have unique grid-aligned starts and one-step-or-shorter
+    /// lengths. Exact matching replacement notes retain their identities.
+    /// Everything forms one undo entry; an identical fill is a no-op.
+    FillStepRange {
+        pattern: PatternId,
+        channel: ChannelId,
+        length_steps: u32,
+        expected: Vec<crate::Note>,
+        start_step: u32,
+        end_step: u32,
+        replace: bool,
+        notes: Vec<NoteInit>,
+    },
     RemoveNotes {
         pattern: PatternId,
         channel: ChannelId,
@@ -249,6 +329,14 @@ pub enum Command {
     UpdateNotes {
         pattern: PatternId,
         channel: ChannelId,
+        updates: Vec<NoteUpdate>,
+    },
+    /// An absolute property edit against captured note identities and values.
+    /// Refuses the whole edit if any captured note changed or disappeared.
+    UpdateCapturedNotes {
+        pattern: PatternId,
+        channel: ChannelId,
+        expected: Vec<crate::Note>,
         updates: Vec<NoteUpdate>,
     },
     /// Removes every note the channel has in the pattern.
@@ -469,6 +557,15 @@ pub enum Command {
         id: AutomationId,
         points: Vec<AutomationPoint>,
     },
+    /// Write a bounded musical LFO into a captured curve range in one edit.
+    /// The complete automation must still match, including target and points.
+    GenerateAutomationLfo {
+        expected: crate::Automation,
+        start: u32,
+        end: u32,
+        resolution: u32,
+        lfo: crate::CurveLfo,
+    },
     /// Copies the automation, with its target and curve but not its clips.
     /// The copy goes right after the original. Its name is the original's
     /// with a number, as in "Tempo #2". Creates an [`AutomationId`].
@@ -507,6 +604,11 @@ pub struct SettingsPatch {
 pub struct ChannelPatch {
     #[ts(optional)]
     pub name: Option<String>,
+    #[ts(optional)]
+    /// Empty moves the channel to the ungrouped category.
+    pub group: Option<String>,
+    #[ts(optional)]
+    pub timing: Option<crate::ChannelTiming>,
     #[ts(optional)]
     pub color: Option<u32>,
     #[ts(optional)]
@@ -577,6 +679,9 @@ pub struct NoteInit {
     #[serde(default)]
     #[ts(optional)]
     pub pan: Option<f32>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub expression: Option<crate::NoteExpression>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
@@ -601,12 +706,20 @@ pub struct NotePatch {
     pub velocity: Option<f32>,
     #[ts(optional)]
     pub pan: Option<f32>,
+    #[ts(optional)]
+    pub expression: Option<crate::NoteExpression>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
 #[ts(export)]
 pub struct MixerTrackPatch {
+    #[ts(optional)]
+    pub dock: Option<crate::MixerDock>,
+    #[ts(optional)]
+    pub processing: Option<windfall_dsp::TrackParams>,
+    #[ts(optional)]
+    pub latency_offset_ms: Option<f64>,
     #[ts(optional)]
     pub name: Option<String>,
     #[ts(optional)]
@@ -619,6 +732,8 @@ pub struct MixerTrackPatch {
     pub muted: Option<bool>,
     #[ts(optional)]
     pub solo: Option<bool>,
+    #[ts(optional)]
+    pub recording: Option<crate::MixerRecording>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -705,6 +820,8 @@ pub struct AudioClipUpdate {
 pub struct AudioClipPatch {
     #[ts(optional)]
     pub mixer_track: Option<TrackId>,
+    #[ts(optional)]
+    pub output: Option<crate::ClipAudioOutput>,
     #[ts(optional)]
     pub gain: Option<f32>,
     #[ts(optional)]

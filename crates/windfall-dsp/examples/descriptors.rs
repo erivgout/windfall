@@ -8,7 +8,7 @@
 //! against the real processors.
 
 use serde_json::{Value, json};
-use windfall_dsp::{CompressorParams, EffectKind, EffectParams, EqParams, InstrumentKind};
+use windfall_dsp::{CompressorParams, EffectKind, EffectParams, EqParams, InstrumentKind, ParamSet, TrackParams};
 
 const FIXTURE_SAMPLE_RATE: f32 = 48_000.0;
 
@@ -44,6 +44,7 @@ fn main() {
     let output = json!({
         "effects": effects,
         "instruments": instruments,
+        "track": { "name": "Track EQ and stereo", "params": TrackParams::descriptors(), "defaults": TrackParams::default() },
         "fixtures": {
             "eqResponse": eq_fixture(),
             "compressorCurve": compressor_fixture(),

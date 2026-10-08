@@ -5,7 +5,12 @@ import {
   type AppState,
 } from "@/lib/actions"
 import { useUiStore } from "@/lib/store"
+import { useProjectStore } from "@/lib/store/project"
+import { openRecording, useRecordingStore } from "@/features/transport/recording-store"
 import { MASTER_TRACK, MAX_MIXER_TRACKS } from "@/lib/units"
+import { showCurrentUtility } from "./current-source"
+import { selectedMixerTracks, useMixerUi } from "./mixer-ui"
+import { openMixerRender, renderableMixerTracks } from "@/features/export/mixer-render"
 
 import { EFFECT_ACTIONS } from "./effect-actions"
 import { keepEffectOnSelectedTrack } from "./effect-ops"
@@ -24,6 +29,7 @@ import {
   toggleSolo,
   unmuteAll,
   unsoloAll,
+  patchTrack,
 } from "./operations"
 
 const SECTION = "Mixer"
@@ -53,13 +59,72 @@ function onSelected(work: (id: number) => void | Promise<void>) {
  */
 export const MIXER_ACTIONS: Action[] = [
   {
+    id: "mixer.extendNext", title: "Extend mixer selection right", section: SECTION,
+    scope: "mixer", defaultShortcut: "Shift+ArrowRight", repeats: true,
+    run: () => moveSelection(1, true),
+  },
+  {
+    id: "mixer.extendPrevious", title: "Extend mixer selection left", section: SECTION,
+    scope: "mixer", defaultShortcut: "Shift+ArrowLeft", repeats: true,
+    run: () => moveSelection(-1, true),
+  },
+  {
+    id: "mixer.currentUtility",
+    title: "Show Current mixer utility",
+    section: SECTION,
+    keywords: "selected follow utility analysis meter effects",
+    run: showCurrentUtility,
+  },
+  {
+    id: "mixer.toggleRecordArm",
+    title: "Arm or disarm mixer track for recording",
+    section: SECTION,
+    keywords: "record input microphone interface",
+    enabled: (state) => {
+      const recording = selected(state)?.recording
+      return !!recording && (!!recording.input || (recording.mode ?? "input") !== "input") && !useRecordingStore.getState().state.active && !useRecordingStore.getState().busy
+    },
+    checked: (state) => selected(state)?.recording?.armed ?? false,
+    run: async () => {
+      const id = useUiStore.getState().selectedTrack
+      const recording = useProjectStore.getState().project.mixer.tracks.find((track) => track.id === id)?.recording
+      if (id !== null && recording) await patchTrack(id, { recording: { ...recording, armed: !recording.armed } })
+    },
+  },
+  {
+    id: "mixer.recordArmed",
+    title: "Record armed mixer tracks…",
+    section: SECTION,
+    keywords: "multitrack audio input drums band microphone take",
+    enabled: (state) => state.document.project.mixer.tracks.some((track) => track.recording?.armed) && !useRecordingStore.getState().state.active,
+    run: async () => { useRecordingStore.setState({ armedTracks: true }); await openRecording() },
+  },
+  {
+    id: "mixer.renderSelected",
+    title: "Render selected mixer tracks…",
+    section: SECTION,
+    keywords: "offline stems export wave audio files",
+    enabled: () => renderableMixerTracks(selectedMixerTracks()).length > 0,
+    whyDisabled: () => "Select a mixer insert or Master",
+    run: () => openMixerRender(selectedMixerTracks()),
+  },
+  {
+    id: "mixer.renderArmed",
+    title: "Render armed mixer tracks…",
+    section: SECTION,
+    keywords: "offline stems export wave disk audio files",
+    enabled: (state) => state.document.project.mixer.tracks.some((track) => track.recording?.armed && !track.current),
+    whyDisabled: () => "Arm a mixer insert or Master",
+    run: () => openMixerRender(useProjectStore.getState().project.mixer.tracks.filter((track) => track.recording?.armed)),
+  },
+  {
     id: "mixer.addTrack",
     title: "Add mixer track",
     section: SECTION,
     defaultShortcut: "Alt+M",
     keywords: "new insert bus",
     enabled: (state) =>
-      state.document.project.mixer.tracks.length < MAX_MIXER_TRACKS,
+      state.document.project.mixer.tracks.filter((track) => !track.current).length < MAX_MIXER_TRACKS,
     run: addTrack,
   },
   {
@@ -109,7 +174,7 @@ export const MIXER_ACTIONS: Action[] = [
     scope: "mixer",
     defaultShortcut: "S",
     keywords: "isolate",
-    enabled: (state) => selectedInsert(state) !== undefined,
+    enabled: (state) => selectedInsert(state) !== undefined && !selectedInsert(state)?.current,
     checked: (state) => selectedInsert(state)?.solo ?? false,
     run: onSelected(toggleSolo),
   },
@@ -152,7 +217,7 @@ export const MIXER_ACTIONS: Action[] = [
     keywords: "output reset routing",
     enabled: (state) => {
       const track = selectedInsert(state)
-      return track !== undefined && track.output !== MASTER_TRACK
+      return track !== undefined && !track.current && track.output !== MASTER_TRACK
     },
     run: onSelected((id) => setOutput(id, MASTER_TRACK)),
   },
@@ -218,10 +283,14 @@ export function registerMixerActions(): () => void {
       state.inspectorOpen,
     ])
     const unwatch = keepEffectOnSelectedTrack()
+    const unrecord = invalidateActionsOn(useRecordingStore, (state) => [state.state.active, state.busy])
+    const unmixer = invalidateActionsOn(useMixerUi, (state) => state.selected)
     unregister = () => {
       remove()
       unfollow()
       unwatch()
+      unrecord()
+      unmixer()
     }
   }
   let released = false

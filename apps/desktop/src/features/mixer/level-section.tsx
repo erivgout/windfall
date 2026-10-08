@@ -10,13 +10,13 @@ import {
 } from "@/components/audio"
 import { ValueContextItems } from "@/components/value-context-menu"
 import { automationFeed, useAutomationMarker } from "@/features/automation/live"
-import { meterFeed, useHint } from "@/lib/store"
+import { meterFeed, useHint, useUiStore } from "@/lib/store"
 import { cn } from "@/lib/utils"
 
 import { trackValueItems } from "./menus"
-import { clampGain } from "./operations"
 import { CLIP_GAIN, resetPeak, subscribePeak } from "./peaks"
-import { useGestureValue } from "./use-gesture-value"
+import { useTrackGroupGesture } from "./group-gesture"
+import { StripWaveform } from "./waveform-meter"
 
 /** A held peak as the readout prints it: "−3.2", "+1.5" or "−∞". */
 export function formatPeak(peak: number): string {
@@ -130,11 +130,8 @@ export function LevelSection({
   layout,
   wide,
 }: LevelSectionProps) {
-  const level = useGestureValue(
-    volume,
-    (value) => ({ type: "updateMixerTrack", id, patch: { volume: value } }),
-    clampGain
-  )
+  const meterMode = useUiStore((state) => state.mixerMeterMode)
+  const level = useTrackGroupGesture(id, "volume")
   const feed = useMemo(() => meterFeed(index), [index])
   const hint = useHint(
     "Volume. Drag, or double-click for 0 dB. Hold Shift for fine steps"
@@ -148,7 +145,7 @@ export function LevelSection({
   )
   const marker = useAutomationMarker({ type: "trackVolume", track: id })
   const upright = layout === "tall" || layout === "short"
-  const meter = (
+  const meter = meterMode === "waveform" ? <StripWaveform id={id} vertical={upright} wide={wide} active={metering} /> : (
     <StripMeter
       id={id}
       feed={metering ? feed : undefined}

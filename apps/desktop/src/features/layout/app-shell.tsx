@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { RetainedSoundsDialog } from "@/features/flp-import/retained-dialog"
 import { FlpImportDialog } from "@/features/flp-import/import-dialog"
 import { ExportDialog } from "@/features/export/export-dialog"
+import { LfoDialog } from "@/features/automation/lfo-dialog"
+import { PatternTimelineDialog } from "@/features/piano-roll/pattern-timeline"
 import { MidiDialogs } from "@/features/midi/dialogs"
 import { CommandPalette } from "@/features/palette/command-palette"
 import { SettingsDialog } from "@/features/settings/settings-dialog"
@@ -52,6 +54,8 @@ export function Overlays() {
       <PromptHost />
       <ArchiveReport />
       <PluginManager />
+      <LfoDialog />
+      <PatternTimelineDialog />
       <Toaster
         theme={theme}
         position="bottom-right"

@@ -7,6 +7,7 @@ import type {
   NoteEdge,
   NoteGroove,
   NoteTransform,
+  NoteGridUnit,
 } from "@/bindings"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -41,6 +42,7 @@ import {
   closeNoteTools,
   NOTE_TOOLS,
   parseChopSteps,
+  parseChordMap,
   requestIsCurrent,
   useNoteTools,
   type NoteTool,
@@ -142,6 +144,8 @@ function ToolForm({ request }: { request: ToolRequest }) {
   const [edge, setEdge] = useState<NoteEdge>(request.edge)
   const [groove, setGroove] = useState<NoteGroove>("straight")
   const [grid, setGrid] = useState(String(request.grid))
+  const [gridUnit, setGridUnit] = useState<NoteGridUnit | "ticks">(request.musical.unit)
+  const [divisor, setDivisor] = useState(String(request.musical.divisor))
   const [strength, setStrength] = useState("100")
   const [length, setLength] = useState("50")
   const [velocity, setVelocity] = useState("80")
@@ -167,6 +171,17 @@ function ToolForm({ request }: { request: ToolRequest }) {
   const [cells, setCells] = useState("2")
   const [phase, setPhase] = useState("0")
   const [offset, setOffset] = useState("240")
+  const [seed, setSeed] = useState("1")
+  const [randomPitch, setRandomPitch] = useState("0")
+  const [randomVelocity, setRandomVelocity] = useState("10")
+  const [randomPan, setRandomPan] = useState("25")
+  const [randomTiming, setRandomTiming] = useState("12")
+  const [randomLength, setRandomLength] = useState("5")
+  const [density, setDensity] = useState("75")
+  const [root, setRoot] = useState("0")
+  const [chordMap, setChordMap] = useState("0,4,7")
+  const [velocityLow, setVelocityLow] = useState("55")
+  const [velocityHigh, setVelocityHigh] = useState("95")
   const [pending, setPending] = useState(false)
   const applying = useRef(false)
   const [failure, setFailure] = useState<string | null>(null)
@@ -182,14 +197,16 @@ function ToolForm({ request }: { request: ToolRequest }) {
   function transform(): NoteTransform | null {
     const g = number(grid)
     switch (tool) {
+      case "lfo": return null
       case "quantize":
-        return within(g, 1, 245760, true) && within(number(strength), 0, 100)
+        return within(g, 1, 245760, true) && within(number(strength), 0, 100) && (gridUnit === "ticks" || within(number(divisor), 1, 96, true))
           ? {
               type: tool,
               grid: g,
               strength: number(strength) / 100,
               edge,
               groove,
+              musical: gridUnit === "ticks" ? null : { ...request.musical, unit: gridUnit, divisor: number(divisor) },
             }
           : null
       case "staccato":
@@ -277,6 +294,24 @@ function ToolForm({ request }: { request: ToolRequest }) {
         return within(number(velocity), 0, 400)
           ? { type: tool, factor: number(velocity) / 100 }
           : null
+      case "randomize":
+        return within(number(seed), 0, 4294967295, true) &&
+          within(number(randomPitch), 0, 127, true) &&
+          within(number(randomVelocity), 0, 100) && within(number(randomPan), 0, 200) &&
+          within(number(randomTiming), 0, 245760, true) && within(number(randomLength), 0, 100)
+          ? { type: tool, seed: number(seed), pitch: number(randomPitch), velocity: number(randomVelocity) / 100,
+              pan: number(randomPan) / 100, timing: number(randomTiming), length: number(randomLength) / 100 }
+          : null
+      case "generateRandom": {
+        const pitchClasses = parseChordMap(chordMap)
+        return pitchClasses !== null && within(number(seed), 0, 4294967295, true) &&
+          within(g, 1, 245760, true) && within(number(density), 0, 100) && within(number(gate), 0.1, 100) &&
+          within(number(root), 0, 11, true) && within(number(low), 0, 127, true) && within(number(high), number(low), 127, true) &&
+          within(number(velocityLow), 0, 100) && within(number(velocityHigh), number(velocityLow), 100)
+          ? { type: tool, seed: number(seed), grid: g, density: number(density) / 100, gate: number(gate) / 100,
+              root: number(root), pitchClasses, low: number(low), high: number(high), velocityLow: number(velocityLow) / 100, velocityHigh: number(velocityHigh) / 100 }
+          : null
+      }
       default:
         return { type: tool }
     }
@@ -352,9 +387,10 @@ function ToolForm({ request }: { request: ToolRequest }) {
                 </SelectContent>
               </Select>
             </Field>
-            {(tool === "quantize" ||
+            {((tool === "quantize" && gridUnit === "ticks") ||
               tool === "chop" ||
               tool === "arpeggiate" ||
+              tool === "generateRandom" ||
               tool === "rhythmReshape") && (
               <NumberField
                 label="Grid (ticks)"
@@ -551,6 +587,13 @@ function ToolForm({ request }: { request: ToolRequest }) {
             )}
             {tool === "quantize" && (
               <>
+                <Choices<NoteGridUnit | "ticks">
+                  label="Grid unit"
+                  value={gridUnit}
+                  set={setGridUnit}
+                  items={[{ value: "step", label: "Step" }, { value: "beat", label: "Beat" }, { value: "bar", label: "Bar" }, { value: "ticks", label: "Custom ticks" }]}
+                />
+                {gridUnit !== "ticks" && <NumberField label="Divisions per unit" value={divisor} set={setDivisor} min={1} max={96} help="Beat and bar grids follow each pattern meter; grooves restart at meter changes." />}
                 <Choices<NoteEdge>
                   label="Quantize"
                   value={edge}
@@ -621,7 +664,7 @@ function ToolForm({ request }: { request: ToolRequest }) {
                 />
               </>
             )}
-            {tool === "keyRange" && (
+            {(tool === "keyRange" || tool === "generateRandom") && (
               <>
                 <NumberField
                   label="Lowest MIDI key"
@@ -638,7 +681,7 @@ function ToolForm({ request }: { request: ToolRequest }) {
                   min={within(number(low), 0, 127) ? number(low) : 0}
                   max={127}
                 />
-                <NumberField
+                {tool === "keyRange" && <><NumberField
                   label="Transpose (semitones)"
                   value={transpose}
                   set={setTranspose}
@@ -654,6 +697,7 @@ function ToolForm({ request }: { request: ToolRequest }) {
                     { value: "octaves", label: "Fold octaves" },
                   ]}
                 />
+                </>}
               </>
             )}
             {tool === "scaleVelocity" && (
@@ -667,6 +711,35 @@ function ToolForm({ request }: { request: ToolRequest }) {
                 help="100 keeps velocities; 80 makes them 20% softer. Results clamp at full velocity."
               />
             )}
+            {(tool === "randomize" || tool === "generateRandom") && <>
+              <NumberField label="Seed" value={seed} set={setSeed} min={0} max={4294967295}
+                help="The same seed and captured notes produce the same result." />
+              <Button type="button" size="sm" variant="outline" onClick={() => setSeed(String((number(seed) + 1) >>> 0))}>Next seed</Button>
+            </>}
+            {tool === "randomize" && <>
+              <NumberField label="Pitch variation (± semitones)" value={randomPitch} set={setRandomPitch} min={0} max={127} />
+              <NumberField label="Velocity variation (± percentage points)" value={randomVelocity} set={setRandomVelocity} min={0} max={100} step={0.1} />
+              <NumberField label="Pan variation (± percentage points)" value={randomPan} set={setRandomPan} min={0} max={200} step={0.1} />
+              <NumberField label="Timing variation (± ticks)" value={randomTiming} set={setRandomTiming} min={0} max={245760} />
+              <NumberField label="Length variation (± %)" value={randomLength} set={setRandomLength} min={0} max={100} step={0.1} />
+              <FieldDescription>Zero keeps that property. Timing and lengths stay inside the pattern limit; pitch and levels clamp at their playable limits.</FieldDescription>
+            </>}
+            {tool === "generateRandom" && <>
+              <NumberField label="Density (%)" value={density} set={setDensity} min={0} max={100} step={0.1} />
+              <NumberField label="Gate (%)" value={gate} set={setGate} min={0.1} max={100} step={0.1} />
+              <NumberField label="Root pitch class" value={root} set={setRoot} min={0} max={11} help="0 = C, 1 = C♯, …, 11 = B." />
+              <Field data-invalid={parseChordMap(chordMap) === null}>
+                <FieldLabel htmlFor="random-chord-map">Chord map (relative semitones)</FieldLabel>
+                <Input id="random-chord-map" value={chordMap} maxLength={128} aria-invalid={parseChordMap(chordMap) === null} onChange={(event) => setChordMap(event.target.value)} />
+                <FieldDescription>Comma-separated classes 0–11 above the root, repeated through the key range. 0,4,7 is a major triad; 0,2,4,5,7,9,11 is a major scale.</FieldDescription>
+                <div className="flex flex-wrap gap-1">
+                  {[{ label: "Major triad", map: "0,4,7" }, { label: "Minor triad", map: "0,3,7" }, { label: "Minor seventh", map: "0,3,7,10" }, { label: "Chromatic", map: "0,1,2,3,4,5,6,7,8,9,10,11" }].map((preset) => <Button key={preset.label} type="button" size="sm" variant="ghost" onClick={() => setChordMap(preset.map)}>{preset.label}</Button>)}
+                </div>
+              </Field>
+              <NumberField label="Minimum velocity (%)" value={velocityLow} set={setVelocityLow} min={0} max={100} step={0.1} />
+              <NumberField label="Maximum velocity (%)" value={velocityHigh} set={setVelocityHigh} min={number(velocityLow)} max={100} step={0.1} />
+              <FieldDescription>The selection is replaced within its earliest start and latest end. Each grid cell may produce one note. Empty cells are rests; density zero clears the selection. A maximum of 16,384 cells keeps generation bounded.</FieldDescription>
+            </>}
           </FieldGroup>
           {!current && (
             <Alert variant="destructive">

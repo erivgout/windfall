@@ -26,7 +26,7 @@ export function trackNumber(index: number): string {
 function TrackOption({ id }: { id: TrackId }) {
   const track = useMixerTrack(id)
   const index = useMixerTrackIndex(id)
-  if (!track) return null
+  if (!track || track.current) return null
   return (
     <DropdownMenuRadioItem value={id} closeOnClick>
       <span

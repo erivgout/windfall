@@ -92,17 +92,23 @@ impl Move {
 /// The parts of a pattern other than its notes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PatternInfo {
+    pub note_curves: Vec<crate::NoteExpressionCurve>,
     pub name: String,
     pub color: u32,
     pub length_steps: u32,
+    pub time_signature: Option<crate::TimeSignature>,
+    pub timeline: crate::Timeline,
 }
 
 impl PatternInfo {
     pub(crate) fn of(pattern: &Pattern) -> Self {
         Self {
+            note_curves: pattern.note_curves.clone(),
             name: pattern.name.clone(),
             color: pattern.color,
             length_steps: pattern.length_steps,
+            time_signature: pattern.time_signature,
+            timeline: pattern.timeline.clone(),
         }
     }
 }
@@ -110,6 +116,7 @@ impl PatternInfo {
 #[derive(Debug, Clone)]
 pub(crate) enum Edit {
     Timeline(Change<crate::Timeline>),
+    TakeGroups(Change<Vec<crate::AudioTakeGroup>>),
     Settings(Change<ProjectSettings>),
     Plugins(Change<Vec<crate::PluginBinding>>),
     Sample(ListEdit<SampleAsset>),
@@ -157,6 +164,7 @@ impl Edit {
         match self {
             Edit::Settings(change) => project.settings = change.result(direction).clone(),
             Edit::Timeline(change) => project.playlist.timeline = change.result(direction).clone(),
+            Edit::TakeGroups(change) => project.playlist.take_groups = change.result(direction).clone(),
             Edit::Plugins(change) => project.plugins = change.result(direction).clone(),
             Edit::Sample(edit) => edit.apply(&mut project.samples, direction),
             Edit::Channel(edit) => edit.apply(&mut project.channels, direction),
@@ -175,6 +183,9 @@ impl Edit {
                     pattern.name = info.name.clone();
                     pattern.color = info.color;
                     pattern.length_steps = info.length_steps;
+                    pattern.time_signature = info.time_signature;
+                    pattern.timeline = info.timeline.clone();
+                    pattern.note_curves = info.note_curves.clone();
                 }
             }
             Edit::Notes {
@@ -233,6 +244,7 @@ impl Edit {
         match self {
             Edit::Settings(_) => touched.settings = true,
             Edit::Timeline(_) => touched.playlist = true,
+            Edit::TakeGroups(_) => touched.playlist = true,
             Edit::Plugins(_) => touched.plugins = true,
             Edit::Sample(_) => touched.samples = true,
             Edit::Channel(_) | Edit::MoveChannel(_) | Edit::SetChannel(_) => {
@@ -282,6 +294,7 @@ impl Edit {
         match self {
             Edit::Settings(change) => change.old == change.new,
             Edit::Timeline(change) => change.old == change.new,
+            Edit::TakeGroups(change) => change.old == change.new,
             Edit::Plugins(change) => change.old == change.new,
             Edit::SetChannel(change) => change.old == change.new,
             Edit::SetMixerTrack(change) => change.old == change.new,
@@ -308,6 +321,7 @@ impl Edit {
         match (self, next) {
             (Edit::Settings(first), Edit::Settings(second)) => first.new = second.new,
             (Edit::Timeline(first), Edit::Timeline(second)) => first.new = second.new,
+            (Edit::TakeGroups(first), Edit::TakeGroups(second)) => first.new = second.new,
             (Edit::Plugins(first), Edit::Plugins(second)) => first.new = second.new,
             (Edit::SetChannel(first), Edit::SetChannel(second))
                 if first.new.id == second.new.id =>
@@ -497,6 +511,7 @@ mod tests {
             key: 60,
             velocity: 0.8,
             pan: 0.0,
+            expression: Default::default(),
         }
     }
 

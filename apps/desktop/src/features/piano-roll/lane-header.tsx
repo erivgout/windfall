@@ -8,9 +8,12 @@ import {
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useHint } from "@/lib/store/hint"
+import { openNoteLfo } from "@/features/automation/lfo-dialog"
 
 import { useSession } from "./context"
 import { LANE_KINDS, type LaneKind } from "./lane-math"
@@ -54,6 +57,8 @@ export function LaneHeader() {
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={session.editor.notes.length === 0} onClick={openNoteLfo}>Write LFO…</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

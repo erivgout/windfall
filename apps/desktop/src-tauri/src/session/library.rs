@@ -7,7 +7,7 @@ use windfall_ipc::{BrowserEntry, BrowserRoot, SampleInfo};
 use windfall_ipc::{LibraryFileToken, LibraryMetadata, LibraryResults, LibrarySearch};
 use windfall_project::file::sample_path_for;
 use windfall_project::{
-    ChannelId, ClipContent, ClipInit, Command, DispatchResult, MAX_MIXER_TRACKS, MAX_SONG_TICKS,
+    ChannelId, ClipContent, ClipInit, Command, DispatchResult, MAX_MIXER_SIGNAL_TRACKS, MAX_SONG_TICKS,
     PlaylistTrackId, Project, SampleId, SamplePath, TrackId,
 };
 
@@ -589,7 +589,7 @@ fn audio_clip_commands(
         .map(|(_, mixer_track)| mixer_track);
     let mixer_track = match place.mixer_track.or(shared) {
         Some(mixer_track) => mixer_track,
-        None if project.mixer.tracks.len() < MAX_MIXER_TRACKS => {
+        None if project.mixer.tracks.iter().filter(|track| !track.current).count() < MAX_MIXER_SIGNAL_TRACKS => {
             commands.push(Command::AddMixerTrack {
                 name: Some(name.to_owned()),
             });
@@ -614,6 +614,7 @@ fn audio_clip_commands(
             content: ClipContent::Audio {
                 sample,
                 mixer_track,
+                output: Default::default(),
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

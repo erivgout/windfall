@@ -23,6 +23,14 @@ pub use windfall_project::PlayMode;
 use windfall_project::{AutomationId, EffectId, PatternId, TrackId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct MetronomeSettings { pub enabled: bool, pub gain: f32, pub accent: bool }
+impl Default for MetronomeSettings {
+    fn default() -> Self { Self { enabled: false, gain: 0.25, accent: true } }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TransportState {
@@ -32,6 +40,15 @@ pub struct TransportState {
     pub pattern: PatternId,
     /// In song mode, jump back to the start at the end of the last clip.
     pub loop_song: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub metronome: Option<MetronomeSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub count_in_bars: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub count_in_remaining: Option<u32>,
 }
 
 /// Session-only timeline playback state; no musical edit or undo entry.
@@ -61,6 +78,10 @@ pub struct TransportPatch {
     pub pattern: Option<PatternId>,
     #[ts(optional)]
     pub loop_song: Option<bool>,
+    #[ts(optional)]
+    pub metronome: Option<MetronomeSettings>,
+    #[ts(optional)]
+    pub count_in_bars: Option<u8>,
 }
 
 /// What the engine reports to the UI 60 times a second.
@@ -68,6 +89,9 @@ pub struct TransportPatch {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct RealtimeFrame {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<MixerWaveform>>", optional)]
+    pub waveforms: Vec<MixerWaveform>,
     pub playing: bool,
     /// Playhead in ticks. In pattern mode it is the position inside the
     /// pattern; in song mode it is the position on the playlist.
@@ -115,6 +139,20 @@ pub struct RealtimeFrame {
     pub automated: Vec<AutomatedValue>,
 }
 
+/// Stereo signed extrema, oldest first, from the track's post-fader meter tap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MixerWaveform {
+    pub track: windfall_project::TrackId,
+    pub epoch: u64,
+    pub serial: u64,
+    pub sample_rate: u32,
+    pub bucket_frames: u32,
+    /// [left min, left max, right min, right max], at most 64 buckets.
+    pub points: Vec<[f32; 4]>,
+}
+
 /// What one automation is doing to its target at this moment.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -147,6 +185,9 @@ pub struct EngineStatus {
     pub host: String,
     pub device: Option<String>,
     pub sample_rate: u32,
+    #[serde(default)]
+    #[ts(as = "Option<u16>", optional)]
+    pub output_channels: u16,
     /// Frames per audio callback.
     pub buffer_frames: u32,
     /// Output latency of one buffer in milliseconds.
@@ -176,6 +217,8 @@ pub struct AudioSettings {
     pub sample_rate: Option<u32>,
     #[ts(optional)]
     pub buffer_frames: Option<u32>,
+    #[ts(optional)]
+    pub output_channels: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -198,6 +241,10 @@ pub struct AudioDevice {
     /// Smallest and largest buffer size in frames, when the driver says.
     pub min_buffer_frames: Option<u32>,
     pub max_buffer_frames: Option<u32>,
+    /// Channel counts the driver offers across its writable configurations.
+    #[serde(default)]
+    #[ts(as = "Option<Vec<u16>>", optional)]
+    pub output_channels: Vec<u16>,
 }
 
 /// A top-level folder in the browser panel.
@@ -492,6 +539,27 @@ pub struct RecordingInput {
     pub channels: u16,
     pub sample_rates: Vec<u32>,
 }
+
+/// Runtime-only standalone input monitoring. Saved routes belong to the mixer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InputMonitorState {
+    pub active: bool,
+    pub sample_rate: u32,
+    pub tracks: Vec<InputMonitorTrackInfo>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InputMonitorTrackInfo {
+    pub mixer_track: windfall_project::TrackId,
+    pub name: String,
+    pub alignment: RecordingAlignmentStatus,
+    pub monitor: RecordingMonitorStatus,
+}
 /// Zero-based hardware channels. Missing right duplicates left into stereo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -501,6 +569,97 @@ pub struct RecordingSource {
     pub device: String,
     pub left: u16,
     pub right: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub alignment: Option<RecordingAlignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub loop_recording: Option<RecordingLoopOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub monitor: Option<RecordingMonitorSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub armed_tracks: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mixer_tap: Option<RecordingMixerTap>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingMixerTap { pub track: windfall_project::TrackId, pub mode: windfall_project::MixerRecordMode }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingTrackInfo {
+    pub mixer_track: windfall_project::TrackId,
+    pub name: String,
+    #[ts(type = "number")]
+    pub frames: u64,
+    pub alignment: RecordingAlignmentStatus,
+    pub monitor: Option<RecordingMonitorStatus>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingMonitorSettings { pub track: windfall_project::TrackId, pub gain: f32, pub buffer_ms: u16 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingMonitorStatus {
+    pub buffered_ms: f64,
+    #[ts(type = "number")]
+    pub dropped_frames: u64,
+    #[ts(type = "number")]
+    pub starved_frames: u64,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingLoopOptions { pub region: windfall_project::TickRange }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum RecordingTakeSelection {
+    All,
+    Latest,
+    Only { indices: Vec<u32> },
+    Except { indices: Vec<u32> },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingTakeInfo {
+    pub index: u32,
+    #[ts(type = "number")]
+    pub frames: u64,
+    pub complete: bool,
+}
+/// Positive offsets advance the take relative to the playback clock.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingAlignment {
+    pub synchronize: bool,
+    pub drift_correction: bool,
+    pub offset_ms: f64,
+    pub input_sample_rate: Option<u32>,
+}
+impl Default for RecordingAlignment {
+    fn default() -> Self { Self { synchronize: false, drift_correction: true, offset_ms: 0.0, input_sample_rate: None } }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RecordingAlignmentStatus {
+    pub input_sample_rate: u32,
+    pub input_latency_ms: f64,
+    pub output_latency_ms: f64,
+    pub drift_ppm: f64,
+    pub measured_timestamps: bool,
+    #[ts(type = "number")]
+    pub trimmed_frames: u64,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -512,6 +671,18 @@ pub struct RecordingState {
     pub sample_rate: u32,
     pub start_tick: u32,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub alignment: Option<RecordingAlignmentStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub takes: Option<Vec<RecordingTakeInfo>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub monitor: Option<RecordingMonitorStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tracks: Option<Vec<RecordingTrackInfo>>,
 }
 mod flp;
 pub use flp::*;

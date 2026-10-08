@@ -1,4 +1,5 @@
 import type { Automation } from "@/bindings"
+import { openAutomationLfo } from "@/features/automation/lfo-dialog"
 import {
   contextSeparator,
   type ContextItem,
@@ -66,6 +67,7 @@ export function automationMenu(automation: Automation): ContextItem[] {
       })),
     },
     { title: "Duplicate", run: () => duplicateAutomation(id) },
+    { title: "Write LFO…", run: () => openAutomationLfo(id) },
     ...viewRangeItems([id]),
     contextSeparator,
     {

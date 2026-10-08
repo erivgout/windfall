@@ -32,6 +32,7 @@ export function formatAutomationValue(
     case "channelVolume":
     case "trackVolume":
     case "sendGain":
+    case "sidechainGain":
       return formatGain(real)
     case "channelPan":
     case "trackPan":
@@ -65,6 +66,7 @@ export function parseAutomationValue(
       case "channelVolume":
       case "trackVolume":
       case "sendGain":
+    case "sidechainGain":
         real = parseGain(text)
         break
       case "channelPan":

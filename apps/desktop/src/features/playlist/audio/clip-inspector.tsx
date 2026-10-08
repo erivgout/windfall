@@ -135,15 +135,17 @@ function Labelled({
 
 /** Picks the mixer track the selected clips play into. */
 function RouteSelect({ clips }: { clips: AudioClip[] }) {
-  const tracks = useProjectStore((state) => state.project.mixer.tracks)
+  const tracks = useProjectStore((state) => state.project.mixer.tracks).filter((track) => !track.current)
   const first = clips[0].content.mixerTrack
-  const mixed = clips.some((clip) => clip.content.mixerTrack !== first)
+  const direct = clips[0].content.output === "direct"
+  const mixed = clips.some((clip) => (clip.content.output === "direct") !== direct || (!direct && clip.content.mixerTrack !== first))
   const current = tracks.find((track) => track.id === first)
+  const label = mixed ? "Several routes" : direct ? "Direct output" : (current?.name ?? "No track")
   const hint = useHint(
-    "The mixer track the clip plays into: its effects, its fader and its sends"
+    "Choose a mixer track, or Direct output for a finished print that bypasses mixer effects and faders"
   )
   const route = (mixerTrack: TrackId) =>
-    void patchSelectedAudioClips({ mixerTrack })
+    void patchSelectedAudioClips({ mixerTrack, output: "mixer" })
 
   return (
     <DropdownMenu>
@@ -152,7 +154,7 @@ function RouteSelect({ clips }: { clips: AudioClip[] }) {
           <Button
             variant="outline"
             size="sm"
-            aria-label={`Mixer track: ${mixed ? "several" : (current?.name ?? "none")}`}
+            aria-label={`Playback route: ${label}`}
             className="w-32 justify-start gap-1 px-1.5"
             {...hint}
           />
@@ -163,7 +165,7 @@ function RouteSelect({ clips }: { clips: AudioClip[] }) {
           strokeWidth={2}
           className="text-muted-foreground"
         />
-        {!mixed && current && (
+        {!mixed && !direct && current && (
           <span
             aria-hidden
             className="size-2 shrink-0 rounded-[2px]"
@@ -171,7 +173,7 @@ function RouteSelect({ clips }: { clips: AudioClip[] }) {
           />
         )}
         <span className="min-w-0 flex-1 truncate text-left">
-          {mixed ? "Several tracks" : (current?.name ?? "No track")}
+          {label}
         </span>
         <HugeiconsIcon
           icon={ArrowDown01Icon}
@@ -180,10 +182,14 @@ function RouteSelect({ clips }: { clips: AudioClip[] }) {
         />
       </DropdownMenuTrigger>
       <DropdownMenuContent className="max-h-80 w-auto min-w-44">
+        <DropdownMenuItem aria-checked={!mixed && direct} onClick={() => void patchSelectedAudioClips({ output: "direct" })}>
+          Direct output
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         {tracks.map((track) => (
           <DropdownMenuItem
             key={track.id}
-            aria-checked={!mixed && track.id === first}
+            aria-checked={!mixed && !direct && track.id === first}
             onClick={() => route(track.id)}
           >
             <span

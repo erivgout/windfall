@@ -25,6 +25,7 @@ import { PositionReadout } from "./position-readout"
 import { TempoField } from "./tempo-field"
 import { TimeSignatureField } from "./time-signature"
 import { TapTempoDialog } from "./tap-tempo-dialog"
+import { MetronomeControls } from "./metronome-controls"
 
 function Divider() {
   return <Separator orientation="vertical" className="mx-1 my-2.5" />
@@ -99,6 +100,7 @@ export function TransportBar() {
         </ActionButton>
         <RecordingDialog />
         <ModeSwitch />
+        <MetronomeControls />
         <Divider />
         <Display />
         <ActionButton action="tempo.tap" variant="ghost" size="sm">

@@ -2,6 +2,7 @@
 import type { Clip } from "./Clip";
 import type { PlaylistTrack } from "./PlaylistTrack";
 import type { Timeline } from "./Timeline";
+import type { AudioTakeGroup } from "./AudioTakeGroup";
 
 /**
  * The song timeline.
@@ -18,4 +19,4 @@ clips: Array<Clip>,
 /**
  * Song meter changes and navigation markers. Absent in legacy v1 files.
  */
-timeline?: Timeline, };
+timeline?: Timeline, takeGroups?: AudioTakeGroup[], };

@@ -979,6 +979,7 @@ fn a_file_from_before_audio_clips_and_automation_still_loads() {
             content: ClipContent::Audio {
                 sample: SampleId(2),
                 mixer_track: TrackId(4),
+                output: Default::default(),
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

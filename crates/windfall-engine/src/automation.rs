@@ -113,6 +113,7 @@ enum Target {
     /// The track at this index of [`Plan::tracks`].
     TrackGain(usize),
     TrackPan(usize),
+    TrackParam { track: usize, param: usize },
     /// A send: the edge at index `edge` of track `track`.
     Send {
         track: usize,
@@ -147,6 +148,7 @@ impl Target {
             Target::EffectParam { .. }
             | Target::EffectMix(_)
             | Target::InstrumentParam { .. }
+            | Target::TrackParam { .. }
             | Target::Tempo => false,
         }
     }
@@ -451,7 +453,8 @@ fn resolve(target: &AutomationTarget, plan: &Plan) -> Option<Target> {
         AutomationTarget::ChannelPan { channel: id } => Target::ChannelPan(channel(id)?),
         AutomationTarget::TrackVolume { track: id } => Target::TrackGain(track(id)?),
         AutomationTarget::TrackPan { track: id } => Target::TrackPan(track(id)?),
-        AutomationTarget::SendGain {
+        AutomationTarget::TrackParam { track: id, param } => Target::TrackParam { track: track(id)?, param: param as usize },
+        AutomationTarget::SidechainGain {
             track: from,
             target: to,
         } => {
@@ -459,7 +462,18 @@ fn resolve(target: &AutomationTarget, plan: &Plan) -> Option<Target> {
             let edges = plan.tracks[from].edges.iter();
             let edge = edges
                 .clone()
-                .position(|edge| edge.send && edge.target_id == to)?;
+                .position(|edge| edge.send && edge.sidechain && edge.target_id == to)?;
+            Target::Send { track: from, edge }
+        }
+            AutomationTarget::SendGain {
+            track: from,
+            target: to,
+        } => {
+            let from = track(from)?;
+            let edges = plan.tracks[from].edges.iter();
+            let edge = edges
+                .clone()
+                .position(|edge| edge.send && !edge.sidechain && edge.target_id == to)?;
             Target::Send { track: from, edge }
         }
         AutomationTarget::EffectParam { effect, param, .. } => {
@@ -616,6 +630,7 @@ fn set(plan: &Plan, state: &mut PlanState, target: Target, value: f32, now: u64,
             aim(&mut state.tracks[track].gain, gain);
         }
         Target::TrackPan(track) => aim(&mut state.tracks[track].pan, value),
+        Target::TrackParam { track, param } => state.track_processing[track].automate(param, value),
         Target::Send { track, edge } => {
             let slot = plan.tracks[track].edges[edge].slot;
             aim(&mut state.edges[slot], value);
@@ -662,6 +677,7 @@ fn stored(plan: &Plan, target: Target) -> Option<f32> {
         Target::ChannelPan(channel) => Some(plan.channels[channel].pan),
         Target::TrackGain(track) => Some(plan.tracks[track].gain),
         Target::TrackPan(track) => Some(plan.tracks[track].pan),
+        Target::TrackParam { track, param } => { use windfall_dsp::ParamSet; plan.tracks[track].processing.get(param) },
         Target::Send { track, edge } => Some(plan.tracks[track].edges[edge].gain),
         Target::EffectParam { effect: id, param } => {
             if let Some(binding) = plan.plugins.iter().find(|binding| {

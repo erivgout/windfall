@@ -59,7 +59,9 @@ function shortened(value: unknown): unknown {
 
 // The file is generated from the Rust tables that also generate the types,
 // so the two agree. JSON has no literal types, which is all the cast adds.
-const EFFECTS = shortened(effects) as unknown as {
+// Provisional append-only descriptor until the combined native generator pass.
+const sidechain: ParamInfo = { id: "sidechain", name: "External sidechain", kind: "toggle", unit: "none", scale: "linear", min: 0, max: 1, default: 0, choices: [] }
+const EFFECTS = shortened({ ...effects, compressor: { ...effects.compressor, params: effects.compressor.params.some((info) => info.id === "sidechain") ? effects.compressor.params : [...effects.compressor.params, sidechain], defaults: { ...effects.compressor.defaults, sidechain: false } } }) as unknown as {
   readonly [Kind in EffectKind]: ParamDescriptor<EffectParamsOf<Kind>>
 }
 const INSTRUMENTS = shortened(instruments) as unknown as {

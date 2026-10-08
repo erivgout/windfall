@@ -94,6 +94,7 @@ impl Session {
         // One at a time, so the request remembered last is also the one
         // opened last.
         drop(_recording);
+        self.input_monitor_stop();
         self.store()
             .update(|stored| stored.audio = settings.clone());
         let open = openable(&settings, || self.inner.audio.devices());
@@ -200,6 +201,7 @@ mod tests {
 
     fn device(name: &str, is_default: bool) -> AudioDevice {
         AudioDevice {
+            output_channels: Vec::new(),
             name: name.to_owned(),
             is_default,
             sample_rates: vec![44_100, 48_000],
@@ -243,6 +245,7 @@ mod tests {
         buffer_frames: Option<u32>,
     ) -> AudioSettings {
         AudioSettings {
+            output_channels: None,
             host: host.map(str::to_owned),
             device: device.map(str::to_owned),
             sample_rate,

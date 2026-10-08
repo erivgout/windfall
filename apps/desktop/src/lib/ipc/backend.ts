@@ -64,6 +64,11 @@ export type AudioClipPlace = {
  * plain text that can be shown to the user.
  */
 export interface Backend {
+  mixerWaveformTracks(tracks: TrackId[], generation: number, revision: number): Promise<void>
+  mixerPresetCapture(id: TrackId, generation: number, revision: number): Promise<import("@/bindings").MixerTrackPreset>
+  mixerPresetSave(preset: import("@/bindings").MixerTrackPreset): Promise<string | null>
+  mixerPresetLoad(): Promise<import("@/bindings").MixerTrackPreset | null>
+  currentMixerTarget(track: TrackId | null, generation: number, revision: number): Promise<void>
   timelineState(): Promise<import("@/bindings").TimelinePlaybackState>
   timelineRegion(
     region: import("@/bindings").TickRange | null,
@@ -97,13 +102,16 @@ export interface Backend {
   sliceApply(token: number, markers: number[]): Promise<DispatchResult>
   sliceDiscard(token: number): Promise<void>
   recordingInputs(): Promise<import("@/bindings").RecordingInput[]>
+  inputMonitorStart(): Promise<import("@/bindings").InputMonitorState>
+  inputMonitorStop(): Promise<import("@/bindings").InputMonitorState>
+  inputMonitorState(): Promise<import("@/bindings").InputMonitorState>
   recordingState(): Promise<import("@/bindings").RecordingState>
   recordingStart(
     source: import("@/bindings").RecordingSource,
     start: number,
     track: number | null
   ): Promise<import("@/bindings").RecordingState>
-  recordingStop(): Promise<DispatchResult>
+  recordingStop(takes?: import("@/bindings").RecordingTakeSelection): Promise<DispatchResult>
   recordingCancel(): Promise<void>
 
   /** "tauri" inside the app, "mock" in a plain browser. */

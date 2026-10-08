@@ -124,6 +124,8 @@ pub(crate) enum Heard {
     Channel(usize),
     /// Straight into the track at this index of the new plan.
     Track(usize),
+    /// A finished print past every mixer strip.
+    Printed,
 }
 
 /// What a compensation delay delays.
@@ -131,6 +133,10 @@ pub(crate) enum Heard {
 enum DelayKey {
     /// The sampler voices that play into a track.
     Direct(TrackId),
+    Printed,
+    MasterOutput,
+    External(TrackId),
+    KeyEffect { track: TrackId, effect: EffectId },
     /// An instrument channel on its way into its track.
     Instrument(ChannelId),
     /// A track's output or send on its way into another track.
@@ -138,6 +144,7 @@ enum DelayKey {
         from: TrackId,
         to: TrackId,
         send: bool,
+        sidechain: bool,
     },
 }
 
@@ -402,6 +409,8 @@ struct Layout {
     reach: Vec<usize>,
     arrival_path: Vec<Vec<DelayStage>>,
     out_path: Vec<Vec<DelayStage>>,
+    /// Prefix transfer before each effect, excluding the track's input alignment.
+    key_paths: Vec<Vec<Vec<DelayStage>>>,
 }
 
 impl Layout {
@@ -421,6 +430,7 @@ impl Layout {
         let mut out = vec![0_usize; count];
         let mut arrival_path = vec![Vec::new(); count];
         let mut out_path = vec![Vec::new(); count];
+        let mut key_paths = vec![Vec::new(); count];
         // An instrument that has left the project is only fading out, and
         // nothing waits for it.
         for channel in plan.channels.iter().filter(|channel| !channel.leaving) {
@@ -455,6 +465,7 @@ impl Layout {
             let chain = track.effects.iter();
             let mut path = arrival_path[index].clone();
             let (latency, longest) = chain.fold((0, 0), |(latency, longest), effect| {
+                key_paths[index].push(path[arrival_path[index].len()..].to_vec());
                 let key = windfall_project::PluginTarget::Effect { effect: effect.id };
                 if effect.leaving {
                     let native = known_plugins.get(&(key, effect.life.generation));
@@ -516,9 +527,13 @@ impl Layout {
                 }
                 (latency + delay, longest + maximum)
             });
-            out[index] = arrival[index] + latency;
-            out_path[index] = path;
-            let out_reach = reach[index] + longest;
+            let correction = (track.latency_offset_ms * f64::from(sample_rate) / 1000.0).round() as i64;
+            let corrected = |frames: usize| (frames as i64).saturating_add(correction).max(0) as usize;
+            out[index] = corrected(arrival[index] + latency);
+            // A manual declaration has no processor whose transfer can be mirrored.
+            // Use scalar compensation on paths involving that declaration instead.
+            out_path[index] = if correction == 0 { path } else { Vec::new() };
+            let out_reach = corrected(reach[index] + longest).max(out[index]);
             for edge in &track.edges {
                 // A zero-delay matrix is still a potential reference path.
                 // Keep its stages primed while it shares latency zero.
@@ -537,6 +552,7 @@ impl Layout {
             reach,
             arrival_path,
             out_path,
+            key_paths,
         }
     }
 
@@ -588,6 +604,8 @@ impl Layout {
 }
 
 pub(crate) struct PlanState {
+    pub key_delays: Vec<Vec<DelaySlot>>,
+    pub track_processing: Vec<windfall_dsp::TrackProcessor>,
     pub channels: Vec<Strip>,
     pub tracks: Vec<Strip>,
     pub edges: Vec<Ramp>,
@@ -600,6 +618,12 @@ pub(crate) struct PlanState {
     pub instruments: Vec<Option<InstrumentSeat>>,
     /// The delay of each track's own sampler voices.
     pub direct: Vec<DelaySlot>,
+    /// Finished prints delayed to the main mix, without replaying processing.
+    pub printed: DelaySlot,
+    pub printed_activity: Activity,
+    /// Final Master delay and each post-fader external path to the shared DAC.
+    pub master_output: DelaySlot,
+    pub external: Vec<DelaySlot>,
     /// The delay on each routing edge, by the edge's slot.
     pub edge_delays: Vec<DelaySlot>,
     pub activity: Vec<Activity>,
@@ -607,10 +631,11 @@ pub(crate) struct PlanState {
     /// has a memory: an effect or a compensation delay on the track or
     /// further along. A voice cannot leave such a path without a jump.
     pub shaped: Vec<bool>,
-    /// Frames by which the output lags the notes that make it.
+    /// Frames by which the latest Master/external path lags the notes.
     pub latency: u64,
     /// The same for what leaves each track, past its effects and its
-    /// fader. The master's is `latency`.
+    /// fader, before final hardware alignment. Master can be earlier than
+    /// `latency` when a separate hardware path has more processing delay.
     pub behind: Vec<usize>,
     /// The level below which a tail counts as over, as a linear gain.
     pub silence: f32,
@@ -659,6 +684,10 @@ impl PlanState {
             })
             .collect();
         let layout = Layout::of(plan, sample_rate, &plugins, &departing_plugins);
+        let output_latency = plan.tracks.iter().enumerate().filter(|(_, track)| track.external_output.is_some())
+            .map(|(index, _)| layout.out[index]).fold(layout.out[0], usize::max);
+        let output_reach = layout.out_path.iter().enumerate().filter(|(index, _)| *index == 0 || plan.tracks[*index].external_output.is_some())
+            .map(|(_, path)| path.iter().map(|stage| stage.maximum).sum::<usize>()).max().unwrap_or(output_latency).max(output_latency);
         let mut ledger = Ledger {
             plugins,
             departing_plugins,
@@ -667,7 +696,7 @@ impl PlanState {
             instruments: HashMap::new(),
             delays: HashMap::new(),
             meters: Vec::new(),
-            latency: u32::try_from(layout.out[0]).unwrap_or(u32::MAX),
+            latency: u32::try_from(output_latency).unwrap_or(u32::MAX),
         };
 
         let mut edges = vec![Ramp::at_rest(0.0); plan.edge_count];
@@ -675,6 +704,7 @@ impl PlanState {
             (0..plan.edge_count).map(|_| DelaySlot::none()).collect();
         let mut direct = Vec::with_capacity(plan.tracks.len());
         let mut chains = Vec::with_capacity(plan.tracks.len());
+        let mut key_delays = Vec::with_capacity(plan.tracks.len());
         for (index, track) in plan.tracks.iter().enumerate() {
             for edge in &track.edges {
                 edges[edge.slot] = Ramp::at_rest(edge.gain);
@@ -682,6 +712,7 @@ impl PlanState {
                     from: track.id,
                     to: edge.target_id,
                     send: edge.send,
+                    sidechain: edge.sidechain,
                 };
                 let delay = layout.arrival[edge.target].saturating_sub(layout.out[index]);
                 let reach = layout.reach[edge.target];
@@ -702,6 +733,23 @@ impl PlanState {
                 held,
                 &mut ledger,
             ));
+
+            let has_key = plan.tracks.iter().any(|source| source.edges.iter().any(|edge| edge.sidechain && edge.target == index));
+            let key_chain = track.effects.iter().enumerate().map(|(place, effect)| {
+                let prefix = &layout.key_paths[index][place];
+                let elapsed = prefix.iter().map(|stage| stage.delay).sum::<usize>();
+                let maximum = prefix.iter().map(|stage| stage.maximum).sum::<usize>();
+                let most = sample_rate as usize;
+                // Mirror matrix tap transitions in their serial order. Fixed-only
+                // chains and paths beyond the host bound keep scalar compensation.
+                let path = if maximum <= most && prefix.iter().any(|stage| stage.matrix) {
+                    prefix.clone()
+                } else { Vec::new() };
+                if has_key {
+                    DelaySlot::seat(DelayKey::KeyEffect { track: track.id, effect: effect.id }, elapsed.min(most), maximum.max(elapsed).min(most), path, held, &mut ledger)
+                } else { DelaySlot::none() }
+            }).collect();
+            key_delays.push(key_chain);
 
             let chain = track.effects.iter().map(|effect| {
                 let kind = effect.params.kind();
@@ -737,6 +785,22 @@ impl PlanState {
             chains.push(chain.collect());
         }
 
+        let printed = if plan.audio_clips.iter().any(|clip| clip.direct_output)
+            || held.is_some_and(|ledger| ledger.delays.contains_key(&DelayKey::Printed))
+        {
+            let reach = layout.out_path[0].iter().map(|stage| stage.maximum).sum::<usize>()
+                .max(layout.out[0]);
+            DelaySlot::seat(DelayKey::Printed, output_latency, reach.max(output_reach), Vec::new(), held, &mut ledger)
+        } else {
+            DelaySlot::none()
+        };
+
+        let master_output = DelaySlot::seat(DelayKey::MasterOutput, output_latency.saturating_sub(layout.out[0]), output_reach, Vec::new(), held, &mut ledger);
+        let external = plan.tracks.iter().enumerate().map(|(index, track)| {
+            if index == 0 || track.external_output.is_none() { DelaySlot::none() } else {
+                DelaySlot::seat(DelayKey::External(track.id), output_latency.saturating_sub(layout.out[index]), output_reach, Vec::new(), held, &mut ledger)
+            }
+        }).collect();
         let instruments = plan.channels.iter().map(|channel| {
             let params = channel.instrument.as_ref()?;
             let kind = params.kind();
@@ -806,10 +870,12 @@ impl PlanState {
             let track = &plan.tracks[index];
             let mut edges = track.edges.iter();
             let onward = edges.any(|edge| edge_delays[edge.slot].used || shaped[edge.target]);
-            shaped[index] = onward || !track.effects.is_empty() || direct[index].used;
+            let automated = plan.lanes.iter().any(|lane| matches!(lane.key, windfall_project::AutomationTarget::TrackParam { track: id, .. } if id == track.id));
+            shaped[index] = onward || !track.effects.is_empty() || !track.processing.is_default() || automated || direct[index].used;
         }
 
         let state = Self {
+            track_processing: plan.tracks.iter().map(|track| windfall_dsp::TrackProcessor::new(sample_rate, crate::mixer::MAX_BLOCK, track.processing)).collect(),
             channels: plan
                 .channels
                 .iter()
@@ -822,8 +888,13 @@ impl PlanState {
                 .collect(),
             edges,
             chains,
+            key_delays,
             instruments,
             direct,
+            printed,
+            printed_activity: Activity::default(),
+            master_output,
+            external,
             edge_delays,
             activity: vec![Activity::default(); plan.tracks.len()],
             shaped,
@@ -908,8 +979,13 @@ impl PlanState {
         // along the way.
         let retempo = plan.tempo_bpm != old_plan.tempo_bpm || old.tempo_told != plan.tempo_bpm;
         let mut heard = [false; MAX_MIXER_TRACKS];
+        let mut printed_sounding = false;
         for destination in sounding {
             let index = match destination {
+                Heard::Printed => {
+                    printed_sounding = true;
+                    continue;
+                }
                 Heard::Track(track) => {
                     heard[track] = true;
                     continue;
@@ -995,9 +1071,14 @@ impl PlanState {
 
         for (index, track) in plan.tracks.iter().enumerate() {
             if let Some(found) = old_plan.track_ids.get(track.id.0) {
+                // Integrated processors contain only inline filter/ramp state.
+                // The unused fresh state remains in the retired plan.
+                std::mem::swap(&mut self.track_processing[index], &mut old.track_processing[found]);
+                self.track_processing[index].set_params(track.processing);
                 self.activity[index] = old.activity[found];
                 // Without effects a track has no sound of its own to keep.
-                let rings = !old_plan.tracks[found].effects.is_empty();
+                let rings = !old_plan.tracks[found].effects.is_empty() || !old_plan.tracks[found].processing.is_default()
+                    || old_plan.lanes.iter().any(|lane| matches!(lane.key, windfall_project::AutomationTarget::TrackParam { track: id, .. } if id == track.id));
                 heard[index] |= rings && self.activity[index].recent(now);
             }
         }
@@ -1023,7 +1104,7 @@ impl PlanState {
                     .edges
                     .iter()
                     .find(|old_edge| {
-                        old_edge.target_id == edge.target_id && old_edge.send == edge.send
+                        old_edge.target_id == edge.target_id && old_edge.send == edge.send && old_edge.sidechain == edge.sidechain
                     })
                     .map(|old_edge| old.edges[old_edge.slot]);
                 // A route that did not exist a moment ago fades in.
@@ -1149,6 +1230,11 @@ impl PlanState {
         }
         for (index, track) in plan.tracks.iter().enumerate() {
             let found = old_plan.track_ids.get(track.id.0);
+            for (place, effect) in track.effects.iter().enumerate() {
+                let previous = found.and_then(|found| old_plan.tracks[found].effects.iter().position(|old| old.id == effect.id).map(|place| (found, place)));
+                self.key_delays[index][place].align_splices(plan, &self.chains);
+                self.key_delays[index][place].take_over(previous.map(|(track, place)| &mut old.key_delays[track][place]), heard[index], fades.delay, wait);
+            }
             self.direct[index].align_splices(plan, &self.chains);
             self.direct[index].take_over(
                 found.map(|found| &mut old.direct[found]),
@@ -1160,7 +1246,7 @@ impl PlanState {
                 let before = found.and_then(|found| {
                     let edges = &old_plan.tracks[found].edges;
                     edges.iter().find(|old_edge| {
-                        old_edge.target_id == edge.target_id && old_edge.send == edge.send
+                        old_edge.target_id == edge.target_id && old_edge.send == edge.send && old_edge.sidechain == edge.sidechain
                     })
                 });
                 self.edge_delays[edge.slot].align_splices(plan, &self.chains);
@@ -1172,6 +1258,18 @@ impl PlanState {
                 );
             }
         }
+        self.printed_activity = old.printed_activity;
+        self.master_output.take_over(Some(&mut old.master_output), heard[0], fades.delay, wait);
+        for (index, track) in plan.tracks.iter().enumerate() {
+            let found = old_plan.track_ids.get(track.id.0);
+            self.external[index].take_over(found.map(|found| &mut old.external[found]), heard[index], fades.delay, wait);
+        }
+        self.printed.take_over(
+            Some(&mut old.printed),
+            printed_sounding || old.printed_activity.recent(now),
+            fades.delay,
+            wait,
+        );
         automation::take_over(plan, self, old_plan, old);
     }
 
@@ -1215,6 +1313,9 @@ impl PlanState {
             unit.render(clock, base, frames.start, frames.end);
         }
     }
+    pub fn render_instrument_curves(&mut self, plan: &Plan, clock: Clock, base: u64, frames: Range<usize>) {
+        for unit in self.instrument_units() { unit.render_curves(plan, clock, base, frames.start, frames.end); }
+    }
 
     /// True when nothing at or above the level of [`TAIL_SILENCE_DB`] is
     /// left to come out as of frame `now`, given that no sampler voice is
@@ -1235,18 +1336,22 @@ impl PlanState {
             let unit = seat.unit.as_ref();
             unit.is_none_or(|unit| unit.settled(now.saturating_sub(seat.delay.holds())))
         });
-        instruments_done
+        let prints_done = self.printed_activity.loud_input == 0
+            || self.printed_activity.loud_input + self.printed.holds() + TAIL_SLACK_FRAMES <= now;
+        instruments_done && prints_done
             && plan.tracks.iter().enumerate().all(|(index, track)| {
+                if track.current { return true; }
                 let activity = &self.activity[index];
                 if activity.loud_input == 0 && activity.loud_output == 0 {
                     return true;
                 }
                 let units = || self.chains[index].iter().flatten();
-                let ring: usize = units().map(EffectUnit::tail_samples).sum();
+                let ring: usize = units().map(EffectUnit::tail_samples).sum::<usize>() + self.track_processing[index].tail_samples();
                 let gap: usize = units().map(EffectUnit::gap_samples).sum();
                 let edges = track.edges.iter();
                 let onward = edges.map(|edge| self.edge_delays[edge.slot].holds()).max();
-                let held = self.direct[index].holds() + onward.unwrap_or(0);
+                let output = if index == 0 { self.master_output.holds() } else { self.external[index].holds() };
+                let held = self.direct[index].holds() + onward.unwrap_or(0).max(output);
                 let rung_out = activity.loud_input + ring as u64 + held;
                 let quiet_from = activity.loud_input.max(activity.loud_output);
                 let died_away = quiet_from + gap as u64 + TAIL_SLACK_FRAMES + held;
@@ -1282,6 +1387,11 @@ mod tests {
 
     fn track(id: u32, output: u32) -> MixerTrack {
         MixerTrack {
+            dock: windfall_project::MixerDock::default(),
+            external_output: None,
+            processing: windfall_dsp::TrackParams::default(),
+            current: false,
+            latency_offset_ms: 0.0,
             id: TrackId(id),
             name: String::new(),
             color: 0,
@@ -1290,8 +1400,10 @@ mod tests {
             muted: false,
             solo: false,
             output: Some(TrackId(output)),
+            sidechains: Vec::new(),
             sends: Vec::new(),
             effects: Vec::new(),
+            recording: None,
         }
     }
 
@@ -1304,6 +1416,8 @@ mod tests {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId(track),
             source,
         }

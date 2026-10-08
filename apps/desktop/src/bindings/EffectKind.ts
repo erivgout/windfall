@@ -3,4 +3,4 @@
 /**
  * Which effect an [`AnyEffect`] or an [`EffectParams`] holds.
  */
-export type EffectKind = "eq" | "compressor" | "limiter" | "reverb" | "delay" | "balance" | "dcBlock" | "channelMute" | "polarity" | "stereoMatrix" | "softClipper" | "distortion" | "fastLowpass" | "selectableFilter" | "bassShelf" | "lofi";
+export type EffectKind = "eq" | "compressor" | "limiter" | "reverb" | "delay" | "balance" | "dcBlock" | "channelMute" | "polarity" | "stereoMatrix" | "softClipper" | "distortion" | "fastLowpass" | "selectableFilter" | "bassShelf" | "lofi" | "chorus" | "flanger" | "phaser";

@@ -106,7 +106,7 @@ mod processor;
 mod state;
 mod vst3;
 
-pub use adapter::{PluginEffect, PluginInstrument};
+pub use adapter::{PluginEffect, PluginInstrument, PluginNoteControls};
 pub use check::{CheckReport, CheckStep, StepOutcome, check_in_process, check_plugin};
 pub use containment::PluginHealth;
 pub use descriptor::{
@@ -114,7 +114,7 @@ pub use descriptor::{
     PluginKind, PluginLayout,
 };
 pub use error::{DeactivationError, PluginError};
-pub use events::{HostEvent, MeterAnchor, PluginEvent, Transport};
+pub use events::{HostEvent, MeterAnchor, PluginEvent, Transport, NoteExpressionKind, MAX_NOTE_INSTANCES, FIRST_NOTE_INSTANCE_ID};
 pub use gui::{EditorError, EditorInfo, EditorOptions};
 pub use host::{LogLevel, PluginHost, PluginModule};
 pub use instance::{PluginInstance, PluginNotification};

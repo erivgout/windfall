@@ -6,16 +6,19 @@ import { getProjectGeneration } from "@/lib/store/replaced"
 
 import { auditionOff, auditionOn } from "./audition"
 import { Editor, type EditorContext, type EditorHost } from "./editor"
-import { PianoRollSession } from "./session"
-import { snapTicks } from "./snap"
+import { currentSession, PianoRollSession } from "./session"
+import { snapMusicalGrid, snapTicks } from "./snap"
 import { usePianoRollStore } from "./store"
+import { patternMeterAt } from "./pattern-timeline"
 
 // An empty lane has no array in the project, and the editor tells lanes
 // apart by reference, so every empty lane gets this one.
 const EMPTY_NOTES: readonly Note[] = []
 
 export function currentSignature(): TimeSignature {
-  return useProjectStore.getState().project.settings.timeSignature
+  const project = useProjectStore.getState().project
+  const id = currentSession()?.editing?.patternId
+  return project.patterns.find((pattern) => pattern.id === id)?.timeSignature ?? project.settings.timeSignature
 }
 
 /** What the editor works on, read from the project as it is right now. */
@@ -32,7 +35,9 @@ export function readContext(
     pattern: {
       id: pattern.id,
       lengthSteps: pattern.lengthSteps,
-      signature: project.settings.timeSignature,
+      signature: pattern.timeSignature ?? project.settings.timeSignature,
+      timeline: pattern.timeline,
+      noteCurves: pattern.noteCurves,
     },
     channel: channelId,
     notes: lane?.notes ?? EMPTY_NOTES,
@@ -52,13 +57,22 @@ export function createSession(): PianoRollSession {
       const editing = session.editing
       return editing ? readContext(editing.patternId, editing.channelId) : null
     },
-    settings: () => {
+    settings: (tick = 0) => {
       const state = usePianoRollStore.getState()
+      const editing = session.editing
+      const pattern = editing ? readContext(editing.patternId, editing.channelId)?.pattern : null
+      const meter = patternMeterAt(tick, pattern?.signature ?? currentSignature(), pattern?.timeline)
       return {
         tool: state.tool,
-        snap: snapTicks(state.snap, currentSignature()),
+        snap: snapTicks(state.snap, meter.signature),
+        snapOrigin: meter.start,
+        snapEnd: meter.end,
+        musicalGrid: snapMusicalGrid(state.snap, pattern?.signature ?? currentSignature(), pattern?.timeline),
         lastLength: state.lastLength,
         lastVelocity: state.lastVelocity,
+        articulation: state.drawArticulation,
+        glideTicks: state.drawGlideTicks,
+        colorGroup: state.drawColorGroup,
         pitchScale: state.snapToScale
           ? { root: state.scaleRoot, id: state.scaleId }
           : null,

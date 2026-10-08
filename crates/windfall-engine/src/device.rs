@@ -189,6 +189,7 @@ fn latency_ms(frames: u32, sample_rate: u32) -> f32 {
 /// The status of an engine with no stream, echoing what was asked for.
 fn stopped(settings: &AudioSettings, error: impl Into<String>) -> EngineStatus {
     EngineStatus {
+        output_channels: 0,
         running: false,
         host: settings.host.clone().unwrap_or_default(),
         device: settings.device.clone(),
@@ -601,7 +602,8 @@ fn open(
     let default = device
         .default_output_config()
         .map_err(|error| format!("could not read the output format of \"{name}\": {error}"))?;
-    let preferred = choose_config(&device, default, settings.sample_rate);
+    let preferred = choose_channel_config(&device, choose_config(&device, default, settings.sample_rate), settings.output_channels)?;
+    let fallback = choose_channel_config(&device, default, settings.output_channels)?;
     let buffer = settings
         .buffer_frames
         .map(|frames| fit_buffer(frames, preferred.buffer_size()));
@@ -612,8 +614,8 @@ fn open(
     if buffer.is_some() {
         attempts.push((preferred, None));
     }
-    if preferred != default {
-        attempts.push((default, None));
+    if preferred != fallback {
+        attempts.push((fallback, None));
     }
 
     let mut last_error = String::new();
@@ -628,6 +630,7 @@ fn open(
         let buffer_frames = stream.buffer_size().ok().or(buffer).unwrap_or(0);
         report.running = true;
         report.sample_rate = config.sample_rate();
+        report.output_channels = config.channels();
         report.buffer_frames = buffer_frames;
         report.latency_ms = latency_ms(buffer_frames, config.sample_rate());
         report.error = None;
@@ -705,6 +708,20 @@ fn fit_buffer(frames: u32, supported: &SupportedBufferSize) -> u32 {
     .max(1)
 }
 
+fn choose_channel_config(device: &cpal::Device, preferred: SupportedStreamConfig, requested: Option<u16>) -> Result<SupportedStreamConfig, String> {
+    let most = crate::hardware_output::MAX_OUTPUT_CHANNELS as u16;
+    if requested.is_some_and(|channels| channels == 0 || channels > most) {
+        return Err(format!("Choose 1–{most} output channels"));
+    }
+    if preferred.channels() <= most && requested.is_none_or(|channels| channels == preferred.channels()) { return Ok(preferred); }
+    let rate = preferred.sample_rate();
+    device.supported_output_configs().map_err(|error| error.to_string())?
+        .filter(|range| writable(range.sample_format()) && range.channels() <= most && requested.is_none_or(|channels| range.channels() == channels))
+        .map(|range| { let chosen = rate.clamp(range.min_sample_rate(), range.max_sample_rate()); (chosen.abs_diff(rate), range.with_sample_rate(chosen)) })
+        .min_by_key(|(distance, _)| *distance).map(|(_, config)| config)
+        .ok_or_else(|| "The selected device does not offer the requested output channel layout".into())
+}
+
 fn build(
     device: &cpal::Device,
     config: SupportedStreamConfig,
@@ -720,8 +737,10 @@ fn build(
         sample_rate: config.sample_rate(),
         buffer_size: buffer.map_or(BufferSize::Default, BufferSize::Fixed),
     };
+    let mut processor = controller.attach(config.sample_rate());
+    processor.set_output_channels(usize::from(config.channels()));
     let mut feeder = Feeder {
-        processor: controller.attach(config.sample_rate()),
+        processor,
         shared: controller.shared().clone(),
         channels: usize::from(config.channels()),
         scratch: vec![[0.0; 2]; MAX_BLOCK].into_boxed_slice(),
@@ -732,7 +751,10 @@ fn build(
         .build_output_stream_raw(
             stream_config,
             format,
-            move |data: &mut cpal::Data, _: &cpal::OutputCallbackInfo| feeder.fill(data),
+            move |data: &mut cpal::Data, info: &cpal::OutputCallbackInfo| {
+                feeder.shared.recording_clock.publish_output(feeder.processor.output_frame(), feeder.processor.sample_rate(), info.timestamp());
+                feeder.fill(data);
+            },
             move |error: cpal::Error| reporter.report(error),
             Some(OPEN_TIMEOUT),
         )
@@ -785,9 +807,8 @@ impl Feeder {
             .record_buffer(frames, started.elapsed(), self.processor.sample_rate());
     }
 
-    /// Fills a device buffer of any length, working through it in pieces
-    /// the scratch buffer can hold. Stereo goes to the first two channels
-    /// and a mono device gets the average of both sides.
+    /// Fills the requested device layout in bounded blocks, summing physical
+    /// destinations before sample conversion. Every unwritten port is silent.
     fn write<T>(&mut self, data: &mut cpal::Data)
     where
         T: SizedSample + FromSample<f32>,
@@ -800,21 +821,10 @@ impl Feeder {
             let frames = block.len() / self.channels;
             let scratch = &mut self.scratch[..frames];
             self.processor.process(scratch.as_flattened_mut());
-            if clip {
-                for sample in scratch.as_flattened_mut() {
-                    *sample = sample.clamp(-1.0, 1.0);
-                }
-            }
-            if self.channels == 1 {
-                for (out, frame) in block.iter_mut().zip(scratch.iter()) {
-                    *out = T::from_sample((frame[0] + frame[1]) * 0.5);
-                }
-            } else {
-                let device_frames = block.chunks_exact_mut(self.channels);
-                for (out, frame) in device_frames.zip(scratch.iter()) {
-                    out[0] = T::from_sample(frame[0]);
-                    out[1] = T::from_sample(frame[1]);
-                }
+            block.fill(T::from_sample(0.0));
+            for (output, sample) in block.iter_mut().zip(self.processor.hardware_samples()) {
+                let value = if sample.is_finite() { *sample } else { 0.0 };
+                *output = T::from_sample(if clip { value.clamp(-1.0, 1.0) } else { value });
             }
         }
     }
@@ -910,7 +920,9 @@ fn list_hosts() -> Vec<AudioHost> {
 
 fn describe(device: &cpal::Device, is_default: bool) -> AudioDevice {
     let mut sample_rates = Vec::new();
+    let mut output_channels = Vec::new();
     for range in device.supported_output_configs().into_iter().flatten() {
+        if writable(range.sample_format()) && usize::from(range.channels()) <= crate::hardware_output::MAX_OUTPUT_CHANNELS { output_channels.push(range.channels()); }
         sample_rates.extend(
             STANDARD_RATES
                 .into_iter()
@@ -919,6 +931,7 @@ fn describe(device: &cpal::Device, is_default: bool) -> AudioDevice {
     }
     sample_rates.sort_unstable();
     sample_rates.dedup();
+    output_channels.sort_unstable(); output_channels.dedup();
     // Buffer sizes are in frames, so a range only means something at one
     // sample rate. The one reported is for the device's default format.
     let buffer_range =
@@ -935,6 +948,7 @@ fn describe(device: &cpal::Device, is_default: bool) -> AudioDevice {
         sample_rates,
         min_buffer_frames: buffer_range.map(|(low, _)| low),
         max_buffer_frames: buffer_range.map(|(_, high)| high),
+        output_channels,
     }
 }
 

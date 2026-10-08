@@ -11,7 +11,7 @@ import { clamp, MASTER_TRACK, MAX_GAIN, MAX_MIXER_TRACKS } from "@/lib/units"
 import { automationGoingWith } from "@/features/automation/owned"
 
 import { effectName } from "./effect-ops"
-import { useMixerUi } from "./mixer-ui"
+import { useMixerUi, selectedMixerTracks, visualMixerOrder, selectMixerTrack } from "./mixer-ui"
 import { resetAllPeaks } from "./peaks"
 import { feedersOf } from "./routing"
 
@@ -38,7 +38,7 @@ export function selectedTrack(): MixerTrack | undefined {
 }
 
 export function mixerIsFull(): boolean {
-  return mixerTracks().length >= MAX_MIXER_TRACKS
+  return mixerTracks().filter((track) => !track.current).length >= MAX_MIXER_TRACKS
 }
 
 /**
@@ -54,6 +54,10 @@ export function clampPan(pan: number): number {
 }
 
 export function patchTrack(id: TrackId, patch: MixerTrackPatch) {
+  if (patch.muted !== undefined || patch.solo !== undefined) {
+    const tracks = selectedMixerTracks(id).filter((track) => patch.solo === undefined || track.id !== MASTER_TRACK && !track.current)
+    return dispatch({ type: "batch", commands: tracks.map((track) => ({ type: "updateMixerTrack", id: track.id, patch })) })
+  }
   return dispatch({ type: "updateMixerTrack", id, patch })
 }
 
@@ -82,6 +86,8 @@ export function deleteWarning(track: MixerTrack): string | null {
     track.id
   )
   const parts: string[] = []
+  const keys = mixerTracks().filter((source) => source.sidechains?.some((send) => send.target === track.id))
+  if (keys.length) parts.push(`Detector-only routes from ${listNames(keys.map((source) => source.name))} will be removed.`)
   if (channels.length === 1) {
     parts.push(
       `The channel "${channels[0].name}" plays into this track. It will fall back to the master.`
@@ -197,7 +203,7 @@ export async function toggleMute(id: TrackId) {
 
 export async function toggleSolo(id: TrackId) {
   const track = findTrack(id)
-  if (track) await patchTrack(id, { solo: !track.solo })
+  if (track && !track.current) await patchTrack(id, { solo: !track.solo })
 }
 
 /** Applies one patch to several tracks as a single undo step. */
@@ -225,12 +231,18 @@ export function unsoloAll() {
 /** Routes a track's output to another track, or nowhere with `null`. */
 export async function setOutput(id: TrackId, output: TrackId | null) {
   const track = findTrack(id)
-  if (!track || id === MASTER_TRACK || track.output === output) return
+  if (!track || track.current || id === MASTER_TRACK || track.output === output) return
   await dispatch({
     type: "setTrackOutput",
     id,
     output: output ?? undefined,
   })
+}
+
+export async function removeSidechain(from: TrackId, to: TrackId) {
+  const automation = automationGoingWith({ type: "sidechain", track: from, target: to })
+  if (automation !== null && await askConfirm({ title: "Remove sidechain?", description: `${automation} Undo brings it back.`, choices: [{ id: "remove", label: "Remove sidechain", variant: "destructive" }] }) !== "remove") return
+  await dispatch({ type: "setSidechain", from, to })
 }
 
 export function addSend(from: TrackId, to: TrackId) {
@@ -261,7 +273,7 @@ export async function removeSend(from: TrackId, to: TrackId): Promise<void> {
 
 /** Moves the selection one strip left (-1) or right (1), or to an end. */
 export function selectStrip(move: -1 | 1 | "first" | "last"): TrackId | null {
-  const tracks = mixerTracks()
+  const tracks = visualMixerOrder(mixerTracks())
   if (tracks.length === 0) return null
   const current = tracks.findIndex((track) => track.id === ui().selectedTrack)
   let next: number
@@ -275,7 +287,17 @@ export function selectStrip(move: -1 | 1 | "first" | "last"): TrackId | null {
 }
 
 /** Moves the selection as a key does: the strip it lands on takes the focus. */
-export function moveSelection(move: -1 | 1 | "first" | "last") {
+export function moveSelection(move: -1 | 1 | "first" | "last", range = false) {
+  if (range) {
+    const tracks = visualMixerOrder(mixerTracks())
+    if (!tracks.length) return
+    const index = tracks.findIndex((track) => track.id === ui().selectedTrack)
+    const next = move === "first" ? 0 : move === "last" ? tracks.length - 1 : clamp(index + move, 0, tracks.length - 1)
+    const id = tracks[next].id
+    selectMixerTrack(id, false, true)
+    useMixerUi.setState({ focusing: id })
+    return
+  }
   const id = selectStrip(move)
   if (id !== null) useMixerUi.setState({ focusing: id })
 }

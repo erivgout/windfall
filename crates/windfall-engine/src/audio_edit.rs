@@ -228,6 +228,7 @@ mod tests {
             content: ClipContent::Audio {
                 sample: SampleId(3),
                 mixer_track: TrackId::MASTER,
+                output: Default::default(),
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

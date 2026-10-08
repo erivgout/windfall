@@ -1,11 +1,13 @@
 import { logicalDelta } from "@/lib/ui-scale"
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type DragEvent,
 } from "react"
+import { useShallow } from "zustand/react/shallow"
 
 import type { ChannelId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
@@ -39,7 +41,9 @@ import {
   STEPS_TRAIL,
 } from "./layout"
 import { StepRuler } from "./step-ruler"
-import { moveIndex, rulerMarks, stepsPerBeat } from "./steps"
+import { useRackStore } from "./rack-store"
+import { StepGraph } from "./step-graph"
+import { beatShades, moveIndex, rulerMarks, stepsPerBeat } from "./steps"
 
 /** MIME type of a rack row being dragged to a new position. */
 export const CHANNEL_DRAG_TYPE = "application/x-windfall-channel"
@@ -63,7 +67,11 @@ function sameDrop(a: Drop | null, b: Drop | null): boolean {
  * steps scroll sideways, and the ruler stays put while the rows scroll down.
  */
 export function RackGrid() {
-  const ids = useChannelIds()
+  const allIds = useChannelIds()
+  const filter = useRackStore((state) => state.groupFilter)
+  const ids = useProjectStore(useShallow((state) => state.project.channels
+    .filter((channel) => filter === null || (channel.group ?? "") === filter)
+    .map((channel) => channel.id)))
   const pattern = useSelectedPatternId()
   const lengthSteps = useProjectStore(
     (state) =>
@@ -71,8 +79,10 @@ export function RackGrid() {
       DEFAULT_PATTERN_STEPS
   )
   const signature = useProjectStore(
-    (state) => state.project.settings.timeSignature
+    (state) => state.project.patterns.find((item) => item.id === pattern)?.timeSignature ?? state.project.settings.timeSignature
   )
+  const timeline = useProjectStore((state) => state.project.patterns.find((item) => item.id === pattern)?.timeline)
+  const shades = useMemo(() => beatShades(lengthSteps, signature, timeline), [lengthSteps, signature, timeline])
   const anySolo = useProjectStore((state) =>
     state.project.channels.some((channel) => channel.solo)
   )
@@ -125,6 +135,15 @@ export function RackGrid() {
       0,
       ids.length
     )
+  }
+
+  // Gaps are measured among visible rows, but commands address global rack
+  // order. Hidden channels retain their relative positions.
+  function insertionIndex(gap: number, order = allIds): number {
+    const before = ids[gap]
+    if (before !== undefined) return order.indexOf(before)
+    const last = ids.at(-1)
+    return last === undefined ? order.length : order.indexOf(last) + 1
   }
 
   /** Where the thing being dragged would land, or null when nowhere. */
@@ -200,7 +219,7 @@ export function RackGrid() {
       if (target.kind === "replace") {
         void replaceSampleFromFile(target.channel, sample.path, sample.browser)
       } else {
-        void addChannelFromFile(sample.path, target.index, sample.browser)
+        void addChannelFromFile(sample.path, insertionIndex(target.index), sample.browser)
       }
       return
     }
@@ -208,11 +227,15 @@ export function RackGrid() {
     const from = ids.indexOf(id)
     if (from < 0 || target.kind !== "insert") return
     const to = moveIndex(from, target.index, ids.length)
-    if (to !== null) void moveChannelTo(id, to)
+    if (to !== null) {
+      const remaining = allIds.filter((item) => item !== id)
+      const globalIndex = insertionIndex(target.index, remaining)
+      if (globalIndex >= 0) void moveChannelTo(id, globalIndex)
+    }
   }
 
   const groupSize = stepsPerBeat(signature)
-  const barLines = rulerMarks(lengthSteps, signature)
+  const barLines = rulerMarks(lengthSteps, signature, timeline)
     .filter((mark) => mark.bar && mark.step > 0)
     .map((mark) => mark.step)
 
@@ -256,6 +279,7 @@ export function RackGrid() {
               <StepRuler
                 lengthSteps={lengthSteps}
                 signature={signature}
+                timeline={timeline}
                 caretRef={caret}
               />
             </div>
@@ -276,6 +300,7 @@ export function RackGrid() {
                     pattern={pattern}
                     lengthSteps={lengthSteps}
                     groupSize={groupSize}
+                    beatShades={shades}
                     anySolo={anySolo}
                     drop={
                       drop !== null &&
@@ -310,6 +335,8 @@ export function RackGrid() {
             )}
           </StepGridGroup>
 
+          {pattern !== null && <StepGraph pattern={pattern} lengthSteps={lengthSteps} groupSize={groupSize} />}
+
           <div className="flex min-h-9 flex-1 items-start">
             <div
               className="sticky left-0 flex items-center gap-2 px-1.5 py-1.5"
@@ -317,8 +344,9 @@ export function RackGrid() {
             >
               <ActionButton action="channel.add" variant="ghost" size="sm" />
               <span className="text-muted-foreground">
-                or drag a sample here from the browser
+                {ids.length === 0 && filter !== null ? "No channels in this group" : "or drag a sample here from the browser"}
               </span>
+              {filter !== null && <ActionButton action="channelRack.showAllGroups" variant="ghost" size="sm">Show all</ActionButton>}
             </div>
           </div>
         </div>

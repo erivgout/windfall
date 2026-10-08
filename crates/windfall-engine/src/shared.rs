@@ -19,6 +19,12 @@ pub(crate) const MAX_REPORTED_AUTOMATIONS: usize = 128;
 const READ_ATTEMPTS: u32 = 4;
 
 pub(crate) struct Shared {
+    pub waveform_epoch: AtomicU64,
+    pub waveforms: Box<[crate::waveform_meter::WaveSlot]>,
+    /// Current utility source. MAX means disabled, as for offline processors.
+    pub current_track: AtomicU32,
+    pub recording_clock: crate::recording_clock::RecordingClock,
+    pub count_in_remaining: AtomicU32,
     pub navigation_overflows: AtomicU32,
     /// Invalidates queued hardware notes and silences their voices without queue space.
     pub hardware_epoch: AtomicU64,
@@ -61,6 +67,11 @@ pub(crate) struct Shared {
 impl Shared {
     pub fn new() -> Self {
         Self {
+            waveform_epoch: AtomicU64::new(1),
+            waveforms: (0..MAX_MIXER_TRACKS).map(|_| crate::waveform_meter::WaveSlot::new()).collect::<Vec<_>>().into_boxed_slice(),
+            current_track: AtomicU32::new(u32::MAX),
+            recording_clock: crate::recording_clock::RecordingClock::new(),
+            count_in_remaining: AtomicU32::new(0),
             navigation_overflows: AtomicU32::new(0),
             hardware_epoch: AtomicU64::new(0),
             transport: AtomicU64::new(0),
@@ -192,6 +203,7 @@ impl Shared {
 
     /// Clears the stream measurements when a device stream starts.
     pub fn begin_stream(&self) {
+        self.waveform_epoch.fetch_add(1, Ordering::AcqRel);
         self.load.store(0, Ordering::Relaxed);
         self.load_peak.store(0, Ordering::Relaxed);
         self.xruns.store(0, Ordering::Relaxed);

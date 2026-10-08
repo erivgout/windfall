@@ -6,8 +6,8 @@
 //! with a sidechain reads its second input whether the host has one or
 //! not. So at activation this module builds a complete set of buffers for
 //! every port the plugin declared, pointing at memory it owns. Per block it
-//! only changes the two pointers of each main port, to where the caller's
-//! audio is.
+//! changes the main pointers to the caller's audio and copies the detector
+//! signal into the selected auxiliary input. Other auxiliary inputs stay silent.
 //!
 //! The raw pointers are why this file has `unsafe` in it. Clack's safe
 //! buffer builder cannot express the same memory used as input and output,
@@ -65,13 +65,15 @@ struct PortSet {
     /// The memory behind every pointer that is not the caller's.
     owned: Vec<Box<[f32]>>,
     main: Option<MainPort>,
+    key_port: Option<usize>,
+    key_owned: Vec<Vec<usize>>,
 }
 
 impl PortSet {
     /// Builds buffers of `frames` frames for `ports`.
     ///
-    /// Input ports other than the main one read silence, all from one
-    /// shared buffer. Output ports other than the main one each get memory
+    /// Auxiliary inputs own their first two channel buffers for key audio.
+    /// Remaining input channels share silence. Output ports other than the main one each get memory
     /// of their own that nobody reads.
     fn new(ports: &[PortDesc], frames: usize, is_input: bool) -> Self {
         let buffer = || vec![0.0_f32; frames].into_boxed_slice();
@@ -79,8 +81,11 @@ impl PortSet {
         let mut pointers = Vec::new();
         let mut firsts = Vec::new();
         let mut main = None;
+        let key_port = if is_input { ports.iter().position(|port| !port.main && port.channels > 0) } else { None };
+        let mut key_owned = Vec::with_capacity(ports.len());
 
         for port in ports {
+            let mut port_owned = Vec::new();
             let first = pointers.len();
             firsts.push(first);
             let mut main_port = MainPort { first, mono: None };
@@ -92,6 +97,8 @@ impl PortSet {
                     owned.push(buffer());
                     main_port.mono = Some(owned.len() - 1);
                     owned.len() - 1
+                } else if is_input && !port.main && channel < 2 {
+                    owned.push(buffer()); port_owned.push(owned.len() - 1); owned.len() - 1
                 } else if callers || is_input {
                     0
                 } else {
@@ -100,6 +107,7 @@ impl PortSet {
                 };
                 pointers.push(owned[index].as_mut_ptr());
             }
+            key_owned.push(port_owned);
             if port.main && port.channels > 0 && main.is_none() {
                 main = Some(main_port);
             }
@@ -127,7 +135,32 @@ impl PortSet {
             pointers,
             owned,
             main,
+            key_port,
+            key_owned,
         }
+    }
+
+    fn key_input(&mut self, key: Option<&[[f32; 2]]>, frames: usize) {
+        self.owned[0][..frames].fill(0.0);
+        for (port, owned_channels) in self.key_owned.iter().enumerate() {
+            if owned_channels.is_empty() { continue; }
+            let selected = Some(port) == self.key_port;
+            let mono = owned_channels.len() == 1;
+            for (side, owned) in owned_channels.iter().copied().enumerate() {
+                for (index, output) in self.owned[owned][..frames].iter_mut().enumerate() {
+                    let pair = if selected { key.and_then(|key| key.get(index)).copied().unwrap_or([0.0; 2]) } else { [0.0; 2] };
+                    let value = if mono { (pair[0] + pair[1]) * 0.5 } else { pair[side] };
+                    *output = if value.is_finite() { value.clamp(-1.0e6, 1.0e6) } else { 0.0 };
+                }
+            }
+            self.buffers[port].constant_mask = if selected && key.is_some() { 0 } else { u64::MAX };
+        }
+    }
+    fn select_key(&mut self, input: Option<u32>) {
+        self.key_port = match input {
+            Some(index) => self.key_owned.get(index as usize).filter(|owned| !owned.is_empty()).map(|_| index as usize),
+            None => self.key_owned.iter().position(|owned| !owned.is_empty()),
+        };
     }
 
     /// Points the main port at the caller's two channels, if it takes them
@@ -219,9 +252,16 @@ fn transport_event(transport: &Transport) -> Result<TransportEvent, ProcessFaile
 }
 
 impl ProcessorBackend for ClapProcessor {
-    fn process(
+    fn supports_note_instances(&self) -> bool { self.dialect == Dialect::Clap }
+    fn note_expression_mask(&self, _channel: u8) -> u32 { if self.dialect == Dialect::Clap { 0x7f } else { 0 } }
+    fn set_sidechain_input(&mut self, input: Option<u32>) { self.inputs.select_key(input); }
+    fn process(&mut self, audio: AudioIo<'_>, events: &[HostEvent], transport: &Transport, steady_time: u64, out: &mut dyn FnMut(PluginEvent)) -> Result<BlockResult, ProcessFailed> {
+        self.process_sidechain(audio, None, events, transport, steady_time, out)
+    }
+    fn process_sidechain(
         &mut self,
         audio: AudioIo<'_>,
+        key: Option<&[[f32; 2]]>,
         events: &[HostEvent],
         transport: &Transport,
         steady_time: u64,
@@ -229,6 +269,7 @@ impl ProcessorBackend for ClapProcessor {
     ) -> Result<BlockResult, ProcessFailed> {
         let transport = transport_event(transport)?;
         let frames = audio.frames();
+        self.inputs.key_input(key, frames);
         self.events.fill(events, self.dialect);
 
         // The caller's slices become raw pointers here and are not used as

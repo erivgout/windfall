@@ -2,14 +2,17 @@
 import type { BalanceParams } from "./BalanceParams";
 import type { BassShelfParams } from "./BassShelfParams";
 import type { ChannelMuteParams } from "./ChannelMuteParams";
+import type { ChorusParams } from "./ChorusParams";
 import type { CompressorParams } from "./CompressorParams";
 import type { DcBlockParams } from "./DcBlockParams";
 import type { DelayParams } from "./DelayParams";
 import type { DistortionParams } from "./DistortionParams";
 import type { EqParams } from "./EqParams";
 import type { FastLowpassParams } from "./FastLowpassParams";
+import type { FlangerParams } from "./FlangerParams";
 import type { LimiterParams } from "./LimiterParams";
 import type { LofiParams } from "./LofiParams";
+import type { PhaserParams } from "./PhaserParams";
 import type { PolarityParams } from "./PolarityParams";
 import type { ReverbParams } from "./ReverbParams";
 import type { SelectableFilterParams } from "./SelectableFilterParams";
@@ -20,4 +23,4 @@ import type { StereoMatrixParams } from "./StereoMatrixParams";
  * The settings of any one effect. This is what a project stores for an
  * effect slot.
  */
-export type EffectParams = { "type": "eq" } & EqParams | { "type": "compressor" } & CompressorParams | { "type": "limiter" } & LimiterParams | { "type": "reverb" } & ReverbParams | { "type": "delay" } & DelayParams | { "type": "balance" } & BalanceParams | { "type": "dcBlock" } & DcBlockParams | { "type": "channelMute" } & ChannelMuteParams | { "type": "polarity" } & PolarityParams | { "type": "stereoMatrix" } & StereoMatrixParams | { "type": "softClipper" } & SoftClipperParams | { "type": "distortion" } & DistortionParams | { "type": "fastLowpass" } & FastLowpassParams | { "type": "selectableFilter" } & SelectableFilterParams | { "type": "bassShelf" } & BassShelfParams | { "type": "lofi" } & LofiParams;
+export type EffectParams = { "type": "eq" } & EqParams | { "type": "compressor" } & CompressorParams | { "type": "limiter" } & LimiterParams | { "type": "reverb" } & ReverbParams | { "type": "delay" } & DelayParams | { "type": "balance" } & BalanceParams | { "type": "dcBlock" } & DcBlockParams | { "type": "channelMute" } & ChannelMuteParams | { "type": "polarity" } & PolarityParams | { "type": "stereoMatrix" } & StereoMatrixParams | { "type": "softClipper" } & SoftClipperParams | { "type": "distortion" } & DistortionParams | { "type": "fastLowpass" } & FastLowpassParams | { "type": "selectableFilter" } & SelectableFilterParams | { "type": "bassShelf" } & BassShelfParams | { "type": "lofi" } & LofiParams | { "type": "chorus" } & ChorusParams | { "type": "flanger" } & FlangerParams | { "type": "phaser" } & PhaserParams;

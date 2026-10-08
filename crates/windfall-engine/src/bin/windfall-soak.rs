@@ -136,6 +136,7 @@ fn list_devices() {
 /// Runs the soak and returns whether it passed.
 fn soak(options: &Options) -> bool {
     let engine = Engine::start(&AudioSettings {
+        output_channels: None,
         host: options.host.clone(),
         device: options.device.clone(),
         sample_rate: options.sample_rate,
@@ -288,6 +289,11 @@ fn drum_project() -> (Project, SamplePool) {
             path: SamplePath::Factory(format!("soak/{}.wav", name.to_lowercase())),
         });
         project.mixer.tracks.push(MixerTrack {
+            dock: windfall_project::MixerDock::default(),
+            external_output: None,
+            processing: windfall_dsp::TrackParams::default(),
+            current: false,
+            latency_offset_ms: 0.0,
             id: track,
             name: name.to_owned(),
             color: palette_color(index),
@@ -296,8 +302,10 @@ fn drum_project() -> (Project, SamplePool) {
             muted: false,
             solo: false,
             output: Some(TrackId::MASTER),
+            sidechains: Vec::new(),
             sends: Vec::new(),
             effects: Vec::new(),
+            recording: None,
         });
         project.channels.push(Channel {
             id: channel,
@@ -307,6 +315,8 @@ fn drum_project() -> (Project, SamplePool) {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: track,
             source: ChannelSource::Sampler(SamplerSettings {
                 sample: Some(sample),
@@ -326,6 +336,7 @@ fn drum_project() -> (Project, SamplePool) {
                     key: DEFAULT_KEY,
                     velocity: 1.0,
                     pan: 0.0,
+                    expression: Default::default(),
                 })
                 .collect(),
         });
@@ -369,11 +380,17 @@ fn add_effects(project: &mut Project) -> (ChannelId, TrackId) {
             key,
             velocity: 0.9,
             pan: 0.0,
+            expression: Default::default(),
         })
         .collect();
 
     project.mixer.tracks[0].effects = effects;
     project.mixer.tracks.push(MixerTrack {
+        dock: windfall_project::MixerDock::default(),
+        external_output: None,
+        processing: windfall_dsp::TrackParams::default(),
+        current: false,
+        latency_offset_ms: 0.0,
         id: track,
         name: "Bass".to_owned(),
         color: palette_color(3),
@@ -382,8 +399,10 @@ fn add_effects(project: &mut Project) -> (ChannelId, TrackId) {
         muted: false,
         solo: false,
         output: Some(TrackId::MASTER),
+        sidechains: Vec::new(),
         sends: Vec::new(),
         effects: Vec::new(),
+        recording: None,
     });
     project.channels.push(Channel {
         id: channel,
@@ -393,6 +412,8 @@ fn add_effects(project: &mut Project) -> (ChannelId, TrackId) {
         pan: 0.0,
         muted: false,
         solo: false,
+        group: String::new(),
+        timing: windfall_project::ChannelTiming::default(),
         mixer_track: track,
         source: ChannelSource::Instrument {
             params: InstrumentKind::SubtractiveSynth.default_params(),
@@ -461,6 +482,7 @@ fn add_song(project: &mut Project, pool: &mut SamplePool, bass: ChannelId, bass_
             ClipContent::Audio {
                 sample,
                 mixer_track: riser_track,
+                output: Default::default(),
                 gain: 0.5,
                 pan: 0.0,
                 fade_in: bar / 2,
@@ -507,6 +529,11 @@ fn add_song(project: &mut Project, pool: &mut SamplePool, bass: ChannelId, bass_
         path: SamplePath::Factory("soak/riser.wav".to_owned()),
     });
     project.mixer.tracks.push(MixerTrack {
+        dock: windfall_project::MixerDock::default(),
+        external_output: None,
+        processing: windfall_dsp::TrackParams::default(),
+        current: false,
+        latency_offset_ms: 0.0,
         id: riser_track,
         name: "Riser".to_owned(),
         color: palette_color(4),
@@ -515,8 +542,10 @@ fn add_song(project: &mut Project, pool: &mut SamplePool, bass: ChannelId, bass_
         muted: false,
         solo: false,
         output: Some(TrackId::MASTER),
+        sidechains: Vec::new(),
         sends: Vec::new(),
         effects: Vec::new(),
+        recording: None,
     });
     project.playlist.tracks = lanes
         .iter()

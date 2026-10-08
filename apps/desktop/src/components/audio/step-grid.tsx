@@ -47,6 +47,8 @@ type StepGridProps = Omit<
   color?: string
   /** Steps per beat. Beats alternate between the two unlit shades. */
   groupSize?: number
+  /** Optional per-step shade from a mixed musical meter map. */
+  beatShades?: readonly boolean[]
   size?: "sm" | "md" | "lg"
   disabled?: boolean
   /** Right-click and right-drag clear steps. Turn off to allow a context menu. */
@@ -81,6 +83,7 @@ const StepGrid = React.memo(function StepGrid({
   onGestureEnd,
   color,
   groupSize = 4,
+  beatShades,
   size = "md",
   disabled = false,
   rightClickClears = true,
@@ -322,7 +325,7 @@ const StepGrid = React.memo(function StepGrid({
           key={step}
           data-step={step}
           on={on}
-          alt={Math.floor(step / groupSize) % 2 === 1}
+          alt={beatShades?.[step] ?? Math.floor(step / groupSize) % 2 === 1}
           tabIndex={step === tabStop ? 0 : -1}
           disabled={disabled}
           spaceToggles={spaceToggles}

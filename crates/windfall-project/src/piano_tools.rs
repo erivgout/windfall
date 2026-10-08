@@ -77,6 +77,11 @@ pub enum NoteGroove {
     PushFour,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum NoteLfoProperty { Velocity, Pan, Release, FinePitchCents, ModulationX, ModulationY }
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",
@@ -151,8 +156,40 @@ pub enum NoteTransform {
     ScaleVelocity {
         factor: f64,
     },
+    /// Seeded offsets preserve each source note's identity and expression.
+    Randomize {
+        seed: u32,
+        pitch: u8,
+        velocity: f64,
+        pan: f64,
+        timing: u32,
+        length: f64,
+    },
+    /// Replace the selection with seeded grid hits from a relative chord map.
+    GenerateRandom {
+        seed: u32,
+        grid: u32,
+        density: f64,
+        gate: f64,
+        root: u8,
+        pitch_classes: u16,
+        low: u8,
+        high: u8,
+        velocity_low: f64,
+        velocity_high: f64,
+    },
+    /// Sample a musical LFO at selected onsets into an event property.
+    Lfo {
+        property: NoteLfoProperty,
+        origin: u32,
+        strength: f64,
+        lfo: crate::CurveLfo,
+    },
     Quantize {
         grid: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        musical: Option<crate::NoteMusicalGrid>,
         strength: f64,
         edge: NoteEdge,
         groove: NoteGroove,
@@ -174,6 +211,9 @@ impl NoteTransform {
             Self::FlipPitch => "Flip note pitch",
             Self::KeyRange { .. } => "Limit and transpose notes",
             Self::ScaleVelocity { .. } => "Scale note velocities",
+            Self::Randomize { .. } => "Randomize notes",
+            Self::GenerateRandom { .. } => "Generate random notes",
+            Self::Lfo { .. } => "Write note-event LFO",
             Self::Quantize {
                 edge: NoteEdge::Start,
                 ..
@@ -265,13 +305,39 @@ impl NoteTransform {
             }
             Self::Staccato { factor } => number("length factor", factor, f64::MIN_POSITIVE, 1.0),
             Self::ScaleVelocity { factor } => number("velocity factor", factor, 0.0, 4.0),
+            Self::Randomize { pitch, velocity, pan, timing, length, .. } => {
+                if pitch > MAX_KEY || timing > MAX_PATTERN_TICKS {
+                    return Err(CommandError::invalid("random pitch or timing range is too large"));
+                }
+                number("random velocity range", velocity, 0.0, 1.0)?;
+                number("random pan range", pan, 0.0, 2.0)?;
+                number("random length range", length, 0.0, 1.0)
+            }
+            Self::Lfo { origin, strength, lfo, .. } => {
+                if origin > MAX_PATTERN_TICKS { return Err(CommandError::invalid("LFO origin is past the pattern limit")); }
+                lfo.check()?;
+                number("LFO strength", strength, 0.0, 1.0)
+            }
+            Self::GenerateRandom { grid: value, density, gate, root, pitch_classes, low, high, velocity_low, velocity_high, .. } => {
+                grid(value)?;
+                number("random density", density, 0.0, 1.0)?;
+                positive_gate("random gate", gate)?;
+                number("random minimum velocity", velocity_low, 0.0, 1.0)?;
+                number("random maximum velocity", velocity_high, velocity_low, 1.0)?;
+                if root > 11 || pitch_classes == 0 || pitch_classes > 0x0fff || low > high || high > MAX_KEY {
+                    return Err(CommandError::invalid("invalid chord map, root or MIDI key range"));
+                }
+                Ok(())
+            }
             Self::Chop { grid: value } => grid(value),
             Self::Quantize {
                 grid: value,
                 strength,
+                musical,
                 ..
             } => {
                 grid(value)?;
+                if let Some(musical) = musical { musical.segments()?; }
                 number("quantize strength", strength, 0.0, 1.0)
             }
             Self::Strum {
@@ -331,6 +397,7 @@ fn valid_note(note: &Note) -> Result<(), CommandError> {
         || !(0.0..=1.0).contains(&note.velocity)
         || !note.pan.is_finite()
         || !(-1.0..=1.0).contains(&note.pan)
+        || !note.expression.valid()
     {
         return Err(CommandError::invalid(
             "selected note is invalid or outside the pattern limit",
@@ -364,12 +431,39 @@ pub(crate) fn selection(notes: &[Note]) -> Result<Vec<Note>, CommandError> {
 
 /// Pure tool calculation. New pieces use id 0 until the transaction allocates
 /// ids. The output is bounded before any document or ID mutation.
-pub fn transform_selected_notes(
+pub fn transform_selected_notes(notes: &[Note], tool: NoteTransform) -> Result<Vec<Note>, CommandError> {
+    let (mut notes, sources) = transform_mapped(notes, tool, &[])?;
+    for note in &mut notes { if sources.contains_key(&note.id) { note.id = NoteId(0); } }
+    Ok(notes)
+}
+
+struct GeneratedSources {
+    next: u32,
+    used: std::collections::BTreeSet<NoteId>,
+    origins: BTreeMap<NoteId, NoteId>,
+}
+impl GeneratedSources {
+    fn new(notes: &[Note]) -> Self {
+        Self { next: u32::MAX, used: notes.iter().map(|note| note.id).collect(), origins: BTreeMap::new() }
+    }
+    fn copy(&mut self, source: NoteId) -> NoteId {
+        // Input/output cardinalities are bounded to 16,384. At most twice that
+        // many reserved candidates can be skipped; these ids never leave here.
+        while self.used.contains(&NoteId(self.next)) { self.next -= 1; }
+        let id = NoteId(self.next); self.next -= 1;
+        self.used.insert(id); self.origins.insert(id, source); id
+    }
+}
+
+pub(crate) fn transform_mapped(
     notes: &[Note],
     tool: NoteTransform,
-) -> Result<Vec<Note>, CommandError> {
+    curves: &[crate::NoteExpressionCurve],
+) -> Result<(Vec<Note>, BTreeMap<NoteId, NoteId>), CommandError> {
     tool.check()?;
     let mut notes = selection(notes)?;
+    let curve_classes = crate::note_curves::classes(curves, &notes);
+    let mut generated_sources = GeneratedSources::new(&notes);
     match tool {
         NoteTransform::ChopPattern {
             origin,
@@ -393,7 +487,7 @@ pub fn transform_selected_notes(
                             id: if start == note.start {
                                 note.id
                             } else {
-                                NoteId(0)
+                                generated_sources.copy(note.id)
                             },
                             start,
                             length: gated(next - start, accent.gate),
@@ -483,7 +577,7 @@ pub fn transform_selected_notes(
                             id: if retained.insert(voice.id) {
                                 voice.id
                             } else {
-                                NoteId(0)
+                                generated_sources.copy(voice.id)
                             },
                             start: onset + slot as u32 * rate,
                             length: gated(rate, gate),
@@ -515,7 +609,7 @@ pub fn transform_selected_notes(
                 push_piece(
                     &mut pieces,
                     Note {
-                        id: NoteId(0),
+                        id: generated_sources.copy(note.id),
                         start,
                         length: interval.min(note.length),
                         velocity: (f64::from(note.velocity) * velocity) as f32,
@@ -549,15 +643,15 @@ pub fn transform_selected_notes(
                 }
                 RhythmMode::Add => {
                     let mut existing: std::collections::BTreeSet<_> =
-                        notes.iter().map(identity).collect();
+                        notes.iter().map(|note| (identity(note), curve_classes.get(&note.id).copied())).collect();
                     let mut additions = Vec::new();
                     for note in notes.iter().filter(|n| matches(n)) {
                         let added = Note {
-                            id: NoteId(0),
+                            id: generated_sources.copy(note.id),
                             start: shifted(note, offset)?,
                             ..*note
                         };
-                        if existing.insert(identity(&added)) {
+                        if existing.insert((identity(&added), curve_classes.get(&note.id).copied())) {
                             if notes.len() + additions.len() == MAX_TOOL_NOTES {
                                 return Err(output_limit());
                             }
@@ -602,7 +696,7 @@ pub fn transform_selected_notes(
                         id: if start == note.start {
                             note.id
                         } else {
-                            NoteId(0)
+                            generated_sources.copy(note.id)
                         },
                         start,
                         length: next - start,
@@ -621,6 +715,14 @@ pub fn transform_selected_notes(
                     // together, matching the compatibility comparison below.
                     .then(a.velocity.partial_cmp(&b.velocity).unwrap())
                     .then(a.pan.partial_cmp(&b.pan).unwrap())
+                    .then(a.expression.release.partial_cmp(&b.expression.release).unwrap())
+                    .then(a.expression.fine_pitch_cents.partial_cmp(&b.expression.fine_pitch_cents).unwrap())
+                    .then(a.expression.modulation_x.partial_cmp(&b.expression.modulation_x).unwrap())
+                    .then(a.expression.modulation_y.partial_cmp(&b.expression.modulation_y).unwrap())
+                    .then((a.expression.articulation as u8).cmp(&(b.expression.articulation as u8)))
+                    .then(a.expression.glide_ticks.cmp(&b.expression.glide_ticks))
+                    .then(a.expression.color_group.cmp(&b.expression.color_group))
+                    .then(curve_classes.get(&a.id).cmp(&curve_classes.get(&b.id)))
                     .then(a.start.cmp(&b.start))
                     .then(a.id.cmp(&b.id))
             });
@@ -630,6 +732,8 @@ pub fn transform_selected_notes(
                     && last.key == note.key
                     && last.velocity == note.velocity
                     && last.pan == note.pan
+                    && last.expression == note.expression
+                    && curve_classes.get(&last.id) == curve_classes.get(&note.id)
                     && note.start <= last.start + last.length
                 {
                     last.length =
@@ -704,18 +808,74 @@ pub fn transform_selected_notes(
                 note.velocity = (f64::from(note.velocity) * factor).clamp(0.0, 1.0) as f32;
             }
         }
+        NoteTransform::Randomize { seed, pitch, velocity, pan, timing, length } => {
+            let mut random = NoteRandom::new(seed);
+            for note in &mut notes {
+                note.key = (i32::from(note.key) + random.integer(i32::from(pitch))).clamp(0, i32::from(MAX_KEY)) as u8;
+                note.velocity = (f64::from(note.velocity) + random.signed() * velocity).clamp(0.0, 1.0) as f32;
+                note.pan = (f64::from(note.pan) + random.signed() * pan).clamp(-1.0, 1.0) as f32;
+                note.start = (i64::from(note.start) + i64::from(random.integer(timing as i32)))
+                    .clamp(0, i64::from(MAX_PATTERN_TICKS - note.length)) as u32;
+                note.length = (f64::from(note.length) * (1.0 + random.signed() * length)).round()
+                    .clamp(1.0, f64::from(MAX_PATTERN_TICKS - note.start)) as u32;
+            }
+        }
+        NoteTransform::GenerateRandom { seed, grid, density, gate, root, pitch_classes, low, high, velocity_low, velocity_high } => {
+            let first = notes.iter().map(|note| note.start).min().unwrap_or(0);
+            let end = notes.iter().map(|note| note.start + note.length).max().unwrap_or(first);
+            let cells = (end - first).div_ceil(grid) as usize;
+            if cells > MAX_TOOL_NOTES { return Err(output_limit()); }
+            let keys: Vec<u8> = (low..=high).filter(|key| {
+                let relative = (u16::from(*key) + 12 - u16::from(root)) % 12;
+                pitch_classes & (1_u16 << relative) != 0
+            }).collect();
+            if keys.is_empty() { return Err(CommandError::invalid("the chord map has no key in this MIDI range")); }
+            let mut random = NoteRandom::new(seed);
+            let mut generated = Vec::with_capacity(cells);
+            for cell in 0..cells {
+                if random.unit() >= density { continue; }
+                let source = notes[random.index(notes.len())];
+                let start = first + cell as u32 * grid;
+                let length = gated(grid.min(end - start), gate).min(end - start);
+                generated.push(Note {
+                    id: generated_sources.copy(source.id), start, length, key: keys[random.index(keys.len())],
+                    velocity: (velocity_low + random.unit() * (velocity_high - velocity_low)) as f32,
+                    ..source
+                });
+            }
+            notes = generated;
+        }
+        NoteTransform::Lfo { property, origin, strength, lfo } => {
+            for note in &mut notes {
+                let normalized = f64::from(lfo.value_at(f64::from(note.start) - f64::from(origin)));
+                let mix = |old: f32, target: f64| (f64::from(old) + (target - f64::from(old)) * strength) as f32;
+                match property {
+                    NoteLfoProperty::Velocity => note.velocity = mix(note.velocity, normalized),
+                    NoteLfoProperty::Pan => note.pan = mix(note.pan, normalized * 2.0 - 1.0),
+                    NoteLfoProperty::Release => note.expression.release = mix(note.expression.release, normalized),
+                    NoteLfoProperty::FinePitchCents => note.expression.fine_pitch_cents = mix(note.expression.fine_pitch_cents, normalized * 2400.0 - 1200.0),
+                    NoteLfoProperty::ModulationX => note.expression.modulation_x = mix(note.expression.modulation_x, normalized),
+                    NoteLfoProperty::ModulationY => note.expression.modulation_y = mix(note.expression.modulation_y, normalized),
+                }
+            }
+        }
         NoteTransform::Quantize {
             grid,
+            musical,
             strength,
             edge,
             groove,
         } => {
+            let segments = musical.map(|musical| musical.segments()).transpose()?;
             for note in &mut notes {
                 let old = match edge {
                     NoteEdge::Start => note.start,
                     NoteEdge::End => note.start + note.length,
                 };
-                let target = nearest(old, grid, groove);
+                let target = if let Some(segments) = &segments {
+                    let &(start, end, spacing) = segments.iter().rev().find(|(start, _, _)| *start <= old).unwrap_or(&segments[0]);
+                    start.saturating_add(nearest(old.saturating_sub(start), spacing, groove)).min(end)
+                } else { nearest(old, grid, groove) };
                 let tick = (f64::from(old) + (f64::from(target) - f64::from(old)) * strength)
                     .round() as u32;
                 match edge {
@@ -727,12 +887,30 @@ pub fn transform_selected_notes(
             }
         }
     }
-    notes.sort_by_key(Note::sort_key);
-    Ok(notes)
+    notes.sort_by_key(|note| (note.start, note.key, if generated_sources.origins.contains_key(&note.id) { NoteId(0) } else { note.id }));
+    Ok((notes, generated_sources.origins))
 }
 
 fn gated(length: u32, gate: f64) -> u32 {
     (f64::from(length) * gate).round().max(1.0) as u32
+}
+
+/// Platform-independent, project-thread RNG; a seed never depends on the clock.
+struct NoteRandom(u32);
+impl NoteRandom {
+    fn new(seed: u32) -> Self { Self((seed ^ 0xa3c5_9ac3).max(1)) }
+    fn next(&mut self) -> u32 {
+        let mut value = self.0;
+        value ^= value << 13;
+        value ^= value >> 17;
+        value ^= value << 5;
+        self.0 = value;
+        value
+    }
+    fn unit(&mut self) -> f64 { f64::from(self.next()) / 4_294_967_296.0 }
+    fn signed(&mut self) -> f64 { self.unit() * 2.0 - 1.0 }
+    fn index(&mut self, count: usize) -> usize { (u64::from(self.next()) * count as u64 >> 32) as usize }
+    fn integer(&mut self, spread: i32) -> i32 { self.index((spread * 2 + 1) as usize) as i32 - spread }
 }
 
 fn output_limit() -> CommandError {
@@ -762,7 +940,7 @@ fn shifted(note: &Note, offset: i32) -> Result<u32, CommandError> {
     Ok(start as u32)
 }
 
-fn identity(note: &Note) -> (u32, u32, u8, u32, u32) {
+fn identity(note: &Note) -> (u32, u32, u8, u32, u32, u32, u32, u32, u32, u8, u32, Option<u8>) {
     let bits = |n: f32| if n == 0.0 { 0 } else { n.to_bits() };
     (
         note.start,
@@ -770,6 +948,13 @@ fn identity(note: &Note) -> (u32, u32, u8, u32, u32) {
         note.key,
         bits(note.velocity),
         bits(note.pan),
+        bits(note.expression.release),
+        bits(note.expression.fine_pitch_cents),
+        bits(note.expression.modulation_x),
+        bits(note.expression.modulation_y),
+        note.expression.articulation as u8,
+        note.expression.glide_ticks,
+        note.expression.color_group,
     )
 }
 

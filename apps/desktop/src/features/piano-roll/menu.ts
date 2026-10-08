@@ -2,8 +2,17 @@ import {
   contextSeparator,
   type ContextItem,
 } from "@/components/context-actions"
+import { NOTE_COLOR_GROUPS } from "@/lib/note-colors"
+
+const COLOR_GROUPS = ["auto", ...NOTE_COLOR_GROUPS.map((_, group) => String(group))]
 
 export const NOTE_MENU: ContextItem[] = [
+  "pianoRoll.noteProperties",
+  "pianoRoll.noteCurves",
+  { submenu: "Note articulation", items: ["pianoRoll.articulation.normal", "pianoRoll.articulation.slide", "pianoRoll.articulation.portamento"] },
+  { submenu: "Set note color / MIDI channel", items: COLOR_GROUPS.map((group) => `pianoRoll.color.${group}`) },
+  { submenu: "Select by note color", items: COLOR_GROUPS.map((group) => `pianoRoll.selectColor.${group}`) },
+  contextSeparator,
   "pianoRoll.cut",
   "pianoRoll.copy",
   "pianoRoll.paste",
@@ -31,6 +40,9 @@ export const NOTE_MENU: ContextItem[] = [
       "pianoRoll.flipPitch",
       "pianoRoll.keyRange",
       "pianoRoll.scaleVelocity",
+      "pianoRoll.randomize",
+      "pianoRoll.generateRandom",
+      "pianoRoll.lfo",
     ],
   },
   "pianoRoll.octaveUp",
@@ -41,10 +53,13 @@ export const NOTE_MENU: ContextItem[] = [
 ]
 
 export const VIEW_MENU: ContextItem[] = [
+  "pianoRoll.patternTimeline",
   "pianoRoll.zoomFit",
   "pianoRoll.zoomSelection",
   contextSeparator,
   "pianoRoll.ghosts",
+  "pianoRoll.editGhosts",
+  "pianoRoll.waveformHelper",
   "pianoRoll.follow",
 ]
 

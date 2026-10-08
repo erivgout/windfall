@@ -42,12 +42,14 @@ pub(crate) enum Message {
     Stop {
         sequence: u32,
     },
+    CountIn { sequence: u32, bars: u8, capture: Option<u64> },
     Seek(f64),
     SetRegion(Option<windfall_project::TickRange>),
     SetTransport {
         mode: PlayMode,
         pattern: PatternId,
         loop_song: bool,
+        metronome: windfall_ipc::MetronomeSettings,
     },
     NoteOn {
         channel: ChannelId,
@@ -68,6 +70,8 @@ pub(crate) enum Message {
     Preview(AudioBuffer),
     StopPreview,
     SetOutputGain(f32),
+    SetInputMonitors(Box<[Box<crate::recording_monitor::MonitorReader>]>),
+    SetDiskTaps(Box<[crate::recording_disk::DiskWriter]>),
 }
 
 /// Values the audio thread is done with. Dropping them is the control
@@ -81,6 +85,8 @@ pub(crate) enum Garbage {
     State(Box<PlanState>),
     Sample(AudioBuffer),
     SamplerBank(Arc<crate::sampler_processing::SamplerBank>),
+    InputMonitors(Box<[Box<crate::recording_monitor::MonitorReader>]>),
+    DiskTaps(Box<[crate::recording_disk::DiskWriter]>),
 }
 
 /// Sends a value back to the control side to be dropped there.

@@ -6,6 +6,7 @@ use crate::support::{RATE, RATES, db, noise, prepared, rms, run, run_mono, sine,
 
 fn peak_params() -> CompressorParams {
     CompressorParams {
+        sidechain: false,
         threshold_db: -20.0,
         ratio: 4.0,
         attack_ms: 5.0,

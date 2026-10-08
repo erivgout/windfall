@@ -96,6 +96,98 @@
         }
       ]
     },
+    "chorus": {
+      "defaults": {
+        "delayMs": 12.0,
+        "depthMs": 4.0,
+        "mix": 0.5,
+        "rate1Hz": 0.6000000238418579,
+        "rate2Hz": 0.800000011920929,
+        "rate3Hz": 1.100000023841858,
+        "stereoPhase": 0.25,
+        "type": "chorus"
+      },
+      "name": "Chorus",
+      "params": [
+        {
+          "choices": [],
+          "default": 12.0,
+          "id": "delayMs",
+          "kind": "float",
+          "max": 30.0,
+          "min": 1.0,
+          "name": "Delay",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 4.0,
+          "id": "depthMs",
+          "kind": "float",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "Depth",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 0.6000000238418579,
+          "id": "rate1Hz",
+          "kind": "float",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "Voice 1 rate",
+          "scale": "linear",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.800000011920929,
+          "id": "rate2Hz",
+          "kind": "float",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "Voice 2 rate",
+          "scale": "linear",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 1.100000023841858,
+          "id": "rate3Hz",
+          "kind": "float",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "Voice 3 rate",
+          "scale": "linear",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "stereoPhase",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Stereo phase (cycles)",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
+        }
+      ]
+    },
     "compressor": {
       "defaults": {
         "attackMs": 10.0,
@@ -907,6 +999,122 @@
         }
       ]
     },
+    "flanger": {
+      "defaults": {
+        "damping": 0.20000000298023224,
+        "delayMs": 1.0,
+        "depthMs": 3.0,
+        "feedback": 0.5,
+        "invertWet": false,
+        "mix": 0.5,
+        "rateHz": 0.25,
+        "shape": 0.0,
+        "stereoPhase": 0.25,
+        "type": "flanger"
+      },
+      "name": "Flanger",
+      "params": [
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "delayMs",
+          "kind": "float",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "Delay",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 3.0,
+          "id": "depthMs",
+          "kind": "float",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "Depth",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "rateHz",
+          "kind": "float",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "Rate",
+          "scale": "linear",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "stereoPhase",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Stereo phase (cycles)",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "feedback",
+          "kind": "float",
+          "max": 0.8999999761581421,
+          "min": -0.8999999761581421,
+          "name": "Feedback",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.20000000298023224,
+          "id": "damping",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Damping",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "shape",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Sine to triangle",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "invertWet",
+          "kind": "toggle",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Invert wet",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
+        }
+      ]
+    },
     "limiter": {
       "defaults": {
         "ceilingDb": -0.30000001192092896,
@@ -1186,6 +1394,86 @@
           "name": "Filter placement",
           "scale": "linear",
           "unit": "none"
+        }
+      ]
+    },
+    "phaser": {
+      "defaults": {
+        "feedback": 0.3499999940395355,
+        "maxHz": 2000.0,
+        "minHz": 200.0,
+        "mix": 0.5,
+        "rateHz": 0.30000001192092896,
+        "stereoPhase": 0.25,
+        "type": "phaser"
+      },
+      "name": "Phaser",
+      "params": [
+        {
+          "choices": [],
+          "default": 200.0,
+          "id": "minHz",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 20.0,
+          "name": "Sweep minimum",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 2000.0,
+          "id": "maxHz",
+          "kind": "float",
+          "max": 10000.0,
+          "min": 20.0,
+          "name": "Sweep maximum",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.30000001192092896,
+          "id": "rateHz",
+          "kind": "float",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "Rate",
+          "scale": "linear",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "stereoPhase",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Stereo phase (cycles)",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.3499999940395355,
+          "id": "feedback",
+          "kind": "float",
+          "max": 0.8500000238418579,
+          "min": -0.8500000238418579,
+          "name": "Feedback",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.5,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
         }
       ]
     },

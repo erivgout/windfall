@@ -29,6 +29,7 @@ import {
 } from "./channel-ops"
 import { ColorSwatches } from "./color-swatches"
 import { useRackStore } from "./rack-store"
+import { channelGroupItems } from "./channel-groups"
 import { WaveGlyph, type WaveShape } from "./synth/wave-glyph"
 
 type ChannelButtonProps = {
@@ -152,6 +153,7 @@ export const ChannelButton = memo(function ChannelButton({
     "channel.rename",
     "channel.color",
     "channel.duplicate",
+    { submenu: "Channel group", items: [{ dynamic: () => channelGroupItems(id) }] },
     contextSeparator,
     // Greyed out on an instrument, with the reason beside it.
     "channel.replaceSample",
@@ -161,7 +163,10 @@ export const ChannelButton = memo(function ChannelButton({
     { title: solo ? "Unsolo" : "Solo", run: () => toggleSolo(id) },
     contextSeparator,
     "channel.clearSteps",
+    "channel.sendStepsToPianoRoll",
+    "channelRack.graph",
     ...FILL_INTERVALS.map((every) => `channel.fill${every}`),
+    "channel.advancedFill",
     "channel.shiftLeft",
     "channel.shiftRight",
     contextSeparator,

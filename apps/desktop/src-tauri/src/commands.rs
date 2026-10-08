@@ -24,6 +24,27 @@ use windfall_ipc::{LibraryFileToken, LibraryMetadata, LibraryResults, LibrarySea
 use windfall_ipc::{MidiExportOptions, MidiImportOptions, MidiImportPreview};
 
 #[tauri::command]
+fn mixer_waveform_tracks(session: State<'_, Session>, tracks: Vec<TrackId>, generation: u64, revision: u64) -> Result<(), String> {
+    session.mixer_waveform_tracks(tracks, generation, revision)
+}
+
+#[tauri::command]
+async fn mixer_preset_capture(session: State<'_, Session>, id: TrackId, generation: u64, revision: u64) -> Result<windfall_project::MixerTrackPreset, String> {
+    let session = session.inner().clone();
+    blocking(move || session.mixer_preset_capture(id, generation, revision)).await
+}
+#[tauri::command]
+async fn mixer_preset_write(session: State<'_, Session>, path: String, preset: windfall_project::MixerTrackPreset) -> Result<String, String> {
+    let session = session.inner().clone();
+    blocking(move || session.mixer_preset_write(path, preset)).await
+}
+#[tauri::command]
+async fn mixer_preset_read(session: State<'_, Session>, path: String) -> Result<windfall_project::MixerTrackPreset, String> {
+    let session = session.inner().clone();
+    blocking(move || session.mixer_preset_read(path)).await
+}
+
+#[tauri::command]
 async fn slice_analyze(
     session: State<'_, Session>,
     clip: windfall_project::ClipId,
@@ -60,6 +81,11 @@ where
 #[tauri::command]
 fn document_snapshot(session: State<'_, Session>) -> DocumentSnapshot {
     session.document_snapshot()
+}
+
+#[tauri::command]
+fn current_mixer_target(session: State<'_, Session>, track: Option<TrackId>, generation: u64, revision: u64) -> Result<(), String> {
+    session.current_mixer_target(track, generation, revision)
 }
 
 #[tauri::command]
@@ -679,12 +705,20 @@ async fn plugin_editor(
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        current_mixer_target,
+        mixer_waveform_tracks,
+        mixer_preset_capture,
+        mixer_preset_write,
+        mixer_preset_read,
         midi_hardware_state,
         midi_hardware_refresh,
         midi_hardware_configure,
         midi_hardware_target,
         midi_hardware_panic,
         recording_inputs,
+        input_monitor_start,
+        input_monitor_stop,
+        input_monitor_state,
         recording_state,
         recording_start,
         recording_stop,
@@ -807,6 +841,21 @@ async fn recording_inputs(
     blocking(move || Ok(session.recording_inputs())).await
 }
 #[tauri::command]
+async fn input_monitor_start(session: State<'_, Session>) -> Result<windfall_ipc::InputMonitorState, String> {
+    let session = session.inner().clone();
+    blocking(move || session.input_monitor_start()).await
+}
+#[tauri::command]
+async fn input_monitor_stop(session: State<'_, Session>) -> Result<windfall_ipc::InputMonitorState, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.input_monitor_stop())).await
+}
+#[tauri::command]
+async fn input_monitor_state(session: State<'_, Session>) -> Result<windfall_ipc::InputMonitorState, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.input_monitor_state())).await
+}
+#[tauri::command]
 fn recording_state(session: State<'_, Session>) -> windfall_ipc::RecordingState {
     session.recording_state()
 }
@@ -821,9 +870,9 @@ async fn recording_start(
     blocking(move || session.recording_start(source, start, track)).await
 }
 #[tauri::command]
-async fn recording_stop(session: State<'_, Session>) -> Result<DispatchResult, String> {
+async fn recording_stop(session: State<'_, Session>, takes: Option<windfall_ipc::RecordingTakeSelection>) -> Result<DispatchResult, String> {
     let session = session.inner().clone();
-    blocking(move || session.recording_stop()).await
+    blocking(move || session.recording_stop_with_selection(takes)).await
 }
 #[tauri::command]
 async fn recording_cancel(session: State<'_, Session>) -> Result<(), String> {

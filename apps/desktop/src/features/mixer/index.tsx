@@ -1,7 +1,6 @@
-import { logicalWheel } from "@/lib/ui-scale"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useEffect, useRef, useState, type WheelEvent } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import type { TrackId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
@@ -12,7 +11,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import { useShortcutScope } from "@/lib/actions"
-import { useMixerTrackIds, useProjectStore, useUiStore } from "@/lib/store"
+import { useProjectStore, useUiStore } from "@/lib/store"
 import type { PanelSizes } from "@/lib/store/ui"
 import { MASTER_TRACK } from "@/lib/units"
 
@@ -20,27 +19,24 @@ import { registerMixerActions } from "./actions"
 import { useEffectsUi } from "./effects-ui"
 import { EffectInspector, EffectInspectorTab } from "./inspector"
 import {
-  ADD_WIDTH,
   INSPECTOR_MIN_WIDTH,
   inspectorWidthFor,
   MASTER_WIDTH,
   STRIP_WIDTH,
-  stripLayout,
-  visibleRange,
+  chosenStripLayout,
 } from "./layout"
 import { MIXER_MENU } from "./menus"
 import { useMixerUi } from "./mixer-ui"
 import { watchPeaks } from "./peaks"
 import { maxSendCount } from "./routing"
 import { MixerStrip } from "./strip"
+import { CreateCurrentUtility } from "./current-source"
 import { maxEffectCount } from "./strip-track"
-import { useStripView } from "./strip-view"
+import { DockStrips } from "./dock-strips"
+import { MixerToolbar } from "./toolbar"
 
 /** Where the split between the strips and the effects is remembered. */
 const LAYOUT_KEY = "mixer:strips+effects"
-
-/** Assumed until the panel has been measured. */
-const DEFAULT_VIEW_WIDTH = 1280
 
 /** The mixer track the channel selected in the rack plays into. */
 function useLinkedTrack(): TrackId | null {
@@ -75,18 +71,20 @@ function AddTrack({ first }: { first: boolean }) {
 }
 
 /**
- * The mixer: the master pinned on the left, then one strip per insert
- * track, scrolling sideways, and the selected track's effects docked on
- * the right.
+ * The mixer: Master and Current pinned on the left, independent insert
+ * docks, and the selected track's effects on the right.
  *
  * Only the strips in view are mounted. A strip is a fader, a knob, a canvas
- * and a dozen store subscriptions, and a full mixer has 128 of them; mounting
+ * and a dozen store subscriptions, and a full mixer has 500 inserts; mounting
  * the few on screen keeps resizing, scrolling and metering at the cost of
  * what is visible, however long the mixer gets. Peaks and clips of tracks
  * that are out of view are still held (see `peaks.ts`).
  */
 export default function MixerPanel() {
-  const ids = useMixerTrackIds()
+  const tracks = useProjectStore((state) => state.project.mixer.tracks)
+  const layoutChoice = useUiStore((state) => state.mixerLayout)
+  const [height, setHeight] = useState(0)
+  const current = useProjectStore((state) => state.project.mixer.tracks.find((track) => track.current)?.id)
   const selected = useUiStore((state) => state.selectedTrack)
   const linked = useLinkedTrack()
   const maxSends = useProjectStore((state) =>
@@ -103,7 +101,6 @@ export default function MixerPanel() {
   const [inspectorWidth] = useState(() => inspectorWidthFor(window.innerWidth))
   const savedLayout = useUiStore((state) => state.layouts[LAYOUT_KEY])
   const saveLayout = useUiStore((state) => state.saveLayout)
-  const { view, attach, reveal } = useStripView()
   const root = useRef<HTMLDivElement>(null)
   const focusing = useMixerUi((state) => state.focusing)
   const scope = useShortcutScope("mixer")
@@ -111,35 +108,10 @@ export default function MixerPanel() {
   useEffect(() => registerMixerActions(), [])
   useEffect(() => watchPeaks(), [])
 
-  const inserts = ids.filter((id) => id !== MASTER_TRACK)
-  const { mode, sendRows, effectRows } = stripLayout(
-    view.height,
-    maxSends,
-    maxEffects
-  )
-  const range = visibleRange(
-    view.offset,
-    // The offset is rounded down to a whole strip, so look one further.
-    (view.width || DEFAULT_VIEW_WIDTH) + STRIP_WIDTH,
-    inserts.length
-  )
-  const selectedIndex = selected === null ? -1 : inserts.indexOf(selected)
-  const linkedIndex = linked === null ? -1 : inserts.indexOf(linked)
-
-  // The selected strip stays mounted when it scrolls away, so the control
-  // that has the focus is never pulled out from under the keyboard.
-  const mounted: number[] = []
-  for (let index = range.start; index < range.end; index += 1) {
-    mounted.push(index)
-  }
-  if (selectedIndex >= 0 && !mounted.includes(selectedIndex)) {
-    mounted.push(selectedIndex)
-    mounted.sort((a, b) => a - b)
-  }
-
-  useEffect(() => {
-    if (selectedIndex >= 0) reveal(selectedIndex)
-  }, [selected, selectedIndex, reveal])
+  const inserts = tracks.filter((track) => track.id !== MASTER_TRACK && !track.current)
+  const layout = chosenStripLayout(layoutChoice, height, maxSends, maxEffects)
+  const { mode, sendRows, effectRows, width } = layout
+  const dockIds = (dock: "left" | "middle" | "right") => inserts.filter((track) => (track.dock ?? "middle") === dock).map((track) => track.id)
 
   // A key that moves the selection takes the focus along. The strip may
   // only just have been mounted, so this waits for it.
@@ -153,35 +125,16 @@ export default function MixerPanel() {
     useMixerUi.setState({ focusing: null })
   }, [focusing, selected])
 
-  useEffect(() => {
-    if (linkedIndex >= 0) reveal(linkedIndex)
-  }, [linked, linkedIndex, reveal])
-
-  // A plain mouse wheel has nowhere to go here, so it moves along the
-  // strips. A control that took the wheel for itself has claimed the event.
-  function onWheel(event: WheelEvent<HTMLDivElement>) {
-    if (event.defaultPrevented || event.ctrlKey) return
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
-    const target = event.target
-    if (!(target instanceof Element)) return
-    if (!event.currentTarget.contains(target)) return
-    const list = target.closest("ul")
-    if (list && list.scrollHeight > list.clientHeight) return
-    event.currentTarget.scrollLeft += logicalWheel(event, {
-      line: 1,
-      page: 1,
-    }).deltaY
-  }
-
   return (
     <ContextActions items={MIXER_MENU}>
       <div
         ref={root}
         data-slot="mixer"
         data-mode={mode}
-        className="flex h-full min-h-0 min-w-0"
+        className="relative flex h-full min-h-0 min-w-0 pt-9"
         {...scope}
       >
+        <MixerToolbar />
         <ResizablePanelGroup
           id="mixer"
           orientation="horizontal"
@@ -199,7 +152,7 @@ export default function MixerPanel() {
             <div
               data-slot="mixer-master"
               className="z-10 shrink-0 border-r bg-chassis shadow-[2px_0_6px_-2px_rgb(0_0_0/0.35)]"
-              style={{ width: MASTER_WIDTH, paddingBottom: view.scrollbar }}
+              style={{ width: MASTER_WIDTH, paddingBottom: 0 }}
             >
               <MixerStrip
                 id={MASTER_TRACK}
@@ -210,47 +163,12 @@ export default function MixerPanel() {
                 metering
               />
             </div>
-            <div
-              ref={attach}
-              role="group"
-              aria-label="Insert tracks"
-              data-slot="mixer-inserts"
-              className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
-              onWheel={onWheel}
-            >
-              <div
-                className="relative h-full"
-                style={{
-                  width:
-                    inserts.length > 0
-                      ? inserts.length * STRIP_WIDTH + ADD_WIDTH
-                      : undefined,
-                }}
-              >
-                {mounted.map((index) => (
-                  <div
-                    key={inserts[index]}
-                    className="absolute inset-y-0"
-                    style={{ left: index * STRIP_WIDTH, width: STRIP_WIDTH }}
-                  >
-                    <MixerStrip
-                      id={inserts[index]}
-                      mode={mode}
-                      sendRows={sendRows}
-                      effectRows={effectRows}
-                      linked={inserts[index] === linked}
-                      metering={index >= range.start && index < range.end}
-                    />
-                  </div>
-                ))}
-                <div
-                  className="absolute inset-y-0"
-                  style={{ left: inserts.length * STRIP_WIDTH }}
-                >
-                  <AddTrack first={inserts.length === 0} />
-                </div>
-              </div>
-            </div>
+            {current !== undefined ? <div className="z-10 shrink-0 border-r bg-chassis" style={{ width, paddingBottom: 0 }}><MixerStrip id={current} mode={mode} sendRows={sendRows} effectRows={effectRows} linked={false} metering /></div> : <div className="shrink-0 p-1"><CreateCurrentUtility /></div>}
+            {dockIds("left").length > 0 && <DockStrips dock="left" ids={dockIds("left")} selected={selected} linked={linked} layout={layout} />}
+            <DockStrips dock="middle" ids={dockIds("middle")} selected={selected} linked={linked} layout={layout} onHeight={setHeight}>
+              <AddTrack first={inserts.length === 0} />
+            </DockStrips>
+            {dockIds("right").length > 0 && <DockStrips dock="right" ids={dockIds("right")} selected={selected} linked={linked} layout={layout} />}
           </ResizablePanel>
           {inspectorOpen && (
             <>

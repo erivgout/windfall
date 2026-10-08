@@ -1,11 +1,44 @@
 # Audio input recording
 
-The native desktop Record dialog selects an input host/device and zero-based hardware channels (shown as 1-based labels). Mono duplicates the selected input into stereo; stereo preserves the selected pair. F32, signed 16/32-bit and unsigned 16-bit device streams are supported. Input must support the output engine's exact sample rate; there is no implicit resampling. Unsupported channel/rate configurations fail before ownership is published.
+Native recording selects a host/device and zero-based hardware channels, shown
+as 1-based labels. Mono duplicates the selected channel into stereo. F32,
+signed 16/32-bit and unsigned 16-bit streams are supported. The source feature
+pass now includes synchronized ADC/DAC timing, native input-rate conversion,
+count-in, routed monitoring and loop takes.
 
-Start playback separately, then Start recording. Capture begins with the first input callback after the input opens. The user explicitly selects the finished clip's song start tick and playlist track, or a new track. This initial workflow does not synchronize separate input/output clocks, compensate driver latency, provide count-in or live monitoring. Song looping, tempo automation and playback stopping do not stop capture. For a continuous vocal take, use a fixed-tempo backing song without looping and stop the take explicitly. Adjust its timing after recording.
+- [Timestamp and latency alignment](RECORDING-ALIGNMENT.md): captured packet
+  times, DAC-frame gates, clock fitting/resampling, signed offset, stop tails
+  and driver latency/drift readouts.
+- [Metronome/count-in](METRONOME-COUNT-IN.md): native beat clicks, gain/accents,
+  song/pattern meters, pre-opened input and playback deadlines.
+- [Input monitoring](INPUT-MONITORING.md): explicit mixer route, worker-side
+  resampling, bounded monitor queue, input gain/buffering and dropout telemetry.
+- [Loop takes](LOOP-RECORDING.md): region looping, complete/final-partial passes,
+  keep selection, separate kept sources and one atomic attachment/undo step.
+- [Multitrack inputs](MULTITRACK-RECORDING.md): saved mixer inputs/arms,
+  simultaneous shared-device capture, independent-device alignment, per-track
+  monitoring/offsets and atomic group attachment.
+- [Mixer disk taps](MIXER-DISK-RECORDING.md): post-effects/post-fader choices,
+  native sample/processing-latency gates and mixer-only or mixed source groups.
+- [Printed clip playback](PRINTED-CLIP-PLAYBACK.md): persisted Direct output,
+  delay alignment and selection routing past Master processing.
+- [Audio comping](AUDIO-COMPING.md): retained-source range choices, crossfades,
+  editable composite clips and one atomic native history command.
+- [Saved take groups](TAKE-GROUPS.md): retained pass/input associations,
+  synchronized multitrack comping, pass audition and composite replacement.
+- [External output ports](EXTERNAL-OUTPUT-ROUTING.md): saved mixer destinations,
+  multichannel device layouts and shared output delay alignment.
 
-While a take is active, ordinary document dispatch, undo/redo/history jumps, seeks, transport mode changes, project replacement, project save/export and output-device configuration are blocked. Existing playback may be stopped separately. Stop and keep finalizes the WAV and imports it using the existing audio-clip command pipeline as one undo step. Discard and any capture/finalization/import failure remove only that take. Finished sources stay in a recordings folder beside Windfall's settings, including after undo; Save copies them into the project through the existing sample path pipeline. There is no automatic source garbage collection.
+Ordinary project edits, history, seeks, mode changes, replacement, save/export
+and output configuration remain blocked while recording owns the take.
+Stop/discard/failure closes capture and monitoring and restores owned playback
+preferences. Failures remove only owned temporary sources and leave the document
+unchanged. Finished sources remain for undo/redo; Save uses the existing project
+sample-copy pipeline.
 
-The input callback converts selected samples and pushes whole stereo frames into a preallocated two-second SPSC queue. It never allocates, locks, waits or performs file IO. The worker drains to a Float32 WAV writer. Overflow, non-finite samples, any input-driver error, writer errors or device loss reject the whole take, leaving the project unchanged. State polling exposes input/writer failure while the take is owned. Stop closes input callbacks before draining queued frames; this boundary is callback based rather than an exact requested frame time.
-
-Synthetic tests exercise format conversion, callback allocation counts, overflow, exact file frame counts, failures/cancel cleanup, original-file preservation, clip placement, undo/redo and save/open. Microphone hardware capture and cross-device synchronization are untested.
+Earlier synthetic tests covered the original untimed callback/file/ownership
+workflow before this feature pass. They do not verify the new behavior. No
+builds, tests, typechecks, artifact generation, hardware/listening checks,
+browser QA or reviews were run for these source additions. External output
+logger workflows and remaining platform/driver support remain required implementation
+work. No GitHub CI or Actions are used.

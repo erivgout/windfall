@@ -101,12 +101,15 @@ pub(crate) struct Trigger {
 /// What a [`Trigger`] starts.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Fire {
+    Click { accent: bool },
     Note {
+        source: crate::note_curves::CurveSource,
         /// Index into [`Plan::channels`].
         channel: usize,
         key: u8,
         velocity: f32,
         pan: f32,
+        expression: windfall_dsp::NoteExpression,
         /// Clock tick on which the note ends. Only samplers with an
         /// envelope and instruments care.
         end: f64,
@@ -238,6 +241,8 @@ pub(crate) struct Sequencer {
     mode: PlayMode,
     pattern: PatternId,
     loop_song: bool,
+    recording: bool,
+    metronome: bool,
     region: Option<windfall_project::TickRange>,
     clock: Clock,
     /// Clock tick at which the pass of the pattern or song now playing
@@ -268,6 +273,8 @@ impl Sequencer {
             mode: PlayMode::Pattern,
             pattern: PatternId(0),
             loop_song: false,
+            recording: false,
+            metronome: false,
             region: None,
             clock: Clock {
                 anchor_frame: 0,
@@ -296,6 +303,8 @@ impl Sequencer {
     pub fn mode(&self) -> PlayMode {
         self.mode
     }
+
+    pub fn set_metronome(&mut self, enabled: bool) { self.metronome = enabled; }
 
     /// Clock tick at which the pass of the pattern or song now playing
     /// began.
@@ -500,7 +509,7 @@ impl Sequencer {
             from
         };
         let requested = self.counted(plan, from);
-        let from = if self.mode == PlayMode::Song && self.region.is_some() {
+        let from = if self.mode == PlayMode::Song && self.region.is_some() && !self.recording {
             crate::timeline::aligned_tick(plan, from, self.sample_rate)
         } else {
             from
@@ -648,6 +657,34 @@ impl Sequencer {
             }
             PlayMode::Song => self.gather_song(plan, from, to, triggers),
         }
+        if self.metronome { self.gather_clicks(plan, from, to, triggers); }
+    }
+
+    fn gather_clicks(&self, plan: &Plan, from: u64, to: u64, triggers: &mut Triggers) {
+        let in_song = self.mode == PlayMode::Song;
+        let (meters, length) = if in_song { (&plan.meters, self.song_end(plan)) }
+            else if let Some(pattern) = self.pattern(plan) { (&pattern.meters, pattern.length) }
+            else { return; };
+        let Ok(meters) = meters else { return; };
+        let (low, high) = self.window(from, to);
+        let (low, high) = if in_song { (plan.unwarp(low), plan.unwarp(high)) } else { (low, high) };
+        for (index, segment) in meters.iter().enumerate() {
+            let start = f64::from(segment.start_tick());
+            let end = f64::from(meters.get(index + 1).map_or(length, |next| next.start_tick()).min(length));
+            if start > high || end < low { continue; }
+            let signature = segment.signature();
+            let beat = f64::from(signature.ticks_per_beat());
+            let mut position = ((low - start) / beat).floor().max(0.0) as u32;
+            loop {
+                let tick = start + f64::from(position) * beat;
+                if tick > high || tick >= end { break; }
+                let counted = if in_song { plan.warp(tick) } else { tick };
+                if let Some(frame) = self.due(counted, from, to) {
+                    triggers.push(Trigger { frame, order: 0, what: Fire::Click { accent: position % u32::from(signature.numerator) == 0 } });
+                }
+                position += 1;
+            }
+        }
     }
 
     fn gather_pattern(&self, pattern: &PlanPattern, from: u64, to: u64, triggers: &mut Triggers) {
@@ -664,10 +701,18 @@ impl Sequencer {
                 frame,
                 order: 0,
                 what: Fire::Note {
+                    source: crate::note_curves::CurveSource {
+                        pattern: pattern.id, note: event.source,
+                        start: self.pass_start + event.tick,
+                        end: self.pass_start + event.tick + event.length,
+                        song_origin: None, base_pan: event.pan, base_expression: event.expression,
+                        active: !pattern.curves_for(event.source).is_empty(),
+                    },
                     channel: event.channel,
                     key: event.key,
                     velocity: event.velocity,
                     pan: event.pan,
+                    expression: event.expression,
                     end: self.pass_start + (event.tick + event.length),
                 },
             });
@@ -720,10 +765,18 @@ impl Sequencer {
                         frame,
                         order: 0,
                         what: Fire::Note {
+                            source: crate::note_curves::CurveSource {
+                                pattern: pattern.id, note: event.source,
+                                start: self.pass_start + plan.warp(tick),
+                                end: self.pass_start + plan.warp((tick + event.length).min(clip_end)),
+                                song_origin: Some(self.pass_start), base_pan: event.pan, base_expression: event.expression,
+                                active: !pattern.curves_for(event.source).is_empty(),
+                            },
                             channel: event.channel,
                             key: event.key,
                             velocity: event.velocity,
                             pan: event.pan,
+                            expression: event.expression,
                             // The clip is a window onto the pattern: a held
                             // note ends where the clip does.
                             end: self.pass_start + plan.warp((tick + event.length).min(clip_end)),
@@ -829,6 +882,16 @@ impl Sequencer {
     pub fn song_looping(&self) -> bool {
         self.loop_song && self.navigation_enabled()
     }
+    pub fn set_recording(&mut self, recording: bool) { self.recording = recording; }
+    /// Keep the fractional frame phase of a recording region across passes.
+    pub fn wrap_recording_region(&mut self, plan: &Plan) -> bool {
+        let Some(range) = self.region else { return false; };
+        if !self.recording || !self.song_looping() { return false; }
+        self.pass_start += plan.warp(f64::from(range.end)) - plan.warp(f64::from(range.start));
+        self.floor = Floor::Tick(plan.warp(f64::from(range.start)));
+        self.jumped = true;
+        true
+    }
     pub fn raw_song_tick(&self, plan: &Plan, now: u64) -> f64 {
         if self.playing {
             plan.unwarp((self.clock.tick_at(now) - self.pass_start).max(0.0))
@@ -868,7 +931,7 @@ impl Sequencer {
     }
 
     /// The transport's pattern, or the first one when that id is gone.
-    fn pattern<'a>(&self, plan: &'a Plan) -> Option<&'a PlanPattern> {
+    pub(crate) fn pattern<'a>(&self, plan: &'a Plan) -> Option<&'a PlanPattern> {
         plan.pattern_ids
             .get(self.pattern.0)
             .map(|index| &plan.patterns[index])
@@ -991,6 +1054,8 @@ mod tests {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId::MASTER,
             source: ChannelSource::Sampler(SamplerSettings::default()),
         });
@@ -1007,6 +1072,7 @@ mod tests {
                     key,
                     velocity: 1.0,
                     pan: 0.0,
+                    expression: Default::default(),
                 })
                 .collect(),
         });

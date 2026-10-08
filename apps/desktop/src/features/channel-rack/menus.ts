@@ -38,6 +38,12 @@ export const RACK_MENU: ContextItem[] = [
   "pattern.duplicate",
   contextSeparator,
   "channelRack.settings",
+  "channelRack.graph",
+  "channelRack.groups",
+  "channelRack.createGroup",
+  "channelRack.renameGroup",
+  "channelRack.removeGroup",
+  "channelRack.showAllGroups",
 ]
 
 /** The settings of the selected channel, outside its controls. */

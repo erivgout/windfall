@@ -46,6 +46,11 @@ fn start_take(rig: &Rig) {
                 device: "Fake".into(),
                 left: 0,
                 right: None,
+                alignment: None,
+                loop_recording: None,
+                monitor: None,
+                armed_tracks: None,
+                mixer_tap: None,
             },
             960,
             None,
@@ -114,6 +119,8 @@ fn recording_refuses_flp_open_and_preserves_the_review_for_after_discard() {
         ..Default::default()
     });
     project.patterns.push(Pattern {
+        time_signature: None,
+        timeline: Default::default(),
         iid: 1,
         notes: vec![Note {
             channel: 0,

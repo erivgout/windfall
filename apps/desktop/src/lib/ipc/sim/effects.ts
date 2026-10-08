@@ -19,54 +19,30 @@ function slotLatency(slot: EffectSlot, sampleRate: number): number {
   return 0
 }
 
-/**
- * A stand-in for the engine's latency figure: the slowest way from a
- * channel to the master, counting built-in effect latency and the synth's
- * own delay. Sends are left out. This is UI simulation, not browser DSP.
- */
-export function simulatedLatencyFrames(
-  project: Project,
-  sampleRate: number
-): number {
+/** Declared built-in routing latency for the UI simulator; no browser DSP. */
+export function simulatedLatencyFrames(project: Project, sampleRate: number): number {
   const tracks = project.mixer.tracks
-  const toOutput = (id: TrackId, depth: number): number => {
+  const memo = new Map<TrackId, number>()
+  const visiting = new Set<TrackId>()
+  const output = (id: TrackId): number => {
+    const saved = memo.get(id)
+    if (saved !== undefined) return saved
     const track = tracks.find((item) => item.id === id)
-    if (!track || depth > tracks.length) return 0
-    const own = track.effects.reduce(
-      (sum, slot) =>
-        sum +
-        (project.plugins?.some(
-          (plugin) =>
-            plugin.target.type === "effect" && plugin.target.effect === slot.id
-        )
-          ? 0
-          : slotLatency(slot, sampleRate)),
-      0
-    )
-    if (track.id === MASTER_TRACK || track.output === null) return own
-    return own + toOutput(track.output, depth + 1)
+    if (!track || visiting.has(id)) return 0
+    visiting.add(id)
+    let arrival = 0
+    for (const source of tracks) {
+      if (source.output === id && !source.externalOutput?.exclusive || source.sends.some((send) => send.target === id)) arrival = Math.max(arrival, output(source.id))
+    }
+    for (const channel of project.channels) {
+      if (channel.mixerTrack === id && channel.source.type === "instrument" && !project.plugins?.some((plugin) => plugin.target.type === "instrument" && plugin.target.channel === channel.id)) arrival = Math.max(arrival, INSTRUMENT_LATENCY_FRAMES)
+    }
+    const own = track.effects.reduce((sum, slot) => sum + (project.plugins?.some((plugin) => plugin.target.type === "effect" && plugin.target.effect === slot.id) ? 0 : slotLatency(slot, sampleRate)), 0)
+    const frames = Math.max(0, Math.min(sampleRate, arrival) + own + Math.round((track.latencyOffsetMs ?? 0) * sampleRate / 1000))
+    visiting.delete(id); memo.set(id, frames)
+    return frames
   }
-
-  let longest = toOutput(MASTER_TRACK, 0)
-  for (const track of tracks) {
-    longest = Math.max(longest, toOutput(track.id, 0))
-  }
-  for (const channel of project.channels) {
-    if (channel.source.type !== "instrument") continue
-    if (
-      project.plugins?.some(
-        (plugin) =>
-          plugin.target.type === "instrument" &&
-          plugin.target.channel === channel.id
-      )
-    )
-      continue
-    longest = Math.max(
-      longest,
-      INSTRUMENT_LATENCY_FRAMES + toOutput(channel.mixerTrack, 0)
-    )
-  }
-  return longest
+  return tracks.reduce((longest, track) => track.id === MASTER_TRACK || track.externalOutput ? Math.max(longest, output(track.id)) : longest, 0)
 }
 
 function reductionDb(slot: EffectSlot, levelDb: number): number | null {

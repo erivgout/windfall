@@ -166,6 +166,13 @@ export class PianoRollSession {
     lastZoom = { pxPerTick, rowHeight }
   }
 
+  /** Editing a ghost keeps the shared grid rather than jumping to a saved lane. */
+  keepViewportForLane(key: string): void {
+    this.saveView()
+    this.laneKey = key
+    this.saveView()
+  }
+
   zoomToFit(): void {
     const extent = notesExtent(this.editor.notes) ?? this.emptyExtent()
     this.fit(extent)

@@ -81,6 +81,8 @@ pub trait Effect: Send {
     /// Processes one block in place. The two slices have the same length,
     /// which may be anything from 1 up.
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
+    /// Optional detector-only stereo input; processors opt in explicitly.
+    fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], _key: Option<&[[f32; 2]]>) { self.process(left, right); }
 
     /// Samples by which the output lags the input, for delay compensation.
     /// It can change when parameters change, so read it after
@@ -641,6 +643,9 @@ impl AnyEffect {
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         each_effect!(self, effect => effect.process(left, right));
     }
+    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
+        each_effect!(self, effect => effect.process_sidechain(left, right, key));
+    }
 
     /// See [`Effect::latency_samples`].
     pub fn latency_samples(&self) -> usize {
@@ -898,18 +903,20 @@ impl EffectSlot {
 
     /// Processes one block in place. Blocks longer than the `max_block`
     /// given to [`EffectSlot::prepare`] are worked through in pieces.
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
+
+    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         let frames = left.len().min(right.len());
         let piece = self.scratch_left.len().max(1);
         let mut start = 0;
         while start < frames {
             let end = (start + piece).min(frames);
-            self.process_piece(&mut left[start..end], &mut right[start..end]);
+            self.process_piece(&mut left[start..end], &mut right[start..end], key.and_then(|key| key.get(start..end)));
             start = end;
         }
     }
 
-    fn process_piece(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn process_piece(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         let fresh = std::mem::replace(&mut self.fresh, false);
         let frames = left.len();
         if self.scratch_left.len() < frames {
@@ -976,7 +983,7 @@ impl EffectSlot {
             // simultaneous dry/PDC transition has also reached its target.
             self.warm_up = self.warm_up.max(dry_transition);
         }
-        self.effect.process(left, right);
+        self.effect.process_sidechain(left, right, key);
         if self.warm_up == 0 && self.wet.is_settled() && self.wet.value() == 1.0 {
             return;
         }

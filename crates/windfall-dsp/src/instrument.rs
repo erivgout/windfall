@@ -6,6 +6,7 @@ use ts_rs::TS;
 
 use crate::param::{ParamInfo, ParamSet};
 use crate::synth::{SubtractiveSynth, SynthParams};
+use crate::{NoteExpression, NoteInstanceId};
 
 /// A stereo instrument that turns notes into audio.
 ///
@@ -44,8 +45,36 @@ pub trait Instrument: Send {
     /// taken as a note-off.
     fn note_on(&mut self, key: u8, velocity: f32);
 
+    /// Starts a note with per-voice expression. Legacy instruments can
+    /// retain their key/velocity implementation until they support it.
+    fn note_on_expression(&mut self, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+        let _ = (pan, expression);
+        self.note_on(key, velocity);
+    }
+
     /// Lets go of a note, which starts its release.
     fn note_off(&mut self, key: u8);
+
+    /// Whether instance-specific release and expression are supported.
+    fn supports_note_instances(&self) -> bool { false }
+
+    fn note_on_instance(&mut self, id: NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+        let _ = id;
+        self.note_on_expression(key, velocity, pan, expression);
+    }
+
+    fn note_off_instance(&mut self, id: NoteInstanceId, key: u8) {
+        let _ = id;
+        self.note_off(key);
+    }
+
+    /// Changes one held or releasing instance, leaving the other voices alone.
+    fn set_note_expression(&mut self, id: NoteInstanceId, pan: f32, expression: NoteExpression) {
+        let _ = (id, pan, expression);
+    }
+
+    /// Effective pitch in fractional MIDI keys, including per-note tuning.
+    fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) { let _ = (id, pitch); }
 
     /// Stops every note with a fade of a few milliseconds, skipping their
     /// releases. For stopping the transport without a click.
@@ -232,11 +261,37 @@ impl AnyInstrument {
         }
     }
 
+    pub fn note_on_expression(&mut self, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+        match self {
+            AnyInstrument::SubtractiveSynth(synth) => synth.note_on_expression(key, velocity, pan, expression),
+        }
+    }
+
     /// See [`Instrument::note_off`].
     pub fn note_off(&mut self, key: u8) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.note_off(key),
         }
+    }
+
+    pub fn supports_note_instances(&self) -> bool {
+        match self { AnyInstrument::SubtractiveSynth(synth) => synth.supports_note_instances() }
+    }
+
+    pub fn note_on_instance(&mut self, id: NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+        match self { AnyInstrument::SubtractiveSynth(synth) => synth.note_on_instance(id, key, velocity, pan, expression) }
+    }
+
+    pub fn note_off_instance(&mut self, id: NoteInstanceId, key: u8) {
+        match self { AnyInstrument::SubtractiveSynth(synth) => synth.note_off_instance(id, key) }
+    }
+
+    pub fn set_note_expression(&mut self, id: NoteInstanceId, pan: f32, expression: NoteExpression) {
+        match self { AnyInstrument::SubtractiveSynth(synth) => synth.set_note_expression(id, pan, expression) }
+    }
+
+    pub fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) {
+        match self { AnyInstrument::SubtractiveSynth(synth) => synth.set_note_pitch(id, pitch) }
     }
 
     /// See [`Instrument::all_notes_off`].

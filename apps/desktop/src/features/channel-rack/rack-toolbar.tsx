@@ -27,6 +27,7 @@ import { RACK_MENU } from "./menus"
 import { useRackStore } from "./rack-store"
 import { clampPatternLength, describeLength } from "./steps"
 import { useGestureValue } from "./use-gesture-value"
+import { ChannelGroupFilter } from "./channel-groups-ui"
 
 function AddChannelMenuItems() {
   const actions = useActions()
@@ -96,8 +97,9 @@ function PatternLength() {
       DEFAULT_PATTERN_STEPS
   )
   const signature = useProjectStore(
-    (state) => state.project.settings.timeSignature
+    (state) => state.project.patterns.find((item) => item.id === pattern)?.timeSignature ?? state.project.settings.timeSignature
   )
+  const timeline = useProjectStore((state) => state.project.patterns.find((item) => item.id === pattern)?.timeline)
   const length = useGestureValue(lengthSteps, async (value, dispatch) => {
     if (pattern === null) return
     await dispatch({
@@ -107,7 +109,7 @@ function PatternLength() {
     })
   })
   const hint = useHint(
-    `Pattern length: ${length.value} steps, ${describeLength(length.value, signature)}. Drag up or down, or double-click to type`
+    `Pattern length: ${length.value} steps, ${describeLength(length.value, signature, timeline)}. Drag up or down, or double-click to type`
   )
 
   return (
@@ -195,6 +197,7 @@ function SettingsToggle() {
 
 /** The strip above the rows: add a channel, pattern length, swing. */
 export function RackToolbar() {
+  const graphOpen = useRackStore((state) => state.graphOpen)
   return (
     <ContextActions items={RACK_MENU}>
       <div
@@ -203,9 +206,11 @@ export function RackToolbar() {
         className="flex h-9 shrink-0 items-center gap-4 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
       >
         <AddChannelMenu />
+        <ChannelGroupFilter />
         <PatternLength />
         <Swing />
         <div className="ml-auto flex items-center">
+          <ActionButton action="channelRack.graph" variant={graphOpen ? "secondary" : "ghost"} size="sm" aria-pressed={graphOpen}>Graph</ActionButton>
           <SettingsToggle />
         </div>
       </div>

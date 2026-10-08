@@ -3,4 +3,4 @@
 /**
  * The audio output the user asked for. `None` means the system default.
  */
-export type AudioSettings = { host?: string, device?: string, sampleRate?: number, bufferFrames?: number, };
+export type AudioSettings = { host?: string, device?: string, sampleRate?: number, bufferFrames?: number, outputChannels?: number, };

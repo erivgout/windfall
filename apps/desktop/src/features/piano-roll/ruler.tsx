@@ -19,7 +19,9 @@ import { ignoresSnap } from "@/lib/edit-modifiers"
 import { dispatch } from "@/lib/store/project"
 import { seek, useTransportStore } from "@/lib/store/transport"
 import { ticksPerBar, ticksPerBeat } from "@/lib/time"
-import { TICKS_PER_STEP } from "@/lib/units"
+import { meterSegments } from "@/lib/timeline"
+import { openPatternTimeline, patternMeterAt } from "./pattern-timeline"
+import { MAX_PATTERN_STEPS, TICKS_PER_STEP } from "@/lib/units"
 
 import { CanvasLayer, type LayerSize } from "./canvas-layer"
 import { useSession } from "./context"
@@ -62,20 +64,10 @@ function paintRuler(
   const { viewport, theme } = view
   const transform = deviceTransform({ ...viewport, dpr: size.dpr })
   const signature = context.pattern.signature
-  const beat = ticksPerBeat(signature)
-  const bar = ticksPerBar(signature)
   const px = viewport.pxPerTick
   const dpr = size.dpr
   const lw = transform.lineWidth
   const height = size.height
-
-  let barsPerLabel = 1
-  while (barsPerLabel * bar * px < MIN_BAR_LABEL_PX) barsPerLabel *= 2
-  const showBeats = beat * px >= MIN_TICK_MARK_PX
-  const showSteps =
-    TICKS_PER_STEP * px >= MIN_TICK_MARK_PX && beat % TICKS_PER_STEP === 0
-  const labelBeats = beat * px >= MIN_BEAT_LABEL_PX
-  const unit = showSteps ? TICKS_PER_STEP : showBeats ? beat : bar
 
   ctx.font = `500 ${Math.round(10 * dpr)}px "Inter Variable", system-ui, sans-serif`
   ctx.textBaseline = "alphabetic"
@@ -87,36 +79,60 @@ function paintRuler(
   const beatInk = rgbaToCss(withAlpha(theme.mutedForeground, 0.8))
 
   const range = visibleTicks(viewport)
-  const first = Math.max(0, Math.floor(range.start / unit) * unit)
-  for (let tick = first; tick <= range.end; tick += unit) {
-    const x = deviceX(transform, tick)
-    if (tick % bar === 0) {
-      const index = tick / bar
-      const labeled = index % barsPerLabel === 0
-      ctx.fillStyle = strongLine
-      const top = labeled ? 0 : Math.round(height * 0.55)
-      ctx.fillRect(x, top, lw, height - top)
-      if (labeled) {
-        ctx.fillStyle = barInk
-        ctx.fillText(String(index + 1), x + pad, baseline)
+  for (const segment of meterSegments(signature, context.pattern.timeline?.meters ?? [])) {
+    if (segment.start > range.end || segment.end < range.start) continue
+    const beat = ticksPerBeat(segment.signature)
+    const bar = ticksPerBar(segment.signature)
+    let barsPerLabel = 1
+    while (barsPerLabel * bar * px < MIN_BAR_LABEL_PX) barsPerLabel *= 2
+    const showBeats = beat * px >= MIN_TICK_MARK_PX
+    const showSteps = TICKS_PER_STEP * px >= MIN_TICK_MARK_PX && beat % TICKS_PER_STEP === 0
+    const labelBeats = beat * px >= MIN_BEAT_LABEL_PX
+    const unit = showSteps ? TICKS_PER_STEP : showBeats ? beat : bar * barsPerLabel
+    const first = segment.start + Math.max(0, Math.floor((range.start - segment.start) / unit)) * unit
+    for (let tick = first; tick <= range.end && tick < segment.end; tick += unit) {
+      const offset = tick - segment.start
+      const x = deviceX(transform, tick)
+      if (offset % bar === 0) {
+        const index = offset / bar
+        const labeled = index % barsPerLabel === 0
+        ctx.fillStyle = strongLine
+        const top = labeled ? 0 : Math.round(height * 0.55)
+        ctx.fillRect(x, top, lw, height - top)
+        if (labeled) {
+          ctx.fillStyle = barInk
+          ctx.fillText(String(segment.bar + index), x + pad, baseline)
+        }
+      } else if (offset % beat === 0) {
+        ctx.fillStyle = faintLine
+        const mark = Math.round(7 * dpr)
+        ctx.fillRect(x, height - mark, lw, mark)
+        if (labelBeats) {
+          ctx.fillStyle = beatInk
+          ctx.fillText(`${segment.bar + Math.floor(offset / bar)}.${Math.floor((offset % bar) / beat) + 1}`, x + pad, baseline)
+        }
+      } else {
+        ctx.fillStyle = faintLine
+        const mark = Math.round(3 * dpr)
+        ctx.fillRect(x, height - mark, lw, mark)
       }
-    } else if (tick % beat === 0) {
-      ctx.fillStyle = faintLine
-      const mark = Math.round(7 * dpr)
-      ctx.fillRect(x, height - mark, lw, mark)
-      if (labelBeats) {
-        const inBar = Math.floor((tick % bar) / beat)
-        ctx.fillStyle = beatInk
-        ctx.fillText(
-          `${Math.floor(tick / bar) + 1}.${inBar + 1}`,
-          x + pad,
-          baseline
-        )
-      }
-    } else {
-      ctx.fillStyle = faintLine
-      const mark = Math.round(3 * dpr)
-      ctx.fillRect(x, height - mark, lw, mark)
+    }
+  }
+  const labels = [
+    ...(context.pattern.timeline?.markers ?? []).map((marker) => ({ tick: marker.tick, text: marker.name })),
+    ...(context.pattern.timeline?.meters ?? []).map((meter) => ({ tick: meter.tick, text: `${meter.signature.numerator}/${meter.signature.denominator}` })),
+  ].sort((a, b) => a.tick - b.tick)
+  let labelEnd = -Infinity
+  for (const label of labels) {
+    if (label.tick < range.start || label.tick > range.end) continue
+    const x = deviceX(transform, label.tick)
+    ctx.fillStyle = rgbaToCss(theme.item)
+    ctx.fillRect(x, Math.round(17 * dpr), lw, height - Math.round(17 * dpr))
+    if (x >= labelEnd) {
+      const text = label.text.length > 32 ? `${label.text.slice(0, 31)}…` : label.text
+      ctx.fillStyle = barInk
+      ctx.fillText(text, x + pad, Math.round(29 * dpr))
+      labelEnd = x + ctx.measureText(text).width + 2 * pad
     }
   }
 
@@ -170,6 +186,7 @@ export function Ruler() {
   const session = useSession()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const dragging = useRef(false)
+  const menuTick = useRef(0)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -215,12 +232,12 @@ export function Ruler() {
     const view = session.view
     const context = session.editor.context
     if (!view || !context) return
-    const steps = lengthStepsAt(
-      xToTick(view.viewport, localX(event)),
-      context.pattern.signature,
-      // By steps is this drag with the snap let go.
-      ignoresSnap({ alt: event.altKey })
-    )
+    const tick = xToTick(view.viewport, localX(event))
+    const bySteps = ignoresSnap({ alt: event.altKey })
+    const meter = patternMeterAt(tick, context.pattern.signature, context.pattern.timeline)
+    const steps = !bySteps && context.pattern.timeline?.meters.length
+      ? Math.min(MAX_PATTERN_STEPS, Math.max(1, Math.round(snapRound(tick, ticksPerBar(meter.signature), meter.start) / TICKS_PER_STEP)))
+      : lengthStepsAt(tick, meter.signature, bySteps)
     session.setLengthPreview(steps * TICKS_PER_STEP)
   }
 
@@ -233,6 +250,7 @@ export function Ruler() {
     const context = session.editor.context
     if (event.button !== 0 || !view || !context) return
     const x = localX(event)
+    menuTick.current = xToTick(view.viewport, x)
     if (nearEnd(x)) {
       dragging.current = true
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -240,12 +258,11 @@ export function Ruler() {
     }
     // The song's position belongs to the playlist, so only the pattern's moves.
     if (useTransportStore.getState().mode !== "pattern") return
-    const snap = snapTicks(
-      usePianoRollStore.getState().snap,
-      context.pattern.signature
-    )
+    const rawTick = xToTick(view.viewport, x)
+    const meter = patternMeterAt(rawTick, context.pattern.signature, context.pattern.timeline)
+    const snap = event.altKey ? 0 : snapTicks(usePianoRollStore.getState().snap, meter.signature)
     const last = context.pattern.lengthSteps * TICKS_PER_STEP - 1
-    const tick = snapRound(xToTick(view.viewport, x), snap)
+    const tick = snapRound(rawTick, snap, meter.start)
     void seek(Math.min(last, Math.max(0, tick)))
   }
 
@@ -290,11 +307,16 @@ export function Ruler() {
   }
 
   return (
-    <ContextActions items={RULER_MENU}>
+    <ContextActions items={[{ title: "Edit markers / meter here…", run: () => openPatternTimeline(menuTick.current), afterClose: true }, contextSeparator, ...RULER_MENU]}>
       <canvas
         ref={canvasRef}
         aria-label="Time ruler. Drag the marker at the end of the pattern to change its length"
         className="block h-full w-full touch-none"
+        onContextMenuCapture={(event) => {
+          const view = session.view
+          if (view) menuTick.current = xToTick(view.viewport, logicalDelta(event.clientX - event.currentTarget.getBoundingClientRect().left))
+        }}
+        onDoubleClick={() => { const context = session.editor.context; if (context) openPatternTimeline(menuTick.current) }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

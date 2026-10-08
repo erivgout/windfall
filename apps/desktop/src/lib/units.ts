@@ -10,6 +10,7 @@ export const DEFAULT_VELOCITY = 0.8
 export const DEFAULT_CHANNEL_VOLUME = 0.8
 export const DEFAULT_PATTERN_STEPS = 16
 export const MAX_PATTERN_STEPS = 1024
+export const MAX_PATTERN_TICKS = MAX_PATTERN_STEPS * TICKS_PER_STEP
 /** The end of the longest song: a million quarter notes. No clip ends past it. */
 export const MAX_SONG_TICKS = 1_000_000 * PPQ
 /** Furthest an audio clip can be pitched up or down, in semitones. */
@@ -29,7 +30,7 @@ export const MAX_TEMPO_BPM = 522
 
 /** Highest linear gain a channel or mixer fader allows, about +6 dB. */
 export const MAX_GAIN = 2
-export const MAX_MIXER_TRACKS = 128
+export const MAX_MIXER_TRACKS = 501
 export const MASTER_TRACK = 0
 
 export const FORMAT_VERSION = 1

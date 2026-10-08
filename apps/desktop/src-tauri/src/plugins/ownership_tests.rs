@@ -40,6 +40,8 @@ pub(crate) fn fixture(index: usize) -> (Arc<Runtime>, PluginBinding) {
     }]);
     let binding = runtime
         .discover(PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target: if index == 2 {
                 PluginTarget::Instrument {
                     channel: windfall_project::ChannelId(900),

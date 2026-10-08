@@ -104,6 +104,25 @@ pub struct StreamStats {
 }
 
 impl Controller {
+    /// Selects a post-fader utility source without rebuilding the musical plan.
+    /// Interest is installed off audio; unrequested tracks perform no history work.
+    pub fn set_waveform_tracks(&self, ids: &[windfall_project::TrackId]) {
+        let ids = &ids[..ids.len().min(crate::waveform_meter::MAX_VISIBLE)];
+        let state = self.lock();
+        for (index, slot) in self.inner.shared.waveforms.iter().enumerate() {
+            let id = state.plan.tracks.get(index).filter(|track| ids.contains(&track.id)).map_or(u32::MAX, |track| track.id.0);
+            slot.requested.store(id, Ordering::Release);
+        }
+    }
+
+    pub fn clear_waveform_history(&self) {
+        self.inner.shared.waveform_epoch.fetch_add(1, Ordering::AcqRel);
+        for slot in self.inner.shared.waveforms.iter() { slot.requested.store(u32::MAX, Ordering::Release); }
+    }
+
+    pub fn set_current_track(&self, track: Option<windfall_project::TrackId>) {
+        self.inner.shared.current_track.store(track.map_or(u32::MAX, |track| track.0), Ordering::Release);
+    }
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -119,6 +138,9 @@ impl Controller {
                         mode: PlayMode::Pattern,
                         pattern: PatternId(0),
                         loop_song: false,
+                        metronome: None,
+                        count_in_bars: None,
+                        count_in_remaining: None,
                     },
                     sequence: 0,
                     output_gain: 1.0,
@@ -299,6 +321,67 @@ impl Controller {
         self.start(None);
     }
 
+    /// A recording pre-roll on the output clock, then playback at the playhead.
+    pub fn play_count_in(&self, bars: u8) {
+        let mut state = self.lock();
+        if state.link.is_none() { return; }
+        state.transport.playing = true;
+        state.sequence = state.sequence.wrapping_add(1);
+        let sequence = state.sequence;
+        self.inner.shared.count_in_remaining.store(1, Ordering::Release);
+        state.send(Message::CountIn { sequence, bars: bars.min(8), capture: self.inner.shared.recording_clock.active_ticket() });
+    }
+
+    pub fn recording_clock(&self) -> crate::recording_clock::RecordingClock { self.inner.shared.recording_clock.clone() }
+    pub fn start_input_monitor(&self, settings: windfall_ipc::RecordingMonitorSettings, rate: u32) -> Result<crate::recording_monitor::MonitorWriter, String> {
+        self.start_input_monitors(vec![settings], rate).map(|mut writers| writers.remove(0))
+    }
+    pub fn start_input_monitors(&self, settings: Vec<windfall_ipc::RecordingMonitorSettings>, rate: u32) -> Result<Vec<crate::recording_monitor::MonitorWriter>, String> {
+        if settings.len() > windfall_project::MAX_MIXER_TRACKS || rate == 0 { return Err("Monitor routes exceed the mixer capacity.".into()); }
+        let mut state = self.lock();
+        if state.link.is_none() {
+            return Err("Open an output and choose an existing monitor mixer track.".into());
+        }
+        for setting in &settings {
+            if !setting.gain.is_finite() || !(0.0..=1.0).contains(&setting.gain) || !(5..=100).contains(&setting.buffer_ms) || state.plan.track_ids.get(setting.track.0).is_none() {
+                return Err("Choose an existing monitor track, gain 0–1 and buffering 5–100 ms.".into());
+            }
+        }
+        let (writers, readers): (Vec<_>, Vec<_>) = settings.into_iter().map(|setting| crate::recording_monitor::channel(setting, rate)).unzip();
+        state.send(Message::SetInputMonitors(readers.into_boxed_slice()));
+        Ok(writers)
+    }
+    pub fn stop_input_monitor(&self) { self.lock().send(Message::SetInputMonitors(Vec::new().into_boxed_slice())); }
+    pub fn start_disk_taps(&self, taps: Vec<(windfall_ipc::RecordingMixerTap, f64)>, gate: crate::recording_clock::CaptureGate, rate: u32) -> Result<Vec<crate::recording_disk::DiskReader>, String> {
+        let mut state = self.lock();
+        if state.link.is_none() || rate == 0 || taps.len() > windfall_project::MAX_MIXER_TRACKS { return Err("Open an output before mixer disk recording.".into()); }
+        for (tap, offset) in &taps {
+            if tap.mode == windfall_project::MixerRecordMode::Input || state.plan.track_ids.get(tap.track.0).is_none() || !offset.is_finite() || offset.abs() > 1000.0 {
+                return Err("Choose a mixer track, processed recording source and an offset within 1000 ms.".into());
+            }
+        }
+        let (readers, writers): (Vec<_>, Vec<_>) = taps.into_iter().map(|(tap, offset)| crate::recording_disk::channel(tap, gate.clone(), rate, offset)).unzip();
+        state.send(Message::SetDiskTaps(writers.into_boxed_slice())); Ok(readers)
+    }
+    pub fn stop_disk_taps(&self) { self.lock().send(Message::SetDiskTaps(Vec::new().into_boxed_slice())); }
+
+    /// Exact nominal sample span through the compiled song tempo map.
+    pub fn song_range_frames(&self, range: windfall_project::TickRange, rate: u32) -> Result<f64, String> {
+        range.check()?;
+        let state = self.lock();
+        let ticks = state.plan.warp(f64::from(range.end)) - state.plan.warp(f64::from(range.start));
+        Ok(ticks * windfall_core::samples_per_tick(state.plan.tempo_bpm, f64::from(rate)))
+    }
+    pub fn song_tick_after_seconds(&self, start: u32, seconds: f64) -> f64 {
+        let state = self.lock();
+        let ticks = seconds.max(0.0) * state.plan.tempo_bpm * f64::from(windfall_core::PPQ) / 60.0;
+        state.plan.unwarp(state.plan.warp(f64::from(start)) + ticks)
+    }
+
+    pub fn count_in_remaining(&self) -> u32 {
+        self.inner.shared.count_in_remaining.load(Ordering::Acquire)
+    }
+
     /// Plays the pattern or song `passes` times, then stops without cutting
     /// off what is still sounding. The offline renderer uses this.
     pub(crate) fn play_passes(&self, passes: u32) {
@@ -325,6 +408,7 @@ impl Controller {
     /// the song had it until everything has rung out. Stopping again
     /// returns it to the stored values right away, over 100 ms.
     pub fn stop(&self) {
+        self.inner.shared.recording_clock.close_active();
         let mut state = self.lock();
         self.panic_hardware();
         state.transport.playing = false;
@@ -343,6 +427,7 @@ impl Controller {
     /// Moves the playhead to `tick`. While playing, sequenced notes fade out
     /// and playback carries on from there.
     pub fn seek(&self, tick: f64) {
+        self.inner.shared.recording_clock.close_active();
         let tick = if tick.is_finite() { tick.max(0.0) } else { 0.0 };
         let mut state = self.lock();
         let tick = if state.transport.mode == PlayMode::Song {
@@ -375,6 +460,11 @@ impl Controller {
         if let Some(loop_song) = patch.loop_song {
             state.transport.loop_song = loop_song;
         }
+        if let Some(mut metronome) = patch.metronome {
+            metronome.gain = if metronome.gain.is_finite() { metronome.gain.clamp(0.0, 1.0) } else { 0.25 };
+            state.transport.metronome = Some(metronome);
+        }
+        if let Some(bars) = patch.count_in_bars { state.transport.count_in_bars = Some(bars.min(8)); }
         state.send_transport();
     }
 
@@ -383,6 +473,7 @@ impl Controller {
         state.maintain();
         TransportState {
             playing: self.playing(&state),
+            count_in_remaining: Some(self.count_in_remaining()),
             ..state.transport
         }
     }
@@ -521,6 +612,10 @@ impl Controller {
             shared.automated(&mut automated);
         }
         RealtimeFrame {
+            waveforms: if state.link.is_some() {
+                let epoch = shared.waveform_epoch.load(Ordering::Acquire);
+                state.plan.tracks.iter().enumerate().filter_map(|(index, track)| shared.waveforms[index].snapshot(track.id, epoch)).take(crate::waveform_meter::MAX_VISIBLE).collect()
+            } else { Vec::new() },
             playing: self.playing(&state),
             tick: shared.tick(),
             meters: (0..state.plan.tracks.len() * 2)
@@ -573,6 +668,7 @@ impl Controller {
     /// could not be built and another kind is tried: the processor made
     /// last is the one that counts.
     pub(crate) fn attach(&self, sample_rate: u32) -> Processor {
+        self.inner.shared.recording_clock.reset_output();
         let (message_tx, message_rx) = RingBuffer::new(MESSAGE_CAPACITY);
         let (garbage_tx, garbage_rx) = RingBuffer::new(GARBAGE_CAPACITY);
         let shared = self.inner.shared.clone();
@@ -628,9 +724,12 @@ impl Controller {
     /// purpose. If the transport was playing, the processor of the next
     /// stream carries on from where the playhead is now.
     pub(crate) fn suspend(&self) {
+        self.inner.shared.recording_clock.reset_output();
         let mut state = self.lock();
         self.panic_hardware();
-        state.resume = self.playing(&state);
+        state.resume = self.playing(&state) && self.count_in_remaining() == 0;
+        if self.count_in_remaining() > 0 { state.transport.playing = false; }
+        self.inner.shared.count_in_remaining.store(0, Ordering::Release);
         state.link = None;
         state.hosted = None;
         state.backlog.clear();
@@ -647,6 +746,7 @@ impl Controller {
     /// This frees whatever was still queued for the processor, so it is for
     /// the control side only.
     pub(crate) fn detach(&self) {
+        self.inner.shared.recording_clock.reset_output();
         let mut state = self.lock();
         self.panic_hardware();
         state.link = None;
@@ -655,6 +755,7 @@ impl Controller {
         state.resume = false;
         state.transport.playing = false;
         let shared = &self.inner.shared;
+        shared.count_in_remaining.store(0, Ordering::Release);
         shared.publish_transport(state.sequence, false);
         shared.publish_position(shared.start(), shared.start(), 0);
         shared.publish_clips(0, 0);
@@ -701,6 +802,7 @@ impl State {
             mode: self.transport.mode,
             pattern: self.transport.pattern,
             loop_song: self.transport.loop_song,
+            metronome: self.transport.metronome.unwrap_or_default(),
         });
     }
 
@@ -747,6 +849,8 @@ mod tests {
             pan: 0.0,
             muted: false,
             solo: false,
+            group: String::new(),
+            timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId::MASTER,
             source: ChannelSource::Sampler(SamplerSettings {
                 sample: Some(SampleId(900)),
@@ -764,6 +868,7 @@ mod tests {
                     key: 60,
                     velocity: 1.0,
                     pan: 0.0,
+                    expression: Default::default(),
                 })
                 .collect(),
         });
@@ -909,6 +1014,8 @@ mod tests {
             project.patterns[0].lanes.push(lane);
         }
         project.plugins.push(PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target: PluginTarget::Effect {
                 effect: EffectId(20),
             },
@@ -1388,6 +1495,8 @@ mod tests {
             params: EffectParams::Limiter(Default::default()),
         });
         project.plugins.push(PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target: PluginTarget::Effect {
                 effect: EffectId(950),
             },

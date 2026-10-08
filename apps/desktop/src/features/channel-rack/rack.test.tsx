@@ -569,6 +569,7 @@ describe("the channel button", () => {
       "Fill every 2 steps",
       "Fill every 4 steps",
       "Fill every 8 steps",
+      "Advanced step fill…",
       "Shift steps leftCtrl+Shift+←",
       "Shift steps rightCtrl+Shift+→",
       "Move channel upAlt+↑",

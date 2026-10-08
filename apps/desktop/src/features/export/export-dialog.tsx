@@ -37,6 +37,7 @@ import { Choice, type Option } from "./choice"
 import { useTimelineStore } from "@/features/playlist/timeline-store"
 import { changeExportFormat, FormatControls } from "./format-controls"
 import { StemControls } from "./stem-controls"
+import { useMixerRender } from "./mixer-render"
 
 import {
   cleanExportPath,
@@ -66,6 +67,8 @@ const BAD_LOOPS = `Enter a whole number from 1 to ${MAX_PATTERN_LOOPS}.`
 const BAD_TAIL = `Enter a number of seconds from 0 to ${MAX_TAIL_SECS}.`
 
 function ExportForm({ onDone }: { onDone(): void }) {
+  const mixerRequest = useRef(useMixerRender.getState().request).current
+  const exportTracks = useProjectStore((state) => state.project.mixer.tracks)
   const [draft, setDraft] = useState<Draft>(() => ({
     path: "",
     format: "wav",
@@ -77,6 +80,13 @@ function ExportForm({ onDone }: { onDone(): void }) {
     patternLoops: "4",
     tailSecs: "10",
     autoTail: true,
+    stems: mixerRequest ? {
+      mode: "trackOutputs",
+      tracks: [...mixerRequest.tracks],
+      includeMix: mixerRequest.includeMix,
+      numbered: true,
+      folder: true,
+    } : undefined,
   }))
   const [run, setRun] = useState<Run | null>(null)
   const [cancelling, setCancelling] = useState(false)
@@ -86,6 +96,7 @@ function ExportForm({ onDone }: { onDone(): void }) {
   )
   useEffect(() => {
     useTimelineStore.setState({ exportSelection: false })
+    useMixerRender.setState({ request: null })
   }, [])
   // An empty path is only called out once Export was pressed without one.
   const [pathAsked, setPathAsked] = useState(false)
@@ -110,6 +121,11 @@ function ExportForm({ onDone }: { onDone(): void }) {
   const stemsError =
     draft.stems?.tracks?.length === 0 && !draft.stems.includeMix
       ? "Choose at least one track or include the full mix."
+      : null
+  const mixerSourceError = mixerRequest && mixerRequest.generation !== getProjectGeneration()
+    ? "The project was replaced. Close this export and choose its mixer tracks again."
+    : draft.stems?.tracks?.some((id) => !exportTracks.some((track) => track.id === id && !track.current))
+      ? "An export track was removed. Choose the remaining mixer tracks again."
       : null
   const regionError =
     draft.mode === "song" && selectedOnly && !selectedRegion
@@ -170,6 +186,7 @@ function ExportForm({ onDone }: { onDone(): void }) {
     if (patternLoops === null) return focus("export-loops")
     if (tailSecs === null) return focus("export-tail")
     if (stemsError) return focus("export-stem-selection")
+    if (mixerSourceError) return focus("export-stem-selection")
     if (regionError) return
 
     const options: ExportOptions = {
@@ -357,6 +374,7 @@ function ExportForm({ onDone }: { onDone(): void }) {
           onChange={(stems) => set("stems", stems)}
         />
         {stemsError && <FieldError>{stemsError}</FieldError>}
+        {mixerSourceError && <FieldError>{mixerSourceError}</FieldError>}
 
         {exporting && (
           <Progress value={run.fraction * 100}>

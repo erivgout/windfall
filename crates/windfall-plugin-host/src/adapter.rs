@@ -18,7 +18,7 @@
 
 use crate::containment::PluginHealth;
 use crate::error::PluginError;
-use crate::events::Transport;
+use crate::events::{Transport, HostEvent, NoteExpressionKind, MAX_NOTE_INSTANCES};
 use crate::instance::PluginInstance;
 use crate::params::PluginParam;
 use crate::processor::{PluginProcessor, ProcessStatus};
@@ -117,6 +117,7 @@ impl PluginEffect {
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         self.processor.process(left, right);
     }
+    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) { self.processor.process_sidechain(left, right, key); }
 
     /// Samples by which the output lags the input.
     pub fn latency_samples(&self) -> usize {
@@ -148,20 +149,37 @@ impl PluginEffect {
     }
 }
 
-/// How many keys there are.
-const KEYS: usize = 128;
+/// Channel/key pairs tracked without callback allocation.
+const KEYS: usize = 16 * 128;
 
 /// A plugin as a stereo instrument.
 ///
 /// Like the built-in instruments it takes notes with no position in time:
 /// a note starts on the first frame of the next block. The engine already
 /// splits its blocks at every note, which puts each on its exact frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PluginNoteControls { pub pan: f32, pub pitch: f32, pub modulation_x: f32, pub modulation_y: f32 }
+impl PluginNoteControls {
+    fn values(self, key: u8) -> [f64; 4] { [(f64::from(self.pan) + 1.0) / 2.0,
+        f64::from(self.pitch) - f64::from(key), f64::from(self.modulation_x), f64::from(self.modulation_y)] }
+    fn valid(self, key: u8) -> bool {
+        let values = self.values(key);
+        [NoteExpressionKind::Pan, NoteExpressionKind::Tuning, NoteExpressionKind::Brightness, NoteExpressionKind::Expression]
+            .into_iter().zip(values).all(|(kind, value)| kind.valid(value))
+    }
+}
+#[derive(Clone, Copy)]
+struct HeldInstance { id: u32, key: u8, channel: u8, controls: PluginNoteControls }
+impl HeldInstance { const EMPTY: Self = Self { id: 0, key: 0, channel: 0,
+    controls: PluginNoteControls { pan: 0.0, pitch: 0.0, modulation_x: 0.5, modulation_y: 0.5 } }; }
+
 pub struct PluginInstrument {
     processor: PluginProcessor,
     params: Box<[ParamSlot]>,
     /// The keys that are down.
     held: [bool; KEYS],
     held_count: usize,
+    instances: Box<[HeldInstance]>,
 }
 
 impl PluginInstrument {
@@ -170,6 +188,7 @@ impl PluginInstrument {
         self.processor.reset();
         self.held = [false; KEYS];
         self.held_count = 0;
+        self.instances.fill(HeldInstance::EMPTY);
     }
 
     /// See [`PluginEffect::set_param`].
@@ -197,27 +216,85 @@ impl PluginInstrument {
     /// key number and `velocity` runs from 0 to 1. Zero or less is taken as
     /// a note-off.
     pub fn note_on(&mut self, key: u8, velocity: f32) -> bool {
+        self.note_on_channel(key, 0, velocity)
+    }
+
+    pub fn note_on_channel(&mut self, key: u8, channel: u8, velocity: f32) -> bool {
+        if channel > 15 { return false; }
         if velocity <= 0.0 {
-            return self.note_off(key);
+            return self.note_off_channel(key, channel);
         }
         let key = key.min(127);
-        if !self.processor.note_on(0, key, velocity) {
+        if !self.processor.note_on_channel(0, key, channel, velocity) {
             return false;
         }
-        if !self.held[usize::from(key)] {
-            self.held[usize::from(key)] = true;
+        let slot = usize::from(channel) * 128 + usize::from(key);
+        if !self.held[slot] {
+            self.held[slot] = true;
             self.held_count += 1;
         }
         true
     }
 
+    pub fn supports_note_instances(&self) -> bool { self.processor.supports_note_instances() }
+    pub fn supports_note_pitch(&self) -> bool { (0..16).any(|channel| self.processor.note_expression_mask(channel) & NoteExpressionKind::Tuning.mask() != 0) }
+    fn controls_events(&self, note: HeldInstance, before: Option<PluginNoteControls>, controls: PluginNoteControls,
+        events: &mut [HostEvent; 5], mut count: usize) -> usize {
+        let values = controls.values(note.key);
+        let before = before.map(|controls| controls.values(note.key));
+        let mask = self.processor.note_expression_mask(note.channel);
+        for (index, kind) in [NoteExpressionKind::Pan, NoteExpressionKind::Tuning, NoteExpressionKind::Brightness, NoteExpressionKind::Expression].into_iter().enumerate() {
+            if mask & kind.mask() != 0 && before.is_none_or(|before| before[index] != values[index]) {
+                events[count] = HostEvent::NoteExpression { time: 0, id: note.id, key: note.key, channel: note.channel, kind, value: values[index] };
+                count += 1;
+            }
+        }
+        count
+    }
+    pub fn note_on_instance(&mut self, id: u32, key: u8, channel: u8, velocity: f32, controls: PluginNoteControls) -> bool {
+        if !self.supports_note_instances() || key > 127 || channel > 15 || !controls.valid(key)
+            || self.instances.iter().any(|note| note.id == id) { return false; }
+        let Some(slot) = self.instances.iter().position(|note| note.id == 0) else { return false; };
+        let note = HeldInstance { id, key, channel, controls };
+        let mut events = [HostEvent::AllNotesOff { time: 0 }; 5];
+        events[0] = HostEvent::NoteOnInstance { time: 0, id, key, channel, velocity };
+        let count = self.controls_events(note, None, controls, &mut events, 1);
+        if !self.processor.push_events(&events[..count]) { return false; }
+        self.instances[slot] = note;
+        true
+    }
+    pub fn set_note_controls(&mut self, id: u32, controls: PluginNoteControls) -> bool {
+        let Some(slot) = self.instances.iter().position(|note| note.id == id && id != 0) else { return false; };
+        let note = self.instances[slot];
+        if !controls.valid(note.key) { return false; }
+        let mut events = [HostEvent::AllNotesOff { time: 0 }; 5];
+        let count = self.controls_events(note, Some(note.controls), controls, &mut events, 0);
+        if !self.processor.push_events(&events[..count]) { return false; }
+        self.instances[slot].controls = controls;
+        true
+    }
+    pub fn note_off_instance(&mut self, id: u32, velocity: f32) -> bool {
+        let Some(slot) = self.instances.iter().position(|note| note.id == id && id != 0) else { return true; };
+        let note = self.instances[slot];
+        if !self.processor.release_note_instance(id, note.key, note.channel, velocity) { return false; }
+        self.instances[slot] = HeldInstance::EMPTY;
+        true
+    }
+
     /// Lets go of a note on the first frame of the next block.
     pub fn note_off(&mut self, key: u8) -> bool {
+        self.note_off_channel(key, 0)
+    }
+
+    pub fn note_off_channel(&mut self, key: u8, channel: u8) -> bool {
+        if channel > 15 { return false; }
         let key = key.min(127);
         // Reserved immediate releases remain guaranteed under saturation.
-        self.processor.release_note(key);
-        if self.held[usize::from(key)] {
-            self.held[usize::from(key)] = false;
+        if channel == 0 { self.processor.release_note(key); }
+        else { self.processor.release_note_on_channel(key, channel); }
+        let slot = usize::from(channel) * 128 + usize::from(key);
+        if self.held[slot] {
+            self.held[slot] = false;
             self.held_count -= 1;
         }
         true
@@ -228,6 +305,7 @@ impl PluginInstrument {
         self.processor.release_all_notes();
         self.held = [false; KEYS];
         self.held_count = 0;
+        self.instances.fill(HeldInstance::EMPTY);
         true
     }
 
@@ -248,13 +326,13 @@ impl PluginInstrument {
     /// out when an instrument has gone quiet by listening to it, bounded by
     /// [`tail_samples`](Self::tail_samples).
     pub fn active_voices(&self) -> usize {
-        self.held_count
+        self.held_count + self.instances.iter().filter(|note| note.id != 0).count()
     }
 
     /// True once the plugin has said that nothing more will come out until
     /// the next note.
     pub fn is_asleep(&self) -> bool {
-        self.held_count == 0 && self.processor.status() == ProcessStatus::Sleep
+        self.active_voices() == 0 && self.processor.status() == ProcessStatus::Sleep
     }
 
     /// Samples by which the output lags the notes.
@@ -307,6 +385,7 @@ impl PluginInstance {
             params,
             held: [false; KEYS],
             held_count: 0,
+            instances: vec![HeldInstance::EMPTY; MAX_NOTE_INSTANCES].into_boxed_slice(),
         })
     }
 
@@ -341,6 +420,7 @@ impl PluginInstance {
             params,
             held,
             held_count,
+            instances,
         } = instrument;
         self.deactivate(processor)
             .map_err(|error| crate::DeactivationError {
@@ -350,6 +430,7 @@ impl PluginInstance {
                     params,
                     held,
                     held_count,
+                    instances,
                 },
             })
     }
