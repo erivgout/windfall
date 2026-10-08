@@ -367,6 +367,119 @@ fn u32le(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
 }
 
+fn zip32_extra(bytes: &[u8]) -> Result<(), Error> {
+    let mut at = 0;
+    while at < bytes.len() {
+        if at + 4 > bytes.len() {
+            return Err(invalid("Truncated ZIP extra field."));
+        }
+        let kind = u16le(bytes, at);
+        at += 4 + u16le(bytes, at + 2) as usize;
+        if at > bytes.len() || kind == 1 {
+            return Err(invalid("Unsupported or damaged ZIP extra field."));
+        }
+    }
+    Ok(())
+}
+
+fn local_span_end(start: u64, bytes: u64, directory_start: u64) -> Result<u64, Error> {
+    start
+        .checked_add(bytes)
+        .filter(|end| *end <= directory_start)
+        .ok_or_else(|| invalid("ZIP local record exceeds the archive data region."))
+}
+
+/// ZIP32 descriptors may carry a signature or start directly with the CRC.
+/// Try the unsigned form first: a legitimate CRC can equal the signature.
+fn descriptor_end<R: Read + Seek>(
+    input: &mut R,
+    start: u64,
+    directory_start: u64,
+    expected: [u32; 3],
+) -> Result<u64, Error> {
+    let short_end = local_span_end(start, 12, directory_start)?;
+    input.seek(SeekFrom::Start(start))?;
+    let mut bytes = [0; 16];
+    input.read_exact(&mut bytes[..12])?;
+    if [u32le(&bytes, 0), u32le(&bytes, 4), u32le(&bytes, 8)] == expected {
+        return Ok(short_end);
+    }
+    if bytes[..4] == *b"PK\x07\x08" {
+        let end = local_span_end(start, 16, directory_start)?;
+        input.read_exact(&mut bytes[12..])?;
+        if [u32le(&bytes, 4), u32le(&bytes, 8), u32le(&bytes, 12)] == expected {
+            return Ok(end);
+        }
+    }
+    Err(invalid("ZIP data descriptor does not match the directory."))
+}
+
+/// Bind ZIP's later local-header seek to the validated central identity.
+/// Read only bounded header/extra/descriptor metadata; compressed payloads
+/// remain streamed by the existing CRC-checked reader after initialization.
+fn local_end<R: Read + Seek>(
+    input: &mut R,
+    name: &[u8],
+    central: &[u8],
+    directory_start: u64,
+    check: &mut Check<'_>,
+) -> Result<(u64, u64), Error> {
+    let start = u32le(central, 42) as u64;
+    let fixed_end = local_span_end(start, 30, directory_start)?;
+    input.seek(SeekFrom::Start(start))?;
+    let mut header = [0; 30];
+    input.read_exact(&mut header)?;
+    let flags = u16le(central, 8);
+    if header[..4] != *b"PK\x03\x04"
+        || u16le(&header, 6) != flags
+        || u16le(&header, 8) != u16le(central, 10)
+        || u16le(&header, 26) as usize != name.len()
+    {
+        return Err(invalid("ZIP local header does not match the directory."));
+    }
+    let extra_length = u16le(&header, 28) as usize;
+    let data_start = local_span_end(
+        fixed_end,
+        name.len() as u64 + extra_length as u64,
+        directory_start,
+    )?;
+    let expected = [u32le(central, 16), u32le(central, 20), u32le(central, 24)];
+    let local = [u32le(&header, 14), u32le(&header, 18), u32le(&header, 22)];
+    let descriptor = flags & 8 != 0;
+    if (descriptor
+        && local
+            .iter()
+            .zip(expected)
+            .any(|(local, expected)| *local != 0 && *local != expected))
+        || (!descriptor && local != expected)
+        || (u16le(central, 10) == 0 && expected[1] != expected[2])
+    {
+        return Err(invalid(
+            "ZIP local CRC or sizes do not match the directory.",
+        ));
+    }
+    let mut local_name = vec![0; name.len()];
+    check(Stage::Read)?;
+    input.read_exact(&mut local_name)?;
+    if local_name != name {
+        return Err(invalid("ZIP local name does not match the directory."));
+    }
+    // Each allocation/read is bounded by the ZIP32 u16 extra length, and
+    // names already passed the small schema-path bound.
+    let mut extra = vec![0; extra_length];
+    check(Stage::Read)?;
+    input.read_exact(&mut extra)?;
+    zip32_extra(&extra)?;
+    let data_end = local_span_end(data_start, expected[1] as u64, directory_start)?;
+    let end = if descriptor {
+        check(Stage::Read)?;
+        descriptor_end(input, data_end, directory_start, expected)?
+    } else {
+        data_end
+    };
+    Ok((start, end))
+}
+
 /// Bounds the central directory BEFORE ZIP's parser allocates its index, and
 /// detects duplicates before any parser can coalesce them. ZIP64/multidisk,
 /// encrypted members, directories and non-regular UNIX types are unsupported.
@@ -420,6 +533,7 @@ fn preflight<R: Read + Seek>(
     let mut at = 0;
     let mut names = HashMap::new();
     let mut expanded = 0u64;
+    let mut ranges = Vec::with_capacity(count);
     for _ in 0..count {
         check(Stage::Read)?;
         if at + 46 > directory.len() || directory[at..at + 4] != *b"PK\x01\x02" {
@@ -442,18 +556,9 @@ fn preflight<R: Read + Seek>(
         // ZIP64 extras can override the sizes and local offset read above.
         // Refuse them before ZIP sees any metadata, including non-sentinel
         // fields, which ZIP 6 also permits ZIP64 extras to replace.
-        let mut extra = at + 46 + name_length;
+        let extra = at + 46 + name_length;
         let extra_end = extra + u16le(&directory, at + 30) as usize;
-        while extra < extra_end {
-            if extra + 4 > extra_end {
-                return Err(invalid("Truncated ZIP extra field."));
-            }
-            let kind = u16le(&directory, extra);
-            extra += 4 + u16le(&directory, extra + 2) as usize;
-            if extra > extra_end || kind == 1 {
-                return Err(invalid("Unsupported or damaged ZIP extra field."));
-            }
-        }
+        zip32_extra(&directory[extra..extra_end])?;
         if u16le(&directory, at + 8) & 1 != 0
             || !matches!(u16le(&directory, at + 10), 0 | 8)
             || u16le(&directory, at + 34) != 0
@@ -475,10 +580,21 @@ fn preflight<R: Read + Seek>(
         if names.insert(name.to_ascii_lowercase(), bytes).is_some() {
             return Err(invalid("Duplicate or case-colliding ZIP members."));
         }
+        ranges.push(local_end(
+            input,
+            name.as_bytes(),
+            &directory[at..at + 46],
+            offset,
+            check,
+        )?);
         at = next;
     }
     if at != directory.len() {
         return Err(invalid("Extra ZIP directory data."));
+    }
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        return Err(invalid("Overlapping ZIP local records."));
     }
     // Relocate only the in-memory central directory to offset zero. Local
     // offsets still address the original file. The parser receives the exact

@@ -722,68 +722,104 @@ fn portable_history_only_missing_source_stays_missing_after_move() {
 
 #[test]
 fn portable_source_conflict_refuses_root_change_without_discarding_history() {
-    let rig = Rig::new();
-    let home = rig
-        .session
-        .project_save(Some(&rig.file("home/song")))
-        .unwrap();
-    let source = Path::new(&home).with_file_name("sounds").join("own.wav");
-    fs::create_dir_all(source.parent().unwrap()).unwrap();
-    write_tone(&source);
-    let source_bytes = fs::read(&source).unwrap();
-    let home_bytes = fs::read(&home).unwrap();
-    let first = rig
-        .session
-        .dispatch(
-            Command::AddSample {
-                name: "First identity".into(),
-                path: own_sample_path("own.wav"),
-            },
-            None,
-        )
-        .unwrap();
-    rig.session
-        .dispatch(
-            Command::RemoveSample {
-                id: SampleId(first.created[0]),
-            },
-            None,
-        )
-        .unwrap();
-    rig.session
-        .dispatch(
-            Command::AddSample {
-                name: "Second identity".into(),
-                path: own_sample_path("own.wav"),
-            },
-            None,
-        )
-        .unwrap();
-    rig.session.undo().unwrap();
-    let before = rig.session.document_snapshot();
-    assert_eq!(before.history.entries.len(), 3);
-    let error = rig
-        .session
-        .project_save_new_version(Some(&rig.file("away/song")))
-        .unwrap_err();
-    assert!(error.contains("history"), "{error}");
-    let saved_copy = rig.folder.path().join("away").join("song (001).windfall");
-    assert!(error.contains(&paths::display(&saved_copy)), "{error}");
-    assert_eq!(file::load(&saved_copy).unwrap(), before.project);
-    assert_eq!(rig.session.document_snapshot(), before);
-    assert_eq!(
-        rig.session.state().sample_dir,
-        file::sample_dir(Path::new(&home))
-    );
-    assert!(rig.session.redo().is_some());
-    assert!(
-        rig.project()
-            .samples
-            .iter()
-            .any(|s| s.name == "Second identity")
-    );
-    assert_eq!(fs::read(&source).unwrap(), source_bytes);
-    assert_eq!(fs::read(&home).unwrap(), home_bytes);
+    for concurrent_edit in [false, true] {
+        let rig = Rig::new();
+        let home = rig
+            .session
+            .project_save(Some(&rig.file("home/song")))
+            .unwrap();
+        let source = Path::new(&home).with_file_name("sounds").join("own.wav");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        write_tone(&source);
+        let source_bytes = fs::read(&source).unwrap();
+        let home_bytes = fs::read(&home).unwrap();
+        let first = rig
+            .session
+            .dispatch(
+                Command::AddSample {
+                    name: "First identity".into(),
+                    path: own_sample_path("own.wav"),
+                },
+                None,
+            )
+            .unwrap();
+        rig.session
+            .dispatch(
+                Command::RemoveSample {
+                    id: SampleId(first.created[0]),
+                },
+                None,
+            )
+            .unwrap();
+        let second = rig
+            .session
+            .dispatch(
+                Command::AddSample {
+                    name: "Second identity".into(),
+                    path: own_sample_path("own.wav"),
+                },
+                None,
+            )
+            .unwrap();
+        rig.session.undo().unwrap();
+        if concurrent_edit {
+            // Keep both identities in applied history so the pending settings
+            // edit does not discard the redo-only second identity.
+            rig.session.redo().unwrap();
+            rig.session
+                .dispatch(
+                    Command::RemoveSample {
+                        id: SampleId(second.created[0]),
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        let captured = rig.project();
+        let base = rig.file("away/song");
+        let hold = rig.session.hold("save:write");
+        let work = rig
+            .session
+            .background(move |s| s.project_save_new_version(Some(&base)));
+        hold.wait();
+        if concurrent_edit {
+            rename(&rig, "Edited while copy was pending");
+        }
+        let before = rig.session.document_snapshot();
+        assert_eq!(
+            before.history.entries.len(),
+            if concurrent_edit { 5 } else { 3 }
+        );
+        hold.release();
+        let error = work.join().unwrap().unwrap_err();
+        let saved_copy = rig.folder.path().join("away").join("song (001).windfall");
+        assert!(error.contains(&paths::display(&saved_copy)), "{error}");
+        assert!(error.contains("history"), "{error}");
+        assert_eq!(file::load(&saved_copy).unwrap(), captured);
+        assert!(
+            !error.contains("not finished"),
+            "the copy was already published: {error}"
+        );
+        assert_eq!(rig.session.document_snapshot(), before);
+        assert_eq!(
+            rig.session.state().sample_dir,
+            file::sample_dir(Path::new(&home))
+        );
+        if concurrent_edit {
+            rig.session.undo().unwrap(); // settings edit
+            rig.session.undo().unwrap(); // removal of the second identity
+        } else {
+            assert!(rig.session.redo().is_some());
+        }
+        assert!(
+            rig.project()
+                .samples
+                .iter()
+                .any(|s| s.name == "Second identity")
+        );
+        assert_eq!(fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(fs::read(&home).unwrap(), home_bytes);
+    }
 }
 
 fn portable_move_with_undone_sample(timing: u8) {

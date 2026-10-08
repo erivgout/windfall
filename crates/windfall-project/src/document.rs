@@ -412,6 +412,66 @@ mod source_tests {
     use super::*;
 
     #[test]
+    fn exact_relink_keeps_an_older_source_when_current_output_uses_its_old_name() {
+        let root = tempfile::tempdir().unwrap();
+        let old = SamplePath::Project("a (2).wav".into());
+        let current = SamplePath::Project("a.wav".into());
+        let absolute_old =
+            SamplePath::External(root.path().join("a (2).wav").to_string_lossy().into_owned());
+        let mut document = Document::new(Project::new("Source versions"));
+        let id = SampleId(
+            document
+                .dispatch(
+                    Command::AddSample {
+                        name: "Sample".into(),
+                        path: old.clone(),
+                    },
+                    None,
+                )
+                .unwrap()
+                .created[0],
+        );
+        // A legal model fixture for the public exact-source contract; path
+        // mutation with one retained ID is not exposed by production commands.
+        document.project.samples.last_mut().unwrap().path = current.clone();
+        document.project().check().unwrap();
+        let history = document.history();
+        document
+            .relink_sample_source(id, &old, absolute_old.clone())
+            .unwrap();
+        document
+            .relink_sample_source(id, &current, old.clone())
+            .unwrap();
+        assert_eq!(document.history(), history);
+        assert_eq!(document.project().sample(id).unwrap().path, old);
+        document.project().check().unwrap();
+        let current_json = crate::file::to_json(document.project()).unwrap();
+        assert_eq!(
+            crate::file::from_json(&current_json)
+                .unwrap()
+                .sample(id)
+                .unwrap()
+                .path,
+            old
+        );
+        document.undo().unwrap();
+        document.project().check().unwrap();
+        assert!(document.project().sample(id).is_none());
+        document.redo().unwrap();
+        document.project().check().unwrap();
+        assert_eq!(document.project().sample(id).unwrap().path, absolute_old);
+        let old_json = crate::file::to_json(document.project()).unwrap();
+        assert_eq!(
+            crate::file::from_json(&old_json)
+                .unwrap()
+                .sample(id)
+                .unwrap()
+                .path,
+            absolute_old
+        );
+    }
+
+    #[test]
     fn sample_sources_and_exact_relink_keep_different_paths_for_one_id() {
         let mut document = Document::new(Project::new("Sources"));
         let old = SamplePath::Project("old.wav".into());

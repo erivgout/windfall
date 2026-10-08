@@ -69,11 +69,14 @@ step. Those files are deliberately referenced in place: keep them available
 while the live document or subsequent ordinary saves reference them. A portable
 export after redo bundles their audio. A missing historical source stays
 missing; unrelated same-name audio in the destination is never substituted for
-it.
+it. Source identities use the original sample ID and path: a carried file's
+renamed output path does not identify a different historical source that
+previously had that name.
 
 If keeping the exact sources would create conflicting stored paths, the
 already-written copy stays at its reported filename and the live document keeps
-its old sample root and complete history.
+its old sample root and complete history. The error includes that filename even
+when an edit made during the save caused the conflict.
 
 ## Archive schema 1
 
@@ -119,6 +122,16 @@ index. Parsing uses the validated directory snapshot and a canonical ZIP32
 footer, with alternate EOCD discovery and parser fallback disabled. Structural
 EOCD/ZIP64 records in archive comments and ZIP64 member overrides are refused
 before index initialization. Ordinary archive comments remain supported.
+Preflight also binds each local record's name, flags, compression method, CRC
+and sizes to its central record. Checked header, extra, compressed-data and
+descriptor ranges must stay before the central directory and must not overlap
+other members. ZIP32 data descriptors, with or without their optional signature,
+must match the central CRC and sizes; descriptor-mode local fields may be zero
+or match those values. Local extras may differ from central extras, but ZIP64
+overrides and damaged extra fields are refused. These checks read bounded
+metadata rather than decompressing payloads during preflight. UTF-8 flags,
+Unicode metadata/comments and valid stored/deflated descriptor archives remain
+supported under the existing generated-member path policy.
 IO streams in 64 KiB chunks and checks cancellation at each chunk and at
 the final boundary.
 
@@ -206,6 +219,7 @@ Real cross-machine large-project throughput, power-loss recovery on specific
 filesystems, macOS/Linux desktop dialogs and a real third-party plugin corpus
 remain external checks. Synthetic Windows tests do not establish those results.
 
-The subsequent parser-binding, numbered sample-root, concurrent carried-audio
-publication and history source-lifetime repair evidence is
+The subsequent parser-binding, local-record/extent validation, numbered
+sample-root, concurrent carried-audio publication, history source-lifetime and
+published-copy reporting repair evidence is
 recorded in [`PORTABLE-REPAIRS.md`](PORTABLE-REPAIRS.md).

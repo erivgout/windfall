@@ -1,6 +1,32 @@
 use super::*;
 use std::io::Cursor;
 
+#[test]
+fn zip32_descriptor_crc_can_equal_the_optional_signature() {
+    let expected = [u32::from_le_bytes(*b"PK\x07\x08"), 3, 5];
+    for signed in [false, true] {
+        let mut bytes = Vec::new();
+        if signed {
+            bytes.extend_from_slice(b"PK\x07\x08");
+        }
+        for field in expected {
+            bytes.extend_from_slice(&field.to_le_bytes());
+        }
+        let end = bytes.len() as u64;
+        assert_eq!(
+            descriptor_end(&mut Cursor::new(bytes), 0, end, expected).unwrap(),
+            end
+        );
+    }
+}
+
+#[test]
+fn local_span_checks_overflow_and_directory_boundary() {
+    assert!(local_span_end(u64::MAX, 1, u64::MAX).is_err());
+    assert!(local_span_end(20, 12, 31).is_err());
+    assert_eq!(local_span_end(20, 12, 32).unwrap(), 32);
+}
+
 /// A small version of the reviewed allocation bypass. The real directory has
 /// two entries; the EOCD in its comment points at a ZIP64 count of 32. Tests
 /// stop at preflight, never handing the untrusted count to ZIP's allocator.
