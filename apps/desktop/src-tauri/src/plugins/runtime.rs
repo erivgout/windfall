@@ -1208,6 +1208,8 @@ impl Runtime {
     }
     /// Only acknowledge after the session has accepted the captured edit.
     /// A concurrent parameter commit must leave its dirty ticket retryable.
+    /// This legacy wrapper still reports delivery failures; new postcommit
+    /// callers use `acknowledge_committed_capture` and retain its typed ticket.
     pub(crate) fn acknowledge_capture(
         &self,
         request: &PendingUpdate,
@@ -1225,6 +1227,25 @@ impl Runtime {
             }
             Ok(())
         })
+    }
+    /// Bookkeeping after document and ready-engine acceptance, off all guards.
+    /// A transport failure cannot turn that accepted edit into a preparation
+    /// refusal. Even a timeout after owner-side effects retains a retry ticket.
+    pub(crate) fn acknowledge_committed_capture(
+        &self,
+        request: &PendingUpdate,
+        captured: &CapturedState,
+    ) -> super::CaptureAcknowledgement {
+        match self.acknowledge_capture(request, captured) {
+            Ok(()) => super::CaptureAcknowledgement::Confirmed,
+            Err(warning) => super::CaptureAcknowledgement::Pending {
+                ticket: super::capture_ack::CaptureAckTicket {
+                    token: request.token,
+                    serial: captured.serial,
+                },
+                warning,
+            },
+        }
     }
     pub fn editor_binding(
         &self,
@@ -1665,6 +1686,9 @@ impl HostedEffect for Audio {
     }
 }
 
+#[cfg(all(test, windows))]
+#[path = "capture_ack_tests.rs"]
+mod capture_ack_tests;
 #[cfg(all(test, windows))]
 #[path = "ownership_tests.rs"]
 pub(crate) mod ownership_tests;
