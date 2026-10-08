@@ -76,6 +76,10 @@ pub use delay::{Delay, DelayMode, DelayParams, NoteDivision};
 pub use distortion::{DISTORTION_LATENCY_SAMPLES, Distortion, DistortionParams};
 pub use effect::{AnyEffect, Effect, EffectKind, EffectParams, EffectSlot, GainReductionMeter};
 pub use eq::{CutSlope, EqBand, EqCutBand, EqParams, ParametricEq};
+pub use filter_family::{
+    BassShelf, BassShelfParams, FastLowpass, FastLowpassParams, SelectableFilter,
+    SelectableFilterMode, SelectableFilterParams,
+};
 pub use instrument::{AnyInstrument, Instrument, InstrumentKind, InstrumentParams};
 pub use limiter::{Limiter, LimiterParams};
 pub use param::{ParamChoice, ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit};

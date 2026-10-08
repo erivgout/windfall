@@ -383,6 +383,9 @@ fn names_are_plain_descriptions() {
             "Stereo matrix",
             "Soft clipper",
             "Drive distortion",
+            "Fast lowpass",
+            "Selectable filter",
+            "Bass shelf",
             "Subtractive synth"
         ]
     );

@@ -6,9 +6,10 @@ independent processors, with authored reference tests, rather than named EQ
 presets. The existing seven-band EQ is unchanged.
 
 This stage does **not** complete `fx-fruity-fast-lp`, `fx-fruity-free-filter`,
-or `fx-fruity-bass-boost`. Host registry, project persistence, automation
-commands, generated controls, live engine and export integration await the
-parent's serialized ownership windows. No parity status is changed here.
+or `fx-fruity-bass-boost`. The DSP registry now constructs all three through
+`AnyEffect` and `EffectSlot`. Project persistence/command acceptance,
+generated controls, live engine and export acceptance await the parent's
+serialized ownership windows. No parity status is changed here.
 
 ## Behavioral sources and equivalence scope
 
@@ -188,12 +189,13 @@ No Tauri, full workspace, browser or package install is needed. Bindings must
 use `target/e1-bindings` once their ownership window is handed over. Headless
 walltime throughput is not actual audio-device deadline or listening proof.
 
-Pending integration must register three distinct kinds/parameter variants,
-preserve defaults/JSON/automation index order, route through the normal effect
-slot, save/load/undo edits and automation, expose the controls and all modes,
-and verify matching live-engine/offline-export behavior. Slot bypass and
-removal/restore continuity require the utility owner's accepted engine seam.
-No production hostbridge or T8 spectrum work is included.
+The DSP registry adds three distinct kinds/parameter variants and preserves
+defaults/JSON/automation index order. All three route through the normal
+effect slot. Remaining acceptance must cover save/load/undo edits and
+automation, expose controls and all modes, and verify matching
+live-engine/offline-export behavior. Engine removal/restore continuity still
+requires the utility owner's accepted engine seam. No production hostbridge
+or T8 spectrum work is included.
 
 ## Executed source checks and measurements
 
@@ -251,3 +253,103 @@ The initial checkpoint fixes this by retargeting the whole weight vector
 from its current mix only when the requested mode changes. The independent
 live-bank sum now matches through interrupted fades; duplicate writes and
 unrelated parameter edits retain their original timing.
+
+## DSP registry checkpoint and exact downstream proposal
+
+The registry source window starts from immutable
+`796a62f99d60c45f19865efb45c374b3265a6a85`, without parent imports or amendments.
+`EffectKind::ALL` appends `FastLowpass`, `SelectableFilter`, `BassShelf` after
+the original 12 entries; old discriminants/order are retained. Serialized
+tags are `fastLowpass`, `selectableFilter`, `bassShelf`. `EffectParams`
+delegates sanitization and indexed controls to the existing parameter types;
+`AnyEffect` holds the actual three processors and delegates all realtime and
+metadata calls. Wrong-kind updates return false without changing state.
+All three have no gain-reduction meter and maximum PDC latency zero.
+
+The acoustic implementation and its reference suite are unchanged in this
+window. The entire existing `EffectSlot` section matches the prior source
+after newline normalization. No utility smoothing, latency, readiness,
+warm-up, bypass or removal policy is edited. The descriptor example already
+derives its entries from `ALL` and requires no source patch.
+
+`tests/filter_family_registry.rs` adds six checks: stable kinds/tags/names and
+default/control metadata; JSON defaults and malformed value rejection;
+sanitized finite settings; sample-identical typed-versus-enum audio dispatch
+including automation/noops/reset/tempo and every readiness/tail call;
+actual slot transfer and mix; existing bypass/dormant-wake behavior; and
+guarded alloc/realloc/free for enum and slot callback paths. Invalid JSON
+types/modes are rejected by serde. Valid numeric JSON is preserved on parse
+and sanitized by the existing explicit sanitization/processor-update policy.
+Construction, prepare and destruction remain outside allocator guards.
+
+The two separately granted generic test seams change only imports/three
+exhaustive random-setting arms in `tests/dsp/realtime.rs` and three appended
+labels in `tests/dsp/params.rs`. All original assertions and utility cases
+are preserved. No utility test file is edited.
+
+Executed checks for this registry window:
+
+- `cargo test -p windfall-dsp --test filter_family_registry -- --nocapture`:
+  all six new tests passed.
+- `cargo test -p windfall-dsp --all-targets`: 299 passed, four ignored
+  optional measurements/renders; breakdown 128 library, 152 existing DSP,
+  13 acoustic references and six registry tests. The descriptor example
+  also compiled. Existing automatic TS export tests wrote only to private
+  `target/e1-bindings` via `TS_RS_EXPORT_DIR`; committed artifacts were
+  untouched. No `gen-bindings` script or WASM build ran.
+- `cargo clippy -p windfall-dsp --all-targets -- -D warnings`: passed.
+- Changed Rust files pass `rustfmt --edition 2024 --check`; whitespace and
+  the unchanged slot-source comparison passed.
+
+Cargo uses the same MSVC environment, one job/test thread and private native
+target as the acoustic stage. The first all-target compile identified the
+old exhaustive allocator-test match; only its granted new arms were added.
+No downstream crate, frontend or full workspace check is claimed.
+
+The following is a proposal for the next exact ownership windows, not an
+authorization or implementation of those changes:
+
+1. **Project acceptance:** add an auto-discovered
+   `crates/windfall-project/tests/filter_family.rs` covering add/replace,
+   save/load, malformed/partial settings, whole-params and indexed edits,
+   undo/redo, all seven modes, automation target ranges and unchanged
+   control indices. `src/model.rs` already reexports the DSP union;
+   `lower.rs::add_effect` uses `kind.default_params()` and `checked_effect`
+   iterates descriptors. No duplicate project union or production model/
+   command/check/lower/edit/patch/lib edits are proposed without an actual
+   failing contract. This stage still requires the T1 owner's window.
+2. **Engine acceptance:** the actual staged exhaustive consumer is
+   `crates/windfall-engine/tests/engine/realtime.rs::effect_at` at the
+   `Balance | ... | Distortion` arm. Append the three new kinds to that
+   descriptor-driven arm, preserving its body and allocator assertions.
+   Add a new filter-family engine test module and its `tests/engine/main.rs`
+   registration (or a standalone harness using existing public test
+   contracts) for chain-position tone/impulse behavior, all modes,
+   automation, latency/tail/gap, live-versus-offline export and stem parity,
+   callback allocations and accepted removal/restore continuity.
+   `src/rack.rs::EffectUnit::build` already calls `AnyEffect::new`; no
+   alternate adapter/routing path or Plan/Rack/State production edit is
+   proposed unless those tests reveal a specific defect. Utility acceptance
+   remains required; no hosting fixture/hostbridge activation is proposed.
+3. **Artifacts and UI acceptance:** after project/engine source acceptance,
+   grant normal binding/descriptor generation (private target
+   `target/e1-bindings`) and the shared-WASM refresh through the parent's
+   serialized artifact owner. The generated `EffectKind`/`EffectParams`,
+   four new parameter/mode type files, binding index and descriptor JSON
+   then carry this stable API. Mechanically append the three keys to
+   `apps/desktop/src/features/params/access.test.ts`'s exhaustive
+   `Record<EffectKind, true>`. Add a focused filter-family UI test under
+   `features/effects` exercising mixer add/reset/replace, all mode choices,
+   frequency/Q/gain controls, undo/redo, persistence and automation actions
+   using the actual command-backed simulation. Existing
+   `features/params/descriptors.ts` derives `EFFECT_KINDS` from JSON, and
+   `features/effects/effect-editor.tsx` already selects
+   `GenericParamEditor` for these kinds; no cosmetic EQ alias or custom
+   editor/menu source change is required by the inspected contracts. If
+   a compiler exposes another exhaustive consumer, name its exact hunk
+   before expanding ownership. IPC/backend paths remain closed; do not
+   introduce a second implementation of project commands.
+
+Full parity still requires independently reviewed native/project/UI/export
+evidence and any requested device/listening checks. Passing the DSP suite
+does not close the engine utility restore issue or establish a usable UI.

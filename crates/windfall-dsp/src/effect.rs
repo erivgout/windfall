@@ -22,6 +22,10 @@ use crate::blocks::tap_crossfade::TapCrossfade;
 use crate::compressor::{Compressor, CompressorParams};
 use crate::delay::{Delay, DelayParams};
 use crate::eq::{EqParams, ParametricEq};
+use crate::filter_family::{
+    BassShelf, BassShelfParams, FastLowpass, FastLowpassParams, SelectableFilter,
+    SelectableFilterParams,
+};
 use crate::limiter::{LOOKAHEAD_FADE_MS, Limiter, LimiterParams};
 use crate::param::{ParamInfo, ParamSet};
 use crate::reverb::{Reverb, ReverbParams};
@@ -166,10 +170,13 @@ pub enum EffectKind {
     StereoMatrix,
     SoftClipper,
     Distortion,
+    FastLowpass,
+    SelectableFilter,
+    BassShelf,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 12] = [
+    pub const ALL: [EffectKind; 15] = [
         EffectKind::Eq,
         EffectKind::Compressor,
         EffectKind::Limiter,
@@ -182,6 +189,9 @@ impl EffectKind {
         EffectKind::StereoMatrix,
         EffectKind::SoftClipper,
         EffectKind::Distortion,
+        EffectKind::FastLowpass,
+        EffectKind::SelectableFilter,
+        EffectKind::BassShelf,
     ];
 
     /// The effect's name as shown to the user.
@@ -199,6 +209,9 @@ impl EffectKind {
             EffectKind::StereoMatrix => StereoMatrixParams::NAME,
             EffectKind::SoftClipper => SoftClipperParams::NAME,
             EffectKind::Distortion => DistortionParams::NAME,
+            EffectKind::FastLowpass => FastLowpassParams::NAME,
+            EffectKind::SelectableFilter => SelectableFilterParams::NAME,
+            EffectKind::BassShelf => BassShelfParams::NAME,
         }
     }
 
@@ -217,6 +230,9 @@ impl EffectKind {
             EffectKind::StereoMatrix => StereoMatrixParams::descriptors(),
             EffectKind::SoftClipper => SoftClipperParams::descriptors(),
             EffectKind::Distortion => DistortionParams::descriptors(),
+            EffectKind::FastLowpass => FastLowpassParams::descriptors(),
+            EffectKind::SelectableFilter => SelectableFilterParams::descriptors(),
+            EffectKind::BassShelf => BassShelfParams::descriptors(),
         }
     }
 
@@ -235,7 +251,10 @@ impl EffectKind {
             | EffectKind::DcBlock
             | EffectKind::ChannelMute
             | EffectKind::Polarity
-            | EffectKind::SoftClipper => 0,
+            | EffectKind::SoftClipper
+            | EffectKind::FastLowpass
+            | EffectKind::SelectableFilter
+            | EffectKind::BassShelf => 0,
         }
     }
 
@@ -254,6 +273,11 @@ impl EffectKind {
             EffectKind::StereoMatrix => EffectParams::StereoMatrix(StereoMatrixParams::default()),
             EffectKind::SoftClipper => EffectParams::SoftClipper(SoftClipperParams::default()),
             EffectKind::Distortion => EffectParams::Distortion(DistortionParams::default()),
+            EffectKind::FastLowpass => EffectParams::FastLowpass(FastLowpassParams::default()),
+            EffectKind::SelectableFilter => {
+                EffectParams::SelectableFilter(SelectableFilterParams::default())
+            }
+            EffectKind::BassShelf => EffectParams::BassShelf(BassShelfParams::default()),
         }
     }
 }
@@ -276,6 +300,9 @@ pub enum EffectParams {
     StereoMatrix(StereoMatrixParams),
     SoftClipper(SoftClipperParams),
     Distortion(DistortionParams),
+    FastLowpass(FastLowpassParams),
+    SelectableFilter(SelectableFilterParams),
+    BassShelf(BassShelfParams),
 }
 
 /// Runs `$body` with `$params` bound to the settings inside an
@@ -295,6 +322,9 @@ macro_rules! each_params {
             EffectParams::StereoMatrix($params) => $body,
             EffectParams::SoftClipper($params) => $body,
             EffectParams::Distortion($params) => $body,
+            EffectParams::FastLowpass($params) => $body,
+            EffectParams::SelectableFilter($params) => $body,
+            EffectParams::BassShelf($params) => $body,
         }
     };
 }
@@ -314,6 +344,9 @@ impl EffectParams {
             EffectParams::StereoMatrix(_) => EffectKind::StereoMatrix,
             EffectParams::SoftClipper(_) => EffectKind::SoftClipper,
             EffectParams::Distortion(_) => EffectKind::Distortion,
+            EffectParams::FastLowpass(_) => EffectKind::FastLowpass,
+            EffectParams::SelectableFilter(_) => EffectKind::SelectableFilter,
+            EffectParams::BassShelf(_) => EffectKind::BassShelf,
         }
     }
 
@@ -332,6 +365,11 @@ impl EffectParams {
             EffectParams::StereoMatrix(params) => EffectParams::StereoMatrix(params.sanitized()),
             EffectParams::SoftClipper(params) => EffectParams::SoftClipper(params.sanitized()),
             EffectParams::Distortion(params) => EffectParams::Distortion(params.sanitized()),
+            EffectParams::FastLowpass(params) => EffectParams::FastLowpass(params.sanitized()),
+            EffectParams::SelectableFilter(params) => {
+                EffectParams::SelectableFilter(params.sanitized())
+            }
+            EffectParams::BassShelf(params) => EffectParams::BassShelf(params.sanitized()),
         }
     }
 
@@ -353,7 +391,10 @@ impl EffectParams {
             | EffectParams::DcBlock(_)
             | EffectParams::ChannelMute(_)
             | EffectParams::Polarity(_)
-            | EffectParams::SoftClipper(_) => 0,
+            | EffectParams::SoftClipper(_)
+            | EffectParams::FastLowpass(_)
+            | EffectParams::SelectableFilter(_)
+            | EffectParams::BassShelf(_) => 0,
         }
     }
 
@@ -391,6 +432,9 @@ pub enum AnyEffect {
     StereoMatrix(Box<StereoMatrix>),
     SoftClipper(Box<SoftClipper>),
     Distortion(Box<Distortion>),
+    FastLowpass(Box<FastLowpass>),
+    SelectableFilter(Box<SelectableFilter>),
+    BassShelf(Box<BassShelf>),
 }
 
 /// Runs `$body` with `$effect` bound to the effect inside an [`AnyEffect`].
@@ -409,6 +453,9 @@ macro_rules! each_effect {
             AnyEffect::StereoMatrix($effect) => $body,
             AnyEffect::SoftClipper($effect) => $body,
             AnyEffect::Distortion($effect) => $body,
+            AnyEffect::FastLowpass($effect) => $body,
+            AnyEffect::SelectableFilter($effect) => $body,
+            AnyEffect::BassShelf($effect) => $body,
         }
     };
 }
@@ -430,6 +477,9 @@ impl AnyEffect {
             EffectKind::StereoMatrix => AnyEffect::StereoMatrix(Box::default()),
             EffectKind::SoftClipper => AnyEffect::SoftClipper(Box::default()),
             EffectKind::Distortion => AnyEffect::Distortion(Box::default()),
+            EffectKind::FastLowpass => AnyEffect::FastLowpass(Box::default()),
+            EffectKind::SelectableFilter => AnyEffect::SelectableFilter(Box::default()),
+            EffectKind::BassShelf => AnyEffect::BassShelf(Box::default()),
         };
         effect.set_params(params);
         effect
@@ -449,6 +499,9 @@ impl AnyEffect {
             AnyEffect::StereoMatrix(_) => EffectKind::StereoMatrix,
             AnyEffect::SoftClipper(_) => EffectKind::SoftClipper,
             AnyEffect::Distortion(_) => EffectKind::Distortion,
+            AnyEffect::FastLowpass(_) => EffectKind::FastLowpass,
+            AnyEffect::SelectableFilter(_) => EffectKind::SelectableFilter,
+            AnyEffect::BassShelf(_) => EffectKind::BassShelf,
         }
     }
 
@@ -495,6 +548,15 @@ impl AnyEffect {
                 effect.set_params(params)
             }
             (AnyEffect::Distortion(effect), EffectParams::Distortion(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::FastLowpass(effect), EffectParams::FastLowpass(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::SelectableFilter(effect), EffectParams::SelectableFilter(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::BassShelf(effect), EffectParams::BassShelf(params)) => {
                 effect.set_params(params)
             }
             _ => return false,
