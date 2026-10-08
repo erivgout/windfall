@@ -35,6 +35,159 @@ fn checked_import(
     }
 }
 
+// Real reload/redo decodes stop off-lock, before installing their older audio.
+fn pending_source_load(destination: &str, redo: bool) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+
+    let rig = Rig::new();
+    let folder = rig.folder.path().join("Samples");
+    fs::create_dir(&folder).unwrap();
+    let file = folder.join("tone.wav");
+    let path = paths::display(&file);
+    let write = |frames, level| {
+        write_wav(
+            &file,
+            &AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]),
+            WavSampleFormat::Float32,
+        )
+        .unwrap();
+    };
+    rig.session
+        .browser_add_root(&paths::display(&folder))
+        .unwrap();
+    let sample = if redo {
+        write(480, 0.25);
+        let result = rig
+            .session
+            .browser_add_channel(&path, None, rig.session.library_file(&path).unwrap())
+            .unwrap();
+        let sample = SampleId(result.created[0]);
+        rig.session.undo().unwrap();
+        let audio = AudioBuffer::from_interleaved(48_000, 1, vec![0.0; 480]);
+        for i in 0..65 {
+            let other = folder.join(format!("evict-{i}.wav"));
+            write_wav(&other, &audio, WavSampleFormat::Float32).unwrap();
+            rig.session.inner.cache.decode(&other).unwrap();
+        }
+        assert!(rig.session.inner.cache.peek(&file).is_none());
+        sample
+    } else {
+        let result = rig
+            .session
+            .dispatch(
+                Command::AddSample {
+                    name: "Missing tone".into(),
+                    path: SamplePath::External(path.clone()),
+                },
+                None,
+            )
+            .unwrap();
+        let sample = SampleId(result.created[0]);
+        rig.wait_until_loaded_or_failed(sample);
+        assert!(rig.session.state().failed.contains(&sample));
+        write(480, 0.25);
+        sample
+    };
+    let hold = rig.session.hold("samples:decoded");
+    let reload = if redo {
+        rig.session.redo().unwrap();
+        None
+    } else {
+        Some(rig.session.background(|session| session.samples_reload()))
+    };
+    hold.wait();
+    assert!(rig.session.state().loading.contains(&sample));
+    assert!(!rig.has_audio(sample));
+    write(960, 0.75);
+    rig.session.library_refresh();
+    let token = rig.session.library_file(&path).unwrap();
+    assert_eq!(
+        rig.session
+            .browser_sample_info(&path, &token)
+            .unwrap()
+            .frames,
+        960
+    );
+    let before = rig.session.document_snapshot();
+    let result = checked_import(&rig, &path, token, destination);
+    let after = rig.session.document_snapshot();
+    let imported_frames = rig
+        .session
+        .state()
+        .pool
+        .get(sample)
+        .map(AudioBuffer::frames);
+    hold.release();
+    if let Some(reload) = reload {
+        assert_eq!(reload.join().unwrap(), 0);
+    } else {
+        // An incorrect import sets loaded before the older pending redo ends.
+        let deadline = std::time::Instant::now() + super::PATIENCE;
+        while rig.session.state().loading.contains(&sample) {
+            assert!(std::time::Instant::now() < deadline, "redo never finished");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    let held = rig.session.state().pool.get(sample).unwrap().clone();
+    assert_eq!(held.frames(), 480);
+    assert_eq!(held.samples()[0], 0.25);
+    assert!(
+        result.is_err(),
+        "{destination} accepted {imported_frames:?} frames before pending {} installed {} older frames",
+        if redo { "redo" } else { "reload" },
+        held.frames()
+    );
+    assert!(result.unwrap_err().contains("still loading"));
+    assert_eq!(after, before, "refusal must not mutate history or geometry");
+    // Reopen explicitly reloads the current disk source. Normal same-version
+    // deduplication and undo then remain available at every destination.
+    let saved = rig
+        .session
+        .project_save(Some(&rig.file("Saved/song")))
+        .unwrap();
+    rig.session.project_open(&saved).unwrap();
+    assert_eq!(rig.session.state().pool.get(sample).unwrap().frames(), 960);
+    let before = rig.project();
+    checked_import(
+        &rig,
+        &path,
+        rig.session.library_file(&path).unwrap(),
+        destination,
+    )
+    .unwrap();
+    assert_eq!(rig.project().samples.len(), before.samples.len());
+    rig.session.undo().unwrap();
+    let mut current = rig.project();
+    current.next_id = before.next_id;
+    assert_eq!(current, before);
+}
+
+#[test]
+fn checked_rack_import_refuses_pending_reload() {
+    pending_source_load("rack", false);
+}
+#[test]
+fn checked_playlist_import_refuses_pending_reload() {
+    pending_source_load("playlist", false);
+}
+#[test]
+fn checked_replacement_import_refuses_pending_reload() {
+    pending_source_load("replacement", false);
+}
+#[test]
+fn checked_rack_import_refuses_pending_redo_after_cache_eviction() {
+    pending_source_load("rack", true);
+}
+#[test]
+fn checked_playlist_import_refuses_pending_redo_after_cache_eviction() {
+    pending_source_load("playlist", true);
+}
+#[test]
+fn checked_replacement_import_refuses_pending_redo_after_cache_eviction() {
+    pending_source_load("replacement", true);
+}
+
 #[test]
 fn checked_import_refuses_reusing_a_loaded_older_file_version_at_every_destination() {
     use windfall_codec::{WavSampleFormat, write_wav};
