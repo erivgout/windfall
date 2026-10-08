@@ -3,10 +3,38 @@
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::cell::Cell;
 use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use windfall_engine::analyzers::*;
 use windfall_project::{EffectId, TrackId};
+
+static ANALYZER_TEST_SCOPE: Mutex<()> = Mutex::new(());
+
+// Fixtures share the production process-wide quota. Every case declares this
+// guard first, so its endpoints and native joins finish before the guard drops.
+// Acquisition is outside allocator guards and measured callback/timing scopes.
+fn analyzer_test_scope() -> MutexGuard<'static, ()> {
+    match ANALYZER_TEST_SCOPE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            let guard = poisoned.into_inner();
+            // Libtest retains the original failed result. Resume later cases
+            // only after verifying cleanup; never reset production accounting.
+            assert_eq!(
+                usage(),
+                Usage {
+                    taps: 0,
+                    slots: 0,
+                    reserved_bytes: 0,
+                },
+                "poisoned analyzer test scope still retains production quota"
+            );
+            ANALYZER_TEST_SCOPE.clear_poison();
+            guard
+        }
+    }
+}
 
 thread_local! {
     static WATCH: Cell<bool> = const { Cell::new(false) };
@@ -160,6 +188,7 @@ fn dft(pcm: &[[f32; 2]], window: Window, side: usize) -> Vec<(f64, f64)> {
 
 #[test]
 fn sine_sample_peak_rms_dbfs_and_bin_calibration() {
+    let _analyzer_scope = analyzer_test_scope();
     for window in [Window::Rectangular, Window::PeriodicHann] {
         let (mut tap, mut worker, mut reader) = prepare(selection(), config(256, window)).unwrap();
         feed(&mut tap, &mut worker, &sine(256, 8.0, 0.5), 0);
@@ -213,6 +242,7 @@ fn sine_sample_peak_rms_dbfs_and_bin_calibration() {
 
 #[test]
 fn fractional_bin_window_leakage_and_scalar_reference() {
+    let _analyzer_scope = analyzer_test_scope();
     let n = 128;
     let pcm = sine(n, 11.5, 0.8);
     let mut distant_power = [0.0; 2];
@@ -261,6 +291,7 @@ fn fractional_bin_window_leakage_and_scalar_reference() {
 
 #[test]
 fn impulse_dc_nyquist_silence_noise_and_log_sweep_energy() {
+    let _analyzer_scope = analyzer_test_scope();
     let n = 64;
     let mut random = 0x9182_7ab3_u32;
     let noise: Vec<_> = (0..n)
@@ -360,6 +391,7 @@ fn impulse_dc_nyquist_silence_noise_and_log_sweep_energy() {
 
 #[test]
 fn anti_phase_distinct_channels_vectors_and_invalid_pcm_are_explicit() {
+    let _analyzer_scope = analyzer_test_scope();
     for anti in [false, true] {
         let mut pcm = sine(128, 7.0, 0.5);
         if anti {
@@ -420,6 +452,7 @@ fn anti_phase_distinct_channels_vectors_and_invalid_pcm_are_explicit() {
 
 #[test]
 fn variable_partitions_preserve_hop_clocks_and_bounded_histories() {
+    let _analyzer_scope = analyzer_test_scope();
     let mut reference = None;
     for block in [1, 7, 64, 127, 256] {
         let mut c = config(128, Window::PeriodicHann);
@@ -465,6 +498,7 @@ fn variable_partitions_preserve_hop_clocks_and_bounded_histories() {
 
 #[test]
 fn queue_overrun_and_stalled_ui_are_bounded_and_counted() {
+    let _analyzer_scope = analyzer_test_scope();
     let mut c = config(32, Window::Rectangular);
     c.input_packets = 1;
     c.snapshot_capacity = 1;
@@ -496,6 +530,7 @@ fn queue_overrun_and_stalled_ui_are_bounded_and_counted() {
 
 #[test]
 fn gaps_reset_rates_latency_and_selection_replacement_clear_stale_evidence() {
+    let _analyzer_scope = analyzer_test_scope();
     let c = config(64, Window::Rectangular);
     let (mut tap, mut worker, mut reader) = prepare(selection(), c).unwrap();
     let pcm = [[0.25; 2]; 64];
@@ -545,6 +580,7 @@ fn gaps_reset_rates_latency_and_selection_replacement_clear_stale_evidence() {
 
 #[test]
 fn clocks_keep_integer_frame_precision_and_explicit_latency_labels() {
+    let _analyzer_scope = analyzer_test_scope();
     let (mut tap, mut worker, mut reader) =
         prepare(selection(), config(32, Window::Rectangular)).unwrap();
     let pcm = [[0.1; 2]; 32];
@@ -591,6 +627,7 @@ fn clocks_keep_integer_frame_precision_and_explicit_latency_labels() {
 
 #[test]
 fn actual_effect_metadata_is_tagged_and_never_inferred() {
+    let _analyzer_scope = analyzer_test_scope();
     let (mut tap, mut worker, mut reader) =
         prepare(selection(), config(64, Window::Rectangular)).unwrap();
     let pcm = [[0.01; 2]; 32];
@@ -624,6 +661,7 @@ fn actual_effect_metadata_is_tagged_and_never_inferred() {
 
 #[test]
 fn preparation_bounds_preserve_old_path_and_aggregate_credit_until_all_owners_leave() {
+    let _analyzer_scope = analyzer_test_scope();
     let before = usage();
     let mut measured = None;
     let (_, live, peak) = allocations(|| {
@@ -704,6 +742,7 @@ fn preparation_bounds_preserve_old_path_and_aggregate_credit_until_all_owners_le
 
 #[test]
 fn instance_and_installation_bounds_refuse_without_unbounded_backlog() {
+    let _analyzer_scope = analyzer_test_scope();
     let mut kept = Vec::new();
     for _ in 0..MAX_LIVE_TAPS {
         kept.push(prepare(selection(), config(32, Window::Rectangular)).unwrap());
@@ -723,6 +762,7 @@ fn instance_and_installation_bounds_refuse_without_unbounded_backlog() {
 
 #[test]
 fn callback_paths_allocate_reallocate_and_free_zero_including_replacement_backpressure() {
+    let _analyzer_scope = analyzer_test_scope();
     let (mut tap, mut worker, mut reader) = prepare(
         selection(),
         Config {
@@ -820,6 +860,7 @@ fn callback_paths_allocate_reallocate_and_free_zero_including_replacement_backpr
 
 #[test]
 fn native_worker_starts_publishes_and_joins_on_shutdown_or_drop() {
+    let _analyzer_scope = analyzer_test_scope();
     let before = usage();
     for explicit in [true, false] {
         let (mut tap, worker, mut reader) =
@@ -855,6 +896,7 @@ fn native_worker_starts_publishes_and_joins_on_shutdown_or_drop() {
 
 #[test]
 fn staged_sources_and_deselection_retire_without_stale_successor_results_or_callback_frees() {
+    let _analyzer_scope = analyzer_test_scope();
     let (mut slot, mut installer) = tap_slot().unwrap();
     let a = selection();
     let b = Selection {
@@ -954,6 +996,7 @@ fn staged_sources_and_deselection_retire_without_stale_successor_results_or_call
 
 #[test]
 fn native_worker_with_reader_stalled_keeps_a_finite_snapshot_pool() {
+    let _analyzer_scope = analyzer_test_scope();
     let mut c = config(64, Window::Rectangular);
     c.snapshot_capacity = 1;
     let (mut tap, worker, mut reader) = prepare(selection(), c).unwrap();
@@ -978,6 +1021,7 @@ fn native_worker_with_reader_stalled_keeps_a_finite_snapshot_pool() {
 
 #[test]
 fn finite_float_extremes_and_invalid_latency_or_metadata_never_fabricate_healthy_evidence() {
+    let _analyzer_scope = analyzer_test_scope();
     let (mut tap, mut worker, mut reader) =
         prepare(selection(), config(32, Window::Rectangular)).unwrap();
     let pcm = [[f32::MAX, f32::MIN_POSITIVE]; 32];
@@ -1027,6 +1071,7 @@ fn finite_float_extremes_and_invalid_latency_or_metadata_never_fabricate_healthy
 #[test]
 #[ignore = "scoped headless CPU measurement; invoke explicitly in release"]
 fn release_cpu_throughput() {
+    let _analyzer_scope = analyzer_test_scope();
     let (mut tap, mut worker, mut reader) = prepare(selection(), Config::default()).unwrap();
     let pcm = sine(256, 7.25, 0.25);
     let start = Instant::now();
