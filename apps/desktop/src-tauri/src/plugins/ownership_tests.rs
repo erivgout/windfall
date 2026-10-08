@@ -319,6 +319,77 @@ fn runtime_repair_completed_automation_readback_supersedes_observed_document_con
 }
 
 #[test]
+fn r4_document_adoption_matches_current_intent_and_never_acks_before_processing() {
+    use std::sync::atomic::Ordering;
+    let (runtime, binding) = fixture(0);
+    let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    let token = runtime.selected_token(binding.target).unwrap();
+    let controls = runtime
+        .controls
+        .lock()
+        .unwrap()
+        .get(&token)
+        .unwrap()
+        .2
+        .clone();
+    let control = controls.iter().find(|control| control.id == 7).unwrap();
+    let mut project = Project::new("Document adoption");
+    project.plugins.push(binding.clone());
+    project.plugins[0]
+        .parameters
+        .iter_mut()
+        .find(|param| param.id == 7)
+        .unwrap()
+        .value = 0.75;
+    runtime.commit_parameters(&project);
+    let document = control.document_generation.load(Ordering::Acquire);
+    let desired = control.generation.load(Ordering::Acquire);
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.adopt_parameters(&binding.parameters); // stale plan still has 0.5
+        }),
+        0
+    );
+    assert_eq!(control.observed_document.load(Ordering::Acquire), 2);
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.adopt_parameters(&project.plugins[0].parameters);
+        }),
+        0
+    );
+    assert_eq!(control.observed_document.load(Ordering::Acquire), document);
+    assert_eq!(control.applied_document.load(Ordering::Acquire), 2);
+    assert_eq!(
+        control.generation.load(Ordering::Acquire),
+        desired,
+        "adoption must not enqueue controls"
+    );
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.set_param(7, 0.25); // automation after the matching plan
+            audio.process(&mut left, &mut right);
+        }),
+        0
+    );
+    assert_eq!(left, [0.5; 64]);
+    assert_eq!(control.applied_document.load(Ordering::Acquire), document);
+    let captured = capture(&runtime, project, audio.as_mut()).unwrap();
+    assert_eq!(
+        captured.plugins[0]
+            .parameters
+            .iter()
+            .find(|p| p.id == 7)
+            .unwrap()
+            .value,
+        0.25
+    );
+    assert_eq!(runtime.selected_token(binding.target), Some(token));
+}
+
+#[test]
 fn paused_effect_retains_the_latest_parameter_without_an_engine_resend() {
     let (runtime, binding) = fixture(0);
     let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();

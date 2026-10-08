@@ -107,6 +107,12 @@ pub(crate) trait ProcessorBackend: Send + 'static {
         out: &mut dyn FnMut(PluginEvent),
     ) -> Result<BlockResult, ProcessFailed>;
 
+    /// Translation drops from the just-failed block must still reach health.
+    /// Defaults to zero for backends with no separate translation buffers.
+    fn failure_dropped_events(&self) -> u32 {
+        0
+    }
+
     /// Clears the plugin's memory of past audio and ends its notes.
     fn reset(&mut self);
 
@@ -512,6 +518,10 @@ impl PluginProcessor {
                 &mut right[done..done + length],
             );
             let Ok(result) = result else {
+                shared
+                    .health
+                    .dropped_events
+                    .fetch_add(backend.failure_dropped_events(), Ordering::Relaxed);
                 shared.health.failed.store(true, Ordering::Relaxed);
                 pending.clear();
                 // What the plugin left in its output cannot be trusted. An

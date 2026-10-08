@@ -71,6 +71,132 @@ fn allocator_calls(work: impl FnOnce()) -> usize {
 const RATE: f64 = 48_000.0;
 
 #[test]
+fn r4_inactive_and_timed_vst3_points_reach_native_at_their_frames() {
+    let path = common::plugin_file("vst3-point-expansion", "fixture.vst3");
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let mut instance = module.create(&module.descriptors()[0].id).unwrap();
+    assert!(instance.set_param(7, 0.25));
+    let mut processor = instance.activate(RATE, 1025).unwrap();
+    let mut left = [1.0; 1025];
+    let mut right = left;
+    let calls = allocator_calls(|| {
+        for time in 1..=windfall_plugin_host::EVENT_CAPACITY as u32 {
+            assert!(processor.set_param(time, 7, if time == 1024 { 0.75 } else { 0.5 }));
+        }
+        processor.process(&mut left, &mut right);
+    });
+    assert_eq!(calls, 0);
+    assert_eq!(left[0], 0.5, "inactive point must process at frame zero");
+    assert!(left[1..1024].iter().all(|value| *value == 1.0));
+    assert_eq!(
+        left[1024], 1.5,
+        "the last admitted timed point was lost in native translation"
+    );
+    assert_eq!(instance.param_value(7), Some(0.75));
+    assert_eq!(processor.health().dropped_events, 0);
+    left.fill(1.0);
+    right.fill(1.0);
+    assert_eq!(
+        allocator_calls(|| {
+            processor.process(&mut left, &mut right);
+        }),
+        0
+    );
+    assert!(left.iter().all(|value| *value == 1.5));
+    instance.deactivate(processor).unwrap();
+}
+
+#[test]
+fn r4_disjoint_vst3_pending_editor_and_timed_controls_process_truthfully() {
+    vst3_disjoint_points(1);
+}
+
+#[test]
+fn r4_full_editor_queue_and_other_native_point_sources_fit_without_allocating() {
+    vst3_disjoint_points(4096);
+}
+
+fn vst3_disjoint_points(editor_points: usize) {
+    let path = common::plugin_file("vst3-three-point-sources", "fixture.vst3");
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let mut instance = module.create(&module.descriptors()[9].id).unwrap();
+    assert!(instance.set_param(8, 0.25));
+    let mut processor = instance.activate(RATE, 1025).unwrap();
+    for _ in 0..editor_points {
+        instance.param_text(7, 0.9375).unwrap(); // queues an editor point on ID 9
+    }
+    let mut left = [1.0; 1025];
+    let mut right = left;
+    let calls = allocator_calls(|| {
+        for time in 1..=windfall_plugin_host::EVENT_CAPACITY as u32 {
+            assert!(processor.set_param(time, 7, if time == 1024 { 0.75 } else { 0.5 }));
+        }
+        processor.process(&mut left, &mut right);
+    });
+    assert_eq!(calls, 0);
+    assert!(
+        right.iter().all(|value| *value == 1.0),
+        "disjoint pending/editor points must actually process"
+    );
+    assert_eq!(
+        left[1024], 1.5,
+        "desktop point was admitted but not applied by the native component"
+    );
+    assert_eq!(instance.param_value(7), Some(0.75));
+    assert_eq!(instance.param_value(8), Some(0.25));
+    assert_eq!(instance.param_value(9), Some(0.75));
+    assert_eq!(processor.health().dropped_events, 0);
+    left.fill(1.0);
+    right.fill(1.0);
+    assert_eq!(
+        allocator_calls(|| {
+            processor.process(&mut left, &mut right);
+        }),
+        0
+    );
+    assert!(left.iter().all(|value| *value == 1.5));
+    assert!(right.iter().all(|value| *value == 1.0));
+    instance.deactivate(processor).unwrap();
+}
+
+#[test]
+fn r4_failed_native_process_never_publishes_control_readback_and_retains_final_intent() {
+    let path = common::plugin_file("vst3-failed-points", "fixture.vst3");
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let mut instance = module.create(&module.descriptors()[4].id).unwrap();
+    let mut processor = instance.activate(RATE, 64).unwrap();
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        allocator_calls(|| {
+            assert!(processor.set_param(1, 7, 0.25));
+            assert!(processor.set_param(63, 7, 0.75));
+            assert_eq!(
+                processor.process(&mut left, &mut right),
+                windfall_plugin_host::ProcessStatus::Failed
+            );
+        }),
+        0
+    );
+    assert_eq!(
+        instance.param_value(7),
+        Some(0.5),
+        "a failed process is not application"
+    );
+    assert_eq!(processor.health().dropped_events, 0);
+    instance.deactivate(processor).unwrap();
+    // Owner return applies retained intent to the inactive controller, never
+    // claiming that the failed component processed it.
+    assert_eq!(instance.param_value(7), Some(0.75));
+}
+
+#[test]
 fn saturated_adapter_releases_are_delivered_without_allocator_calls() {
     for id in [SINE, MIDI_SINE] {
         let (_module, mut instance) = create(id);

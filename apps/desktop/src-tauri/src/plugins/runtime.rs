@@ -128,8 +128,13 @@ impl ParameterControl {
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.value.store(value.to_bits(), Ordering::Relaxed);
         self.generation.fetch_add(1, Ordering::Release);
-        // The callback reads once, without waiting on a concurrent document
-        // publisher. Consuming its plan follows publication of its values.
+        self.observe_document(value);
+    }
+    fn observe_document(&self, value: f32) {
+        use std::sync::atomic::Ordering;
+        // One bounded read matches the committed generation/value pair. A
+        // stale plan with different values cannot acknowledge newer intent.
+        // Adoption alone never acknowledges actual native processing.
         let document = self.document_generation.load(Ordering::Acquire);
         if document & 1 == 0
             && self.document_value.load(Ordering::Relaxed) == value.to_bits()
@@ -738,6 +743,15 @@ impl Runtime {
     pub(crate) fn selected_token(&self, target: PluginTarget) -> Option<u64> {
         selected(&self.selection, target)
     }
+    #[cfg(all(test, windows))]
+    pub(crate) fn fixture_parameter(&self, target: PluginTarget, id: u32) -> Option<f64> {
+        self.call(move |owner| {
+            Ok(selected(&owner.selection, target)
+                .and_then(|token| owner.instances.get_mut(&token))
+                .and_then(|record| record.plugin.param_value(id)))
+        })
+        .unwrap()
+    }
     fn selection(&self, target: PluginTarget) -> Option<Arc<std::sync::atomic::AtomicU64>> {
         if self.rendering {
             None
@@ -1134,6 +1148,12 @@ enum Adapter {
     Instrument(PluginInstrument),
 }
 impl Adapter {
+    fn dropped_events(&self) -> u32 {
+        match self {
+            Self::Effect(adapter) => adapter.health().dropped_events,
+            Self::Instrument(adapter) => adapter.health().dropped_events,
+        }
+    }
     fn failed(&self) -> bool {
         match self {
             Self::Effect(adapter) => adapter.health().failed,
@@ -1290,6 +1310,13 @@ impl Drop for Audio {
     }
 }
 impl HostedEffect for Audio {
+    fn adopt_parameters(&mut self, parameters: &[windfall_project::PluginParameter]) {
+        for control in self.controls.iter() {
+            if let Some(param) = parameters.iter().find(|param| param.id == control.id) {
+                control.observe_document(param.value);
+            }
+        }
+    }
     fn control_boundary(&mut self) {
         if let Some(ownership) = &mut self.ownership {
             if let Some(adapter) = ownership.current() {
@@ -1326,6 +1353,7 @@ impl HostedEffect for Audio {
         // Reconcile after engine commands and note expirations, immediately
         // before sounding. A boundary alone must never resurrect a released key.
         self.reconcile();
+        let dropped = self.adapter().map(Adapter::dropped_events);
         let instrument = self.instrument;
         match self.adapter_mut() {
             Some(Adapter::Effect(adapter)) => adapter.process(left, right),
@@ -1338,7 +1366,9 @@ impl HostedEffect for Audio {
         }
         if !left.is_empty()
             && !right.is_empty()
-            && self.adapter().is_some_and(|adapter| !adapter.failed())
+            && self.adapter().is_some_and(|adapter| {
+                !adapter.failed() && Some(adapter.dropped_events()) == dropped
+            })
         {
             for ((id, pending), control) in self.pending_params.iter().zip(self.controls.iter()) {
                 debug_assert_eq!(*id, control.id);

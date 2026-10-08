@@ -1,6 +1,6 @@
 //! Preallocated VST3 audio-thread data. Controller calls never happen here.
 use super::{
-    buffers::{Changes, Events},
+    buffers::{Changes, Events, PENDING_PARAMETER_CAPACITY},
     handlers::AudioCall,
     instance::{Objects, Value},
 };
@@ -87,6 +87,9 @@ impl Ports {
 pub(super) struct VstProcessor {
     objects: Arc<Objects>,
     values: Arc<[Value]>,
+    // Final input intent from a failed native call/translation, retained until
+    // owner return. Readback remains the last successfully processed value.
+    unprocessed: Box<[Option<f64>]>,
     inputs: Ports,
     outputs: Ports,
     parameters: ComWrapper<Changes>,
@@ -124,6 +127,14 @@ impl VstProcessor {
     /// The native owner calls this only after exclusive audio ownership returns.
     /// Preserve editor points still queued for process as deferred state overrides.
     pub(super) fn retain_pending_edits(&mut self) {
+        for (value, pending) in self.values.iter().zip(&mut self.unprocessed) {
+            if let Some(normalized) = pending.take() {
+                value.set(normalized);
+                value
+                    .pending
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         for _ in 0..crate::instance::QUEUE_CAPACITY {
             let Ok((id, value)) = self.edits.pop() else {
                 break;
@@ -227,7 +238,7 @@ impl VstProcessor {
                 return Err(PluginError::Activate("processing setup refused".into()));
             }
         }
-        let parameters = Changes::new();
+        let parameters = Changes::input(values.len());
         let parameter_ptr = parameters
             .to_com_ptr::<IParameterChanges>()
             .expect("changes");
@@ -241,6 +252,7 @@ impl VstProcessor {
         let output_event_ptr = output_events.to_com_ptr::<IEventList>().expect("events");
         Ok(Self {
             objects,
+            unprocessed: vec![None; values.len()].into_boxed_slice(),
             values,
             inputs: Ports::new(&layout.audio_inputs, max_block as usize),
             outputs: Ports::new(&layout.audio_outputs, max_block as usize),
@@ -265,6 +277,33 @@ impl VstProcessor {
             .binary_search_by_key(&id, |v| v.id)
             .ok()
             .map(|i| &self.values[i])
+    }
+    fn input_point(&mut self, id: u32, time: u32, normalized: f64) {
+        if !self.parameters.push(id, time, normalized)
+            && let Ok(index) = self.values.binary_search_by_key(&id, |v| v.id)
+        {
+            self.unprocessed[index] = Some(normalized);
+        }
+    }
+    fn retain_failed_block(&mut self) {
+        let values = &self.values;
+        let unprocessed = &mut self.unprocessed;
+        self.parameters.visit_final(&mut |id, normalized| {
+            if let Ok(index) = values.binary_search_by_key(&id, |v| v.id)
+                && unprocessed[index].is_none()
+            {
+                // Rejected final points already take precedence over each
+                // queue's final admitted value.
+                unprocessed[index] = Some(normalized);
+            }
+        });
+    }
+    fn dropped_events(&self) -> u32 {
+        self.parameters
+            .dropped()
+            .saturating_add(self.output_parameters.dropped())
+            .saturating_add(self.events.dropped())
+            .saturating_add(self.output_events.dropped())
     }
     fn note(&self, time: u32, key: u8, channel: u8, velocity: f32, on: bool) {
         if !self.event_input {
@@ -309,6 +348,12 @@ impl ProcessorBackend for VstProcessor {
         out: &mut dyn FnMut(PluginEvent),
     ) -> Result<BlockResult, ProcessFailed> {
         let _guard = AudioCall::enter();
+        // Clear before starting too, so a start failure cannot repeat a prior
+        // block's drop count.
+        self.parameters.clear();
+        self.output_parameters.clear();
+        self.events.clear();
+        self.output_events.clear();
         // SAFETY: processor has one exclusive audio owner, lifecycle calls
         // occur here rather than on the concurrent controller/main thread.
         if !self.started {
@@ -320,20 +365,22 @@ impl ProcessorBackend for VstProcessor {
         let frames = audio.frames();
         self.inputs.clear(frames);
         self.outputs.clear(frames);
-        self.parameters.clear();
-        self.output_parameters.clear();
-        self.events.clear();
-        self.output_events.clear();
         let mut pending_count = 0;
         for value in self.values.iter() {
-            if pending_count == 256 {
+            if pending_count == PENDING_PARAMETER_CAPACITY {
                 break;
             }
             if value
                 .pending
                 .swap(false, std::sync::atomic::Ordering::Relaxed)
             {
-                self.parameters.push(value.id, 0, value.normalized());
+                // The capacity includes every deferred point. Preserve a
+                // refused flag rather than consuming an undeliverable value.
+                if !self.parameters.push(value.id, 0, value.normalized()) {
+                    value
+                        .pending
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 pending_count += 1;
             }
         }
@@ -357,8 +404,7 @@ impl ProcessorBackend for VstProcessor {
                 if !v.writable {
                     continue;
                 }
-                v.set(value);
-                self.parameters.push(id, 0, value);
+                self.input_point(id, 0, value);
             }
         }
         for event in events {
@@ -369,8 +415,7 @@ impl ProcessorBackend for VstProcessor {
                             continue;
                         }
                         let normalized = (value / v.scale).clamp(0.0, 1.0);
-                        v.set(normalized);
-                        self.parameters.push(id, time, normalized);
+                        self.input_point(id, time, normalized);
                     }
                 }
                 HostEvent::NoteOn {
@@ -402,6 +447,12 @@ impl ProcessorBackend for VstProcessor {
                     }
                 }
             }
+        }
+        // A valid block fits by construction. An unexpected translation
+        // refusal is a failed block, never a successful control acknowledgement.
+        if self.parameters.dropped() != 0 {
+            self.retain_failed_block();
+            return Err(ProcessFailed);
         }
         let (left, right) = match audio {
             AudioIo::Separate {
@@ -447,8 +498,16 @@ impl ProcessorBackend for VstProcessor {
         // SAFETY: all buffers and interfaces live for this synchronous call;
         // plugin must not retain buffer/context pointers beyond process.
         if unsafe { self.objects.processor.process(&mut data) } != kResultOk {
+            self.retain_failed_block();
             return Err(ProcessFailed);
         }
+        // Admission into an SDK queue is not processing. Publish readback only
+        // after the actual native call succeeded; newer output edits win next.
+        self.parameters.visit_final(&mut |id, normalized| {
+            if let Some(v) = self.value(id) {
+                v.set(normalized);
+            }
+        });
         self.outputs.output(left, right);
         self.output_parameters.visit(&mut |id, _time, normalized| {
             if let Some(v) = self.value(id) {
@@ -462,13 +521,11 @@ impl ProcessorBackend for VstProcessor {
         Ok(BlockResult {
             status: ProcessStatus::Continue,
             tail: None,
-            dropped_events: self
-                .parameters
-                .dropped()
-                .saturating_add(self.output_parameters.dropped())
-                .saturating_add(self.events.dropped())
-                .saturating_add(self.output_events.dropped()),
+            dropped_events: self.dropped_events(),
         })
+    }
+    fn failure_dropped_events(&self) -> u32 {
+        self.dropped_events()
     }
     fn reset(&mut self) {
         self.stop();
@@ -484,4 +541,62 @@ impl ProcessorBackend for VstProcessor {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn r4_unexpected_native_point_refusal_counts_drops_without_false_readback_and_recovers() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let target = manifest.join("../../target/vst3-ownership-fixture");
+    let build = std::process::Command::new(env!("CARGO"))
+        .args(["build", "--manifest-path"])
+        .arg(manifest.join("test-plugins/Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .env("CARGO_BUILD_JOBS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let path = target.join("point-refusal.vst3");
+    std::fs::copy(target.join("debug/windfall_test_plugins.dll"), &path).unwrap();
+    let module = crate::PluginHost::windfall().load(&path).unwrap();
+    let mut instance = module.create(&module.descriptors()[0].id).unwrap();
+    let mut processor = instance.activate(48_000.0, 64).unwrap();
+    // Fault injection on the creating owner, before the measured audio work:
+    // valid production input storage has room for all three sources.
+    let vst = processor
+        .backend_mut()
+        .as_any_mut()
+        .downcast_mut::<VstProcessor>()
+        .unwrap();
+    vst.parameters = Changes::input(0);
+    vst.parameter_ptr = vst.parameters.to_com_ptr().unwrap();
+    assert!(processor.set_param(1, 7, 0.25));
+    assert!(processor.set_param(63, 7, 0.75));
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        processor.process(&mut left, &mut right),
+        ProcessStatus::Failed
+    );
+    assert_eq!(processor.health().dropped_events, 2);
+    assert_eq!(instance.param_value(7), Some(0.5));
+    assert_eq!(left, [1.0; 64]);
+    instance.deactivate(processor).unwrap();
+    assert_eq!(instance.param_value(7), Some(0.75));
+    let mut recovered = instance.activate(48_000.0, 64).unwrap();
+    assert_eq!(
+        recovered.process(&mut left, &mut right),
+        ProcessStatus::Continue
+    );
+    assert_eq!(
+        left, [1.5; 64],
+        "retained final intent must actually process"
+    );
+    assert_eq!(recovered.health().dropped_events, 0);
+    instance.deactivate(recovered).unwrap();
 }
