@@ -2999,12 +2999,12 @@
       "area": "effect",
       "fl_feature": "Fruity Bass Boost",
       "summary": "A two-knob bass enhancement EQ.",
-      "windfall_name": null,
+      "windfall_name": "Bass shelf",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP source checkpoints f0ad5e44 and 796a62f9 implement a measured two-control shelf with boost headroom, neutral high-frequency response and frame-counted smoothing. Independent follow-up review is pending; registry, persistence, automation, engine/export and UI integration remain unfinished."
     },
     {
       "id": "fx-fruity-center",
@@ -3035,24 +3035,24 @@
       "area": "effect",
       "fl_feature": "Fruity Fast LP",
       "summary": "A low-CPU low-pass filter built for automation.",
-      "windfall_name": null,
+      "windfall_name": "Fast lowpass",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP source checkpoints f0ad5e44 and 796a62f9 implement a measured resonant 12 dB/oct lowpass with frame-counted smoothing and bounded callback work. Independent follow-up review is pending; registry, persistence, automation, engine/export and UI integration remain unfinished."
     },
     {
       "id": "fx-fruity-free-filter",
       "area": "effect",
       "fl_feature": "Fruity Free Filter",
       "summary": "A general-purpose filter with low-pass, band-pass, high-pass, notch and shelving types.",
-      "windfall_name": null,
+      "windfall_name": "Selectable filter",
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP source checkpoints f0ad5e44 and 796a62f9 implement seven measured filter modes with live histories and frame-counted mode/control smoothing. Independent follow-up review is pending; registry, persistence, automation, engine/export and UI integration remain unfinished."
     },
     {
       "id": "fx-fruity-mute-2",

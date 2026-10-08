@@ -18,8 +18,8 @@ As of 2026-10-08. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 218 |
-| In progress | 54 |
+| Todo | 215 |
+| In progress | 57 |
 | Done | 68 |
 | Won't do | 2 |
 
@@ -28,7 +28,7 @@ As of 2026-10-08. Sources:
 | Core features | 23 | 12 | 8 | 2 | 1 |
 | Main windows | 113 | 48 | 20 | 44 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 68 | 10 | 2 | 0 |
+| Effects | 80 | 65 | 13 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
@@ -41,7 +41,7 @@ As of 2026-10-08. Sources:
 | 2. Write a song | 99 | 41 | 24 | 34 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
-| 5. The long tail | 129 | 122 | 7 | 0 | 0 |
+| 5. The long tail | 129 | 119 | 10 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -313,11 +313,11 @@ As of 2026-10-08. Sources:
 | Emphasizer | TBD | 5 | todo |  |
 | VFX Script | TBD | 6 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. Grouped with the plan's phase-6 scripting. |
 | Fruity 7 Band EQ | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Bass Boost | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
+| Fruity Bass Boost | Bass shelf | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP source checkpoints f0ad5e44 and 796a62f9 implement a measured two-control shelf with boost headroom, neutral high-frequency response and frame-counted smoothing. Independent follow-up review is pending; registry, persistence, automation, engine/export and UI integration remain unfinished. |
 | Fruity Center | DC blocker | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Delay | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Fast LP | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Free Filter | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
+| Fruity Fast LP | Fast lowpass | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP source checkpoints f0ad5e44 and 796a62f9 implement a measured resonant 12 dB/oct lowpass with frame-counted smoothing and bounded callback work. Independent follow-up review is pending; registry, persistence, automation, engine/export and UI integration remain unfinished. |
+| Fruity Free Filter | Selectable filter | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP source checkpoints f0ad5e44 and 796a62f9 implement seven measured filter modes with live histories and frame-counted mode/control smoothing. Independent follow-up review is pending; registry, persistence, automation, engine/export and UI integration remain unfinished. |
 | Fruity Mute 2 | Channel mute | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Phase Inverter | Polarity | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Reeverb | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. |
