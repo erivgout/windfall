@@ -61,6 +61,10 @@ pub trait PluginFactory: Send + Sync + std::fmt::Debug {
     fn render_factory(&self) -> Option<std::sync::Arc<dyn PluginFactory>> {
         None
     }
+    /// Control/offline caller only; never poll this from a live callback.
+    fn render_error(&self) -> Option<String> {
+        None
+    }
     /// Changes when an explicit retry or plugin restart requires fresh instances.
     fn revision(&self) -> u64 {
         0

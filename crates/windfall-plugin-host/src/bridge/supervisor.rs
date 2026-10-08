@@ -122,6 +122,25 @@ impl Drop for Inner {
 #[derive(Clone)]
 pub struct Control(Arc<Inner>);
 impl Control {
+    pub fn describe(
+        &self,
+        timeout: Duration,
+    ) -> Result<(Vec<u8>, Vec<super::control::DiscoveredParameter>), String> {
+        let packet = self.call(Message::Describe, timeout)?;
+        match packet.body {
+            Message::Described { parameters }
+                if !packet.state.is_empty()
+                    && parameters.len() <= super::protocol::PARAM_CAPACITY
+                    && parameters.iter().all(|parameter| {
+                        parameter.name.len() <= 4096 && ParameterSpec::from(parameter.spec).valid()
+                    }) =>
+            {
+                Ok((packet.state, parameters))
+            }
+            Message::Error { message } => Err(message),
+            _ => Err("malformed plugin discovery response".into()),
+        }
+    }
     /// Control/render caller only. Ends this instance and confirms process exit
     /// before returning; audio may retain its mapping for bounded fallback.
     pub fn terminate(&self) -> Status {

@@ -7,14 +7,14 @@ the bridge or native editor parity rows.
 The owner has since advanced its worktree baseline to `7f70315c` (including
 `19caf872`) at the parent's direction. The parent approved the proposed 2B
 schedule and host-library edit window. Shared fixture classes10+ have a narrow
-approved window; production runtime/manager/main routing remains reserved
-while bridge repairs are independently accepted. The initial512-frame default
+approved window. The historical leaf below preceded the later approved
+production runtime/manager/main integration window. The initial512-frame default
 delay was a proposal; the evidence
 below now measures it with B=256 native helper fixtures, separately from B=64.
 The owner subsequently imported reviewed R4 `ec601edf` in local merge
 `02072c81`, using the parent's applied `ea145d93` composition to preserve the
-accepted capture and native point-delivery repairs. Production wiring is still
-reserved separately.
+accepted capture and native point-delivery repairs. The in-progress production
+integration and ABI3 contract are recorded at the end of this document.
 
 ## Boundary and ownership
 
@@ -31,7 +31,7 @@ This is crash containment, not a security sandbox. Native code can access the
 user's files and other processes with their permissions. Corrupt protocol data
 is rejected; isolation does not make an intentionally hostile plugin safe.
 
-## ABI version 2
+## Accepted leaf ABI version 2 (historical; current integration uses ABI3)
 
 Only 64-bit little-endian Windows is initially enabled. The mapping is a fixed
 size, page-aligned array of aligned 32-bit words. No Rust enum, pointer, slice,
@@ -539,6 +539,146 @@ pending independent leaf acceptance; engine/document integration, packaged
 installer, licensed Windows corpus, native editors/other OSes and hardware
 acceptance remain open.
 
+## Production desktop integration window (in progress)
+
+The Windows desktop executable recognizes audio-helper mode before Tauri. Windows
+factories resolve current_exe and launch one authenticated helper per prepared
+CLAP/VST3 instance; private test constructors inject the explicitly built current
+desktop executable. Existing native-owner/R4 test fixtures keep their historical
+in-process provider solely in cfg(test). No production native fallback is used.
+Discovery itself now obtains initial state/parameter metadata from a disposable
+authenticated helper, not a desktop-native instance. Selected playback capture
+continues to require exact binding, document revision and selected token before
+and after the control operation; render/speculative helpers never select targets.
+
+The facade retains preallocated audio buffers, shared metadata and a retirement
+flag. Helper controls/status/resources remain on the desktop control owner.
+Engine facade destruction remains a control-side operation; its retired flag lets
+that owner reap the process without joining on the callback. Startup, failure and
+retry errors use the existing manager error channel. Manual retry advances the
+existing factory revision; there is no automatic retry storm. Bridge editor
+requests explicitly return unsupported and cannot open an in-process native
+editor. This remains crash containment, not a security sandbox.
+
+Parameter adoption only records equivalence with an existing desired generation
+and a collection sequence frontier. It emits no event, desired-counter increment,
+submit, IPC or native acknowledgement. A matching timely COMPLETE sequence at
+or after that frontier is required to publish processed local/document metadata.
+Timeline reset clears that proof. Capture retains committed pending intent
+separately from actual native bytes and inactive reconciliation.
+
+Each offline render obtains its own provider/error latch and helpers. It may wait
+up to two seconds per bridge process operation off realtime; cancellation is
+observed between bounded operations. A helper process error zeros the supplied
+operation buffers and latches a render error. Reporting APIs discard collected
+results on that error; checked streaming/stems return an explicit plugin error
+although a prefix may already have reached the sink. The desktop discards every
+staged file and preserves destinations. Ordinary cancellation and sampler errors
+remain distinct. These statements describe the implementation contract; compiled
+production evidence follows below. The existing nonWindows native provider is
+preserved and does not gain crash isolation from this Windows-only window.
+
+The seven-path native metadata prerequisite94e168ae is imported alone as1fa5a16d,
+directly atop0741117f; no T1parent/full branch is imported. Current engine producer
+remains None until the separately coordinated full Song meter-map producer lands.
+Both desktop facades faithfully forward Some anchors. ABI3 now carries14 atomic
+LE transport words at16..29: words0..2 playing/numerator/denominator, word3 flag
+None0/Some1, words4..9 existing tempo/beats/seconds f64, words10/11 anchor origin
+f64, word12 zero-based cumulative index, word13 reserved zero. None requires the
+extra words zero and retains scalar negative positions. Some requires finite
+nonnegative origin<=position and checked i32 cumulative index. Input epoch moves
+to30/31, reply identity stays32..39; all later metadata/payload offsets and mapping
+size are unchanged. Units audit all used metadata ranges for overlap and reject
+ABI1/2, malformed anchors/reserved words/overflow before native installation.
+Hello2/private WFAP1/WFCB1 remain unchanged. Fullproducer malformed meter refusal
+must remain a SamplerPreparation(Unsupported) preparation error, never Plugin,
+when the parent later composes that prerequisite.
+
+### Production-window evidence and remaining gates
+
+The current desktop executable was explicitly built in the owner target and
+injected into tests, exercising its real helper entry before Tauri. This is
+development executable discovery evidence, not packaged-installer evidence.
+All four CLAP/VST3 effect/instrument Session routes use child PIDs, selected
+playback tokens, current document revision and real native state. Unsupported
+editors are explicit refusals. Startup/failure errors use manager instance errors;
+there is no production in-process native fallback on Windows.
+
+The truthful37-frame effect measures549 frames at the bridge facade (37+2*256).
+An actual Session clip impulse at1024 appears at1585 in live graph audio: an
+additional12 frames from the source instrument plus549 from the facade. Graph
+latency is561. Independent offline results remove the graph delay, retain the
+impulse at1024, and match bit-for-bit across1/7/64/480/512-frame chunks. The live
+variable-callback test counts zero allocator calls. These are synthetic software
+measurements, not physical device deadline or licensed plugin evidence.
+
+The adoption unit compiled RED when mismatched committed0.75 was equated with
+existing desired0.625. GREEN retains equivalence only for matching values and
+waits for a later completed sequence. Adoption changes no desired generation or
+native event count. Four actual native Song-automation cases preserve processed
+0.25 after deduplicated committed0.75 adoption. Local metadata tuples use a
+single callback writer and sequentially consistent atomic payload/version access;
+equal even versions fence epoch/generation capture without callback locks.
+
+Appended fixture19 has truthful37-frame stereo delay and returns an actual
+native process error at gain>=0.75. Both formats produce a healthy prefix and
+then fail the final Song processing block. Collected reporting audio is wholly
+discarded; checked streaming and both stem modes return Plugin errors. Desktop
+mix and multi-file stem export discard all staging, publish no Written outcome,
+and preserve a destination replaced by a competing writer. A fresh healthy
+Pattern render/stem operation succeeds, and the live sibling PID/token/document
+remain unchanged. The separate pure factory regression fails on the final
+one-frame block of a16001-frame render after16000 valid frames and verifies
+simultaneous final progress cancellation cannot mask the plugin error.
+
+Appended VST-only fixture20 retains the same truthful37 latency while making a
+newer deactivation edit0.625->0.375. The actual fixture compiled RED when the
+desktop intent overlay restored0.625; GREEN keeps inactive reconciliation's
+native readback, subsequent healthy DSP0.1875 at input0.5, and a second capture
+0.375 on the same PID. The earlier class7 probe instead latched its dynamic
+17->64 latency change; that probe is not overlay RED evidence. Fixtures0-18,
+IDs and R4 point/drop semantics remain unchanged; scanner count21 is mechanical.
+These six fixture paths are frozen separately in71dbec11. Creator thread identity
+hooks and the new native_thread module are now the portability owner's exclusive
+window; this owner will not modify those hooks or import its branch.
+
+Real facade crash/nonfinite/hang tests retain finite delayed effect fallback,
+reap the failed helper within its bound, expose a manual-retry manager error and
+keep the healthy sibling process/token alive. Four native pending-control cases
+save and back up0.75 without intervening audio/adoption/native processing, preserve
+undo/redo and live document contents, refuse save/backup/refresh/New during a take,
+and invalidate old capture tokens after New/Open. Callback allocator guards cover
+these paths and normal processing; off-thread process and control waits remain
+bounded. Actual synchronous Session preparation still inherits native waits under
+State/controller guards. The parent assigned a separate preparation owner; this
+gap is unaccepted until guarded off-lock construction and retirement are composed
+and tested. No asynchronous prewarm or assumed-latency shortcut closes it.
+
+The current checks retain all27 real process regressions from the accepted leaf,
+61 host units plus the explicitly invoked sticky native CLAP writer case,20 host
+realtime cases,11 parameter/state cases and2 scanner cases. Engine checks passed:
+3 error-reporting units,37 effect/render/allocator cases,11 existing stem cases
+and11 existing sampler-processing cases. Desktop checks passed21 new native
+Session cases,2 private facade units and all5 unchanged native R4 regressions.
+Strict all-feature/all-target host, engine all-target and desktop lib/tests
+Clippy, workspace/full-fixture formatting and whitespace checks passed.
+The final21-case desktop run measured25 callbacks per role with zero allocator
+calls: CLAP effect max120us/mean69.42us, CLAP instrument82.5us/37.128us,
+VST3 effect137.5us/67.492us, VST3 instrument60.2us/37.868us. Earlier runs reached
+different maxima. These are headless wall times on a busy machine, not average
+CPU or a physical device deadline guarantee.
+The seven imported native metadata paths and two mechanical desktop transport
+literals are the complete metadata prerequisite adaptation. The one VST processor
+formatting hunk removes a blank line introduced while preserving the R4 refusal
+test during that prerequisite cherry-pick; it changes no native point behavior.
+
+Full Song meter production and malformed-meter refusal await the parent's exact
+producer handover. Whole preparation/document-race acceptance, packaged installer
+helper discovery, licensed Surge/OB-Xf corpus, Windows devices, native editor
+parenting/scaling/lifecycle, and other platforms remain open. The independently
+reproduced macOS entry and Linux fixture-TLS failures belong to the portability
+owner and are not repaired or claimed passed by this Windows evidence. N4 remains
+partial; a separate process provides crash containment, not a security sandbox.
 ## ABI3 native meter metadata prerequisite
 
 This isolated prerequisite imports no production facade, helper discovery,

@@ -112,6 +112,15 @@ pub struct ControlParameter {
     pub read_only: bool,
     pub stepped: bool,
 }
+
+/// Discovery stays on an authenticated disposable native owner, never desktop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveredParameter {
+    pub spec: ControlParameter,
+    pub name: String,
+    pub automatable: bool,
+}
 impl From<ParameterSpec> for ControlParameter {
     fn from(value: ParameterSpec) -> Self {
         Self {
@@ -140,6 +149,10 @@ impl From<ControlParameter> for ParameterSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Message {
+    Describe,
+    Described {
+        parameters: Vec<DiscoveredParameter>,
+    },
     Load {
         mapping: String,
         settings: Settings,
@@ -203,7 +216,10 @@ impl Packet {
         }
         checked_state_size(self.state.len())?;
         if !self.state.is_empty() {
-            if !matches!(self.body, Message::Load { .. } | Message::Captured { .. }) {
+            if !matches!(
+                self.body,
+                Message::Load { .. } | Message::Captured { .. } | Message::Described { .. }
+            ) {
                 return Err(invalid("state on an unsupported control message"));
             }
             PluginState::from_bytes(self.state.clone())

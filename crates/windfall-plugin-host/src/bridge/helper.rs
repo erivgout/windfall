@@ -587,6 +587,56 @@ fn run(address: SocketAddr) -> io::Result<()> {
             }
             let mut response = Packet::new(packet.request, packet.owner, Message::Stopped);
             match packet.body {
+                Message::Describe => {
+                    let discovered = (|| {
+                        let (state, _, _, _) = native.capture(1, 1, &[])?;
+                        let native_parameters = native.instance.params().to_vec();
+                        let parameters = native_parameters
+                            .iter()
+                            .filter(|parameter| !parameter.hidden)
+                            .map(|parameter| super::control::DiscoveredParameter {
+                                name: parameter.name.clone(),
+                                automatable: parameter.automatable,
+                                spec: ControlParameter {
+                                    id: parameter.id,
+                                    min: parameter.min,
+                                    max: parameter.max,
+                                    value: native
+                                        .instance
+                                        .param_value(parameter.id)
+                                        .unwrap_or(parameter.default),
+                                    read_only: parameter.read_only,
+                                    stepped: parameter.stepped,
+                                },
+                            })
+                            .collect::<Vec<_>>();
+                        if parameters.len() > PARAM_CAPACITY
+                            || parameters
+                                .iter()
+                                .map(|parameter| parameter.name.len())
+                                .sum::<usize>()
+                                > 128 * 1024
+                            || parameters.iter().any(|parameter| {
+                                parameter.name.len() > 4096
+                                    || !ParameterSpec::from(parameter.spec).valid()
+                            })
+                        {
+                            return Err(error("native discovery metadata exceeds bridge limits"));
+                        }
+                        Ok((state, parameters))
+                    })();
+                    match discovered {
+                        Ok((state, parameters)) => {
+                            response.state = state;
+                            response.body = Message::Described { parameters };
+                        }
+                        Err(error_value) => {
+                            response.body = Message::Error {
+                                message: error_value.to_string(),
+                            }
+                        }
+                    }
+                }
                 Message::Shutdown => {
                     native.deactivate()?;
                     reply(&mut socket, &response)?;

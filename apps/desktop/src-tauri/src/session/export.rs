@@ -13,7 +13,7 @@ use windfall_codec::{
 };
 use windfall_core::samples_per_tick;
 use windfall_engine::{
-    RenderOptions, SamplePool, StemOptions, Streamed, render_stems, render_streaming, stems,
+    RenderOptions, SamplePool, StemOptions, Streamed, render_stems, render_streaming_checked, stems,
 };
 use windfall_ipc::{BitDepth, ExportFormat, ExportOptions, ExportProgress, ExportedFile, PlayMode};
 use windfall_project::{AutomationRange, AutomationTarget, PatternId, Project, TrackId};
@@ -604,6 +604,7 @@ fn write_files(
 ) -> Result<Outcome, String> {
     let prepared_pool = job
         .pool
+        .prepare_plugin_render()
         .prepare_samplers(&job.project, &mut || !cancelled(), &mut |_, _, _| {})
         .map_err(|error| error.to_string())?;
     let options = &job.options;
@@ -657,7 +658,7 @@ fn write_files(
     };
     let mut report = |fraction: f32| {
         progress.report(fraction);
-        !cancelled()
+        !cancelled() && prepared_pool.plugin_render_error().is_none()
     };
     let streamed: Streamed = match &job.stems {
         Some(stems) => render_stems(
@@ -669,16 +670,23 @@ fn write_files(
             &mut report,
         )
         .map_err(|error| error.to_string())?,
-        None => render_streaming(
+        None => render_streaming_checked(
             &job.project,
             &prepared_pool,
             &render,
             &mut |block| write(0, block),
             &mut report,
-        ),
+        )
+        .map_err(|error| error.to_string())?,
     };
     if let Some(reason) = failure {
         return Err(reason);
+    }
+    if let Some(error) = streamed
+        .plugin_error
+        .or_else(|| prepared_pool.plugin_render_error())
+    {
+        return Err(error);
     }
     if !streamed.completed || cancelled() {
         return Ok(Outcome::Cancelled);
@@ -690,6 +698,9 @@ fn write_files(
     // Finalize under staging names so a later encoder failure cannot
     // replace an earlier destination. The transaction restores backups
     // if moving a completed set fails part way through.
+    if let Some(error) = prepared_pool.plugin_render_error() {
+        return Err(error);
+    }
     for (encoder, target) in encoders.into_iter().zip(&job.targets) {
         if let Err(error) = encoder.finalize() {
             return Err(named(&target.path, job, &error.to_string()));
@@ -697,6 +708,9 @@ fn write_files(
     }
     if cancelled() {
         return Ok(Outcome::Cancelled);
+    }
+    if let Some(error) = prepared_pool.plugin_render_error() {
+        return Err(error);
     }
     transaction.commit()?;
     let files = job.targets.iter().map(|target| ExportedFile {

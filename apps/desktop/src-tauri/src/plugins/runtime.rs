@@ -100,15 +100,15 @@ struct CaptureIntent {
 /// One callback writer publishes desired values; only completed native
 /// processing or inactive owner reconciliation acknowledges their generation.
 /// Storage is allocated with the binding. Audio never spins or allocates.
-struct ParameterControl {
-    id: u32,
-    value: std::sync::atomic::AtomicU32,
-    generation: std::sync::atomic::AtomicU64,
-    applied: std::sync::atomic::AtomicU64,
-    document_value: std::sync::atomic::AtomicU32,
-    document_generation: std::sync::atomic::AtomicU64,
-    observed_document: std::sync::atomic::AtomicU64,
-    applied_document: std::sync::atomic::AtomicU64,
+pub(super) struct ParameterControl {
+    pub(super) id: u32,
+    pub(super) value: std::sync::atomic::AtomicU32,
+    pub(super) generation: std::sync::atomic::AtomicU64,
+    pub(super) applied: std::sync::atomic::AtomicU64,
+    pub(super) document_value: std::sync::atomic::AtomicU32,
+    pub(super) document_generation: std::sync::atomic::AtomicU64,
+    pub(super) observed_document: std::sync::atomic::AtomicU64,
+    pub(super) applied_document: std::sync::atomic::AtomicU64,
 }
 impl ParameterControl {
     fn new(id: u32, value: f32) -> Self {
@@ -123,14 +123,14 @@ impl ParameterControl {
             applied_document: std::sync::atomic::AtomicU64::new(2),
         }
     }
-    fn publish(&self, value: f32) {
+    pub(super) fn publish(&self, value: f32) {
         use std::sync::atomic::Ordering;
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.value.store(value.to_bits(), Ordering::Relaxed);
         self.generation.fetch_add(1, Ordering::Release);
         self.observe_document(value);
     }
-    fn observe_document(&self, value: f32) {
+    pub(super) fn observe_document(&self, value: f32) {
         use std::sync::atomic::Ordering;
         // One bounded read matches the committed generation/value pair. A
         // stale plan with different values cannot acknowledge newer intent.
@@ -143,7 +143,7 @@ impl ParameterControl {
             self.observed_document.store(document, Ordering::Release);
         }
     }
-    fn document(&self) -> (u64, f32) {
+    pub(super) fn document(&self) -> (u64, f32) {
         use std::sync::atomic::Ordering;
         loop {
             let generation = self.document_generation.load(Ordering::Acquire);
@@ -156,7 +156,7 @@ impl ParameterControl {
             }
         }
     }
-    fn commit(&self, value: f32) {
+    pub(super) fn commit(&self, value: f32) {
         use std::sync::atomic::Ordering;
         if self.document_value.load(Ordering::Relaxed) != value.to_bits() {
             self.document_generation.fetch_add(1, Ordering::AcqRel);
@@ -166,7 +166,7 @@ impl ParameterControl {
         }
     }
     // Owner-side snapshot only. An odd generation means a callback is writing.
-    fn snapshot(&self) -> (u64, f32) {
+    pub(super) fn snapshot(&self) -> (u64, f32) {
         use std::sync::atomic::Ordering;
         loop {
             let generation = self.generation.load(Ordering::Acquire);
@@ -179,13 +179,13 @@ impl ParameterControl {
             }
         }
     }
-    fn settled(&self, generation: u64) -> bool {
+    pub(super) fn settled(&self, generation: u64) -> bool {
         self.applied.load(std::sync::atomic::Ordering::Acquire) == generation
     }
 }
-type ParameterControls = Arc<[ParameterControl]>;
+pub(super) type ParameterControls = Arc<[ParameterControl]>;
 type ControlRegistry = Arc<Mutex<BTreeMap<u64, (PluginTarget, u64, ParameterControls)>>>;
-fn parameter_controls(binding: &PluginBinding) -> ParameterControls {
+pub(super) fn parameter_controls(binding: &PluginBinding) -> ParameterControls {
     binding
         .parameters
         .iter()
@@ -482,6 +482,8 @@ struct Owner {
     selection: Selection,
     host: PluginHost,
     instances: BTreeMap<u64, Instance>,
+    #[cfg(windows)]
+    bridges: BTreeMap<u64, super::bridge::Record>,
     next: u64,
     approved: Approved,
     controls: ControlRegistry,
@@ -500,6 +502,11 @@ pub struct Runtime {
     next_revision: Arc<std::sync::atomic::AtomicU64>,
     prepared_revision: Option<u64>,
     rendering: bool,
+    #[cfg(windows)]
+    bridge_enabled: bool,
+    #[cfg(windows)]
+    bridge_helper: Option<std::path::PathBuf>,
+    render_error: Arc<Mutex<Option<String>>>,
 }
 impl std::fmt::Debug for Runtime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -517,6 +524,7 @@ impl Runtime {
         let owner_approved = approved.clone();
         let controls: ControlRegistry = Default::default();
         let owner_controls = controls.clone();
+        let owner_errors = errors.clone();
         let (updates, update_receiver) = mpsc::sync_channel(4096);
         let revision = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let owner_revision = revision.clone();
@@ -529,6 +537,8 @@ impl Runtime {
                     selection: owner_selection,
                     host: PluginHost::windfall(),
                     instances: BTreeMap::new(),
+                    #[cfg(windows)]
+                    bridges: BTreeMap::new(),
                     next: 0,
                     approved: owner_approved,
                     controls: owner_controls,
@@ -540,6 +550,50 @@ impl Runtime {
                         Ok(job) => job(&mut owner),
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                    // Bridge process IO/reaping is confined to this control owner.
+                    #[cfg(windows)]
+                    {
+                        let retired = owner
+                            .bridges
+                            .iter()
+                            .filter_map(|(token, record)| {
+                                (!record.alive.load(std::sync::atomic::Ordering::Acquire))
+                                    .then_some(*token)
+                            })
+                            .collect::<Vec<_>>();
+                        for token in retired {
+                            owner
+                                .controls
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .remove(&token);
+                            owner.bridges.remove(&token);
+                        }
+                        for (token, record) in &owner.bridges {
+                            if record.playback
+                                && selected(&owner.selection, record.binding.target) == Some(*token)
+                                && record.revision
+                                    == owner_revision.load(std::sync::atomic::Ordering::Acquire)
+                            {
+                                let status = record.status();
+                                if status.failed {
+                                    let mut errors = owner_errors
+                                        .lock()
+                                        .unwrap_or_else(|error| error.into_inner());
+                                    errors.retain(|(target, _)| *target != record.binding.target);
+                                    errors.push((
+                                        record.binding.target,
+                                        format!(
+                                            "Process bridge failed; retry manually: {}",
+                                            status.error.unwrap_or_else(|| {
+                                                "native helper unavailable".into()
+                                            })
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
                     }
                     windfall_plugin_host::gui::pump_events(Some(Duration::ZERO));
                     let selection = owner.selection.clone();
@@ -658,6 +712,14 @@ impl Runtime {
             next_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             prepared_revision: None,
             rendering: false,
+            // Existing native-owner/R4 fixtures use their historical provider.
+            // New bridge tests explicitly inject a real helper; release builds
+            // on Windows use this process route and the installed executable.
+            #[cfg(windows)]
+            bridge_enabled: !cfg!(test),
+            #[cfg(windows)]
+            bridge_helper: None,
+            render_error: Arc::new(Mutex::new(None)),
         })
     }
     pub fn approve_catalog(&self, catalog: &windfall_plugin_host::scan::PluginCatalog) {
@@ -876,7 +938,10 @@ impl Runtime {
             }
         }
     }
-    fn create(owner: &mut Owner, binding: &PluginBinding) -> Result<PluginInstance, String> {
+    fn approved_binding(
+        owner: &Owner,
+        binding: &PluginBinding,
+    ) -> Result<windfall_plugin_host::paths::PluginFileIdentity, String> {
         binding.validate().map_err(str::to_owned)?;
         let format = match binding.format.as_str() {
             "clap" => windfall_plugin_host::PluginFormat::Clap,
@@ -902,6 +967,15 @@ impl Runtime {
                 "This plugin is unscanned, changed, or blocked. Scan it before loading".into(),
             );
         }
+        Ok(stamp)
+    }
+    fn create(owner: &mut Owner, binding: &PluginBinding) -> Result<PluginInstance, String> {
+        Self::approved_binding(owner, binding)?;
+        let format = match binding.format.as_str() {
+            "clap" => windfall_plugin_host::PluginFormat::Clap,
+            "vst3" => windfall_plugin_host::PluginFormat::Vst3,
+            _ => return Err("Unsupported native plugin format".into()),
+        };
         let module = owner
             .host
             .load(std::path::Path::new(&binding.path))
@@ -937,6 +1011,41 @@ impl Runtime {
         Ok(instance)
     }
     pub fn discover(&self, mut binding: PluginBinding) -> Result<PluginBinding, String> {
+        #[cfg(windows)]
+        if self.bridge_enabled {
+            let helper = super::bridge::helper_path(self.bridge_helper.as_deref())?;
+            return self.call(move |owner| {
+                let stamp = Self::approved_binding(owner, &binding)?;
+                owner.next = owner
+                    .next
+                    .checked_add(1)
+                    .ok_or("Plugin owner token exhausted")?;
+                let options =
+                    super::bridge::options(helper, &binding, stamp, owner.next, 0, 48_000, false)?;
+                let (control, audio, _) =
+                    windfall_plugin_host::bridge::supervisor::launch(options)?;
+                let result = control.describe(Duration::from_secs(2));
+                control.terminate();
+                drop(audio);
+                let (state, parameters) = result?;
+                binding.state = state;
+                binding.parameters = parameters
+                    .into_iter()
+                    .map(|parameter| windfall_project::PluginParameter {
+                        id: parameter.spec.id,
+                        name: parameter.name,
+                        min: parameter.spec.min as f32,
+                        max: parameter.spec.max as f32,
+                        value: parameter.spec.value as f32,
+                        stepped: parameter.spec.stepped,
+                        read_only: parameter.spec.read_only,
+                        automatable: parameter.automatable,
+                    })
+                    .collect();
+                binding.validate().map_err(str::to_owned)?;
+                Ok(binding)
+            });
+        }
         self.call(move |owner| {
             let mut instance = Self::create(owner, &binding)?;
             let params = instance.params().to_vec();
@@ -977,6 +1086,36 @@ impl Runtime {
             }
             for binding in &mut project.plugins {
                 let selected_token = selected(&owner.selection, binding.target);
+                #[cfg(windows)]
+                if let Some(record) = selected_token.and_then(|token| owner.bridges.get(&token))
+                    && record.playback
+                    && record.revision == revision
+                    && record.binding.path == binding.path
+                    && record.binding.id == binding.id
+                    && record.binding.format == binding.format
+                    && record.binding.state == binding.state
+                {
+                    if lifetime.cancelled() {
+                        return Err("Plugin capture was cancelled".into());
+                    }
+                    let (state, parameters) = record.capture(&binding.parameters)?;
+                    if lifetime.cancelled()
+                        || current_revision.load(std::sync::atomic::Ordering::Acquire) != revision
+                        || selected(&owner.selection, binding.target) != selected_token
+                    {
+                        return Err(
+                            "Plugin ownership changed during state capture; save again".into()
+                        );
+                    }
+                    binding.state = state;
+                    for param in &mut binding.parameters {
+                        if let Some(value) = parameters.iter().find(|value| value.0 == param.id) {
+                            param.value = value.1;
+                        }
+                    }
+                    continue;
+                }
+
                 if let Some(record) =
                     selected_token.and_then(|token| owner.instances.get_mut(&token))
                     && record.playback
@@ -1095,6 +1234,20 @@ impl Runtime {
     ) -> Result<(), String> {
         let revision = self.revision.load(std::sync::atomic::Ordering::Relaxed);
         self.call(move |owner| {
+            #[cfg(windows)]
+            if let Some(record) =
+                selected(&owner.selection, target).and_then(|token| owner.bridges.get(&token))
+                && record.playback
+                && record.revision == revision
+                && binding.as_ref().is_none_or(|binding| {
+                    binding.path == record.binding.path
+                        && binding.id == record.binding.id
+                        && binding.format == record.binding.format
+                        && binding.state == record.binding.state
+                })
+            {
+                return record.control.editor(open);
+            }
             let record = selected(&owner.selection, target)
                 .and_then(|token| owner.instances.get_mut(&token))
                 .filter(|record| record.revision == revision)
@@ -1119,6 +1272,87 @@ impl Runtime {
                 instance.close_editor();
             }
             Ok(())
+        })
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn bridge_fixture(helper: &std::path::Path) -> Arc<Self> {
+        let mut runtime = Self::new().unwrap();
+        runtime.bridge_enabled = true;
+        runtime.bridge_helper = Some(helper.to_owned());
+        Arc::new(runtime)
+    }
+    #[cfg(windows)]
+    pub fn bridge_status(
+        &self,
+    ) -> Vec<(
+        PluginTarget,
+        u64,
+        windfall_plugin_host::bridge::supervisor::Status,
+    )> {
+        let revision = self.document_revision();
+        self.call(move |owner| {
+            Ok(owner
+                .bridges
+                .iter()
+                .filter(|(token, record)| {
+                    record.playback
+                        && record.revision == revision
+                        && selected(&owner.selection, record.binding.target) == Some(**token)
+                })
+                .map(|(token, record)| (record.binding.target, *token, record.status()))
+                .collect())
+        })
+        .unwrap_or_default()
+    }
+    #[cfg(windows)]
+    fn bridge_audio(
+        &self,
+        binding: &PluginBinding,
+        rate: u32,
+    ) -> Result<super::bridge::Audio, String> {
+        let binding = binding.clone();
+        let revision = self.preparation_revision();
+        let offline = self.rendering;
+        let selection = self.selection(binding.target);
+        let helper = super::bridge::helper_path(self.bridge_helper.as_deref())?;
+        let render_error = self.render_error.clone();
+        self.call(move |owner| {
+            let stamp = Self::approved_binding(owner, &binding)?;
+            owner.next = owner
+                .next
+                .checked_add(1)
+                .ok_or("Plugin owner token exhausted")?;
+            let token = owner.next;
+            let controls = parameter_controls(&binding);
+            let mut options =
+                super::bridge::options(helper, &binding, stamp, token, revision, rate, offline)?;
+            if !offline
+                && let Some(old) = selected(&owner.selection, binding.target)
+                    .and_then(|token| owner.bridges.get(&token))
+                && old.binding == binding
+                && let Some(state) = old.control.last_valid_state()
+            {
+                options.state = state.state;
+            }
+            let (record, audio) = super::bridge::launch(
+                options,
+                binding.clone(),
+                controls.clone(),
+                selection,
+                render_error,
+            )?;
+            if !offline {
+                owner
+                    .controls
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(
+                        token,
+                        (binding.target, binding_identity(&binding), controls),
+                    );
+            }
+            owner.bridges.insert(token, record);
+            Ok(audio)
         })
     }
     pub fn errors(&self) -> Vec<(PluginTarget, String)> {
@@ -1498,9 +1732,23 @@ impl PluginFactory for Runtime {
         Arc::as_ptr(&self.revision) as usize as u64
     }
     fn render_factory(&self) -> Option<Arc<dyn PluginFactory>> {
+        if self.rendering {
+            return None;
+        }
         let mut runtime = self.clone();
+        runtime.render_error = Arc::new(Mutex::new(None));
         runtime.rendering = true;
         Some(Arc::new(runtime))
+    }
+    fn render_error(&self) -> Option<String> {
+        if self.rendering {
+            self.render_error
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        } else {
+            None
+        }
     }
     fn revision(&self) -> u64 {
         self.preparation_revision()
@@ -1511,6 +1759,21 @@ impl PluginFactory for Runtime {
         rate: u32,
         block: usize,
     ) -> Result<Box<dyn HostedEffect>, String> {
+        #[cfg(windows)]
+        if self.bridge_enabled {
+            let result = self.bridge_audio(binding, rate);
+            if self.rendering
+                && let Err(error) = &result
+            {
+                *self
+                    .render_error
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(error.clone());
+            }
+            return self
+                .record(binding.target, result)
+                .map(|audio| Box::new(audio) as Box<dyn HostedEffect>);
+        }
         let binding = binding.clone();
         let target = binding.target;
         let jobs = self.jobs.clone();
@@ -1622,6 +1885,21 @@ impl PluginFactory for Runtime {
         rate: u32,
         block: usize,
     ) -> Result<Box<dyn HostedInstrument>, String> {
+        #[cfg(windows)]
+        if self.bridge_enabled {
+            let result = self.bridge_audio(binding, rate);
+            if self.rendering
+                && let Err(error) = &result
+            {
+                *self
+                    .render_error
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(error.clone());
+            }
+            return self
+                .record(binding.target, result)
+                .map(|audio| Box::new(audio) as Box<dyn HostedInstrument>);
+        }
         let binding = binding.clone();
         let target = binding.target;
         let jobs = self.jobs.clone();
