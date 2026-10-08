@@ -30,8 +30,11 @@ import { backend, errorMessage } from "@/lib/ipc"
 import { useEngineStore } from "@/lib/store/engine"
 import { useTransportStore } from "@/lib/store/transport"
 import { useUiStore } from "@/lib/store/ui"
+import { useProjectStore } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
 
 import { Choice, type Option } from "./choice"
+import { useTimelineStore } from "@/features/playlist/timeline-store"
 import { changeExportFormat, FormatControls } from "./format-controls"
 import { StemControls } from "./stem-controls"
 
@@ -68,13 +71,22 @@ function ExportForm({ onDone }: { onDone(): void }) {
     format: "wav",
     bitDepth: "int24",
     sampleRate: useEngineStore.getState().status?.sampleRate ?? 44_100,
-    mode: useTransportStore.getState().mode,
+    mode: useTimelineStore.getState().exportSelection
+      ? "song"
+      : useTransportStore.getState().mode,
     patternLoops: "4",
     tailSecs: "10",
     autoTail: true,
   }))
   const [run, setRun] = useState<Run | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const selectedRegion = useTimelineStore((state) => state.selection)
+  const [selectedOnly, setSelectedOnly] = useState(
+    () => useTimelineStore.getState().exportSelection
+  )
+  useEffect(() => {
+    useTimelineStore.setState({ exportSelection: false })
+  }, [])
   // An empty path is only called out once Export was pressed without one.
   const [pathAsked, setPathAsked] = useState(false)
   const exporting = run !== null && run.error === null
@@ -98,6 +110,10 @@ function ExportForm({ onDone }: { onDone(): void }) {
   const stemsError =
     draft.stems?.tracks?.length === 0 && !draft.stems.includeMix
       ? "Choose at least one track or include the full mix."
+      : null
+  const regionError =
+    draft.mode === "song" && selectedOnly && !selectedRegion
+      ? "The time selection was cleared. Select a region again or turn off region export."
       : null
 
   useEffect(
@@ -154,14 +170,39 @@ function ExportForm({ onDone }: { onDone(): void }) {
     if (patternLoops === null) return focus("export-loops")
     if (tailSecs === null) return focus("export-tail")
     if (stemsError) return focus("export-stem-selection")
+    if (regionError) return
 
-    const options: ExportOptions = { ...draft, path, patternLoops, tailSecs }
+    const options: ExportOptions = {
+      ...draft,
+      path,
+      patternLoops,
+      tailSecs,
+      region:
+        draft.mode === "song" && selectedOnly && selectedRegion
+          ? { ...selectedRegion }
+          : undefined,
+    }
     // The field shows the name the file gets.
     set("path", path)
     sent.current = options
     setCancelling(false)
     setRun({ fraction: 0, error: null })
     try {
+      if (options.region) {
+        const generation = getProjectGeneration()
+        const revision = useProjectStore.getState().revision
+        const source = await backend.timelineState()
+        if (
+          generation !== getProjectGeneration() ||
+          revision !== useProjectStore.getState().revision ||
+          revision !== source.revision
+        )
+          throw new Error(
+            "The project changed before the selected region could be exported. Select the region again."
+          )
+        options.regionGeneration = source.generation
+        options.regionRevision = source.revision
+      }
       await backend.exportAudio(options)
     } catch (error) {
       setRun({ fraction: 0, error: errorMessage(error) })
@@ -221,6 +262,27 @@ function ExportForm({ onDone }: { onDone(): void }) {
         </Field>
 
         <FieldGroup className="grid grid-cols-2 gap-3">
+          <Field orientation="horizontal" className="col-span-2">
+            <Checkbox
+              id="export-selected-region"
+              checked={selectedOnly}
+              disabled={
+                exporting ||
+                draft.mode !== "song" ||
+                (!selectedRegion && !selectedOnly)
+              }
+              onCheckedChange={setSelectedOnly}
+            />
+            <FieldLabel htmlFor="export-selected-region">
+              Export selected song region
+              {selectedRegion
+                ? ` (ticks ${selectedRegion.start}–${selectedRegion.end})`
+                : " (select time in the playlist first)"}
+            </FieldLabel>
+          </Field>
+          {regionError && (
+            <FieldError className="col-span-2">{regionError}</FieldError>
+          )}
           <Field>
             <FieldLabel htmlFor="export-mode">Render</FieldLabel>
             <Choice

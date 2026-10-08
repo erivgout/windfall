@@ -167,6 +167,35 @@ export class GridMetrics {
     this.setViewport(zoomTimeAt(this.viewport, anchorX, factor, this.limits))
   }
 
+  /** Fits absolute dragged ticks in the current logical CSS viewport. */
+  fitRegion(range: { start: number; end: number }): void {
+    if (
+      !Number.isFinite(range.start) ||
+      !Number.isFinite(range.end) ||
+      range.start < 0 ||
+      range.end <= range.start
+    )
+      return
+    const viewport = this.viewport
+    const padding = Math.min(24, viewport.width / 10)
+    const pxPerTick = clamp(
+      (viewport.width - padding * 2) / (range.end - range.start),
+      this.limits.minPxPerTick,
+      this.limits.maxPxPerTick
+    )
+    this.setLimits({
+      contentTicks: Math.max(
+        this.limits.contentTicks,
+        range.end + padding / pxPerTick
+      ),
+    })
+    this.setViewport({
+      ...viewport,
+      pxPerTick,
+      scrollTick: Math.max(0, range.start - padding / pxPerTick),
+    })
+  }
+
   /**
    * Makes rows taller or shorter around the row under `anchorY`. Heights
    * stay whole pixels so the track headers, which the browser lays out,

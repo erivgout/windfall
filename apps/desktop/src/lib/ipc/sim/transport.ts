@@ -118,6 +118,19 @@ function audioClipLevels(project: Project, tick: number): [number, number][] {
  * the tempo, and meters that jump when a note starts and then fall.
  */
 export class TransportSim {
+  region: import("@/bindings").TickRange | null = null
+  navigationOverflows = 0
+  private ignoredPause: number | null = null
+  setRegion(region: import("@/bindings").TickRange | null, project: Project) {
+    this.region = region
+    this.ignoredPause = null
+    if (
+      region &&
+      this.state.mode === "song" &&
+      (this.tick < region.start || this.tick >= region.end)
+    )
+      this.seek(region.start, project)
+  }
   state: TransportState
   /** The playhead. */
   tick = 0
@@ -155,6 +168,9 @@ export class TransportSim {
   }
 
   seek(tick: number, project: Project) {
+    this.ignoredPause = null
+    if (this.state.mode === "song" && this.region)
+      tick = Math.max(this.region.start, Math.min(tick, this.region.end))
     this.position = Number.isFinite(tick) ? Math.max(0, tick) : 0
     this.tick = this.position
     this.keepInRange(project)
@@ -317,6 +333,18 @@ export class TransportSim {
    */
   private keepInRange(project: Project) {
     if (!this.state.playing) return
+    if (this.state.mode === "song" && this.region) {
+      if (this.tick < this.region.start) this.tick = this.region.start
+      if (this.tick >= this.region.end) {
+        if (this.state.loopSong) this.tick = this.region.start
+        else {
+          this.tick = this.region.end
+          this.position = this.tick
+          this.state = { ...this.state, playing: false }
+        }
+      }
+      return
+    }
     const length = this.length(project)
     if (length <= 0) this.finish()
     else if (this.tick >= length) {
@@ -328,12 +356,10 @@ export class TransportSim {
   private step(project: Project, seconds: number): Onset[] {
     this.keepInRange(project)
     if (!this.state.playing) return []
+    if (this.state.mode === "song") return this.stepSong(project, seconds)
     const length = this.length(project)
     const from = this.tick
-    const to =
-      this.state.mode === "song"
-        ? songPosition(project, from, seconds)
-        : from + (seconds * project.settings.tempoBpm * PPQ) / 60
+    const to = from + (seconds * project.settings.tempoBpm * PPQ) / 60
     const pattern = project.patterns.find(
       (item) => item.id === this.state.pattern
     )
@@ -355,6 +381,73 @@ export class TransportSim {
     }
     this.tick = (to - length) % length
     return [...onsets, ...between(0, this.tick)]
+  }
+
+  private stepSong(project: Project, seconds: number): Onset[] {
+    const onsets: Onset[] = []
+    const map = songTempoMap(project)
+    let remaining = seconds
+    for (let transitions = 0; ; transitions += 1) {
+      const end = this.region?.end ?? songLength(project)
+      let boundary = end
+      let action: "pause" | "jump" | "end" = "end"
+      let destination = this.region?.start ?? 0
+      for (const marker of project.playlist.timeline?.markers ?? []) {
+        const kind = marker.kind
+        if (kind.type === "named") continue
+        const at = kind.type === "loop" ? kind.end : marker.tick
+        if (
+          at < this.tick ||
+          at > boundary ||
+          (at === boundary && (!!this.region || action !== "end")) ||
+          at === this.ignoredPause ||
+          (this.region && at < this.region.start) ||
+          (kind.type === "loop" && (this.region || !this.state.loopSong))
+        )
+          continue
+        boundary = at
+        action = kind.type === "pause" ? "pause" : "jump"
+        destination =
+          kind.type === "loop"
+            ? marker.tick
+            : kind.type === "skip"
+              ? kind.end
+              : at
+      }
+      const to = songPosition(project, this.tick, remaining)
+      if (to < boundary) {
+        onsets.push(...songOnsets(project, this.tick, to))
+        this.tick = to
+        break
+      }
+      onsets.push(...songOnsets(project, this.tick, boundary))
+      remaining = Math.max(
+        0,
+        remaining - (map.secondsAt(boundary) - map.secondsAt(this.tick))
+      )
+      this.tick = boundary
+      if (transitions >= 64) {
+        this.navigationOverflows += 1
+        this.position = boundary
+        this.state = { ...this.state, playing: false }
+        break
+      }
+      if (action === "pause" || (action === "end" && !this.state.loopSong)) {
+        if (action === "end" && !this.region) this.finish()
+        else {
+          this.position = boundary
+          this.state = { ...this.state, playing: false }
+          this.ignoredPause = boundary
+        }
+        break
+      }
+      this.ignoredPause = null
+      this.tick = this.region
+        ? Math.min(destination, this.region.end)
+        : destination
+      if (remaining === 0) break
+    }
+    return onsets
   }
 
   /**

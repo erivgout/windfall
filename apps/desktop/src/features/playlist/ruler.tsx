@@ -1,7 +1,12 @@
-import { logicalDelta } from "@/lib/ui-scale"
+import { logicalDelta, UI_SCALE_EVENT } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
-import type { TimeSignature } from "@/bindings"
+import type {
+  TimeSignature,
+  MeterChange,
+  TimelineMarker,
+  TickRange,
+} from "@/bindings"
 import {
   observeCanvas,
   resolveColors,
@@ -28,6 +33,10 @@ import { usePlayhead } from "@/lib/store/realtime"
 import { useSettings } from "@/lib/store/selectors"
 import { useTransportStore } from "@/lib/store/transport"
 import { ticksPerBar, ticksPerBeat } from "@/lib/time"
+import { meterSegments, musicalPosition, rulerLabels } from "@/lib/timeline"
+import { onProjectReplaced } from "@/lib/store/replaced"
+import { TimelineGesture } from "./timeline-gesture"
+import { useTimelineStore } from "./timeline-store"
 
 import { snapNearest, songEnd } from "./edit"
 import { wheelInput, type GridMetrics } from "./metrics"
@@ -46,7 +55,6 @@ type RulerColors = typeof RULER_COLORS
 /** Bar numbers get at least this much room each, in CSS pixels. */
 const MIN_LABEL_SPACING = 46
 const MIN_BEAT_SPACING = 7
-const MIN_BAR_SPACING = 5
 
 /** How many bars one number stands for: 1 zoomed in, then 2, 4, 8 and so on. */
 export function barsPerLabel(barPx: number): number {
@@ -64,17 +72,23 @@ function drawRuler(
   size: CanvasSize,
   viewport: Viewport,
   signature: TimeSignature,
+  meters: readonly MeterChange[],
+  markers: readonly TimelineMarker[],
+  selection: TickRange | null,
   end: number,
   colors: RulerColors
 ): void {
   const { pixelWidth: width, pixelHeight: height, dpr } = size
   const transform = deviceTransform({ ...viewport, dpr })
   const lw = transform.lineWidth
-  const bar = ticksPerBar(signature)
-  const beat = ticksPerBeat(signature)
   const ticks = visibleTicks(viewport)
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, width, height)
+  if (selection) {
+    ctx.fillStyle = colors.after
+    const left = deviceX(transform, selection.start)
+    ctx.fillRect(left, 0, deviceX(transform, selection.end) - left, height)
+  }
 
   const endX = deviceX(transform, end)
   if (end > 0 && endX < width) {
@@ -83,36 +97,50 @@ function drawRuler(
   }
 
   ctx.fillStyle = colors.line
-  if (beat * viewport.pxPerTick >= MIN_BEAT_SPACING) {
+  for (const segment of meterSegments(signature, meters)) {
+    const beat = ticksPerBeat(segment.signature)
+    const bar = ticksPerBar(segment.signature)
+    if (beat * viewport.pxPerTick < MIN_BEAT_SPACING) continue
     const mark = Math.round(4 * dpr)
-    const first = Math.max(0, Math.floor(ticks.start / beat) * beat)
-    for (let tick = first; tick <= ticks.end; tick += beat) {
-      if (tick % bar === 0) continue
+    const first =
+      segment.start +
+      Math.max(0, Math.floor((ticks.start - segment.start) / beat) * beat)
+    for (
+      let tick = first;
+      tick <= ticks.end && tick < segment.end;
+      tick += beat
+    ) {
+      if ((tick - segment.start) % bar === 0) continue
       ctx.fillRect(deviceX(transform, tick), height - mark, lw, mark)
     }
   }
 
-  const barPx = bar * viewport.pxPerTick
-  const labelEvery = barsPerLabel(barPx)
-  const step = barPx >= MIN_BAR_SPACING ? 1 : labelEvery
-  const firstBar = Math.floor(Math.max(0, ticks.start) / bar / step) * step
-  const shortMark = Math.round(8 * dpr)
   ctx.font = `500 ${Math.round(10 * dpr)}px "Inter Variable", system-ui, sans-serif`
   ctx.textBaseline = "middle"
-  for (let index = firstBar; index * bar <= ticks.end; index += step) {
-    const x = deviceX(transform, index * bar)
-    const labelled = index % labelEvery === 0
+  for (const label of rulerLabels(
+    ticks.start,
+    ticks.end,
+    viewport.pxPerTick,
+    signature,
+    meters
+  )) {
+    const x = deviceX(transform, label.tick)
     ctx.fillStyle = colors.line
-    if (labelled) ctx.fillRect(x, 0, lw, height)
-    else ctx.fillRect(x, height - shortMark, lw, shortMark)
-    if (labelled) {
-      ctx.fillStyle = colors.ink
-      ctx.fillText(
-        String(index + 1),
-        x + Math.round(4 * dpr),
-        Math.round(height / 2 - dpr)
-      )
-    }
+    ctx.fillRect(x, 0, lw, height)
+    ctx.fillStyle = colors.ink
+    ctx.fillText(
+      String(label.bar),
+      x + Math.round(4 * dpr),
+      Math.round(height / 2 - dpr)
+    )
+  }
+
+  for (const marker of markers) {
+    const x = deviceX(transform, marker.tick)
+    if (x < 0 || x >= width) continue
+    ctx.fillStyle = colors.end
+    ctx.fillRect(x, 0, lw * 2, height)
+    ctx.fillText(marker.name, x + 4 * dpr, height - 5 * dpr, 140 * dpr)
   }
 
   if (end > 0 && endX >= 0 && endX < width) {
@@ -159,6 +187,11 @@ function placeMarker(
  */
 export function Ruler({ metrics }: { metrics: GridMetrics }) {
   const signature = useSettings().timeSignature
+  const timeline = useProjectStore((state) => state.project.playlist.timeline)
+  const tool = useTimelineStore((state) => state.tool)
+  const selection = useTimelineStore((state) => state.draft ?? state.selection)
+  const gesture = useRef<TimelineGesture | null>(null)
+  const drag = useRef<"seek" | "region" | null>(null)
   const end = useProjectStore((state) => songEnd(state.project.playlist.clips))
   const mode = useTransportStore((state) => state.mode)
   const loop = useTransportStore((state) => state.loopSong)
@@ -198,7 +231,18 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
     let frame = 0
     const draw = () => {
       frame = 0
-      if (size) drawRuler(ctx, size, metrics.viewport, signature, end, colors)
+      if (size)
+        drawRuler(
+          ctx,
+          size,
+          metrics.viewport,
+          signature,
+          timeline?.meters ?? [],
+          timeline?.markers ?? [],
+          selection,
+          end,
+          colors
+        )
     }
     // Several scroll events can arrive within one frame.
     const schedule = () => {
@@ -219,7 +263,35 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
       cancelAnimationFrame(frame)
       for (const stop of stops) stop()
     }
-  }, [metrics, signature, end])
+  }, [metrics, signature, timeline, selection, end])
+
+  useEffect(() => {
+    const cancel = () => {
+      gesture.current?.cancel()
+      gesture.current = null
+      drag.current = null
+    }
+    window.addEventListener("blur", cancel)
+    window.addEventListener("resize", cancel)
+    window.addEventListener(UI_SCALE_EVENT, cancel)
+    const stops = [
+      onProjectReplaced(cancel),
+      metrics.subscribe(cancel),
+      useTimelineStore.subscribe((state, prior) => {
+        if (state.tool !== prior.tool) cancel()
+      }),
+      useProjectStore.subscribe((state, prior) => {
+        if (state.revision !== prior.revision) cancel()
+      }),
+    ]
+    return () => {
+      cancel()
+      window.removeEventListener("blur", cancel)
+      window.removeEventListener("resize", cancel)
+      window.removeEventListener(UI_SCALE_EVENT, cancel)
+      stops.forEach((stop) => stop())
+    }
+  }, [metrics])
 
   useEffect(() => {
     const root = rootRef.current
@@ -261,6 +333,12 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
       disabled: end === 0,
     },
     contextSeparator,
+    "playlist.playSelection",
+    "playlist.loopSelection",
+    "playlist.zoomRegion",
+    "playlist.exportRegion",
+    "playlist.clearRegion",
+    contextSeparator,
     "playlist.zoomToFit",
     {
       title: loop ? "Stop at the end of the song" : "Loop the song",
@@ -281,26 +359,87 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
         aria-valuemin={0}
         aria-valuemax={Math.max(end, 1)}
         aria-valuenow={cursor}
-        aria-valuetext={`Bar ${Math.floor(cursor / ticksPerBar(signature)) + 1}`}
+        aria-valuetext={`Bar ${musicalPosition(cursor, signature, timeline?.meters).bar}`}
+        tabIndex={0}
         data-mode={mode}
         className="relative cursor-pointer overflow-hidden border-b bg-chassis/30"
+        {...hint}
         onPointerDown={(event) => {
           if (event.button !== 0) return
+          event.currentTarget.focus()
           event.currentTarget.setPointerCapture(event.pointerId)
           lastSeek.current = null
-          seekAt(event)
+          const chosen = event.shiftKey ? "select" : tool
+          drag.current = chosen === "seek" ? "seek" : "region"
+          if (chosen === "seek") seekAt(event)
+          else
+            gesture.current = new TimelineGesture(
+              metrics,
+              logicalDelta(
+                event.clientX - event.currentTarget.getBoundingClientRect().left
+              ),
+              chosen
+            )
         }}
         onPointerMove={(event) => {
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            seekAt(event)
+            if (gesture.current)
+              gesture.current.update(
+                logicalDelta(
+                  event.clientX -
+                    event.currentTarget.getBoundingClientRect().left
+                )
+              )
+            else if (drag.current === "seek") seekAt(event)
           }
         }}
         onPointerUp={(event) => {
+          gesture.current?.finish(
+            logicalDelta(
+              event.clientX - event.currentTarget.getBoundingClientRect().left
+            )
+          )
+          gesture.current = null
+          drag.current = null
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId)
           }
         }}
-        {...hint}
+        onPointerCancel={() => {
+          gesture.current?.cancel()
+          gesture.current = null
+          drag.current = null
+        }}
+        onLostPointerCapture={() => {
+          gesture.current?.cancel()
+          gesture.current = null
+          drag.current = null
+        }}
+        onBlur={() => {
+          hint.onBlur?.()
+          gesture.current?.cancel()
+          gesture.current = null
+          drag.current = null
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && drag.current) {
+            event.preventDefault()
+            event.stopPropagation()
+            gesture.current?.cancel()
+            gesture.current = null
+            drag.current = null
+          }
+          if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+            event.preventDefault()
+            void seekSong(
+              Math.max(
+                0,
+                cursor +
+                  (event.key === "ArrowRight" ? 1 : -1) * currentSnapTicks()
+              )
+            )
+          }
+        }}
       >
         <canvas ref={canvasRef} className="absolute inset-0 size-full" />
         <div

@@ -1,14 +1,20 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { toast } from "sonner"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { Backend } from "@/lib/ipc"
 import { useUiStore } from "@/lib/store/ui"
+import { dispatch } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
 import { settle, startTestApp } from "@/test/harness"
 
 import { ExportDialog } from "./export-dialog"
 import { cleanExportPath, parsePatternLoops, parseTailSecs } from "./names"
+import {
+  selectTimelineRegion,
+  useTimelineStore,
+} from "@/features/playlist/timeline-store"
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
@@ -36,6 +42,112 @@ async function exportTo(user: ReturnType<typeof userEvent.setup>) {
 const exportButton = () => screen.getByRole("button", { name: "Export" })
 
 describe("pressing Export", () => {
+  it("refuses an edit while the selected export source query is pending", async () => {
+    const user = userEvent.setup()
+    const exported = vi.spyOn(backend, "exportAudio")
+    await act(async () => {
+      await selectTimelineRegion({ start: 17, end: 839 })
+    })
+    await user.click(screen.getByRole("combobox", { name: "Render" }))
+    await user.click(
+      await screen.findByRole("option", { name: "The whole song" })
+    )
+    await user.click(
+      screen.getByRole("checkbox", { name: /Export selected song region/ })
+    )
+    await user.click(screen.getByRole("button", { name: "Choose…" }))
+    const source = await backend.timelineState()
+    let release = () => {}
+    const query = vi.spyOn(backend, "timelineState").mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(source)
+        })
+    )
+    await user.click(exportButton())
+    expect(query).toHaveBeenCalledOnce()
+    await act(async () => {
+      await dispatch({
+        type: "addMeterChange",
+        tick: 4001,
+        signature: { numerator: 7, denominator: 8 },
+      })
+      release()
+      await settle()
+    })
+    expect(exported).not.toHaveBeenCalled()
+    expect(
+      screen.getByText(/The project changed before the selected region/)
+    ).toHaveAttribute("role", "alert")
+  })
+
+  it("keeps legacy whole-song export unless the region option is explicitly checked", async () => {
+    const user = userEvent.setup()
+    const exported = vi.spyOn(backend, "exportAudio")
+    const sourceQuery = vi.spyOn(backend, "timelineState")
+    await act(async () => {
+      await selectTimelineRegion({ start: 17, end: 839 })
+    })
+    await user.click(screen.getByRole("combobox", { name: "Render" }))
+    await user.click(
+      await screen.findByRole("option", { name: "The whole song" })
+    )
+    expect(
+      screen.getByRole("checkbox", { name: /Export selected song region/ })
+    ).not.toBeChecked()
+    await exportTo(user)
+    expect(exported).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "song", region: undefined })
+    )
+    expect(exported.mock.calls[0][0].regionGeneration).toBeUndefined()
+    expect(exported.mock.calls[0][0].regionRevision).toBeUndefined()
+    expect(sourceQuery).not.toHaveBeenCalled()
+  })
+
+  it("exports a copied range and refuses a cleared selection instead of exporting the whole song", async () => {
+    const user = userEvent.setup()
+    const exported = vi.spyOn(backend, "exportAudio").mockResolvedValue()
+    await act(async () => {
+      await selectTimelineRegion({ start: 17, end: 839 })
+    })
+    await user.click(screen.getByRole("combobox", { name: "Render" }))
+    await user.click(
+      await screen.findByRole("option", { name: "The whole song" })
+    )
+    await user.click(
+      screen.getByRole("checkbox", { name: /Export selected song region/ })
+    )
+    await act(async () => {
+      await selectTimelineRegion(null)
+    })
+    await exportTo(user)
+    expect(exported).not.toHaveBeenCalled()
+    expect(screen.getByText(/The time selection was cleared/)).toHaveAttribute(
+      "role",
+      "alert"
+    )
+    await act(async () => {
+      await selectTimelineRegion({ start: 17, end: 839 })
+    })
+    const selected = useTimelineStore.getState().selection
+    const canonical = {
+      ...(await backend.timelineState()),
+      // Backend document generations are independent of the UI replacement epoch.
+      generation: getProjectGeneration() + 1000,
+    }
+    vi.spyOn(backend, "timelineState").mockResolvedValueOnce(canonical)
+    await user.click(exportButton())
+    const sent = exported.mock.calls[0][0]
+    expect(sent.regionGeneration).toBe(canonical.generation)
+    expect(sent.regionRevision).toBe(canonical.revision)
+    expect(sent.region).toEqual({ start: 17, end: 839 })
+    expect(sent.region).not.toBe(selected)
+    await act(async () => {
+      await selectTimelineRegion({ start: 5, end: 80 })
+    })
+    expect(sent.region).toEqual({ start: 17, end: 839 })
+  })
+
   it("says a tail is out of range instead of doing nothing", async () => {
     const user = userEvent.setup()
     const exported = vi.spyOn(backend, "exportAudio")
