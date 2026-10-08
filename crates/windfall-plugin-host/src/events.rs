@@ -145,12 +145,55 @@ impl Transport {
             None => (0.0, 0.0),
         };
         let width = f64::from(self.numerator) * 4.0 / f64::from(self.denominator);
-        let relative_bar = ((self.position_beats - origin) / width).floor();
+        let mut relative_bar = ((self.position_beats - origin) / width).floor();
+        let bar_start = if self.meter_anchor.is_some() {
+            if !relative_bar.is_finite()
+                || !(0.0..=f64::from(i32::MAX) + 1.0).contains(&relative_bar)
+            {
+                return None;
+            }
+            // Song anchors originate on the 960-PPQ grid. Reconstruct that
+            // grid only when division reproduces the supplied anchor exactly.
+            // Comparing absolute downbeats avoids cancellation in (pos-origin),
+            // without an epsilon that would promote a genuinely earlier frame.
+            const PPQ: f64 = 960.0;
+            const MAX_EXACT_TICK: f64 = (1_u64 << 53) as f64;
+            let origin_tick = (origin * PPQ).round();
+            let width_ticks = width * PPQ;
+            let tick_grid = origin_tick <= MAX_EXACT_TICK
+                && origin_tick / PPQ == origin
+                && width_ticks >= 1.0
+                && width_ticks == width_ticks.round();
+            let downbeat = |bar: f64| {
+                if tick_grid {
+                    let tick = origin_tick + bar * width_ticks;
+                    (0.0..=MAX_EXACT_TICK).contains(&tick).then_some(tick / PPQ)
+                } else {
+                    Some(bar.mul_add(width, origin))
+                }
+            };
+            if self.position_beats < downbeat(relative_bar)? {
+                relative_bar -= 1.0;
+            }
+            if self.position_beats >= downbeat(relative_bar + 1.0)? {
+                relative_bar += 1.0;
+            }
+            let start = downbeat(relative_bar)?;
+            let end = downbeat(relative_bar + 1.0)?;
+            // At most one correction in either direction; unrepresentable
+            // boundaries refuse rather than spin or manufacture a valid bar.
+            if relative_bar < 0.0 || !(start <= self.position_beats && self.position_beats < end) {
+                return None;
+            }
+            start
+        } else {
+            origin + relative_bar * width
+        };
         let bar = index + relative_bar;
         if !bar.is_finite() || bar < f64::from(i32::MIN) || bar > f64::from(i32::MAX) {
             return None;
         }
-        Some((origin + relative_bar * width, bar as i32))
+        Some((bar_start, bar as i32))
     }
 
     /// Moves the position on by `frames` at `sample_rate`, if the song is
@@ -168,6 +211,90 @@ impl Transport {
 #[cfg(test)]
 mod meter_tests {
     use super::*;
+
+    #[test]
+    fn tick_grid_boundaries_do_not_round_preceding_positions_forward() {
+        for origin_tick in [1_u32, 485, 4_001, 1_000_001, u32::MAX - 20_000] {
+            for (numerator, denominator, width_ticks) in [
+                (1, 16, 240),
+                (7, 16, 1_680),
+                (7, 8, 3_360),
+                (4, 4, 3_840),
+                (3, 2, 5_760),
+            ] {
+                for relative_bar in [1_u32, 2, 3] {
+                    let tick = origin_tick + relative_bar * width_ticks;
+                    let boundary = f64::from(tick) / 960.0;
+                    let preceding = f64::from(tick - width_ticks) / 960.0;
+                    let transport = Transport {
+                        position_beats: boundary,
+                        numerator,
+                        denominator,
+                        meter_anchor: Some(MeterAnchor {
+                            bar_origin_beats: f64::from(origin_tick) / 960.0,
+                            bar_origin_index: 2,
+                        }),
+                        ..Transport::default()
+                    };
+                    assert_eq!(
+                        transport.bar_position(),
+                        Some((boundary, 2 + relative_bar as i32))
+                    );
+                    assert_eq!(
+                        Transport {
+                            position_beats: boundary.next_down(),
+                            ..transport
+                        }
+                        .bar_position(),
+                        Some((preceding, 1 + relative_bar as i32))
+                    );
+                    assert_eq!(
+                        Transport {
+                            position_beats: boundary.next_up(),
+                            ..transport
+                        }
+                        .bar_position(),
+                        Some((boundary, 2 + relative_bar as i32))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_grid_anchors_and_native_index_bounds_remain_checked() {
+        let anchor = MeterAnchor {
+            bar_origin_beats: 0.123,
+            bar_origin_index: 1,
+        };
+        let boundary = 3.5_f64 + anchor.bar_origin_beats;
+        let mut transport = Transport {
+            position_beats: boundary.next_down(),
+            numerator: 7,
+            denominator: 8,
+            meter_anchor: Some(anchor),
+            ..Transport::default()
+        };
+        assert_eq!(transport.bar_position(), Some((anchor.bar_origin_beats, 1)));
+        transport.position_beats = boundary;
+        assert_eq!(transport.bar_position(), Some((boundary, 2)));
+        transport.meter_anchor = Some(MeterAnchor {
+            bar_origin_beats: 485.0 / 960.0,
+            bar_origin_index: i32::MAX as u32,
+        });
+        transport.position_beats = (3845.0_f64 / 960.0).next_down();
+        assert_eq!(transport.bar_position(), Some((485.0 / 960.0, i32::MAX)));
+        transport.position_beats = 3845.0 / 960.0;
+        assert_eq!(transport.bar_position(), None);
+        transport.position_beats = (3845.0_f64 / 960.0).next_up();
+        assert_eq!(transport.bar_position(), None);
+        transport.meter_anchor = Some(MeterAnchor {
+            bar_origin_beats: f64::MAX,
+            bar_origin_index: 0,
+        });
+        transport.position_beats = f64::MAX;
+        assert_eq!(transport.bar_position(), None);
+    }
 
     #[test]
     fn checked_bar_bounds_and_advance_preserve_the_segment_anchor() {
