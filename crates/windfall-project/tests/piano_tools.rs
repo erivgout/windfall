@@ -1,6 +1,9 @@
 use windfall_project::piano_tools::{MAX_TOOL_NOTES, transform_selected_notes};
 use windfall_project::*;
 
+#[path = "piano_tools/rhythm.rs"]
+mod rhythm;
+
 fn note(id: u32, start: u32, length: u32, key: u8) -> Note {
     Note {
         id: NoteId(id),
@@ -164,8 +167,11 @@ fn flips_are_involutions_and_preserve_lengths_properties() {
     assert_eq!(flipped, [note(2, 100, 150, 127), note(1, 340, 50, 100)]);
     for tool in [NoteTransform::FlipTime, NoteTransform::FlipPitch] {
         assert_eq!(
-            transform_selected_notes(&transform_selected_notes(&notes, tool).unwrap(), tool)
-                .unwrap(),
+            transform_selected_notes(
+                &transform_selected_notes(&notes, tool.clone()).unwrap(),
+                tool
+            )
+            .unwrap(),
             notes
         );
     }
@@ -446,7 +452,7 @@ fn each_tool_is_one_atomic_undoable_persistable_command() {
             pattern: PatternId(1),
             channel,
             notes,
-            transform,
+            transform: transform.clone(),
         };
         let encoded = serde_json::to_string(&command).unwrap();
         let applied = doc
@@ -657,7 +663,7 @@ fn every_parameter_is_checked_and_results_are_order_independent() {
         },
     ] {
         assert_eq!(
-            transform_selected_notes(&notes, transform),
+            transform_selected_notes(&notes, transform.clone()),
             transform_selected_notes(&[notes[1], notes[0], notes[1]], transform)
         );
     }
