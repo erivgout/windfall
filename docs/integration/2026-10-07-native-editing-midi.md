@@ -785,3 +785,66 @@ This is a checked development checkpoint with the utility issue explicitly
 open. No new parity row, release or full-project acceptance is claimed.
 The private repository and immutable `v0.1.0-alpha.1` assets were rechecked;
 the collaborator write invitation remains pending.
+
+## 2026-10-08 usable filter registry and remaining review findings
+
+The checked development checkpoint `ca59fd67` was pushed to private GitHub
+main; the alpha tag and its dereferenced commit remain unchanged. CI run
+37735236422 is still running. Its completed parity, simulator and macOS
+binding checks passed; this is not a full remote CI pass.
+
+E1 registry `25b692b3` is integrated as `22794f02`. The mechanical engine
+exhaustiveness and access-test keys are in `caeef779`. Fresh root compilation
+passed **299 DSP tests**, with four existing optional tests ignored, plus the
+engine's actual all-kind allocator guard. All-target strict Clippy for
+DSP/project/engine/desktop, workspace formatting and whitespace checks passed.
+Root generated and independently compared all **174 bindings and fixtures**.
+The matching simulator is 1,881,168 bytes, SHA-256
+`9feb181f0a3d6aed64d9aabd26c61cedcf015b1437889bfa5ca7b309d18dde3a`;
+source-input SHA-256 is
+`26ac50ad9e44561b20ca18d811b00fc8f66e98082d9ecbe89580c07791cc250f`.
+Fresh composed UI execution passed **304 tests in nine files**, typecheck,
+lint and production build. Native logs are
+`windfall-root-e1-registry-native.log` and
+`windfall-root-e1-registry-composed.log`. The artifact command's process handle
+was already absent on its final poll; its logged engine/generation/build
+results and subsequent direct freshness/comparison checks establish those
+individual results, without inventing a group exit receipt.
+
+The E1 owner reports four project, five independent signal/engine and ten
+new UI cases passing. Its additional interrupted-removal restoration case
+fails on the owner's older utility composition and remains active. Root must
+run that exact fixture against the accepted utility composition before filter
+parity acceptance. These new downstream tests are not yet integrated.
+
+Utility R6 `6d80370e` has a clean independent R7 verdict: 107 attributable
+cached native cases passed, including the compiled detached-owner regression
+with zero cancellation residual. Root integration and checks are next;
+the root-only fallible preparation adapters remain test changes. Existing
+branch/topology phase limits and one-second compensation bounds remain.
+
+T1 independent R2 found pending Play committing while Clear awaits a query,
+hidden retained ranges after refused clears, and retained native ranges hidden
+after frontend reload. The same owner is implementing matched Play ownership,
+atomic cancellation/region publication and canonical UI hydration/refusal
+recovery. Four narrow legacy transport metadata hooks were approved; no
+controller or engine transport changes are included in that window.
+
+M1 R1 found untracked publication temporaries after failed cleanup, uncharged
+manifest capacities, allocations at final commit seams, sanitized nonfinite
+encoded outputs and Windows filename alias collisions. All five are assigned
+to its existing owner. An additive strict codec decode entry point is approved
+while ordinary import decoding remains unchanged. Session attachment stays
+closed until the foundation is accepted.
+
+N4 R3 supports the earlier trigger closures but found a fixed helper receive
+deadline with a sleep after successful reads, and native state wrapper bytes
+crossing the wire cap. The owner is reproducing both and repairing progress
+draining/startup budget alignment and complete wrapped-size refusal.
+Production activation remains closed.
+
+A new E3 implementation task owns an echo bank and sixteen-band delay's pure
+DSP modules and tests. Registry, project, engine and UI wiring remain later
+serialized windows. Release candidate tooling continues in its separate
+worktree. No additional parity completion, release or hardware verification
+is claimed.

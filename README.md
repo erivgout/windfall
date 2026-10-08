@@ -22,6 +22,8 @@ Channel samplers support forward and ping-pong loops with editable points, note 
 
 Mixer chains include balance, DC removal, channel mute, polarity, stereo matrix with channel delays, soft clipping and oversampled distortion. Matrix insertion, routing-compensation and tail-accounting repairs remain in progress. See `docs/UTILITY-EFFECTS.md`.
 
+Mixer chains also include a resonant lowpass, a seven-mode filter and a bass shelf, with generated controls and checked automation parameters. DSP and composed control checks passed; focused engine/export and interrupted-restoration integration are still being verified. See `docs/FILTER-FAMILY.md`.
+
 The Windows app hosts CLAP and VST3 instruments and effects with a plugin manager, parameter automation and saved state. Native state capture defers during recording, preserves current note/parameter intent during ownership exchange, and reports native lifecycle refusal. Review and native regressions closed save-before-drain capture, bundle binary validation, multi-channel panic, document-adoption and VST3 parameter-overflow cases. Native VST3 editor windows and installed external plugins remain unverified. Native hosting on macOS/Linux remains unfinished; audio and state process isolation is under implementation, with watchdog, acknowledgement, capture and helper-authentication repairs required before desktop activation. See `docs/plugins/desktop-integration.md`, `docs/plugins/vst3-desktop.md` and `docs/plugins/runtime-repairs.md`.
 
 Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.

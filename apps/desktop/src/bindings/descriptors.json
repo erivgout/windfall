@@ -32,6 +32,38 @@
         }
       ]
     },
+    "bassShelf": {
+      "defaults": {
+        "frequencyHz": 150.0,
+        "gainDb": 0.0,
+        "type": "bassShelf"
+      },
+      "name": "Bass shelf",
+      "params": [
+        {
+          "choices": [],
+          "default": 150.0,
+          "id": "frequencyHz",
+          "kind": "float",
+          "max": 1000.0,
+          "min": 40.0,
+          "name": "Frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "gainDb",
+          "kind": "float",
+          "max": 18.0,
+          "min": 0.0,
+          "name": "Boost",
+          "scale": "linear",
+          "unit": "decibels"
+        }
+      ]
+    },
     "channelMute": {
       "defaults": {
         "left": false,
@@ -843,6 +875,38 @@
         }
       ]
     },
+    "fastLowpass": {
+      "defaults": {
+        "cutoffHz": 20000.0,
+        "q": 0.7071067690849304,
+        "type": "fastLowpass"
+      },
+      "name": "Fast lowpass",
+      "params": [
+        {
+          "choices": [],
+          "default": 20000.0,
+          "id": "cutoffHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Cutoff",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.7071067690849304,
+          "id": "q",
+          "kind": "float",
+          "max": 10.0,
+          "min": 0.5,
+          "name": "Resonance",
+          "scale": "logarithmic",
+          "unit": "ratio"
+        }
+      ]
+    },
     "limiter": {
       "defaults": {
         "ceilingDb": -0.30000001192092896,
@@ -1068,6 +1132,91 @@
           "name": "Mix",
           "scale": "linear",
           "unit": "fraction"
+        }
+      ]
+    },
+    "selectableFilter": {
+      "defaults": {
+        "frequencyHz": 1000.0,
+        "gainDb": 0.0,
+        "mode": "lowpass",
+        "q": 0.7071067690849304,
+        "type": "selectableFilter"
+      },
+      "name": "Selectable filter",
+      "params": [
+        {
+          "choices": [
+            {
+              "label": "Lowpass",
+              "value": "lowpass"
+            },
+            {
+              "label": "Highpass",
+              "value": "highpass"
+            },
+            {
+              "label": "Bandpass",
+              "value": "bandpass"
+            },
+            {
+              "label": "Notch",
+              "value": "notch"
+            },
+            {
+              "label": "Low shelf",
+              "value": "lowShelf"
+            },
+            {
+              "label": "Peak",
+              "value": "peak"
+            },
+            {
+              "label": "High shelf",
+              "value": "highShelf"
+            }
+          ],
+          "default": 0.0,
+          "id": "mode",
+          "kind": "choice",
+          "max": 6.0,
+          "min": 0.0,
+          "name": "Mode",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1000.0,
+          "id": "frequencyHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Frequency",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 0.7071067690849304,
+          "id": "q",
+          "kind": "float",
+          "max": 10.0,
+          "min": 0.5,
+          "name": "Resonance",
+          "scale": "logarithmic",
+          "unit": "ratio"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "gainDb",
+          "kind": "float",
+          "max": 18.0,
+          "min": -18.0,
+          "name": "Gain",
+          "scale": "linear",
+          "unit": "decibels"
         }
       ]
     },
