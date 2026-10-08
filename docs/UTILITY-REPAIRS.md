@@ -7,6 +7,9 @@ findings on the repair base before their corresponding fixes.
 The first repair is `99792c909c82e69c49dea60f223759aa99f1a72c`. The second
 round integrates parent `bde3fd77dacdd9c1d4c92cf3a77e5c4d1d1eab55`, which
 already contains that repair and the other accepted parent changes.
+The second repair is `1e0fa52512031c351da0a1c6541786abec5bb805`.
+The third review independently executed the four pinned R2 cases at that
+commit successfully, then identified the three history/splice gaps below.
 
 ## Reproductions and behavior
 
@@ -98,14 +101,88 @@ and enabled/bypassed hosted slots cancel throughout repeated changes; the
 factory creates one instance, and guarded callbacks make zero allocator
 calls. This is engine hosting evidence, not native plugin/OS verification.
 
+## Third review: compiled reproductions
+
+Each exact R3 regression failed natively before its corresponding fix.
+The values here are measured test failures, replacing the review's predicted
+source traces. The earlier R1/R2 regressions and their thresholds remain.
+
+1. **Departing fixed stages:** opposite 0.25-amplitude 500 Hz sampler tracks,
+   with one containing a settled 1/1 ms matrix followed by an idle 1 ms
+   limiter, were processed for 4092 frames. Limiter removal produced first
+   residual `-0.35355338`, with peak `0.47606185` over the splice. Layout now
+   retains departing limiter, hosted-plugin and other fixed-delay stages at
+   a zero target while the rack fades them out. Retired plugin latency comes
+   from the held native ledger even after its binding leaves the project.
+   Tests remove enabled/bypassed limiters and real hosted 32-frame delays
+   before, between and after two matrices, with irregular blocks and zero
+   callback allocator calls.
+2. **Reference history:** three constant-one tracks A/B/C, with A at 1/1 ms,
+   B at 0/0 ms and C plain, were processed for 4092 frames. Setting B to
+   2/2 ms reduced the expected sum 3 to `2.6041667`. New staged references
+   now inherit the aggregate raw input history, and subsequent unmatched
+   stages reconstruct their required input from the preceding retained
+   stage. Only actually retained causal history is marked valid. A repeated
+   short-history reference test then exposed scalar fallback reading beyond
+   its history (`2.975` instead of 3); that path now waits for valid history
+   too. Repeated reference switches preserve unity from both 64 and 4092
+   priming frames, including larger pending targets and irregular blocks.
+3. **Short history after reset:** a prepared full-wet 0/0 ms slot processed
+   64 constant-one samples, then requested 50/50 ms. The minimum output
+   was zero. Matrix wet and dry taps now retain their previous audible
+   transfer until both new channel taps have enough actual input history.
+   Compensation uses the same readiness threshold, separate from the
+   minimum-channel PDC figure. Tests preserve unity through the wait and
+   fade at full/half/dry/bypassed policies, reset/reprepare and irregular
+   blocks. An impulse proves the final 2400-frame tap is applied. Opposite
+   sampler tracks cancel through a 5-to-50 ms request during the wait,
+   repeated reset/replay and eventual shorter targets; solo output remains
+   audible. These callbacks also make zero alloc/realloc/free calls.
+
+Source addition/replay, channel and matrix moves, matrix insertion/removal,
+and source removal have constant-input and guarded callback coverage. The
+transport's intentional restart fade and actual earlier source silence are
+kept distinct from unavailable history in a newly constructed delay line.
+
+A further compiled solo test exposed a departing splice interrupted by an
+unrelated plan: at removal frame 80, changing an unused track's fader
+produced adjacent step `0.09216105`, above the 0.04 bound for this
+0.25-amplitude 500 Hz tone plus its 240-frame splice. Cancellation alone
+had missed this because both the rack and compensation dropped together.
+With the parent's narrow `Plan::keep_leaving` reservation, each effect now
+shares a progress marker with its rack slot. Heard departures keep their
+definitions across successive plans; the fade is not restarted. Completion
+is published without a lock, and the next control-side plan excludes the
+definition and its latency record. The native owner then retires through
+the existing control-side garbage collection path.
+
+The marker carries no owner handle or authority. A concrete prepared slot
+also tracks whether that owner has actually been heard. Never-heard slots
+are omitted or dropped without a departure fade, so speculative preparation
+and a revised native factory cannot activate a future owner as a leaver.
+Departing plugin latency is stored separately from active reuse metadata;
+restoring a removed native id prepares a new active owner. Tests check 40
+successive unrelated plans, eventual single native destruction off callback,
+40 speculative preparations with zero native processing and all 40 retired,
+native revision replacement, restored ids, and progress after a track move
+or unrelated factory change. Active project slots retain their existing
+limit; departing history lasts only its actual finite splice, rather than
+accumulating completed or never-heard definitions across edits. Pending
+message/garbage storage still follows the existing controller queue policy.
+
 ## Transition policy and bounds
 
-Each retarget freezes the current tap mixture at its current weights and
-starts a new 5 ms linear fade to the latest whole-sample destination. An
-unchanged target does not restart a fade. There is no queue or discarded
-partially audible destination. Five milliseconds after the **last** edit,
-the output uses exactly its requested tap; reset immediately takes the
-latest settings and clears all historical tap contributions.
+When history is ready, a retarget freezes the current tap mixture at its
+current weights and starts a new 5 ms linear fade to the latest whole-sample
+destination. An unchanged target does not restart a fade. If history is
+short, one pending setting holds the latest request while the old transfer
+continues sounding and collecting input. Repeated requests coalesce into
+that setting; they never replace a partially audible destination. An
+increase extends readiness, and a shorter target can become ready sooner.
+Five milliseconds after the **last** request is both accepted and ready,
+the output uses exactly its requested tap. Reset takes the latest configured
+taps immediately, clears history and pending contributions, and preserves
+the initial configured processor latency.
 
 The prepared vector reserves one entry for every legal whole-sample tap.
 Entries with the same delay merge, so edits cannot grow storage beyond
@@ -165,11 +242,20 @@ measurement. A zero-delay reference consumes prepared history and work
 even before its first delayed edit; a project without delayed processors
 still constructs no compensation lines.
 
-There is no settings queue. Each matrix stage reaches its exact latest tap
-5 ms after its last edit. At the route output, completion additionally
+Each matrix stage has one bounded pending target while its input fills and
+reaches its exact latest tap 5 ms after that target becomes ready. Prepared
+wet/dry counters and compensation validity saturate at their storage bounds.
+A request made during an unheard rack insertion also waits for its inner
+tap fade to finish before the outer splice starts, keeping compensation
+and the resulting outer transfer synchronized. At the route output, completion additionally
 waits for downstream shared delay to carry the last upstream fade samples.
 Overlapping edits in an unchanged eligible serial route retain all currently
 audible contributions and synchronize wet, dry and compensation clocks.
+Changing reference topology reconstructs new stage input using a bounded
+snapshot of retained preceding tap weights. This preserves constant unity
+but is not an inverse of an arbitrary varying filter; the phase limits
+below still apply. History reconstruction costs at most the retained frame
+count times the preceding stage's prepared tap bound, on plan adoption.
 
 **Exact transient cancellation has a defined boundary:** two independently
 varying branches generally cannot be factored into one another by a causal
@@ -256,3 +342,44 @@ The badge does not include live native plugin latency: project bindings do
 not contain that runtime figure. Post-repair worst-case device deadline,
 hardware listening and platform walkthroughs remain external checks; the
 original throughput measurements retain their original provenance.
+
+## Third-repair verification (1e0fa525 source)
+
+Commands reuse `target/utility-repairs-native` and
+`target/utility-repairs-bindings` in this worktree. Every native command
+starts with `source scripts/msvc-env.sh`, with `CARGO_BUILD_JOBS=1` and
+`RUST_TEST_THREADS=1`; Cargo processes run sequentially. Exact new-case red
+commands were `cargo test -p windfall-dsp --test dsp r3_ -- --nocapture` and
+`cargo test -p windfall-engine --test engine utility_effects_r3 -- --nocapture`.
+The later interruption red command used the filter
+`utility_effects_r3_an_intervening`. All completed before their respective
+fixes; none of the reported failures are predicted traces.
+
+- `cargo test -p windfall-dsp --test dsp`: **152 passed**, three existing
+  timing/demo tests ignored. DSP source was unchanged by the later Plan
+  progress refinement. All original transfers, partitions/reset properties,
+  nine repair regressions and prepared allocator bounds remain covered.
+- `cargo test -p windfall-engine --test engine effects --quiet`:
+  **58 passed**, 183 unrelated tests filtered out, after the final source
+  refinement. Includes all eleven R3 tests, the seven original utility
+  transfers, R1/R2 routing/automation/render cases, fixed limiter/hosted
+  policies and callback allocator guards.
+- `cargo test -p windfall-engine --lib rack::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib state::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib plugins::tests --quiet`: **eight passed**.
+- `cargo clippy -p windfall-dsp -p windfall-engine --all-targets -- -D warnings`
+  and `cargo fmt --all --check`: **passed after the final source refinement**.
+- `cargo test -p windfall-dsp --test dsp utility_repairs --quiet`:
+  **nine passed** after the final engine refinement.
+- Prettier on both utility documents and `git diff --check`: **passed**.
+- New readiness, reference reconstruction, splice progress, restoration and
+  retirement paths: **zero callback alloc/realloc/free calls**. New shared
+  progress uses atomics; no lock was added. This is allocator instrumentation
+  and source inspection, not an OS scheduler or native plugin hardware test.
+
+No full workspace, desktop build or UI suite was duplicated. The runtime
+owner's `adopt_parameters` facade and adoption hooks are outside this patch
+and must be retained by the parent integration. Generated descriptors/WASM
+and combined native/shared-WASM parity remain with the parent. The explicit
+causal graph and one-second prepared-bound limitations above remain; unity
+dropouts and premature splice completion are not covered by those limits.

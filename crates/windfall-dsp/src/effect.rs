@@ -90,6 +90,16 @@ pub trait Effect: Send {
         self.latency_samples()
     }
 
+    /// History required before starting a live latency-tap edit. This is
+    /// separate from reported PDC and includes both outputs of a matrix.
+    fn delay_readiness_samples(&self) -> usize {
+        self.latency_samples()
+    }
+    /// Remaining input/fade frames before a requested latency edit settles.
+    fn latency_transition_samples_remaining(&self) -> usize {
+        0
+    }
+
     /// Samples for which the output can keep sounding after the input has
     /// gone silent, including the latency. A host can stop processing a
     /// track this long after its last input.
@@ -512,6 +522,14 @@ impl AnyEffect {
         each_effect!(self, effect => effect.warm_up_samples())
     }
 
+    /// See [`Effect::delay_readiness_samples`].
+    pub fn delay_readiness_samples(&self) -> usize {
+        each_effect!(self, effect => effect.delay_readiness_samples())
+    }
+    pub fn latency_transition_samples_remaining(&self) -> usize {
+        each_effect!(self, effect => effect.latency_transition_samples_remaining())
+    }
+
     /// The largest latency any setting of this effect can have at
     /// `sample_rate`. A host that reserves this much never has to grow a
     /// compensation buffer while playing.
@@ -580,6 +598,9 @@ pub struct EffectSlot {
     dry_right: DelayLine,
     /// Shared-delay transition, preserving every currently audible dry tap.
     dry_fade: TapCrossfade,
+    dry_history: usize,
+    /// Whether each prepared scratch frame uses the final dry tap.
+    dry_aligned: Box<[bool]>,
     scratch_left: Box<[f32]>,
     scratch_right: Box<[f32]>,
     /// The effect has faded out and has not run since, so its memory is
@@ -593,6 +614,7 @@ pub struct EffectSlot {
     /// Samples already run since the dormant effect was cleared. A delay
     /// increased during priming extends the wait without losing this history.
     warm_up_elapsed: usize,
+    warming: bool,
     fresh: bool,
 }
 
@@ -609,11 +631,14 @@ impl EffectSlot {
             dry_left: DelayLine::default(),
             dry_right: DelayLine::default(),
             dry_fade: TapCrossfade::new(0, 0),
+            dry_history: 0,
+            dry_aligned: Box::default(),
             scratch_left: Box::default(),
             scratch_right: Box::default(),
             dormant: false,
             warm_up: 0,
             warm_up_elapsed: 0,
+            warming: false,
             fresh: true,
         }
     }
@@ -629,6 +654,7 @@ impl EffectSlot {
         self.dry_fade = TapCrossfade::new(latency, self.effect.latency_samples());
         self.scratch_left = vec![0.0; max_block].into_boxed_slice();
         self.scratch_right = vec![0.0; max_block].into_boxed_slice();
+        self.dry_aligned = vec![false; max_block].into_boxed_slice();
         self.reset();
     }
 
@@ -638,9 +664,11 @@ impl EffectSlot {
         self.dry_left.clear();
         self.dry_right.clear();
         self.dry_fade.snap(self.effect.latency_samples());
+        self.dry_history = 0;
         self.dormant = false;
         self.warm_up = 0;
         self.warm_up_elapsed = 0;
+        self.warming = false;
         self.fresh = true;
         self.wet.snap(self.wet_target());
     }
@@ -772,15 +800,20 @@ impl EffectSlot {
         } else {
             ms_to_samples(LOOKAHEAD_FADE_MS, self.sample_rate)
         };
-        if self.effect.kind() == EffectKind::StereoMatrix {
-            self.dry_fade.retarget(latency, fade_samples);
-        } else {
+        let matrix = self.effect.kind() == EffectKind::StereoMatrix;
+        let readiness = self.effect.delay_readiness_samples();
+        if !matrix {
             self.dry_fade.retarget_joining(latency, fade_samples);
         }
         let dry_transition = self.dry_fade.remaining() as usize;
         let dry_left = &mut self.scratch_left[..frames];
         let dry_right = &mut self.scratch_right[..frames];
         for index in 0..frames {
+            let ready = fresh || !matrix || self.dry_history >= readiness;
+            if matrix && ready {
+                self.dry_fade.retarget(latency, fade_samples);
+            }
+            self.dry_aligned[index] = ready && self.dry_fade.remaining() == 0;
             for (line, input, dry) in [
                 (&mut self.dry_left, left[index], &mut dry_left[index]),
                 (&mut self.dry_right, right[index], &mut dry_right[index]),
@@ -792,6 +825,7 @@ impl EffectSlot {
                 line.push(input);
             }
             self.dry_fade.advance();
+            self.dry_history = (self.dry_history + 1).min(self.dry_left.max_delay());
         }
 
         if self.wet.is_settled() && self.wet.value() == 0.0 {
@@ -805,6 +839,7 @@ impl EffectSlot {
             self.dormant = false;
             self.warm_up = self.effect.warm_up_samples().max(dry_transition);
             self.warm_up_elapsed = 0;
+            self.warming = true;
         }
         if self.warm_up > 0 {
             // Reset snaps the wet taps, so keep them unheard until any
@@ -817,10 +852,11 @@ impl EffectSlot {
         }
         for index in 0..frames {
             // The fade waits until the effect's output has arrived.
-            let wet = if self.warm_up > 0 {
-                self.warm_up -= 1;
+            let wet = if self.warming && (self.warm_up > 0 || !self.dry_aligned[index]) {
+                self.warm_up = self.warm_up.saturating_sub(1);
                 0.0
             } else {
+                self.warming = false;
                 self.wet.tick()
             };
             if wet == 0.0 {

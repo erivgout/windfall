@@ -83,6 +83,11 @@ impl StereoMatrixParams {
         let [left, right] = self.delays(sample_rate);
         left.min(right)
     }
+    /// Input history required before a live edit can use both new taps.
+    pub fn delay_readiness_samples(&self, sample_rate: f32) -> usize {
+        let [left, right] = self.delays(sample_rate);
+        left.max(right)
+    }
     fn coefficients(&self) -> [f32; 4] {
         let Self {
             ll: a,
@@ -114,6 +119,8 @@ pub struct StereoMatrix {
     delays: [TapCrossfade; 2],
     fade_len: u32,
     fresh: bool,
+    history_samples: usize,
+    delay_waiting: bool,
 }
 impl Default for StereoMatrix {
     fn default() -> Self {
@@ -125,6 +132,8 @@ impl Default for StereoMatrix {
             delays: std::array::from_fn(|_| TapCrossfade::new(0, 0)),
             fade_len: 240,
             fresh: true,
+            history_samples: 0,
+            delay_waiting: false,
         }
     }
 }
@@ -134,6 +143,14 @@ impl StereoMatrix {
     }
     fn update(&mut self) {
         self.controls.set(self.params.coefficients());
+        self.update_delays();
+    }
+    fn update_delays(&mut self) {
+        self.delay_waiting = !self.fresh
+            && self.history_samples < self.params.delay_readiness_samples(self.sample_rate);
+        if self.delay_waiting {
+            return;
+        }
         for (fade, delay) in self
             .delays
             .iter_mut()
@@ -162,6 +179,7 @@ impl Effect for StereoMatrix {
         }
         self.controls.reset();
         self.fresh = true;
+        self.history_samples = 0;
         self.update();
     }
     fn set_params(&mut self, params: &Self::Params) {
@@ -170,6 +188,9 @@ impl Effect for StereoMatrix {
     }
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         for (l, r) in left.iter_mut().zip(right) {
+            if self.delay_waiting {
+                self.update_delays();
+            }
             self.fresh = false;
             let [a, b, c, d] = self.controls.tick();
             let (il, ir) = (audio(*l), audio(*r));
@@ -188,6 +209,8 @@ impl Effect for StereoMatrix {
                 line.push(inputs[side]);
                 self.delays[side].advance();
             }
+            self.history_samples =
+                (self.history_samples + 1).min(Self::max_latency_samples(self.sample_rate));
         }
     }
     fn latency_samples(&self) -> usize {
@@ -196,10 +219,29 @@ impl Effect for StereoMatrix {
     fn warm_up_samples(&self) -> usize {
         self.tail_samples()
     }
+    fn delay_readiness_samples(&self) -> usize {
+        self.params.delay_readiness_samples(self.sample_rate)
+    }
+    fn latency_transition_samples_remaining(&self) -> usize {
+        if self.delay_waiting {
+            self.params
+                .delay_readiness_samples(self.sample_rate)
+                .saturating_sub(self.history_samples)
+                + self.fade_len as usize
+        } else {
+            self.delays
+                .iter()
+                .map(|fade| fade.remaining() as usize)
+                .max()
+                .unwrap_or(0)
+        }
+    }
     fn tail_samples(&self) -> usize {
-        self.delays[0]
-            .longest_delay()
-            .max(self.delays[1].longest_delay())
+        self.params.delay_readiness_samples(self.sample_rate).max(
+            self.delays[0]
+                .longest_delay()
+                .max(self.delays[1].longest_delay()),
+        )
     }
     fn gap_samples(&self) -> usize {
         self.tail_samples()
