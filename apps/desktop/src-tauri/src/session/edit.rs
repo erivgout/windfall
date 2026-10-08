@@ -15,7 +15,7 @@ impl Session {
         &self,
         runtime: &crate::plugins::Runtime,
         request: crate::plugins::PendingUpdate,
-    ) -> Result<bool, String> {
+    ) -> Result<crate::plugins::CaptureOutcome, String> {
         let crate::plugins::Update::Capture { target, .. } = request.update else {
             return Err("Not a native state request".into());
         };
@@ -33,7 +33,7 @@ impl Session {
         let desired = {
             let state = self.state();
             if !current(&state) {
-                return Ok(false);
+                return Ok(crate::plugins::CaptureOutcome::Obsolete);
             }
             state
                 .document
@@ -44,11 +44,11 @@ impl Session {
                 .clone()
         };
         let Some(captured) = runtime.capture_pending(request.clone(), desired.clone())? else {
-            return Ok(false);
+            return Ok(crate::plugins::CaptureOutcome::Obsolete);
         };
         let mut state = self.state();
         if !current(&state) {
-            return Ok(false);
+            return Ok(crate::plugins::CaptureOutcome::Obsolete);
         }
         let binding = state
             .document
@@ -85,8 +85,11 @@ impl Session {
             .map_err(|error| error.to_string())?;
         self.publish(&mut state, &applied.touched);
         drop(state);
-        runtime.acknowledge_capture(&request, &captured)?;
-        Ok(captured.restart)
+        drop(_recording);
+        Ok(crate::plugins::CaptureOutcome::Accepted {
+            restart: captured.restart,
+            acknowledgement: runtime.acknowledge_committed_capture(&request, &captured),
+        })
     }
     pub fn document_snapshot(&self) -> DocumentSnapshot {
         let state = self.state();

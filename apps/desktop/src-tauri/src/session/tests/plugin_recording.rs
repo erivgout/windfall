@@ -187,7 +187,10 @@ fn native_vst3_dirty_restart_and_deactivation_edits_wait_for_recording_then_capt
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(
-        task.join().unwrap().unwrap(),
+        matches!(
+            task.join().unwrap().unwrap(),
+            crate::plugins::CaptureOutcome::Accepted { restart: true, .. }
+        ),
         "restart is retained until captured"
     );
     let project = rig.project();
