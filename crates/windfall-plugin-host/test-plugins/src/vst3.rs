@@ -1,5 +1,7 @@
 //! Independent VST3 factory and component fixtures for the scanner.
 #![allow(non_snake_case)]
+#[cfg(target_os = "macos")]
+mod bundle_entry;
 mod native_thread;
 use native_thread::CreatorThread;
 use std::ffi::c_void;

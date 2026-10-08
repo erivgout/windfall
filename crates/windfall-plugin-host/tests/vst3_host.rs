@@ -1,5 +1,5 @@
 //! An independent open fixture exercises the actual SDK process ABI.
-#![cfg(any(windows, target_os = "linux"))]
+#![cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod common;
 use windfall_plugin_host::{EditorError, EditorOptions, PluginHost, ProcessStatus, Transport};
 fn create(

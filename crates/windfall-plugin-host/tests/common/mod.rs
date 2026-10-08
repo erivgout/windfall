@@ -8,6 +8,9 @@
 
 #![allow(dead_code)]
 
+#[cfg(target_os = "macos")]
+pub mod macos_bundle;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -107,9 +110,22 @@ pub fn plugin_file(folder: &str, name: &str) -> PathBuf {
     static COPY: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _copy = COPY.lock().expect("the fixture copy lock is intact");
     let folder = scratch().join(folder);
+    // Mac tickets keep their live lifecycle owner. Parallel test owners use
+    // independent complete bundles; callers still share a path on one owner.
+    #[cfg(target_os = "macos")]
+    let folder = if name.ends_with(".vst3") {
+        folder.join(format!("mac-owner-{:?}", std::thread::current().id()))
+    } else {
+        folder
+    };
     std::fs::create_dir_all(&folder).expect("the plugin folder can be made");
     let file = folder.join(name);
     if !file.exists() {
+        #[cfg(target_os = "macos")]
+        if name.ends_with(".vst3") {
+            macos_bundle::publish(&file, built_library(), "windfall-fixture");
+            return file;
+        }
         std::fs::copy(built_library(), &file).expect("the plugin can be copied");
     }
     file

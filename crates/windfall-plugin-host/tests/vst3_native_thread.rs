@@ -116,24 +116,31 @@ fn native_component_owner_checks_reject_another_live_owner() {
     const CHILD_LIBRARY: &str = "WINDFALL_NATIVE_COMPONENT_OWNER_CHILD";
     const CHILD_METHOD: &str = "WINDFALL_NATIVE_COMPONENT_OWNER_METHOD";
     if let Some(library_path) = std::env::var_os(CHILD_LIBRARY) {
+        #[cfg(not(target_os = "macos"))]
+        use vst3::Steinberg::IPluginFactory;
         use vst3::Steinberg::Vst::{IComponent, IComponentTrait};
-        use vst3::Steinberg::{
-            IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait, PClassInfo, kResultOk,
-        };
+        use vst3::Steinberg::{IPluginBaseTrait, IPluginFactoryTrait, PClassInfo, kResultOk};
         use vst3::{ComPtr, Interface};
 
         // This known fixture's entry exports are no-ops. Call its real factory
         // directly to reach the native owner guards without a host-side owner
         // check rejecting the intentional misuse first. No other lifecycle or
         // audio operation runs concurrently with the foreign-thread call.
-        let library = unsafe { libloading::Library::new(library_path) }.unwrap();
+        #[cfg(not(target_os = "macos"))]
+        let library = unsafe { libloading::Library::new(&library_path) }.unwrap();
+        #[cfg(target_os = "macos")]
+        let library = common::macos_bundle::NativeFixture::load(Path::new(&library_path));
+        #[cfg(not(target_os = "macos"))]
         let get = unsafe {
             library.get::<unsafe extern "system" fn() -> *mut IPluginFactory>(b"GetPluginFactory\0")
         }
         .unwrap();
         // SAFETY: the exact SDK export returns an owned factory reference;
         // its executable remains loaded through both component references.
+        #[cfg(not(target_os = "macos"))]
         let factory = unsafe { ComPtr::from_raw(get()) }.unwrap();
+        #[cfg(target_os = "macos")]
+        let factory = library.factory().clone();
         let mut class: PClassInfo = unsafe { std::mem::zeroed() };
         assert_eq!(unsafe { factory.getClassInfo(0, &mut class) }, kResultOk);
         let mut raw = std::ptr::null_mut();

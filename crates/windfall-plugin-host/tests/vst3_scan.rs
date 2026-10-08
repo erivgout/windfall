@@ -1,5 +1,5 @@
 //! VST3 scanning exercises an actual independent SDK factory fixture.
-#![cfg(any(windows, target_os = "linux"))]
+#![cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod common;
 use std::time::Duration;
 use windfall_plugin_host::scan::FailureKind;
@@ -10,6 +10,7 @@ fn runtime_repair_bundle_catalog_keeps_scanned_binary_identity_until_refresh() {
     use windfall_plugin_host::{paths, scan::PluginCatalog};
     let folder = common::scratch().join("bundle-cache");
     let bundle = folder.join("Bundle.vst3");
+    #[cfg(not(target_os = "macos"))]
     let (architecture, binary_name) = if cfg!(all(windows, target_arch = "aarch64")) {
         ("arm64-win", "Bundle.vst3")
     } else if cfg!(all(windows, target_arch = "x86")) {
@@ -21,9 +22,23 @@ fn runtime_repair_bundle_catalog_keeps_scanned_binary_identity_until_refresh() {
     } else {
         ("x86_64-linux", "Bundle.so")
     };
+    #[cfg(not(target_os = "macos"))]
     let binary = bundle.join("Contents").join(architecture).join(binary_name);
+    #[cfg(not(target_os = "macos"))]
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    #[cfg(not(target_os = "macos"))]
     std::fs::copy(common::test_plugins(), &binary).unwrap();
+    #[cfg(target_os = "macos")]
+    let binary = {
+        std::fs::create_dir_all(&folder).unwrap();
+        let source = common::plugin_file("vst3-catalog-source", "fixture.vst3");
+        common::macos_bundle::publish(
+            &bundle,
+            &paths::vst3_binary(&source).unwrap(),
+            "catalog-executable",
+        );
+        bundle.join("Contents/MacOS/catalog-executable")
+    };
     let files = paths::find_plugins(std::slice::from_ref(&folder));
     let runner = common::scanner(Duration::from_secs(20));
     let mut catalog = PluginCatalog::new();

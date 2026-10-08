@@ -1,8 +1,12 @@
 //! VST3 module loading, scanning and hosting through the pinned SDK bindings.
 mod buffers;
+#[cfg(target_os = "macos")]
+pub(crate) mod bundle_macos;
 mod editor;
 mod handlers;
 mod instance;
+#[cfg(any(target_os = "macos", test))]
+mod lifecycle;
 mod processor;
 mod stream;
 use crate::descriptor::{
@@ -11,6 +15,7 @@ use crate::descriptor::{
 };
 use crate::error::PluginError;
 use crate::instance::InstanceBackend;
+#[cfg(not(target_os = "macos"))]
 use libloading::Library;
 use std::ffi::c_void;
 use std::path::Path;
@@ -20,11 +25,19 @@ use vst3::{Class, ComPtr, ComWrapper, Interface, Steinberg::*};
 
 #[derive(Clone)]
 pub(crate) struct Vst3Module {
+    #[cfg(target_os = "macos")]
+    inner: std::rc::Rc<ModuleData>,
+    #[cfg(not(target_os = "macos"))]
     inner: std::sync::Arc<ModuleData>,
 }
 pub(crate) struct ModuleData {
+    #[cfg(target_os = "macos")]
+    owner: bundle_macos::MacModuleLease,
+    #[cfg(not(target_os = "macos"))]
     factory: Option<ComPtr<IPluginFactory>>,
+    #[cfg(not(target_os = "macos"))]
     library: Library,
+    #[cfg(not(target_os = "macos"))]
     exit: Option<unsafe extern "system" fn() -> bool>,
 }
 impl std::ops::Deref for Vst3Module {
@@ -71,7 +84,12 @@ fn canonical_order(cid: &mut TUID) {
 impl Vst3Module {
     pub fn load(_path: &Path) -> Result<Self, PluginError> {
         #[cfg(target_os = "macos")]
-        return Err(PluginError::Unsupported("VST3 bundle entry on macOS"));
+        {
+            let owner = bundle_macos::MacModuleLease::load(_path)?;
+            Ok(Self {
+                inner: std::rc::Rc::new(ModuleData { owner }),
+            })
+        }
         #[cfg(not(target_os = "macos"))]
         {
             let path = _path;
@@ -160,10 +178,19 @@ impl Vst3Module {
             Ok(Self { inner })
         }
     }
+    fn with_factory<R>(&self, operation: impl FnOnce(&ComPtr<IPluginFactory>) -> R) -> R {
+        #[cfg(target_os = "macos")]
+        {
+            self.owner.with_factory(operation)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            operation(self.factory.as_ref().expect("loaded factory"))
+        }
+    }
     pub fn descriptors(&self) -> Vec<PluginDescriptor> {
-        let factory = self.factory.as_ref().expect("loaded factory");
         // SAFETY: live COM references, sized output structures, owning thread.
-        unsafe {
+        self.with_factory(|factory| unsafe {
             let mut info: PFactoryInfo = std::mem::zeroed();
             factory.getFactoryInfo(&mut info);
             let factory2 = factory.cast::<IPluginFactory2>();
@@ -203,7 +230,7 @@ impl Vst3Module {
                     Some(descriptor)
                 })
                 .collect()
-        }
+        })
     }
     pub fn create(&self, id: &str) -> Result<Box<dyn InstanceBackend>, PluginError> {
         Ok(Box::new(instance::VstInstance::new(self.clone(), id)?))
@@ -211,17 +238,13 @@ impl Vst3Module {
     fn object<T: Interface>(&self, cid: &TUID) -> Result<ComPtr<T>, PluginError> {
         let mut raw = ptr::null_mut();
         // SAFETY: sixteen-byte ids and SDK output pointer for an owned ref.
-        unsafe {
-            let result = self
-                .factory
-                .as_ref()
-                .expect("loaded factory")
-                .createInstance(cid.as_ptr(), T::IID.as_ptr().cast(), &mut raw);
+        self.with_factory(|factory| unsafe {
+            let result = factory.createInstance(cid.as_ptr(), T::IID.as_ptr().cast(), &mut raw);
             if result != kResultOk {
                 return Err(PluginError::Create(format!("factory returned {result}")));
             }
             ComPtr::from_raw(raw.cast()).ok_or_else(|| PluginError::Create("null instance".into()))
-        }
+        })
     }
     pub fn probe(&self, id: &str) -> Result<PluginLayout, PluginError> {
         let cid = parse_id(id).ok_or_else(|| PluginError::NotFound(id.into()))?;
@@ -362,6 +385,7 @@ impl<T: Interface + vst3::com_scrape_types::Inherits<IPluginBase>> Drop for Init
         }
     }
 }
+#[cfg(not(target_os = "macos"))]
 impl Drop for ModuleData {
     fn drop(&mut self) {
         drop(self.factory.take());
