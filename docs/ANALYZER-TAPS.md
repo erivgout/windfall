@@ -411,7 +411,7 @@ Final release measurement: 4,800,000 stereo frames representing 100 seconds at
 48 kHz, default `N=1024,H=256,Q=32,S=2`, deterministic pump and reader after each
 256-frame publication. Elapsed **584.586 ms**, ratio **171.06 audio seconds per
 elapsed second**, maximum observed publication wrapper **47.700 µs**. The output
-field calls the ratio `audio_seconds_per_cpu_second`, but the timer is wall-clock
+field calls the ratio `audio_seconds_per_elapsed_second`; the timer is wall-clock
 elapsed, not OS process CPU accounting. It includes worker analysis and polling;
 the publication timing has `Instant` measurements outside the callback interface.
 One authored repeating PCM fixture and this scoped hardware run do not establish

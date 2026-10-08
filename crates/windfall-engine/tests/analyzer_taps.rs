@@ -1040,7 +1040,7 @@ fn release_cpu_throughput() {
     }
     let elapsed = start.elapsed();
     println!(
-        "frames=4800000 rate=48000 fft=1024 hop=256 elapsed_ms={:.3} audio_seconds_per_cpu_second={:.2} max_copy_us={:.3} payload_bytes={} reserved_bytes={} drops={:?}",
+        "frames=4800000 rate=48000 fft=1024 hop=256 elapsed_ms={:.3} audio_seconds_per_elapsed_second={:.2} max_copy_us={:.3} payload_bytes={} reserved_bytes={} drops={:?}",
         elapsed.as_secs_f64() * 1000.0,
         100.0 / elapsed.as_secs_f64(),
         callback_max.as_secs_f64() * 1e6,
