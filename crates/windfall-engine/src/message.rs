@@ -79,6 +79,7 @@ pub(crate) enum Garbage {
     Plan(Arc<Plan>),
     State(Box<PlanState>),
     Sample(AudioBuffer),
+    SamplerBank(Arc<crate::sampler_processing::SamplerBank>),
 }
 
 /// Sends a value back to the control side to be dropped there.

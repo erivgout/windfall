@@ -143,6 +143,27 @@ export type EditorEvent = "scene" | "selection" | "drag" | "hover" | "stamp"
 
 export type StampState = { stamp: Stamp; error: string | null }
 
+/** A menu choice owns its delayed completion only until the editor cancels it. */
+export type PendingStampChoice = { complete(): boolean; cancel(): void }
+
+type PendingStamp = {
+  context: EditorContext
+  generation: number | undefined
+  tool: Tool
+}
+
+function sameStampContext(a: EditorContext, b: EditorContext | null): boolean {
+  return (
+    b !== null &&
+    a.channel === b.channel &&
+    a.pattern.id === b.pattern.id &&
+    a.notes === b.notes &&
+    a.pattern.lengthSteps === b.pattern.lengthSteps &&
+    a.pattern.signature.numerator === b.pattern.signature.numerator &&
+    a.pattern.signature.denominator === b.pattern.signature.denominator
+  )
+}
+
 type Press = { x: number; y: number }
 
 type Gesture =
@@ -228,6 +249,7 @@ export class Editor {
   private sounding: number | null = null
   private listeners = new Set<(event: EditorEvent) => void>()
   private armedStamp: StampState | null = null
+  private pendingStamp: PendingStamp | null = null
   private stampLane: EditorContext | null = null
   private stampGeneration: number | undefined
   private disposed = false
@@ -278,11 +300,48 @@ export class Editor {
   }
 
   get busy(): boolean {
-    return this.gesture.kind !== "idle" || this.armedStamp !== null
+    return (
+      this.gesture.kind !== "idle" ||
+      this.armedStamp !== null ||
+      this.pendingStamp !== null
+    )
   }
 
   get stampState(): StampState | null {
     return this.armedStamp
+  }
+
+  /** Reserve a menu choice while its exit transition still owns keyboard focus. */
+  deferStamp(stamp: Stamp): PendingStampChoice | null {
+    const context = this.ctx
+    if (!context || this.disposed) return null
+    this.cancel()
+    const choice: PendingStamp = {
+      context,
+      generation: this.host.generation?.(),
+      tool: this.host.settings().tool,
+    }
+    this.pendingStamp = choice
+    this.emit("stamp")
+    return {
+      complete: () => {
+        if (this.pendingStamp !== choice) return false
+        this.cancel()
+        if (
+          this.disposed ||
+          choice.generation !== this.host.generation?.() ||
+          choice.tool !== this.host.settings().tool ||
+          !sameStampContext(context, this.ctx) ||
+          !sameStampContext(context, this.host.context())
+        )
+          return false
+        this.armStamp(stamp)
+        return true
+      },
+      cancel: () => {
+        if (this.pendingStamp === choice) this.cancel()
+      },
+    }
   }
 
   /** Arm a one-shot placement. No project edit happens until the click ends. */
@@ -310,6 +369,8 @@ export class Editor {
    * every commit; it only does work when the lane really changed.
    */
   setContext(next: EditorContext | null): void {
+    if (this.pendingStamp && !sameStampContext(this.pendingStamp.context, next))
+      this.cancel()
     this.follow(next, false)
   }
 
@@ -696,7 +757,8 @@ export class Editor {
   /** Drops the gesture in progress and puts everything back. */
   cancel(): void {
     const gesture = this.gesture
-    if (gesture.kind === "idle" && !this.armedStamp) return
+    if (gesture.kind === "idle" && !this.armedStamp && !this.pendingStamp)
+      return
     if (gesture.kind === "marquee") this.selected = new Set(gesture.base)
     this.abandon()
     this.rebuild()
@@ -1088,8 +1150,9 @@ export class Editor {
   private abandon(): void {
     this.sound(null)
     this.gesture = IDLE
-    if (this.armedStamp) {
+    if (this.armedStamp || this.pendingStamp) {
       this.armedStamp = null
+      this.pendingStamp = null
       this.stampLane = null
       this.emit("stamp")
     }

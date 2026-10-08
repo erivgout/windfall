@@ -638,6 +638,7 @@ impl Transaction<'_> {
         let label = single_label(
             &[
                 (patch.root_key.is_some(), "Change root key"),
+                (patch.stretch.is_some(), "Prepare sampler stretch"),
                 (patch.tune.is_some(), "Change tuning"),
                 (patch.gain.is_some(), "Change sample gain"),
                 (
@@ -657,6 +658,10 @@ impl Transaction<'_> {
         );
         let index = self.channel_index(id)?;
         let mut sampler = self.sampler(index)?;
+        if let Some(stretch) = patch.stretch {
+            stretch.validate().map_err(CommandError::invalid)?;
+            sampler.stretch = stretch;
+        }
         if let Some(root_key) = patch.root_key {
             sampler.root_key = checked_key(root_key)?;
         }

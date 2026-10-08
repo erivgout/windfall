@@ -64,7 +64,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 /// Runs `work` and returns how many times it allocated, reallocated or
 /// freed memory.
-fn allocator_calls(work: impl FnOnce()) -> usize {
+pub(super) fn allocator_calls(work: impl FnOnce()) -> usize {
     CALLS.set(0);
     WATCHING.set(true);
     work();

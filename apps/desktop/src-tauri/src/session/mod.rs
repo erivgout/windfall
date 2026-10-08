@@ -71,6 +71,7 @@ mod midi;
 mod midi_hardware;
 mod realtime;
 mod recording;
+mod sampler_processing;
 mod samples;
 mod slicer;
 #[cfg(test)]
@@ -182,6 +183,10 @@ struct Inner {
     recording: Mutex<Option<recording::Take>>,
     exporting: AtomicBool,
     preparing_clips: AtomicBool,
+    preparing_samplers: AtomicBool,
+    sampler_ticket: std::sync::atomic::AtomicU64,
+    sampler_done: std::sync::atomic::AtomicU32,
+    sampler_total: std::sync::atomic::AtomicU32,
     /// The export that is running has been asked to stop.
     export_cancelled: AtomicBool,
     /// Counts preview requests, so a file that finishes decoding after a
@@ -366,6 +371,10 @@ impl Session {
                 recording: Mutex::new(None),
                 exporting: AtomicBool::new(false),
                 preparing_clips: AtomicBool::new(false),
+                preparing_samplers: AtomicBool::new(false),
+                sampler_ticket: std::sync::atomic::AtomicU64::new(0),
+                sampler_done: std::sync::atomic::AtomicU32::new(0),
+                sampler_total: std::sync::atomic::AtomicU32::new(0),
                 export_cancelled: AtomicBool::new(false),
                 preview: Mutex::new(0),
                 #[cfg(test)]

@@ -1,4 +1,4 @@
-import { useRef, useSyncExternalStore } from "react"
+import { useEffect, useRef, useSyncExternalStore } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -12,30 +12,42 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { getProjectGeneration } from "@/lib/store/replaced"
-
 import { useSession } from "./context"
-import type { EditorContext } from "./editor"
+import type { PendingStampChoice } from "./editor"
 import { CHORD_STAMPS, SCALE_STAMPS, type Stamp } from "./stamps"
+import { usePianoRollStore } from "./store"
 
 export function StampMenu() {
   const session = useSession()
   const { editor } = session
-  const pending = useRef<{
-    stamp: Stamp
-    context: EditorContext
-    generation: number
-  } | null>(null)
+  const pending = useRef<PendingStampChoice | null>(null)
   const state = useSyncExternalStore(
     (listener) => editor.subscribe(listener),
     () => editor.stampState,
     () => null
   )
   const choose = (stamp: Stamp) => {
-    const context = editor.context
-    if (context)
-      pending.current = { stamp, context, generation: getProjectGeneration() }
+    pending.current = editor.deferStamp(stamp)
   }
+
+  useEffect(() => {
+    const cancelPending = () => pending.current?.cancel()
+    const onKeyDown = (event: KeyboardEvent) => {
+      // The closing menu may still own focus, so the grid keymap can ignore Esc.
+      if (event.key === "Escape") cancelPending()
+    }
+    const stopTool = usePianoRollStore.subscribe((next, previous) => {
+      if (next.tool !== previous.tool) cancelPending()
+    })
+    window.addEventListener("blur", cancelPending)
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      cancelPending()
+      stopTool()
+      window.removeEventListener("blur", cancelPending)
+      window.removeEventListener("keydown", onKeyDown)
+    }
+  }, [editor])
 
   return (
     <>
@@ -44,23 +56,8 @@ export function StampMenu() {
           if (open) return
           const chosen = pending.current
           pending.current = null
-          if (!chosen || chosen.generation !== getProjectGeneration()) return
-          const current = editor.context
-          if (
-            current?.channel !== chosen.context.channel ||
-            current.pattern.id !== chosen.context.pattern.id ||
-            current.notes !== chosen.context.notes ||
-            current.pattern.lengthSteps !==
-              chosen.context.pattern.lengthSteps ||
-            current.pattern.signature.numerator !==
-              chosen.context.pattern.signature.numerator ||
-            current.pattern.signature.denominator !==
-              chosen.context.pattern.signature.denominator
-          )
-            return
           // Closing menus manage focus until their exit transition completes.
-          editor.armStamp(chosen.stamp)
-          session.focusGrid()
+          if (chosen?.complete()) session.focusGrid()
         }}
       >
         <DropdownMenuTrigger

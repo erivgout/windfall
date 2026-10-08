@@ -18,9 +18,9 @@ The piano roll includes selected-note quantize, legato/staccato, grid chop, comp
 
 The sample browser indexes bounded folder trees, searches paths with Boolean and wildcard queries, and stores local favorites and tags. Refreshed file imports use checked source tokens. Delayed-import and changed-source repair work is still in progress. See `docs/BROWSER-LIBRARY.md`.
 
-Channel samplers support forward and ping-pong loops with editable points, note release, undo and saved project settings. Playback and export share the same loop processing. Independent sampler time-stretch remains unfinished. See `docs/SAMPLER-LOOPS.md`.
+Channel samplers support forward and ping-pong loops with editable points, note release, undo and saved project settings. Native spectral preparation adds independent duration and pitch within an explicit MIDI key range and a 256 MiB retained-bank budget. Keys outside that range are silent; browser preparation is unavailable. Sampler integration and review remain in progress. See `docs/SAMPLER-LOOPS.md` and `docs/SAMPLER-STRETCH.md`.
 
-Mixer chains include balance, DC removal, channel mute, polarity, stereo matrix with channel delays, soft clipping and oversampled distortion. Matrix transition and latency-display repairs remain in progress. See `docs/UTILITY-EFFECTS.md`.
+Mixer chains include balance, DC removal, channel mute, polarity, stereo matrix with channel delays, soft clipping and oversampled distortion. Matrix insertion, routing-compensation and tail-accounting repairs remain in progress. See `docs/UTILITY-EFFECTS.md`.
 
 The Windows app hosts CLAP and VST3 instruments and effects with a plugin manager, parameter automation and saved state. Native state capture defers during recording, preserves current note/parameter intent during ownership exchange, and reports native lifecycle refusal. Repairs remain in progress for save-before-drain parameter capture, bundle binary validation and multi-channel panic expansion. Native VST3 editor windows and installed external plugins remain unverified. Native hosting on macOS/Linux and audio plugin crash containment remain unfinished. See `docs/plugins/desktop-integration.md` and `docs/plugins/vst3-desktop.md`.
 

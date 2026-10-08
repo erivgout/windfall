@@ -126,6 +126,8 @@ pub(crate) struct PlanChannel {
 #[derive(Debug)]
 pub(crate) struct PlanSampler {
     pub sample: Option<AudioBuffer>,
+    pub bank: Option<std::sync::Arc<crate::sampler_processing::SamplerBank>>,
+    pub spectral: bool,
     /// First frame of the region that plays.
     pub start: usize,
     /// One past the last frame of the region. Greater than `start` whenever
@@ -368,6 +370,26 @@ impl Plan {
             .filter_map(|channel| channel.sampler.sample.as_ref())
             .chain(self.audio_clips.iter().map(|clip| &clip.sample));
         samples.any(|sample| same_audio(sample, buffer))
+            || self.channels.iter().any(|channel| {
+                channel
+                    .sampler
+                    .bank
+                    .as_ref()
+                    .is_some_and(|bank| bank.holds(buffer))
+            })
+    }
+
+    pub fn holds_sampler_bank(
+        &self,
+        bank: &std::sync::Arc<crate::sampler_processing::SamplerBank>,
+    ) -> bool {
+        self.channels.iter().any(|channel| {
+            channel
+                .sampler
+                .bank
+                .as_ref()
+                .is_some_and(|held| std::sync::Arc::ptr_eq(held, bank))
+        })
     }
 }
 
@@ -486,6 +508,11 @@ fn compile_channel(
 }
 
 fn compile_sampler(settings: &SamplerSettings, pool: &SamplePool) -> PlanSampler {
+    let spectral = matches!(
+        settings.stretch,
+        windfall_project::SamplerStretch::Spectral { .. }
+    );
+    let bank = spectral.then(|| pool.sampler_bank(settings)).flatten();
     let sample = settings
         .sample
         .and_then(|id| pool.get(id))
@@ -506,7 +533,7 @@ fn compile_sampler(settings: &SamplerSettings, pool: &SamplePool) -> PlanSampler
     } else {
         0.0
     };
-    let region_frames = end - start;
+    let region_frames = bank.as_ref().map_or(end - start, |bank| bank.frames);
     let loop_region = (settings.loop_mode != windfall_project::SamplerLoopMode::Off
         && region_frames > 0)
         .then(|| {
@@ -531,6 +558,8 @@ fn compile_sampler(settings: &SamplerSettings, pool: &SamplePool) -> PlanSampler
             }
         });
     PlanSampler {
+        bank,
+        spectral,
         sample,
         start,
         end,

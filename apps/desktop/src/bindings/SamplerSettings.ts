@@ -2,8 +2,13 @@
 import type { Envelope } from "./Envelope";
 import type { SampleId } from "./SampleId";
 import type { SamplerLoopMode } from "./SamplerLoopMode";
+import type { SamplerStretch } from "./SamplerStretch";
 
 export type SamplerSettings = { sample: SampleId | null, 
+/**
+ * Independent duration/pitch is prepared for an explicit inclusive MIDI range.
+ */
+stretch?: SamplerStretch, 
 /**
  * The key that plays the sample at its recorded pitch.
  */

@@ -532,7 +532,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sampler loops still use tape-style pitch resampling. A bounded policy for prepared note-key variants and loop/release boundaries is needed; see docs/SAMPLER-LOOPS.md and crates/windfall-stretch/VALIDATION.md."
+      "notes": "Native sampler spectral preparation now persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Worker signal, lifecycle and callback-allocation checks passed; combined integration and independent review remain pending. Browser DSP preparation is unavailable and musical listening is unverified. See docs/SAMPLER-STRETCH.md and crates/windfall-stretch/VALIDATION.md."
     },
     {
       "id": "win-rack-layer-channel",
@@ -1900,7 +1900,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Filter and independent sampler time-stretch remain unfinished; see docs/SAMPLER-LOOPS.md."
+      "notes": "The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Prepared independent spectral duration/pitch is undergoing combined integration and review; filter and further modulation controls remain unfinished. See docs/SAMPLER-LOOPS.md and docs/SAMPLER-STRETCH.md."
     },
     {
       "id": "inst-directwave-player",
