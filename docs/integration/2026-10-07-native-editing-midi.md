@@ -848,3 +848,54 @@ DSP modules and tests. Registry, project, engine and UI wiring remain later
 serialized windows. Release candidate tooling continues in its separate
 worktree. No additional parity completion, release or hardware verification
 is claimed.
+
+## 2026-10-08 composed utility acceptance and active filter timing check
+
+Utility R6 `6d80370e` is integrated as `df624224`, with three test-only
+fallible preparation adapters in `7cf9be06`. Its clean independent R7 verdict
+and fresh root execution establish **112 unique native tests**: 12 controller,
+71 effects, one bounded Plan, three Rack, three State, eight plugin, nine
+DSP repair, four actual desktop CLAP/VST3 persistence roles and one adoption
+guard. Strict DSP/engine/desktop all-target Clippy, formatting, simulator
+freshness and whitespace checks passed. The complete log is
+`windfall-root-utility-r6-native.log`; its existing process exited zero.
+The documented varying-branch/topology phase and prepared-history bounds
+remain. This does not establish hardware deadlines or listening results.
+
+E1 downstream `1a7c33cc` is integrated as `fcb67d94`; the previously applied
+mechanical exhaustiveness/access edits were preserved. Fresh root execution
+passed four project persistence/automation tests, five reference engine tests
+and 70 focused shared-WASM UI cases, typecheck and focused lint. Tone and
+impulse errors retain the owner measurements, and live/offline/both stem
+modes are bit-identical in the tested routes. The sixth engine test remains
+active and failed: its first restored sample now passes, but the comparison
+of restoration frames 256 onward to the always-wet reference does not.
+The utility owner is determining whether that observation precedes the
+documented remaining-departure plus new-insertion fade. No bound is weakened,
+test skipped, or production defect declared without that clock proof.
+The complete `windfall-root-e1-downstream-native.log` exits one; its later
+lint steps did not run. A separate all-target project/engine/desktop Clippy,
+fmt, simulator-freshness and whitespace command passed after this failure.
+The three filter parity rows remain in progress.
+
+Remote CI run 37735236422 completed with Windows Rust, UI, parity, simulator
+and all three operating-system binding jobs passing. Linux and macOS Rust
+failed strict Clippy because the desktop allocator helper was compiled unused
+when its Windows-only native tests were excluded. `f9a1d2ee` applies the same
+Windows test condition to its module and global allocator. Local strict
+checks passed; a fresh remote run remains necessary. App jobs were skipped
+by their failed prerequisite, so no three-platform app build is claimed.
+
+T1 R2 `59c8f7f3`, directly atop `e0809d0e`, is outside root and has fresh
+parallel standards/spec reviews. Its owner reports 248 shared-WASM UI and
+77 native/engine cases, with exact selected-Play ownership, canonical retained
+range hydration and refusal recovery. The new release foundation `67191069`
+also has separate standards/spec reviews; its 38 fixture tests and candidate
+workflow do not establish actual bundles, signing or installation. Neither
+delivery is accepted or integrated from owner counts alone.
+
+E3's T3-bound pure DSP implementation is active, so its two delay rows now
+track work in progress. M1's five foundation findings and N4's two R3 findings
+remain with their existing implementation owners. The matrix is still 342
+rows: 68 done, 59 in progress, 213 todo and two explicit exclusions. The full
+goal, immutable alpha release, and remaining platform/hardware gates remain.

@@ -18,8 +18,8 @@ As of 2026-10-08. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 215 |
-| In progress | 57 |
+| Todo | 213 |
+| In progress | 59 |
 | Done | 68 |
 | Won't do | 2 |
 
@@ -28,7 +28,7 @@ As of 2026-10-08. Sources:
 | Core features | 23 | 12 | 8 | 2 | 1 |
 | Main windows | 113 | 48 | 20 | 44 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 65 | 13 | 2 | 0 |
+| Effects | 80 | 63 | 15 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
@@ -41,7 +41,7 @@ As of 2026-10-08. Sources:
 | 2. Write a song | 99 | 41 | 24 | 34 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
-| 5. The long tail | 129 | 119 | 10 | 0 | 0 |
+| 5. The long tail | 129 | 117 | 12 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -256,7 +256,7 @@ As of 2026-10-08. Sources:
 | Frequency Shifter | TBD | 5 | todo |  |
 | Hyper Chorus | TBD | 5 | todo |  |
 | Maximus | TBD | 5 | todo |  |
-| Multiband Delay | TBD | 5 | todo |  |
+| Multiband Delay | Frequency delay | 5 | in-progress | A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet. |
 | Spreader | TBD | 5 | todo |  |
 | Vocodex | TBD | 5 | todo |  |
 | Control Surface | TBD | 5 | todo |  |
@@ -271,7 +271,7 @@ As of 2026-10-08. Sources:
 | Fruity Convolver | TBD | 5 | todo | Impulse responses shipped with FL are Image-Line content; needs own. |
 | Fruity Delay 2 | TBD | 5 | todo |  |
 | Fruity Delay 3 | Delay | 2 | in-progress | Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row. |
-| Fruity Delay Bank | TBD | 5 | todo |  |
+| Fruity Delay Bank | Echo bank | 5 | in-progress | A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet. |
 | Fruity Fast Dist | Drive distortion | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Filter | TBD | 5 | todo |  |
 | Fruity Flanger | TBD | 5 | todo |  |
@@ -313,11 +313,11 @@ As of 2026-10-08. Sources:
 | Emphasizer | TBD | 5 | todo |  |
 | VFX Script | TBD | 6 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. Grouped with the plan's phase-6 scripting. |
 | Fruity 7 Band EQ | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Bass Boost | Bass shelf | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP is integrated at 7061a055/9f365ef1: a measured two-control shelf with boost headroom, neutral high-frequency response and frame-counted smoothing. Independent R2 and root native/shared-WASM checks passed; registry, persistence, automation, engine/export and UI integration remain unfinished. See docs/FILTER-FAMILY.md. |
+| Fruity Bass Boost | Bass shelf | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 routes the measured two-control shelf through the appended registry, checked persistence/automation and generic UI, with explicit boost headroom and neutral high-frequency response. Root native/reference and shared-WASM control checks passed. The active interrupted-restoration timing assertion and fresh downstream review remain open. See docs/FILTER-FAMILY.md. |
 | Fruity Center | DC blocker | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Delay | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Fast LP | Fast lowpass | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP is integrated at 7061a055/9f365ef1: a measured resonant 12 dB/oct lowpass with frame-counted smoothing and bounded callback work. Independent R2 and root native/shared-WASM checks passed; registry, persistence, automation, engine/export and UI integration remain unfinished. See docs/FILTER-FAMILY.md. |
-| Fruity Free Filter | Selectable filter | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 pure DSP is integrated at 7061a055/9f365ef1: seven measured filter modes with live histories and frame-counted mode/control smoothing. Independent R2 and root native/shared-WASM checks passed; registry, persistence, automation, engine/export and UI integration remain unfinished. See docs/FILTER-FAMILY.md. |
+| Fruity Fast LP | Fast lowpass | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked project controls, persistence/automation and generic UI. Root passed 299 DSP tests, 4 project tests, 5 reference engine/export tests and 70 focused UI tests on matching 174 bindings/WASM. The active interrupted-restoration test passes its first-sample continuity check but fails its later observation; the utility owner is checking the documented serial handover clocks before any timing or production change. Fresh downstream review remains pending. See docs/FILTER-FAMILY.md. |
+| Fruity Free Filter | Selectable filter | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 routes all seven measured filter modes through the appended registry, persistence/automation and generic UI. Root reference tone/impulse, live/offline/stem parity and 70 focused UI cases passed with matching artifacts. The active interrupted-restoration timing assertion remains unresolved; new downstream review and full acceptance remain pending. See docs/FILTER-FAMILY.md. |
 | Fruity Mute 2 | Channel mute | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Phase Inverter | Polarity | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
 | Fruity Reeverb | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. |
