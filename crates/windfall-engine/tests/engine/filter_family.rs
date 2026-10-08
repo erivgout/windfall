@@ -393,15 +393,21 @@ fn edits_bypass_noops_removal_and_settled_restore_are_callback_allocation_free()
 
 #[test]
 fn restore_during_removal_preserves_the_current_wet_history_and_splice_share() {
-    // A restore after only 80 of the 240 departure frames must not open a
-    // dry gap or restart a resonant integrator. This intentionally exercises
-    // the utility owner's engine policy through the new filter kinds.
+    // The outgoing owner completes its existing removal while the fresh
+    // owner consumes that serial input unheard, then begins its own fade.
+    // A restore after 80 of 240 frames must preserve that whole handover.
+    const RESTORE_START: usize = 4096 + 80;
+    const RESTORE_FRAMES: usize = 1024;
+    const REMAINING_DEPARTURE: usize = 240 - 80;
+    const FULL_WET: usize = REMAINING_DEPARTURE + 240;
+    const SETTLED: usize = 768;
+
     for params in settings() {
         let (mut rig, track, effect) = fixture(tone(500.0), Some(params));
         let effect = effect.unwrap();
-        let reference = rig.play(RATE, 4608, 127);
+        let always_wet = rig.play(RATE, RESTORE_START + RESTORE_FRAMES, 127);
         let (dry, _, _) = fixture(tone(500.0), None);
-        let dry = dry.play(RATE, 4608, 113);
+        let dry = dry.play(RATE, RESTORE_START + RESTORE_FRAMES, 113);
         let (mut processor, controller) = rig.processor(RATE);
         controller.play();
         guarded_run(&mut processor, 4096, 137);
@@ -411,24 +417,66 @@ fn restore_during_removal_preserves_the_current_wet_history_and_splice_share() {
         let share = 161.0 / 240.0; // The last frame supplied before restore.
         for channel in 0..2 {
             let index = (4096 + 79) * 2 + channel;
-            let expected = dry[index] + (reference[index] - dry[index]) * share;
+            let expected = dry[index] + (always_wet[index] - dry[index]) * share;
             assert!((departing[79 * 2 + channel] - expected).abs() < 2e-6);
         }
         rig.track_mut(track).effects.push(slot);
         controller.set_project(&rig.project, &rig.pool);
-        let restored = guarded_run(&mut processor, 432, 29);
+        let restored = guarded_run(&mut processor, RESTORE_FRAMES, 29);
         for (channel, &sample) in restored.iter().take(2).enumerate() {
             let index = (4096 + 80) * 2 + channel;
-            let expected = dry[index] + (reference[index] - dry[index]) * share;
+            let expected = dry[index] + (always_wet[index] - dry[index]) * share;
             // One frame of fade movement is allowed; a fresh dry splice or
-            // fresh history is much larger than this bound.
-            let tolerance = (reference[index] - dry[index]).abs() / 240.0 + 2e-6;
+            // a discarded outgoing history is much larger than this bound.
+            let tolerance = (always_wet[index] - dry[index]).abs() / 240.0 + 2e-6;
             assert!(
                 (sample - expected).abs() <= tolerance,
                 "{params:?}, channel {channel}: restore {}, expected {expected}, tolerance {tolerance}",
                 sample
             );
         }
-        assert!(difference(&restored[256 * 2..], &reference[4432 * 2..4608 * 2]) < 2e-6);
+        let serial_input: Vec<_> = dry[RESTORE_START * 2..]
+            .iter()
+            .zip(&always_wet[RESTORE_START * 2..])
+            .enumerate()
+            .map(|(index, (&dry, &wet))| {
+                let outgoing = REMAINING_DEPARTURE.saturating_sub(index / 2) as f32 / 240.0;
+                dry + (wet - dry) * outgoing
+            })
+            .collect();
+        let fresh = reference_audio(params, &serial_input);
+        let serial_expected: Vec<_> = serial_input
+            .iter()
+            .zip(&fresh)
+            .enumerate()
+            .map(|(index, (&input, &wet))| {
+                let incoming =
+                    ((index / 2).saturating_sub(REMAINING_DEPARTURE) as f32 / 240.0).min(1.0);
+                input + (wet - input) * incoming
+            })
+            .collect();
+        let error = difference(&restored, &serial_expected);
+        assert!(error < 2e-6, "{params:?}: serial history error {error:e}");
+        assert!(difference(&restored[FULL_WET * 2..], &fresh[FULL_WET * 2..]) < 2e-6);
+
+        // The bass shelf's independent first-order pole bounds its fresh
+        // history transient after frame 400. At 768 it is below the same
+        // 2e-6 bound; the other eight settings settle before frame 400.
+        if matches!(params, EffectParams::BassShelf(_)) {
+            let (_, denominator) = reference(params);
+            let pole = (denominator[1] / denominator[0]).abs();
+            let initial_error = difference(
+                &fresh[FULL_WET * 2..FULL_WET * 2 + 2],
+                &always_wet[(RESTORE_START + FULL_WET) * 2..(RESTORE_START + FULL_WET) * 2 + 2],
+            );
+            assert!(f64::from(initial_error) * pole.powi((SETTLED - FULL_WET) as i32) < 2e-6);
+        }
+        assert!(
+            difference(
+                &restored[SETTLED * 2..],
+                &always_wet[(RESTORE_START + SETTLED) * 2..]
+            ) < 2e-6
+        );
+        eprintln!("{params:?}: full serial restore reference error {error:e}");
     }
 }

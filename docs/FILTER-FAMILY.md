@@ -38,16 +38,16 @@ No proprietary code, assets, presets or measured proprietary fixtures are used.
 
 Control indices are the following fixed order; parameter JSON uses camelCase.
 
-| Processor | Index / field | Unit / range | Default |
-| --- | --- | --- | --- |
-| Fast lowpass | 0 `cutoffHz` | Hz, 20–20000, logarithmic | 20000 |
-| | 1 `q` | ratio, 0.5–10, logarithmic | 1/√2 |
-| Selectable filter | 0 `mode` | choice, 0–6 | `lowpass` |
-| | 1 `frequencyHz` | Hz, 20–20000, logarithmic | 1000 |
-| | 2 `q` | ratio, 0.5–10, logarithmic | 1/√2 |
-| | 3 `gainDb` | dB, −18–18, linear | 0 |
-| Bass shelf | 0 `frequencyHz` | Hz, 40–1000, logarithmic | 150 |
-| | 1 `gainDb` | dB, 0–18, linear | 0 |
+| Processor         | Index / field   | Unit / range               | Default   |
+| ----------------- | --------------- | -------------------------- | --------- |
+| Fast lowpass      | 0 `cutoffHz`    | Hz, 20–20000, logarithmic  | 20000     |
+|                   | 1 `q`           | ratio, 0.5–10, logarithmic | 1/√2      |
+| Selectable filter | 0 `mode`        | choice, 0–6                | `lowpass` |
+|                   | 1 `frequencyHz` | Hz, 20–20000, logarithmic  | 1000      |
+|                   | 2 `q`           | ratio, 0.5–10, logarithmic | 1/√2      |
+|                   | 3 `gainDb`      | dB, −18–18, linear         | 0         |
+| Bass shelf        | 0 `frequencyHz` | Hz, 40–1000, logarithmic   | 150       |
+|                   | 1 `gainDb`      | dB, 0–18, linear           | 0         |
 
 Mode values in index order are `lowpass`, `highpass`, `bandpass`, `notch`,
 `lowShelf`, `peak`, `highShelf`. Unknown automation indices return false/None.
@@ -92,11 +92,11 @@ Lowpass/highpass have 12 dB/octave stopbands and magnitude Q at the cutoff.
 For the three gain modes let `A = 10^(gainDb/40)`. Each uses its own
 continuously running SVF, and a combination `m0 x + m1 B + m2 L`:
 
-| Mode | Integrator g | Damping k | m0 | m1 | m2 |
-| --- | --- | --- | --- | --- | --- |
-| Low shelf | g/√A | 1/Q | 1 | k(A−1) | A²−1 |
-| Peak | g | 1/(QA) | 1 | k(A²−1) | 0 |
-| High shelf | g√A | 1/Q | A² | k(1−A)A | 1−A² |
+| Mode       | Integrator g | Damping k | m0  | m1      | m2   |
+| ---------- | ------------ | --------- | --- | ------- | ---- |
+| Low shelf  | g/√A         | 1/Q       | 1   | k(A−1)  | A²−1 |
+| Peak       | g            | 1/(QA)    | 1   | k(A²−1) | 0    |
+| High shelf | g√A          | 1/Q       | A²  | k(1−A)A | 1−A² |
 
 Here the table's k denotes each row's damping. These produce the cookbook
 shelf/peak transfers through trapezoidal integrators without direct-form
@@ -229,11 +229,11 @@ but excludes construction/prepare and test console output. Automation cycles
 descriptor extrema; this measures bounded parameter-update cost alongside
 audio processing, rather than predicting a particular musical workload.
 
-| Processor | Constant µs/128 | Automated µs/128 | Constant M stereo frames/s | Automated M stereo frames/s | Fixed storage |
-| --- | --- | --- | --- | --- | --- |
-| Fast lowpass | 0.510 | 0.549 | 251.23 | 233.06 | 80 bytes |
-| Selectable filter | 3.121 | 3.302 | 41.01 | 38.77 | 408 bytes |
-| Bass shelf | 0.278 | 0.294 | 460.71 | 435.38 | 72 bytes |
+| Processor         | Constant µs/128 | Automated µs/128 | Constant M stereo frames/s | Automated M stereo frames/s | Fixed storage |
+| ----------------- | --------------- | ---------------- | -------------------------- | --------------------------- | ------------- |
+| Fast lowpass      | 0.510           | 0.549            | 251.23                     | 233.06                      | 80 bytes      |
+| Selectable filter | 3.121           | 3.302            | 41.01                      | 38.77                       | 408 bytes     |
+| Bass shelf        | 0.278           | 0.294            | 460.71                     | 435.38                      | 72 bytes      |
 
 At 48 kHz these automated cases consumed respectively 0.021%, 0.124% and
 0.011% of a single core's audio-duration walltime. Other T3 work was active;
@@ -392,12 +392,12 @@ recurrences. Separate 50/1000/10000 Hz left and 60/1200/12000 Hz right tones
 provide 54 analytic gain comparisons. This checks the actual sampler/track/
 master path, not a descriptor dispatch in isolation. Results at 48000 Hz:
 
-| Measurement | Observed maximum | Acceptance bound |
-| --- | --- | --- |
-| Absolute impulse sample error | 3.0267984e-9 | 2e-6 |
-| Tone gain error / max(reference gain, 1) | 7.446086640503532e-7 | 3e-4 |
-| Guarded callback alloc/zeroed-alloc/realloc/free | 0 calls | 0 |
-| Reported live latency | 0 frames | 0 |
+| Measurement                                      | Observed maximum     | Acceptance bound |
+| ------------------------------------------------ | -------------------- | ---------------- |
+| Absolute impulse sample error                    | 3.0267984e-9         | 2e-6             |
+| Tone gain error / max(reference gain, 1)         | 7.446086640503532e-7 | 3e-4             |
+| Guarded callback alloc/zeroed-alloc/realloc/free | 0 calls              | 0                |
+| Reported live latency                            | 0 frames             | 0                |
 
 Each descriptor control is automated through real project automation clips;
 live blocks of 1 and 137 frames, offline blocks of 101 frames and both
@@ -428,8 +428,8 @@ thread, MSVC setup and private worktree targets:
   ignored. The five independent cases also pass when the known failing case
   is explicitly skipped for isolation; that run is not an all-green suite.
 - `cargo test -p windfall-engine --test engine
-  realtime::effects_and_instruments_never_allocate_or_free_on_the_audio_path
-  -- --nocapture`: passed with all 15 kinds in the existing exhaustive guard.
+realtime::effects_and_instruments_never_allocate_or_free_on_the_audio_path
+-- --nocapture`: passed with all 15 kinds in the existing exhaustive guard.
 - Strict scoped Clippy for the new project target and engine test target:
   passed (`cargo clippy -p windfall-project --test filter_family -- -D warnings`
   and `cargo clippy -p windfall-engine --test engine -- -D warnings`).
@@ -475,3 +475,51 @@ using the parent's committed matching artifacts. The model union/lower,
 engine constructor and generic UI already consume the registry, so no new
 production adapter is proposed. No full-workspace, Tauri, full-Vitest, device,
 listening, hosted-plugin activation or three-row completion claim is made.
+
+### Parent composition: serial clock and fresh-history reference
+
+Root composed `1a7c33cc` with the accepted utility R6 source. The original
+first-frame and departing-share assertions pass. Its later assertion still
+failed because it demanded fully wet output from restore frame 256, before
+the documented serial handover completes. No production change was warranted.
+
+A read-only diagnostic linked the exact root native rlibs, verified their
+Cargo fingerprints/source hashes, and measured all nine filter paths over
+1536 restoration frames. All match an independent f64 serial recurrence with
+maximum sample error **6.519258e-9** and **zero callback alloc/realloc/free**.
+The provenance, diagnostic source and log are in the utility owner's
+`target/utility-repairs-native/diagnostics/e1_restore_provenance.json`
+and adjacent files.
+
+For zero-based restore frame `n`, dry input `d` and the outgoing filter
+output `w`, the accepted policy is:
+
+```text
+u[n] = d[n] + (w[n] - d[n]) * max(160 - n, 0) / 240
+p[n] = clamp((n - 160) / 240, 0, 1)
+y[n] = u[n] + (H_fresh(u)[n] - u[n]) * p[n]
+```
+
+The fresh filter starts with zero state at restoration and consumes `u`
+during its unheard wait. Incoming share is zero at frame 160, first audible
+at 161, 0.4 at 256, and fully wet at 400. Its history can differ from an
+always-wet owner after that point. The bass shelf's independent pole
+`0.990207082071` bounds the measured 400-frame error `4.4566346e-5` to
+less than `2e-6` by frame 768; the predicted residual is `1.191775513e-6`.
+The other eight tested settings settle within that bound by frame 400.
+
+The parent corrected only the test: it now processes 1024 restoration frames,
+compares **every frame** to the independent serial recurrence, explicitly
+checks full wet against the fresh reference from frame 400, and retains the
+always-wet endpoint from frame 768 with an analytic bass-pole check. All
+original `2e-6` and first-frame movement bounds remain. No assertion is
+ignored, no failure skipped, and no effect/engine production source changed.
+
+Fresh root execution of all six engine filter tests passed, including all
+nine restoration paths; maximum serial-reference error remains 6.519258e-9.
+Strict all-target engine Clippy, formatting, simulator freshness and diff
+checks passed. The full log is
+`windfall-root-e1-serial-clock-green.log`. Earlier fresh root checks passed
+the four project tests and 70 focused shared-WASM UI cases. Matching 174
+bindings and the 1,881,168-byte WASM are committed in root. A new independent
+downstream review still controls final three-row acceptance.
