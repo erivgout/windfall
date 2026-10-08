@@ -47,6 +47,7 @@ pub(crate) enum Kind {
     BridgeEventFlood,
     BridgeIgnoredStreamError,
     BridgeStateBoundary,
+    BridgeControlledProcessError,
     /// Sine instrument that takes CLAP notes and reports latency.
     Sine,
     /// The same instrument with a note port that only speaks MIDI.
@@ -234,6 +235,12 @@ const SPECS: &[Spec] = &[
         kind: Kind::BridgeStateBoundary,
         id: c"org.windfall.test.bridge-state-boundary",
         name: c"Test Bridge Successful Native State Limit",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeControlledProcessError,
+        id: c"org.windfall.test.bridge-controlled-process-error",
+        name: c"Test Bridge Controlled Process Error",
         features: EFFECT,
     },
 ];
