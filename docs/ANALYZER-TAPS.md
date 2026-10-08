@@ -422,6 +422,91 @@ Earlier executions of the same case measured 589.108, 584.866 and 601.186 ms, wi
 observed publication maxima of 37.400, 25.000 and 3.200 µs respectively. These variations reinforce
 that the measurements do not provide a worst-case scheduling guarantee.
 
+### Default parallel test contention follow-up (2026-10-08 UTC)
+
+The foundation `421bf5ebf2406d660751eb8cbd670527e09b13d7` and naming/proposal
+follow-up `51c88f45212f9592b62349a9bc11ecf9d7343bc9` remain immutable. Their
+original 16-case passing runs used `RUST_TEST_THREADS=1`. Parent Windows CI for
+pushed `290f`, run `37756198700`, job `113241248719`, ran `cargo test --workspace`
+with default test parallelism: **14 passed, 2 failed, 1 ignored** in this target.
+The original test-file lines 635 and 709 respectively observed 2 versus expected
+1 live tap and unwrapped an `InstanceLimit` refusal. The local captured CI log is
+`C:/Temp/windfall-290-windows-ci.log`; this is executed CI evidence, separate from
+the earlier reviewers' source/API inspections.
+
+Before repository edits, the unchanged owner target with `RUST_TEST_THREADS`
+unset reproduced **9 passed/7 failed/1 ignored** and **11 passed/5 failed/1
+ignored**. Filtering only the two quota tests produced two failures; each passed
+when invoked alone. The tests assumed exclusive use of production process-wide
+accounting, while other fixture threads could admit or retire unrelated owners.
+Neither a captured usage baseline nor a captured aggregate byte count is stable
+across those independent lifetimes. The documented contract remains eight taps,
+eight slots, and 32 MiB aggregate charged reservation, with credit retained until
+the last shared owner is destroyed. `usage()` remains separate atomic observations.
+
+The repair is confined to this integration-test executable: a private
+`Mutex<()>` and `analyzer_test_scope()` helper. Every one of its **17 test entries**
+declares `let _analyzer_scope = analyzer_test_scope();` as its first local,
+including the 16 cases in the table above and ignored `release_cpu_throughput`.
+The guard is retained through the entire case. Reverse local destruction releases
+it after every subsequently declared endpoint/native handle; explicit shutdowns
+and drops also occur while it is held. Acquisition precedes `usage()` baselines,
+preparation, allocator-guard intervals, and every `Instant` timing interval.
+Production callback code has no new lock. This only isolates fixture lifetimes
+within `analyzer_taps`; workspace CI and other test executables retain their
+normal parallelism. All original quota, signal, allocator, and timing assertions
+are unchanged. A mechanical audit counted exactly 17 first-local guards and
+restored the complete `51c88` test file by removing only the new import, helper,
+and guard statements, byte-for-byte after newline normalization.
+
+Poison recovery acquires the poisoned guard and first asserts that usage is
+exactly zero taps, zero slots, and zero charged bytes. Only then is poison cleared
+and a subsequent case allowed to execute. Libtest keeps the original case's
+failure. Nonzero retained quota produces an explicit cleanup failure without
+resetting counters, releasing someone else's credit, or clearing poison. A
+private diagnostic compiled the exact helper from this test file and verified
+native-handle/endpoint unwind cleanup and subsequent recovery. With one externally
+retained tap, recovery refused at `Usage { taps: 1, slots: 0, reserved_bytes:
+2914168 }`, preserving that usage and poison until real retirement. A separate
+private libtest run intentionally failed its first case and passed its subsequent
+case after verified cleanup: **1 passed/1 failed, exit 101**, proving the original
+failure remains visible. These injected failures are diagnostic evidence, not
+additional committed cases or passing claims for the production suite.
+
+The unchanged private production-interface quota probe was rerun after the
+repair. Gated unrelated admission again yielded 2 taps versus a test-local
+expectation of 1; one unrelated retained owner plus seven local taps correctly
+refused the local eighth. In each of 16 paired concurrent rounds, nine small
+contenders admitted exactly eight plus one `InstanceLimit`; eight maximum-layout
+contenders admitted four plus four `ByteLimit`. Stable charged usage was exactly
+the admitted layout sum, at most 32 MiB, and returned to zero after every joined
+retirement. Reader-held tap credit and installer-held slot credit remained
+charged until their last owners left. Diagnostic sources/executables/logs are
+private ignored artifacts under `target/t8-native/diagnostics`, not checkpoint
+source or installed product hooks. All diagnostic/native helper threads joined.
+
+Post-repair verification used the same Git Bash MSVC environment and private
+target/bindings directories:
+
+```bash
+source scripts/msvc-env.sh
+export CARGO_BUILD_JOBS=1
+export CARGO_TARGET_DIR=target/t8-native TS_RS_EXPORT_DIR=target/t8-bindings
+unset RUST_TEST_THREADS
+cargo test -p windfall-engine --test analyzer_taps --locked --offline
+export RUST_TEST_THREADS=1
+cargo test -p windfall-engine --test analyzer_taps --locked --offline
+cargo clippy -p windfall-engine --all-targets --locked --offline -- -D warnings
+rustfmt --edition 2024 --check crates/windfall-engine/tests/analyzer_taps.rs
+git diff --check
+```
+
+Both full-target test commands passed **16 cases, 0 failed, 1 existing CPU ignore**;
+strict engine all-target Clippy, owned rustfmt, and diff checks passed. The optional
+release timing case was not rerun: its first-local guard lies outside every
+measured interval, and the measurement reported above retains its original
+provenance. This repair adds no production changes or T8/EQ acceptance closure.
+
 ## Concrete next integration packet
 
 The next change requires narrow grants from existing engine/desktop owners; no
