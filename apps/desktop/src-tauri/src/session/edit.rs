@@ -359,6 +359,7 @@ impl Session {
             action.apply(&mut document)?;
             for asset in &document.project().samples {
                 if !pool.contains(asset.id)
+                    && !loading.contains(&asset.id)
                     && let Ok(path) =
                         super::samples::locate(asset, directory.as_deref(), &self.inner.factory_dir)
                     && let Some(audio) = self.inner.cache.peek(&path)

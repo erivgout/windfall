@@ -125,9 +125,14 @@ impl Session {
 
         if let Some(prepared) = prepared {
             for (id, audio) in prepared.iter().filter(|(id, _)| wanted.contains(id)) {
+                // This publication does not own a pending decoder's lifetime.
+                // Its existing held source (if any) stays in place until that
+                // job finishes and schedules its own guarded preparation.
+                if loading.contains(&id) {
+                    continue;
+                }
                 pool.insert(id, audio.clone());
                 loaded.insert(id);
-                loading.remove(&id);
                 failed.remove(&id);
             }
         }

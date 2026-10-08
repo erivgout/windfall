@@ -25,15 +25,18 @@ browser, MIDI and generated-artifact changes.
    Publication attaches exactly the prepared handles and marks them loaded before
    installing the plan. It never peeks a newer cache allocation at publication.
    Sources not resolved by preparation decode later and trigger their own guarded
-   publication. The real WAV/cache barrier regression removes a spectral channel
+   publication. Original pending loads are never filled from the cache or
+   superseded by prepared publication. The real WAV/cache barrier regression removes a spectral channel
    and asset, pauses Undo after preparing A, replaces the cache with B through
-   sample info, then requires restored A identity and export readiness.
+   sample info, then requires restored A identity, audible sequence and float WAV
+   parity against the frozen prepared source.
 4. **Clip Apply misses newly attached sampler sources:** final validation compares
    source maps symmetrically, including additions, removals, replacements and
    distinct empty buffers. It also checks pending loads and document replacement
    tickets. The regression pauses clip preparation with missing spectral audio,
    reloads the file and publishes its sampler bank, then requires stale clip
-   refusal without changing the newer source, bank, plan or document.
+   refusal without changing the newer source, bank, plan or document, including
+   repeated note-on parity and float WAV export parity.
 
 ## Candidate API for the import owner
 
@@ -43,7 +46,9 @@ lock order. Build the batch and predicted source ID under those same guards.
 The helper dispatches only a cloned document and snapshots generation, edits,
 replacement tickets, the **original** source map and pending-loading IDs.
 Candidate source overlays do not participate in comparison with the original
-live map. A musical no-op ignores all overlays.
+live map. A musical no-op ignores all overlays. A changed overlay for an original
+pending-loading ID is refused. Cache resolution skips all original loading IDs,
+including unrelated sampler assets.
 
 Drop State/library guards before `ticket.prepare()`. This performs bounded
 sampler DSP and complete plan compilation off State. It does not acquire
@@ -58,8 +63,9 @@ pending-load/provenance and project-directory guards. Call
 `prepared.commit(&mut State)` only under that exclusion. The method revalidates
 generation/edit/replacement/original-source/pending-load snapshots, dispatches
 once and publishes exact handles. A changed command marks attached candidates
-loaded and clears failed/loading; a no-op neither attaches overlays nor changes
-musical history. Successful no-op bank repair is still published.
+loaded and clears failed; it preserves other jobs' pending-loading state. A
+no-op neither attaches overlays nor changes musical history. Successful no-op
+bank repair is still published.
 
 Normal sample document edits use the same ticket taken before dropping their
 initial locks, avoiding a second snapshot in a newly opened document. Sampler
@@ -77,6 +83,15 @@ history RED failed prepared/restored source identity; the clip RED incorrectly
 returned success after source reload. Logs are ignored local artifacts under
 `target/n1-r1-{noop,history,clip}-red.log`.
 
+The import owner identified a follow-up lifetime gap in the helper's resolution
+of unrelated pending loads. Two additional compiled RED tests pause a real
+decoder at `samples:decoded`, replace the path cache through sample info, then
+publish a candidate edit or Undo. Both failed because publication superseded the
+outstanding decode. Candidate/history resolution now skips loading IDs, and
+source synchronization leaves their jobs in control. After releasing the
+decoder, the tests require its exact held source and guarded sampler bank.
+The RED log is `target/n1-r1-pending-load-red.log`.
+
 The native tests use the cached worktree target, `CARGO_BUILD_JOBS=1`, one Cargo
 process at a time and isolated temporary TypeScript exports. The helper fixture
 uses `SamplePool::with_sampler_budget(256 * 1024)` with a retained audible bank,
@@ -93,6 +108,20 @@ need the parent's fresh bindings (`ArpDirection`, `FlamPosition`, `RhythmMode`
 and expanded `NoteTransform`). No sampler TypeScript/model command changed in
 this repair. Artifact regeneration remains with the parent; no generated output
 is included in these commits.
+
+The pending-load follow-up passed all **18 native sampler/session tests**,
+including the stronger audible/WAV history and clip checks, and strict scoped
+Clippy (`windfall-engine`, `windfall-desktop`, all targets, `-D warnings`) plus
+workspace formatting. Engine checks passed **49 sampler integration tests**,
+**3 bank/budget unit tests** and the new exact-source-map unit test. Callback
+allocator guards again measured zero allocations/reallocations/frees at first
+notes, prepared range edges, cuts, stealing, reload, eviction and retirement.
+The unchanged stationary sine fixture again measured **0.00002433 cent** worst
+error; this remains synthetic evidence.
+Publication compatibility checks passed **80 native tests** across document,
+playlist, recording, editor/slicer, save/open and export. The final local logs
+are `target/n1-r1-final-{sampler,clippy,fmt,native-compatibility}.log` and
+`target/n1-r1-engine-{sampler,source-map}.log`. None are committed.
 
 No DSP algorithm, prepared range policy, callback allocation path, tape geometry,
 plugin runtime/provider, archive format, MIDI panic policy or generated bindings

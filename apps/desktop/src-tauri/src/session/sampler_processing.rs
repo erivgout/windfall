@@ -124,6 +124,11 @@ impl Session {
         let mut candidate_pool = state.pool.clone();
         if !applied.touched.is_empty() {
             for (id, audio) in sources {
+                if state.loading.contains(&id) {
+                    return Err(
+                        "The candidate source is already loading. Wait and try again.".into(),
+                    );
+                }
                 if !document
                     .project()
                     .samples
@@ -137,6 +142,7 @@ impl Session {
             if applied.touched.samples {
                 for asset in &document.project().samples {
                     if !candidate_pool.contains(asset.id)
+                        && !state.loading.contains(&asset.id)
                         && let Ok(path) = super::samples::locate(
                             asset,
                             state.sample_dir.as_deref(),
