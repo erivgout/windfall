@@ -584,6 +584,94 @@ increment. Production algorithms remain unavailable. The P1 engine readiness
 API is being repaired and composed separately; no native-preparation or full M1
 closure follows from these frontend checks.
 
+### App R2 diagnostics and unresolved drive namespace authority
+
+The old real Session drive-alias trigger was also executed before adding any
+production namespace change. An unused local `Z:` mapped an owned temporary
+directory through `DefineDosDeviceW`. At the actual `analysis:prepared` pause,
+after source hashing and identity checking with the original filesystem handles
+live, another owned definition remapped `Z:` to a second directory. Its WAV had
+different PCM and the same encoded length and mtime. The original file identity,
+loaded `AudioIdentity`, stored source path and document snapshot stayed unchanged.
+Actual Apply succeeded, so the regression failed with "remapped DOS drive source
+was applied" (RED). Filesystem handles do not pin the DOS drive mapping.
+
+The bounded Windows probes use only test-local `NtOpenSymbolicLinkObject`,
+`NtQuerySymbolicLinkObject`, `NtCreateSymbolicLinkObject`, `QueryDosDeviceW` and
+`DefineDosDeviceW` bindings.
+The native child inherits a non-LocalSystem, medium-integrity token; administrator
+membership is deny-only. Before creating local `Z:`, both the effective `Z:` and
+explicit `Global\Z:` queries were absent. Its retained NT object path was
+`\??\Z:`. Push and remove/recreate returned error 183 while that handle lived;
+removing the original definition returned success, but the original effective
+mapping and file bytes stayed visible. Retargeting succeeded after handle
+retirement. Exact owned targets are verified before exact-match removal, and
+every definition uses RAW_TARGET and NO_BROADCAST flags.
+
+A separate unused local drive alias directly targeted `\Device\HarddiskVolume4`.
+Its retained object similarly blocked retargeting. Physical `C:` was only queried
+and opened read-only through `\??\C:`; no physical or competitor mapping was
+modified. This local alias result does **not** prove effective namespace authority
+for an ordinary global physical drive.
+
+The global/local shadow axis is **unresolved**. The owned fixture attempted
+`Global\Z:` only after both effective and explicit global queries were absent;
+creation returned error 5 (AccessDenied). Therefore it never acquired the proposed
+`\??\Global\Z:` handle and never attempted a local shadow of that owned global
+fixture. Nor was an ordinary nonadministrator shadow of existing global `C:`
+attempted: changing a physical or competitor mapping was outside the grant.
+The diagnostic test returns after reporting this refusal; its libtest success
+is not a passed authority axis. Microsoft's
+[DOS namespace documentation](https://learn.microsoft.com/en-us/windows/win32/fileio/defining-an-ms-dos-device-name)
+describes separate local/global namespaces and local precedence. Those facts and
+the local probe successes do not establish that a retained global object prevents
+a new effective local shadow.
+
+The additional normal-medium-token prototype created only a nonpermanent local
+link at an unused `\??\Z:` slot, with effective and explicit global queries absent
+before creation. Attributes were exactly `OBJ_CASE_INSENSITIVE` (no PERMANENT,
+OPENIF or replacement); the owned query handle retained the exact target.
+Another native creation at the same name returned `0xc0000035` while the original
+object target and effective file bytes stayed original. Closing the owned handle
+removed the temporary object; only then could a new local object expose the
+second owned directory. Exact-target checks and handle-only retirement preserved
+both directories and left effective/global slot queries empty. This case actually
+executed (one check, 0.01 seconds); it did not take an unavailable early return.
+No global-creation attempt or privileged helper ran in this additional window.
+
+The minimum proposed support contract would require an ordinary canonical local
+path whose effective DOS object is established as local in an unchanged token/
+DOS context, whose target is a direct physical-volume device, and whose object,
+ordinary ancestors and leaf stay retained through commit. A target string or
+query alone is insufficient to establish that context/object authority. Until
+those conditions can be established, refuse before publication with
+`analysis:sourceNamespace`; this includes alias chains, SUBST/transitive mappings
+and global or otherwise unproved mappings. Ordinary global physical-drive paths
+remain pending rather than being silently accepted or rewritten. This is a
+proposal for parent review, not an implemented policy or additional supported
+namespace. The current prototype does not supply a production local/global
+classification seam.
+
+Remaining external proof requires a parent-controlled, genuinely unused global
+fixture targeting an owned directory. A normal-token process must hold the
+original global object while attempting an owned local shadow through both
+DefineDosDevice and nonpermanent NtCreateSymbolicLinkObject, and compare effective
+ordinary-letter bytes with the retained object's target. A new effective local
+target while the old global object lives invalidates the single-global-handle
+proposal. Local collision refusal cannot substitute for this axis. No existing
+physical/competitor mapping may be used; no elevation, helper or global fixture
+creation is authorized to this implementation owner.
+
+Production `SourceFile` remains exactly `9243f20f`; there is no new supported path
+policy, original-path rewrite, fallback, or final-guard query/IO/allocation/drop.
+One additional retained DOS object would change the proposed per-file cap from
+65 to 66 and the serialized 17-file maximum from 1105 to 1122 handles, but these
+are prototype calculations, not accepted production caps. Strict desktop
+all-target Clippy and owned Rust formatting/diff checks pass for the prototype;
+the source-remap regression deliberately remains RED. No full Session GREEN or
+global namespace guarantee follows from this receipt. The separate global P1
+native-factory preparation/installation gate remains open.
+
 ## Dependency license evidence
 
 The only dependency graph addition is the native analysis package; sha2 0.10.9

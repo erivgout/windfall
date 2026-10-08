@@ -9,6 +9,8 @@ use windfall_ipc::{AnalysisApply, AnalysisJob, AnalysisStatus};
 use windfall_ipc::{AnalysisModel, AnalysisOutputRole, AnalysisProvenance, AnalysisSubmit};
 use windfall_project::ClipId;
 use windfall_project::SampleId;
+#[cfg(windows)]
+mod dos_device;
 
 struct CopyAdapter;
 impl native::AnalysisAdapter for CopyAdapter {
@@ -869,6 +871,93 @@ fn analysis_junction_retarget_after_hash_cannot_install_a_changed_source_namespa
     assert!(
         worker.join().unwrap().is_err(),
         "retargeted junction was applied"
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+}
+
+#[cfg(windows)]
+#[test]
+fn analysis_substituted_drive_retarget_after_hash_cannot_install_a_changed_source() {
+    let rig = Rig::new();
+    let (_, source, original) = fixture(&rig);
+    let first = rig.folder.path().join("dos-first");
+    let second = rig.folder.path().join("dos-second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::copy(source, first.join("original.wav")).unwrap();
+    windfall_codec::write_wav(
+        second.join("original.wav"),
+        &AudioBuffer::from_interleaved(48_000, 2, vec![0.75; 200]),
+        windfall_codec::WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let modified = std::fs::metadata(first.join("original.wav"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(second.join("original.wav"))
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    let mut drive = dos_device::Drive::new(format!(r"\??\{}", first.display()));
+    let source = format!(r"{}\original.wav", drive.name());
+    let result = rig
+        .session
+        .add_audio_clip_from_file(
+            &source,
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let clip = ClipId(*result.created.last().unwrap());
+    let before = rig.session.document_snapshot();
+    let sample = before.project.samples.last().unwrap();
+    assert_eq!(
+        sample.path,
+        windfall_project::SamplePath::External(source.clone())
+    );
+    let loaded_identity = rig.session.state().pool.get(sample.id).unwrap().identity();
+    let original_file_identity =
+        crate::library::file_identity(&first.join("original.wav")).unwrap();
+    let source_length = std::fs::metadata(&source).unwrap().len();
+    let job = ready(&rig, clip);
+    let hold = rig.session.hold("analysis:prepared");
+    let r = apply(&job, false);
+    let worker = rig
+        .session
+        .background(move |session| session.analysis_apply(r));
+    hold.wait(); // real source hash/identity passed; all old source handles live
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    assert_eq!(rig.session.document_snapshot(), before);
+    drive.push(format!(r"\??\{}", second.display())).unwrap();
+    assert_ne!(std::fs::read(&source).unwrap(), original);
+    assert_eq!(std::fs::metadata(&source).unwrap().len(), source_length);
+    assert_eq!(
+        std::fs::metadata(&source).unwrap().modified().unwrap(),
+        modified
+    );
+    assert_eq!(
+        crate::library::file_identity(&first.join("original.wav")).unwrap(),
+        original_file_identity
+    );
+    assert_eq!(
+        rig.session.state().pool.get(sample.id).unwrap().identity(),
+        loaded_identity
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert_eq!(std::fs::read(first.join("original.wav")).unwrap(), original);
+    eprintln!(
+        "R2_DOS old real Session effective source remapped at analysis:prepared while original handles remain live"
+    );
+    hold.release();
+    assert!(
+        worker.join().unwrap().is_err(),
+        "remapped DOS drive source was applied"
     );
     assert_eq!(rig.session.document_snapshot(), before);
 }
