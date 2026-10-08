@@ -311,12 +311,25 @@ impl IComponentTrait for Component {
         unsafe { self.write_state(state) }
     }
 }
-#[derive(Default)]
 struct Audio {
     rate: f64,
     phase: f64,
     velocity: f32,
     configured: bool,
+    held: [[bool; 128]; 16],
+    held_count: usize,
+}
+impl Default for Audio {
+    fn default() -> Self {
+        Self {
+            rate: 0.0,
+            phase: 0.0,
+            velocity: 0.0,
+            configured: false,
+            held: [[false; 128]; 16],
+            held_count: 0,
+        }
+    }
 }
 impl Component {
     unsafe fn notify_owner(&self, flags: i32) {
@@ -437,6 +450,8 @@ impl IAudioProcessorTrait for Component {
             let audio = unsafe { &mut *self.audio.get() };
             audio.phase = 0.0;
             audio.velocity = 0.0;
+            audio.held = [[false; 128]; 16];
+            audio.held_count = 0;
         }
         kResultOk
     }
@@ -521,9 +536,23 @@ impl IAudioProcessorTrait for Component {
                         && event.sampleOffset == frame
                     {
                         if event.r#type == 0 {
-                            audio.velocity = unsafe { event.__field0.noteOn.velocity };
+                            let note = unsafe { event.__field0.noteOn };
+                            let held = &mut audio.held[note.channel as usize][note.pitch as usize];
+                            if !*held {
+                                *held = true;
+                                audio.held_count += 1;
+                            }
+                            audio.velocity = note.velocity;
                         } else if event.r#type == 1 {
-                            audio.velocity = 0.0;
+                            let note = unsafe { event.__field0.noteOff };
+                            let held = &mut audio.held[note.channel as usize][note.pitch as usize];
+                            if *held {
+                                *held = false;
+                                audio.held_count -= 1;
+                            }
+                            if audio.held_count == 0 {
+                                audio.velocity = 0.0;
+                            }
                         }
                     }
                 }

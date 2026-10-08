@@ -72,6 +72,7 @@ pub(super) struct VstInstance {
     active: bool,
     editor: Option<super::editor::Editor>,
     controller_values: Vec<u64>,
+    deactivation_values: Vec<(u32, f64, Option<f64>)>,
 }
 fn utf16(text: &[u16]) -> String {
     String::from_utf16_lossy(&text[..text.iter().position(|&v| v == 0).unwrap_or(text.len())])
@@ -247,6 +248,11 @@ impl VstInstance {
         layout.parameter_count = params.len() as u32;
         values.sort_by_key(|v| v.id);
         let controller_values = values.iter().map(|v| v.normalized().to_bits()).collect();
+        let deactivation_values = values
+            .iter()
+            .filter(|v| v.writable)
+            .map(|v| (v.id, 0.0, None))
+            .collect();
         let separate = separate_guard.is_some();
         // Ownership of termination moves to Objects. Drop COM refs without
         // calling terminate a second time (forget only the initialized wrappers).
@@ -271,6 +277,7 @@ impl VstInstance {
             active: false,
             editor: None,
             controller_values,
+            deactivation_values,
         })
     }
     fn value(&self, id: u32) -> Option<&Value> {
@@ -294,13 +301,43 @@ impl InstanceBackend for VstInstance {
             .as_any_mut()
             .downcast_mut::<VstProcessor>()
             .ok_or_else(|| PluginError::Deactivate("incorrect processor backend".into()))?;
+        if let Some(controller) = &self.objects.controller {
+            for (id, before, after) in &mut self.deactivation_values {
+                *before = unsafe { controller.getParamNormalized(*id) };
+                *after = None;
+            }
+        }
         processor.quiesce()?;
         // SAFETY: exclusive returned processor, creating owner thread.
         if unsafe { self.objects.component.setActive(0) } != kResultOk {
             return Err(PluginError::Deactivate("setActive(false) refused".into()));
         }
         self.active = false;
+        if let Some(controller) = &self.objects.controller {
+            for (id, before, after) in &mut self.deactivation_values {
+                let value = unsafe { controller.getParamNormalized(*id) };
+                if value.is_finite() && value.to_bits() != before.to_bits() {
+                    *after = Some(value.clamp(0.0, 1.0));
+                }
+            }
+        }
         Ok(())
+    }
+    fn deactivation_param_value(&self, id: u32) -> Option<f64> {
+        self.deactivation_values
+            .iter()
+            .find(|edit| edit.0 == id)?
+            .2
+            .map(|value| value * self.value(id).expect("known parameter").scale)
+    }
+    fn flush_retired_params(&mut self, changes: &[HostEvent], out: &mut dyn FnMut(PluginEvent)) {
+        for change in changes {
+            if let HostEvent::Param { id, .. } = change
+                && self.deactivation_param_value(*id).is_none()
+            {
+                self.flush_params(std::slice::from_ref(change), out);
+            }
+        }
     }
     fn layout(&self) -> &PluginLayout {
         &self.layout
@@ -535,6 +572,9 @@ impl InstanceBackend for VstInstance {
                 .store(self.objects.processor.getTailSamples(), Ordering::Relaxed);
         }
         self.active = true;
+        for (_, _, after) in &mut self.deactivation_values {
+            *after = None;
+        }
         Ok(Box::new(processor))
     }
     fn finish_deactivation(&mut self, processor: Option<Box<dyn ProcessorBackend>>) {
@@ -551,6 +591,15 @@ impl InstanceBackend for VstInstance {
         processor.retain_pending_edits();
         processor.stop();
         drop(processor);
+        // Native lifecycle edits are newer than every returned editor/audio
+        // point. Restore them after retaining those older pending points.
+        for (id, _, after) in &self.deactivation_values {
+            if let Some(value) = after {
+                let v = self.value(*id).expect("known parameter");
+                v.set(*value);
+                v.pending.store(true, Ordering::Relaxed);
+            }
+        }
         if let Some(controller) = &self.objects.controller {
             for value in self.values.iter() {
                 if value.pending.load(Ordering::Relaxed) {

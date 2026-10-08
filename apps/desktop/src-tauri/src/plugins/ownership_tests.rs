@@ -139,6 +139,186 @@ fn pause_adapter(runtime: &Runtime, audio: &mut dyn HostedEffect) -> mpsc::Sende
 }
 
 #[test]
+fn runtime_repair_capture_reconciles_absent_controls_and_keeps_timeout_intent() {
+    let (runtime, binding) = fixture(0);
+    let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    audio.set_param(7, 0.5);
+    audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+    let token = runtime.selected_token(binding.target).unwrap();
+    let resume = pause_adapter(&runtime, audio.as_mut());
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.set_param(7, 0.9);
+            audio.set_param(7, 0.75);
+            audio.process(&mut [], &mut []);
+        }),
+        0
+    );
+    resume.send(()).unwrap();
+    runtime.call(|_| Ok(())).unwrap();
+    let mut project = Project::new("Pending inactive capture");
+    project.plugins.push(binding);
+    project.plugins[0]
+        .parameters
+        .iter_mut()
+        .find(|p| p.id == 7)
+        .unwrap()
+        .value = 0.75;
+    runtime.commit_parameters(&project);
+    let error = runtime.capture(project.clone()).unwrap_err();
+    assert!(error.contains("boundary"), "{error}");
+    assert_eq!(
+        runtime.selected_token(project.plugins[0].target),
+        Some(token)
+    );
+    let saved = capture(&runtime, project, audio.as_mut()).unwrap();
+    assert_eq!(
+        saved.plugins[0]
+            .parameters
+            .iter()
+            .find(|p| p.id == 7)
+            .unwrap()
+            .value,
+        0.75
+    );
+    assert_eq!(runtime.selected_token(saved.plugins[0].target), Some(token));
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| audio.process(&mut left, &mut right)),
+        0
+    );
+    assert_eq!(left, [1.5; 64]);
+    let mut reopened = runtime
+        .render_factory()
+        .unwrap()
+        .effect(&saved.plugins[0], 48_000, 64)
+        .unwrap();
+    left.fill(1.0);
+    right.fill(1.0);
+    reopened.process(&mut left, &mut right);
+    assert_eq!(left, [1.5; 64]);
+}
+
+#[test]
+fn runtime_repair_capture_refusal_retains_pending_controls_and_stale_snapshot_is_rejected() {
+    let (runtime, binding) = fixture(6);
+    let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    audio.set_param(7, 0.5);
+    audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+    let token = runtime.selected_token(binding.target).unwrap();
+    let mut project = Project::new("Pending refusing capture");
+    project.plugins.push(binding);
+    let stale = project.clone();
+    project.plugins[0]
+        .parameters
+        .iter_mut()
+        .find(|p| p.id == 7)
+        .unwrap()
+        .value = 0.75;
+    runtime.commit_parameters(&project);
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| audio.set_param(7, 0.75)),
+        0
+    );
+    let error = runtime.capture(stale).unwrap_err();
+    assert!(error.contains("parameters changed"), "{error}");
+    let error = capture(&runtime, project.clone(), audio.as_mut()).unwrap_err();
+    assert!(error.contains("setActive(false) refused"), "{error}");
+    assert_eq!(
+        runtime.selected_token(project.plugins[0].target),
+        Some(token)
+    );
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| audio.process(&mut left, &mut right)),
+        0
+    );
+    assert_eq!(
+        left, [1.5; 64],
+        "refusal must preserve the exact accepted queue"
+    );
+    audio.set_param(7, 0.25);
+    left.fill(1.0);
+    right.fill(1.0);
+    audio.process(&mut left, &mut right);
+    project.plugins[0]
+        .parameters
+        .iter_mut()
+        .find(|p| p.id == 7)
+        .unwrap()
+        .value = 0.625;
+    runtime.commit_parameters(&project);
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| audio.set_param(7, 0.625)),
+        0
+    );
+    let saved = capture(&runtime, project, audio.as_mut()).unwrap();
+    assert_eq!(
+        saved.plugins[0]
+            .parameters
+            .iter()
+            .find(|p| p.id == 7)
+            .unwrap()
+            .value,
+        0.625
+    );
+    assert_eq!(runtime.selected_token(saved.plugins[0].target), Some(token));
+    left.fill(1.0);
+    right.fill(1.0);
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| audio.process(&mut left, &mut right)),
+        0
+    );
+    assert_eq!(left, [1.25; 64]);
+}
+
+#[test]
+fn runtime_repair_completed_automation_readback_supersedes_observed_document_control() {
+    let (runtime, binding) = fixture(0);
+    let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
+    audio.transport(transport());
+    let mut project = Project::new("Later automation");
+    project.plugins.push(binding);
+    project.plugins[0]
+        .parameters
+        .iter_mut()
+        .find(|p| p.id == 7)
+        .unwrap()
+        .value = 0.75;
+    runtime.commit_parameters(&project);
+    let mut left = [1.0; 64];
+    let mut right = left;
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            audio.set_param(7, 0.75);
+            audio.process(&mut left, &mut right);
+            // Once the document control has processed, newer automation is not
+            // masked by its older stored value during save.
+            audio.set_param(7, 0.25);
+            left.fill(1.0);
+            right.fill(1.0);
+            audio.process(&mut left, &mut right);
+        }),
+        0
+    );
+    assert_eq!(left, [0.5; 64]);
+    let saved = capture(&runtime, project, audio.as_mut()).unwrap();
+    assert_eq!(
+        saved.plugins[0]
+            .parameters
+            .iter()
+            .find(|p| p.id == 7)
+            .unwrap()
+            .value,
+        0.25
+    );
+}
+
+#[test]
 fn paused_effect_retains_the_latest_parameter_without_an_engine_resend() {
     let (runtime, binding) = fixture(0);
     let mut audio = runtime.effect(&binding, 48_000, 64).unwrap();
