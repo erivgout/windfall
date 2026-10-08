@@ -138,6 +138,8 @@ mod shared;
 mod state;
 mod stems;
 mod tempo;
+mod timeline;
+pub use timeline::MAX_NAVIGATION_TRANSITIONS;
 #[cfg(test)]
 mod test_alloc;
 mod voice;
@@ -147,7 +149,7 @@ pub use controller::{Controller, PreparedProject, StreamStats};
 pub use device::Engine;
 pub use pool::SamplePool;
 pub use processor::Processor;
-pub use render::{RenderOptions, Rendered, TAIL_SILENCE_DB, render, render_reporting};
+pub use render::{RenderError, RenderOptions, Rendered, TAIL_SILENCE_DB, render, render_reporting};
 pub use stems::{
     Stem, StemError, StemMode, StemOptions, Streamed, render_stems, render_streaming,
     render_streaming_checked, stems,

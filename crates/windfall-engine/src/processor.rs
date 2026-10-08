@@ -38,6 +38,7 @@ pub struct Processor {
     /// The moving values that belong to `plan`. Always built for it.
     state: Box<PlanState>,
     sequencer: Sequencer,
+    ignored_pause: Option<u32>,
     voices: VoicePool,
     /// The audio clips of the playlist that are sounding.
     clips: ClipPlayer,
@@ -99,6 +100,7 @@ impl Processor {
             frame: 0,
             state,
             sequencer: Sequencer::new(sample_rate, &plan),
+            ignored_pause: None,
             plan,
             voices: VoicePool::new(sample_rate),
             clips: ClipPlayer::new(sample_rate),
@@ -139,11 +141,18 @@ impl Processor {
         let (frames, stray) = out.as_chunks_mut::<2>();
         stray.fill(0.0);
         let mut rest = frames;
+        let mut navigation_left = crate::timeline::MAX_NAVIGATION_TRANSITIONS;
         while !rest.is_empty() {
-            let (block, later) = rest.split_at_mut(self.next_block(rest.len()));
+            self.apply_navigation(&mut navigation_left);
+            let most = self.next_block(rest.len());
+            let next = self.navigation_boundary().map_or(most, |(frame, _, _)| {
+                most.min(frame.saturating_sub(self.frame).max(1) as usize)
+            });
+            let (block, later) = rest.split_at_mut(next);
             self.process_block(block);
             rest = later;
         }
+        self.apply_navigation(&mut navigation_left);
         self.publish_automation();
         self.shared
             .publish_transport(self.transport_sequence, self.sequencer.playing());
@@ -338,6 +347,7 @@ impl Processor {
             | Message::Preview(_) => true,
             Message::SetTransport { mode, .. } => *mode != self.sequencer.mode(),
             Message::SetPlan { .. }
+            | Message::SetRegion(_)
             | Message::NoteOff { .. }
             | Message::HardwareNote { .. }
             | Message::StopPreview
@@ -369,7 +379,16 @@ impl Processor {
                 }
             }
             Message::Seek(tick) => {
+                self.ignored_pause = None;
                 if self.sequencer.seek(tick, &self.plan, now) {
+                    self.end_sequenced();
+                }
+            }
+            Message::SetRegion(region) => {
+                if region != self.sequencer.region() {
+                    self.ignored_pause = None;
+                }
+                if self.sequencer.set_region(region, &self.plan, now) {
                     self.end_sequenced();
                 }
             }
@@ -470,6 +489,96 @@ impl Processor {
     fn hold_if_stopped(&mut self, tick: f64) {
         if !self.sequencer.playing() && self.state.engaged > 0 {
             self.hold = Some(tick);
+        }
+    }
+
+    fn navigation_boundary(&self) -> Option<(u64, u32, crate::timeline::NavigationAction)> {
+        use crate::timeline::NavigationAction;
+        if !self.sequencer.in_song() {
+            return None;
+        }
+        let region = self.sequencer.region();
+        let mut next = region.map(|r| {
+            (
+                self.sequencer.song_frame(&self.plan, r.end).max(self.frame),
+                r.end,
+                if self.sequencer.song_looping() {
+                    NavigationAction::Jump(r.start)
+                } else {
+                    NavigationAction::Pause
+                },
+            )
+        });
+        if self.sequencer.navigation_enabled() {
+            for point in &self.plan.navigation {
+                if self.ignored_pause == Some(point.tick)
+                    || (point.looping && (region.is_some() || !self.sequencer.song_looping()))
+                    || region.is_some_and(|r| point.tick < r.start || point.tick >= r.end)
+                {
+                    continue;
+                }
+                let Some(frame) = self
+                    .sequencer
+                    .navigation_frame(&self.plan, point.tick, self.frame)
+                else {
+                    continue;
+                };
+                if next.is_none_or(|(next_frame, _, _)| frame < next_frame) {
+                    next = Some((frame, point.tick, point.action));
+                }
+            }
+        }
+        next
+    }
+
+    fn apply_navigation(&mut self, remaining: &mut u32) {
+        use crate::timeline::NavigationAction;
+        while let Some((frame, tick, action)) = self.navigation_boundary() {
+            if frame > self.frame {
+                break;
+            }
+            if *remaining == 0 {
+                self.shared
+                    .navigation_overflows
+                    .fetch_add(1, Ordering::Relaxed);
+                let tick = self.sequencer.raw_song_tick(&self.plan, self.frame);
+                self.sequencer.pause_at(tick);
+                self.end_sequenced();
+                self.clips.release_all();
+                self.hold_if_stopped(tick);
+                break;
+            }
+            *remaining -= 1;
+            self.end_sequenced();
+            self.clips.release_all();
+            match action {
+                NavigationAction::Pause => {
+                    self.ignored_pause = Some(tick);
+                    self.sequencer.pause_at(f64::from(tick));
+                    self.hold_if_stopped(f64::from(tick));
+                }
+                NavigationAction::Jump(destination) => {
+                    self.ignored_pause = None;
+                    let destination = self
+                        .sequencer
+                        .region()
+                        .map_or(destination, |r| destination.min(r.end));
+                    self.sequencer
+                        .seek(f64::from(destination), &self.plan, self.frame);
+                    let shift = self.sequencer.take_clock_shift();
+                    self.voices.shift_ends(shift);
+                    for unit in self.state.instrument_units() {
+                        unit.shift_ends(shift);
+                    }
+                    self.sequencer.take_jump();
+                    self.chase_clips();
+                    self.hold = None;
+                    self.landed = true;
+                }
+            }
+            // Restore automation immediately at a navigation destination,
+            // using the existing 64-frame ramp contract and no new DSP API.
+            self.automate();
         }
     }
 
@@ -599,13 +708,19 @@ impl Processor {
             .tempo_map
             .as_ref()
             .map_or(tick, |map| map.warp(tick));
+        let signature = self.plan.meters[..self
+            .plan
+            .meters
+            .partition_point(|(at, _)| f64::from(*at) <= tick)]
+            .last()
+            .map_or(self.plan.signature, |(_, signature)| *signature);
         let transport = crate::plugins::PluginTransport {
             playing: self.sequencer.playing(),
             tempo_bpm: self.state.tempo(),
             position_beats: tick / windfall_core::PPQ as f64,
             position_seconds: warped * 60.0 / (self.plan.tempo_bpm * windfall_core::PPQ as f64),
-            numerator: self.plan.signature.numerator as u16,
-            denominator: self.plan.signature.denominator as u16,
+            numerator: signature.numerator as u16,
+            denominator: signature.denominator as u16,
         };
         for (index, chain) in self.state.chains.iter_mut().enumerate() {
             for (place, unit) in chain.iter_mut().enumerate() {

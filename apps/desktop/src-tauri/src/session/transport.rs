@@ -127,6 +127,11 @@ impl Session {
     /// Tells the UI the transport state whether or not it changed, as after
     /// loading a project, when the UI starts over.
     pub(super) fn announce_transport(&self) -> TransportState {
+        // This authority is called after document replacement. Never carry a
+        // region with reused IDs/ticks into the replacement project.
+        self.controller()
+            .set_timeline_region(None)
+            .expect("clearing a region is valid");
         let mut told = lock(&self.inner.transport);
         let now = self.controller().transport();
         *told = now;

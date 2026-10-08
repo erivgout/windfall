@@ -26,6 +26,7 @@ mod recording;
 mod sampler_processing;
 mod slicer;
 mod song;
+mod timeline;
 mod versions;
 
 use std::collections::HashMap;

@@ -58,6 +58,7 @@ struct Inner {
 }
 
 struct State {
+    region: Option<windfall_project::TickRange>,
     link: Option<Link>,
     /// The plan most recently compiled, kept to hand to a new processor.
     plan: Arc<Plan>,
@@ -109,6 +110,7 @@ impl Controller {
                 shared: Arc::new(Shared::new()),
                 sampler_error: Mutex::new(None),
                 state: Mutex::new(State {
+                    region: None,
                     link: None,
                     plan: Arc::new(Plan::empty()),
                     hosted: None,
@@ -310,6 +312,13 @@ impl Controller {
     pub fn seek(&self, tick: f64) {
         let tick = if tick.is_finite() { tick.max(0.0) } else { 0.0 };
         let mut state = self.lock();
+        let tick = if state.transport.mode == PlayMode::Song {
+            state
+                .region
+                .map_or(tick, |r| tick.clamp(f64::from(r.start), f64::from(r.end)))
+        } else {
+            tick
+        };
         // Shown at once, and kept for the next stream when none is open.
         self.inner.shared.set_tick(tick);
         self.inner.shared.set_start(tick);
@@ -343,6 +352,31 @@ impl Controller {
             playing: self.playing(&state),
             ..state.transport
         }
+    }
+
+    /// Session-only song region, preserved across stream replacement.
+    pub fn set_timeline_region(
+        &self,
+        region: Option<windfall_project::TickRange>,
+    ) -> Result<(), String> {
+        if let Some(range) = region {
+            range.check()?;
+        }
+        let mut state = self.lock();
+        state.region = region;
+        state.send(Message::SetRegion(region));
+        Ok(())
+    }
+
+    pub fn timeline_region(&self) -> Option<windfall_project::TickRange> {
+        self.lock().region
+    }
+
+    pub fn navigation_overflows(&self) -> u32 {
+        self.inner
+            .shared
+            .navigation_overflows
+            .load(Ordering::Relaxed)
     }
 
     /// Plays a note on a channel right away, as from the UI keyboard.
@@ -629,6 +663,7 @@ impl State {
     }
 
     fn send_transport(&mut self) {
+        self.send(Message::SetRegion(self.region));
         self.send(Message::SetTransport {
             mode: self.transport.mode,
             pattern: self.transport.pattern,

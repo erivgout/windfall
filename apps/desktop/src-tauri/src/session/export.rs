@@ -239,6 +239,17 @@ impl Session {
     /// the UI matches them by.
     pub fn export_audio(&self, options: ExportOptions) -> Result<(), String> {
         let _recording = self.recording_idle()?;
+        if options.region_generation.is_some() != options.region_revision.is_some() {
+            return Err(
+                "A timeline export source requires both generation and revision.".to_owned(),
+            );
+        }
+        if let Some(range) = options.region {
+            if options.mode != PlayMode::Song {
+                return Err("A timeline export region requires song mode.".to_owned());
+            }
+            range.check()?;
+        }
         if options.path.trim().is_empty() {
             return Err("Choose where to save the file.".to_owned());
         }
@@ -262,6 +273,12 @@ impl Session {
         // and not of a project opened a moment later.
         let (project, pool, pattern, plugin_revision) = {
             let state = self.state();
+            if let (Some(generation), Some(revision)) =
+                (options.region_generation, options.region_revision)
+                && (generation != state.generation || revision != state.document.revision())
+            {
+                return Err("The project changed before the selected region could be exported. Select the region again.".to_owned());
+            }
             if state
                 .pool
                 .needs_sampler_preparation(state.document.project())
@@ -281,7 +298,10 @@ impl Session {
         };
         // Native state capture runs on its owner after releasing the document lock.
         let project = self.capture_plugins_idle(project, plugin_revision)?;
-        if options.mode == PlayMode::Song && project.playlist.clips.is_empty() {
+        if options.mode == PlayMode::Song
+            && options.region.is_none()
+            && project.playlist.clips.is_empty()
+        {
             return Err("The playlist is empty, so there is no song to export.".to_owned());
         }
         let frames = expected_frames(&project, pattern, &options);
@@ -608,6 +628,7 @@ fn write_files(
         .map_err(|error| error.to_string())?;
     let options = &job.options;
     let render = RenderOptions {
+        region: options.region,
         sample_rate: options.sample_rate,
         mode: options.mode,
         pattern: Some(job.pattern),
@@ -731,6 +752,10 @@ fn expected_frames(project: &Project, pattern: PatternId, options: &ExportOption
                 .or(project.patterns.first())
                 .map_or(0, |pattern| pattern.length_ticks());
             f64::from(length) * f64::from(options.pattern_loops)
+        }
+        PlayMode::Song if options.region.is_some() => {
+            let range = options.region.expect("a selected range exists");
+            f64::from(range.end - range.start)
         }
         PlayMode::Song => project
             .playlist

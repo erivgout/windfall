@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use windfall_project::Document;
 mod midi;
 mod slicer;
+mod timeline;
 
 /// The JSON of the value a call produced, or the message of its failure.
 pub type Reply = Result<String, String>;
@@ -142,6 +143,7 @@ pub mod ops {
     }
     pub use crate::midi::{doc_midi_export, doc_midi_import, midi_preview};
     pub use crate::slicer::{slice_analyze, slice_command};
+    pub use crate::timeline::{timeline_position, timeline_range};
     use serde::Deserialize;
     use windfall_project::file;
     use windfall_project::{Command, DispatchResult, Document, Project, SaveError, Touched};
@@ -399,6 +401,8 @@ macro_rules! export_ops {
 }
 
 export_ops! {
+    timeline_position
+    timeline_range
     slice_analyze
     slice_command
     browser_query

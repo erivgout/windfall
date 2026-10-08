@@ -68,7 +68,9 @@ impl IdIndex {
 
 #[derive(Debug)]
 pub(crate) struct Plan {
+    pub navigation: Vec<crate::timeline::NavigationPoint>,
     pub signature: windfall_project::TimeSignature,
+    pub meters: Vec<(u32, windfall_project::TimeSignature)>,
     pub plugins: Vec<windfall_project::PluginBinding>,
     pub plugin_factory: Option<std::sync::Arc<dyn crate::plugins::PluginFactory>>,
     pub tempo_bpm: f64,
@@ -549,7 +551,15 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let audio_clip_ids = IdIndex::new(audio_clips.iter().map(|clip| clip.id.0));
 
     let mut plan = Plan {
+        navigation: crate::timeline::compile(&project.playlist.timeline),
         signature: project.settings.time_signature,
+        meters: project
+            .playlist
+            .timeline
+            .meters
+            .iter()
+            .map(|m| (m.tick, m.signature))
+            .collect(),
         plugins: project.plugins.clone(),
         plugin_factory: pool.plugin_factory.clone(),
         tempo_bpm,
