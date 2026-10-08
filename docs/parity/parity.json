@@ -196,7 +196,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "T1 is implementing checked persisted song meter maps, shortened-bar conversions and MIDI/FLP song-map plumbing. Native tests are running; delivery, independent acceptance and per-pattern signatures remain required. See docs/IMPLEMENTATION-ROADMAP.md."
+      "notes": "Checked persisted song meter maps, shortened-bar conversions, MIDI/FLP song maps and anchored engine/CLAP/VST3 transport metadata are integrated. Undo, legacy loading, native ABI bar boundaries and malformed-map publication refusal are tested. Per-pattern signatures, scalar snap/grid refinement, combined native plugin/device acceptance and P1 off-lock preparation remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
     },
     {
       "id": "core-midi-support",
@@ -448,7 +448,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "A T3-bound implementation owns real per-lane note thumbnails in place of step buttons, with an explicit step view and accessible opening of the current piano-roll lane. Existing step-detail behavior remains tested in step view. Source delivery, shared-WASM UI checks, independent review and parent composition remain pending; no row closure yet."
+      "notes": "Bounded per-lane note thumbnails, explicit step/note views, canonical menu/shortcut actions and guarded opening of the current piano-roll lane are integrated. Independent review and composed shared-WASM tests preserve the existing step-detail assertions. Browser zoom/scroll/focus evidence is recorded; native desktop window-focus verification and final parity acceptance remain open. See docs/RACK-NOTE-PREVIEW.md and docs/integration/2026-10-08-review-rounds.md."
     },
     {
       "id": "win-rack-send-to-piano-roll",
@@ -1060,7 +1060,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "T1 is implementing dragged-region playlist zoom with logical coordinates and cancellation. Final delivery and shared-WASM UI acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md."
+      "notes": "Dragged song-region selection and registry zoom are integrated with logical coordinates, cancellation, focus/clip-selection preservation and replacement guards. Shared-WASM tests cover 75–200% zoom, DPR and scroll; native window/device and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md."
     },
     {
       "id": "win-playlist-playback",
@@ -1120,7 +1120,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "T1 has implemented named/loop/skip/pause marker commands and actual bounded native navigation in its isolated worktree. PDC, tempo, tails and composed UI/native acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md."
+      "notes": "Persisted named/loop/skip/pause markers, checked undoable commands and bounded engine navigation are integrated. Native tests cover tempo, PDC, stopped-skip automation tails and buffered/stream/stem parity; composed shared-WASM UI tests exercise editing and lifetime guards. Physical/native-platform and P1 publication acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
     },
     {
       "id": "win-playlist-arrangements",
@@ -1192,7 +1192,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "T1 is implementing selected playback/loop/export ranges with native transport precedence and buffered/stream/stem parity. Final source delivery and independent/composed acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md."
+      "notes": "Selected playback/loop/export ranges are integrated with native request ordering, source/revision guards, ordinary-transport supersession and reload/cancellation recovery. Native WAV/PDC/tail and buffered/stream/stem checks pass. The composed local UI suite passed; current CI found one asynchronous hydration-menu lookup under repair. Native window/device, P1 publication and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
     },
     {
       "id": "win-playlist-audio-clip-fades",
