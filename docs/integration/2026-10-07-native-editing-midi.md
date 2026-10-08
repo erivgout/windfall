@@ -69,7 +69,8 @@ Native file tokens check root generation and filesystem identity for audition,
 waveform and rack/playlist/replacement imports. See
 [browser library](../BROWSER-LIBRARY.md) for bounds and deliberate limits.
 
-The combined artifacts contain 155 TypeScript files and a 1,743,421-byte WASM
+The combined artifacts contain 155 binding files (153 TypeScript and two JSON)
+and a 1,743,421-byte WASM
 module. Parent browser/rack/playlist-import UI checks passed all 403 tests
 across 20 files, followed by ESLint and the production TypeScript/Vite build.
 Native library and sample-cache checks passed 16 and 14 tests respectively.
@@ -109,7 +110,8 @@ including 11 actual-inspector regressions, plus typecheck and focused lint.
 Independent editing round three and document-reply round two are pending.
 
 Seven measured utility effects `3181d87a` are merged through `5254a40e`.
-The parent regenerated 163 TypeScript files and the shared browser WASM to
+The parent regenerated 163 binding files (161 TypeScript and two JSON) and the
+shared browser WASM to
 1,775,678 bytes. [Utility effects](../UTILITY-EFFECTS.md) records the worker's
 signal, smoothing, allocation, latency, aliasing and throughput evidence;
 combined parent validation and independent review remain pending.
@@ -244,3 +246,18 @@ task owns custom chopping, arpeggio, flam and rhythm-reshape transforms. Current
 accounting is 64 done, 49 in progress, 227 todo and two won't-do rows, preserving
 all 342 requirements. Open native/library/archive/utility findings still prevent
 publishing this batch as verified progress.
+
+## Native validation checkpoint before further repair merges
+
+The combined native suite at `72718071` completed with **1,777 passing tests and
+nine ignored tests**, then passed strict workspace/all-target Clippy and workspace
+formatting. Rust source remained unchanged through the scale/UI documentation
+commits at `8ff536a5`. This is Windows headless/fixture evidence; it does not
+close the independently found runtime, archive or utility behavior gaps.
+
+At `8ff536a5`, regeneration into a separate temporary directory exactly matched
+all checked-in bindings and fixtures. The 163 files comprise 161 TypeScript
+files and two JSON files; earlier references to 163 TypeScript files counted
+the JSON fixtures as well. Simulator freshness and parity checks also passed,
+with the WASM still 1,775,678 bytes. Subsequent source repairs require their own
+freshness and appropriate combined checks.
