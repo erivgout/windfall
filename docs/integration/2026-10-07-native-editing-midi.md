@@ -491,3 +491,16 @@ source/model-traced historical output-path aliasing, local ZIP header/extent
 validation and a missing already-written-path error. The portable owner is
 checking real reachability/reader behavior and producing bounded regressions;
 no new exploit or Rust reproduction is claimed from the review's models.
+
+The resumed native command finished successfully: **all 278 desktop tests
+passed**, including `selected_native_plugin_capture_archive_and_export_round_trip`.
+Scoped all-target strict Clippy for project/archive/engine/desktop, workspace
+formatting, independent comparison of all 170 generated files, WASM freshness
+and whitespace checks passed. Together with the preceding 13 archive,
+308 project and 55 engine sampler/source/budget cases, these validate the fixed
+integrated source at `9b3001f4`; they do not close the independently traced
+import, scaling, runtime, utility, stamp and portable edge cases still assigned.
+The local logs are `windfall-root-imports-combined-native.log` and
+`windfall-root-imports-native-resume.log`. The root Rust freeze is released for
+the next tested source delivery. The private GitHub main and alpha remain
+unchanged while the critical picker/source and capture repairs are completed.
