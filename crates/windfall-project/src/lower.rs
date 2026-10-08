@@ -1084,10 +1084,11 @@ impl Transaction<'_> {
                 ));
             }
         }
+        let label = transform.label();
         let mut insert = crate::piano_tools::transform_selected_notes(&selected, transform)?;
         // Identity transformations preserve history, dirty state and redo.
         if selected == insert {
-            return Ok(transform.label());
+            return Ok(label);
         }
         for note in &mut insert {
             if note.id.0 == 0 {
@@ -1117,7 +1118,7 @@ impl Transaction<'_> {
                 },
             });
         }
-        Ok(transform.label())
+        Ok(label)
     }
 
     fn clear_lane(

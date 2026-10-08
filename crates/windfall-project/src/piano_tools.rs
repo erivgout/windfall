@@ -11,6 +11,50 @@ use crate::{CommandError, MAX_KEY, MAX_PATTERN_TICKS, Note, NoteId};
 /// A bound on both the input selection and the output of a tool. In particular,
 /// a one-tick chop cannot accidentally create hundreds of thousands of notes.
 pub const MAX_TOOL_NOTES: usize = 16_384;
+pub const MAX_RHYTHM_STEPS: usize = 64;
+
+fn one() -> f64 {
+    1.0
+}
+
+/// A boundary within one repeating Chop period. Gate scales the retained
+/// piece (including partial edges); velocity multiplies the source dynamic.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ChopStep {
+    pub tick: u32,
+    #[serde(default = "one")]
+    pub gate: f64,
+    #[serde(default = "one")]
+    pub velocity: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ArpDirection {
+    Ascending,
+    Descending,
+    Alternating,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FlamPosition {
+    Before,
+    After,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum RhythmMode {
+    Remove,
+    Add,
+    Shift,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +77,7 @@ pub enum NoteGroove {
     PushFour,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -51,6 +95,38 @@ pub enum NoteTransform {
     /// Split at absolute grid boundaries. Keep the first segment's id.
     Chop {
         grid: u32,
+    },
+    /// Repeat boundaries in both directions from origin. First step is zero,
+    /// ticks strictly increase below period. Never discard partial edges.
+    ChopPattern {
+        origin: u32,
+        period: u32,
+        steps: Vec<ChopStep>,
+    },
+    /// Exact-onset chords, ordered by key/id across ascending octave copies.
+    /// Repetitions 0 fills the original longest voice span, requiring exact
+    /// rate divisibility; 1..64 produces that many complete traversals.
+    Arpeggiate {
+        rate: u32,
+        gate: f64,
+        octaves: u8,
+        repetitions: u32,
+        direction: ArpDirection,
+    },
+    Flam {
+        interval: u32,
+        velocity: f64,
+        position: FlamPosition,
+    },
+    /// Match onset cells floor((start-origin)/step) mod period == phase.
+    /// Remove matches, add shifted copies, or shift the originals.
+    RhythmReshape {
+        origin: u32,
+        step: u32,
+        period: u32,
+        phase: u32,
+        offset: i32,
+        mode: RhythmMode,
     },
     /// Union touching/overlapping notes with identical key, velocity and pan.
     Glue,
@@ -84,11 +160,14 @@ pub enum NoteTransform {
 }
 
 impl NoteTransform {
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::Legato => "Legato notes",
             Self::Staccato { .. } => "Staccato notes",
-            Self::Chop { .. } => "Chop notes",
+            Self::Chop { .. } | Self::ChopPattern { .. } => "Chop notes",
+            Self::Arpeggiate { .. } => "Arpeggiate notes",
+            Self::Flam { .. } => "Flam notes",
+            Self::RhythmReshape { .. } => "Reshape note rhythm",
             Self::Glue => "Glue notes",
             Self::Strum { .. } => "Strum notes",
             Self::FlipTime => "Flip note time",
@@ -106,8 +185,84 @@ impl NoteTransform {
         }
     }
 
-    fn check(self) -> Result<(), CommandError> {
-        match self {
+    fn check(&self) -> Result<(), CommandError> {
+        if let Self::ChopPattern { steps, .. } = self
+            && steps.len() > MAX_RHYTHM_STEPS
+        {
+            return Err(CommandError::invalid("Chop allows at most 64 boundaries"));
+        }
+        let tool = self.clone();
+        match tool {
+            Self::ChopPattern {
+                origin,
+                period,
+                steps,
+            } => {
+                grid(period)?;
+                if origin > MAX_PATTERN_TICKS
+                    || steps.is_empty()
+                    || steps.len() > MAX_RHYTHM_STEPS
+                    || steps[0].tick != 0
+                    || steps.iter().any(|s| s.tick >= period)
+                    || steps.windows(2).any(|s| s[0].tick >= s[1].tick)
+                {
+                    return Err(CommandError::invalid(
+                        "use 1 to 64 increasing Chop boundaries starting at zero, below the period",
+                    ));
+                }
+                for step in steps {
+                    positive_gate("Chop gate", step.gate)?;
+                    number("Chop velocity", step.velocity, 0.0, 4.0)?;
+                }
+                Ok(())
+            }
+            Self::Arpeggiate {
+                rate,
+                gate,
+                octaves,
+                repetitions,
+                ..
+            } => {
+                grid(rate)?;
+                positive_gate("arpeggio gate", gate)?;
+                if !(1..=8).contains(&octaves) || repetitions > 64 {
+                    return Err(CommandError::invalid(
+                        "arpeggio needs 1 to 8 octaves and 0 to 64 repetitions",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Flam {
+                interval, velocity, ..
+            } => {
+                if !(1..=960).contains(&interval) {
+                    return Err(CommandError::invalid(
+                        "Flam interval must be 1 to 960 ticks",
+                    ));
+                }
+                number("Flam velocity", velocity, 0.0, 1.0)
+            }
+            Self::RhythmReshape {
+                origin,
+                step,
+                period,
+                phase,
+                offset,
+                mode,
+            } => {
+                grid(step)?;
+                if origin > MAX_PATTERN_TICKS
+                    || !(1..=64).contains(&period)
+                    || phase >= period
+                    || offset.unsigned_abs() > MAX_PATTERN_TICKS
+                    || (mode == RhythmMode::Add && offset == 0)
+                {
+                    return Err(CommandError::invalid(
+                        "invalid rhythm origin, period, phase or offset (Add needs a nonzero offset)",
+                    ));
+                }
+                Ok(())
+            }
             Self::Staccato { factor } => number("length factor", factor, f64::MIN_POSITIVE, 1.0),
             Self::ScaleVelocity { factor } => number("velocity factor", factor, 0.0, 4.0),
             Self::Chop { grid: value } => grid(value),
@@ -147,6 +302,14 @@ impl NoteTransform {
 
 fn number(name: &str, value: f64, low: f64, high: f64) -> Result<(), CommandError> {
     if !value.is_finite() || !(low..=high).contains(&value) {
+        return Err(CommandError::invalid(format!("invalid {name}")));
+    }
+    Ok(())
+}
+
+fn positive_gate(name: &str, value: f64) -> Result<(), CommandError> {
+    number(name, value, 0.0, 1.0)?;
+    if value == 0.0 {
         return Err(CommandError::invalid(format!("invalid {name}")));
     }
     Ok(())
@@ -199,8 +362,8 @@ pub(crate) fn selection(notes: &[Note]) -> Result<Vec<Note>, CommandError> {
     Ok(notes)
 }
 
-/// Pure tool calculation. New chop segments use id 0 until the transaction
-/// allocates ids; all other surviving notes retain their original ids.
+/// Pure tool calculation. New pieces use id 0 until the transaction allocates
+/// ids. The output is bounded before any document or ID mutation.
 pub fn transform_selected_notes(
     notes: &[Note],
     tool: NoteTransform,
@@ -208,6 +371,203 @@ pub fn transform_selected_notes(
     tool.check()?;
     let mut notes = selection(notes)?;
     match tool {
+        NoteTransform::ChopPattern {
+            origin,
+            period,
+            steps,
+        } => {
+            let mut pieces = Vec::new();
+            for note in notes {
+                let end = note.start + note.length;
+                let mut start = note.start;
+                while start < end {
+                    let relative = i64::from(start) - i64::from(origin);
+                    let phase = relative.rem_euclid(i64::from(period)) as u32;
+                    let index = steps.partition_point(|s| s.tick <= phase) - 1;
+                    let next_phase = steps.get(index + 1).map_or(period, |s| s.tick);
+                    let next = end.min(start + next_phase - phase);
+                    let accent = steps[index];
+                    push_piece(
+                        &mut pieces,
+                        Note {
+                            id: if start == note.start {
+                                note.id
+                            } else {
+                                NoteId(0)
+                            },
+                            start,
+                            length: gated(next - start, accent.gate),
+                            velocity: (f64::from(note.velocity) * accent.velocity).min(1.0) as f32,
+                            ..note
+                        },
+                    )?;
+                    start = next;
+                }
+            }
+            notes = pieces;
+        }
+        NoteTransform::Arpeggiate {
+            rate,
+            gate,
+            octaves,
+            repetitions,
+            direction,
+        } => {
+            let mut pieces = Vec::new();
+            let mut first = 0;
+            while first < notes.len() {
+                let onset = notes[first].start;
+                let end = first + notes[first..].partition_point(|n| n.start == onset);
+                let chord = &notes[first..end];
+                // Construct the pitch ladder only after its bound is checked.
+                let voices = chord.len() * usize::from(octaves);
+                if voices > MAX_TOOL_NOTES {
+                    return Err(output_limit());
+                }
+                let mut ladder = Vec::with_capacity(voices);
+                for octave in 0..octaves {
+                    for note in chord {
+                        let key = u16::from(note.key) + u16::from(octave) * 12;
+                        if key > u16::from(MAX_KEY) {
+                            return Err(CommandError::invalid(
+                                "arpeggio octave exceeds MIDI key 127",
+                            ));
+                        }
+                        ladder.push(Note {
+                            key: key as u8,
+                            ..*note
+                        });
+                    }
+                }
+                ladder.sort_by_key(|n| (n.key, n.id));
+                if direction == ArpDirection::Descending {
+                    ladder.sort_by(|a, b| b.key.cmp(&a.key).then(a.id.cmp(&b.id)));
+                }
+                let traversal = if direction == ArpDirection::Alternating && voices > 1 {
+                    voices * 2 - 2
+                } else {
+                    voices
+                };
+                let slots = if repetitions == 0 {
+                    let span = chord.iter().map(|n| n.length).max().unwrap();
+                    if span % rate != 0 {
+                        return Err(CommandError::invalid(
+                            "original chord span must contain complete arpeggio rate slots; choose fixed repetitions or another rate",
+                        ));
+                    }
+                    (span / rate) as usize
+                } else {
+                    traversal * repetitions as usize
+                };
+                if slots > MAX_TOOL_NOTES - pieces.len() {
+                    return Err(output_limit());
+                }
+                if u64::from(onset) + slots as u64 * u64::from(rate) > u64::from(MAX_PATTERN_TICKS)
+                {
+                    return Err(CommandError::invalid(
+                        "complete arpeggio slots exceed the pattern limit",
+                    ));
+                }
+                let mut retained = std::collections::BTreeSet::new();
+                for slot in 0..slots {
+                    let rank = slot % traversal;
+                    let index = if rank < voices {
+                        rank
+                    } else {
+                        traversal - rank
+                    };
+                    let voice = ladder[index];
+                    push_piece(
+                        &mut pieces,
+                        Note {
+                            id: if retained.insert(voice.id) {
+                                voice.id
+                            } else {
+                                NoteId(0)
+                            },
+                            start: onset + slot as u32 * rate,
+                            length: gated(rate, gate),
+                            ..voice
+                        },
+                    )?;
+                }
+                first = end;
+            }
+            notes = pieces;
+        }
+        NoteTransform::Flam {
+            interval,
+            velocity,
+            position,
+        } => {
+            if notes.len() > MAX_TOOL_NOTES / 2 {
+                return Err(output_limit());
+            }
+            let mut pieces = Vec::with_capacity(notes.len() * 2);
+            for note in notes {
+                let start = match position {
+                    FlamPosition::Before => note.start.checked_sub(interval),
+                    FlamPosition::After => note.start.checked_add(interval),
+                }
+                .ok_or_else(|| {
+                    CommandError::invalid("Flam grace hit would start before tick zero")
+                })?;
+                push_piece(
+                    &mut pieces,
+                    Note {
+                        id: NoteId(0),
+                        start,
+                        length: interval.min(note.length),
+                        velocity: (f64::from(note.velocity) * velocity) as f32,
+                        ..note
+                    },
+                )?;
+                pieces.push(note);
+            }
+            notes = pieces;
+        }
+        NoteTransform::RhythmReshape {
+            origin,
+            step,
+            period,
+            phase,
+            offset,
+            mode,
+        } => {
+            let matches = |n: &Note| {
+                (i64::from(n.start) - i64::from(origin))
+                    .div_euclid(i64::from(step))
+                    .rem_euclid(i64::from(period))
+                    == i64::from(phase)
+            };
+            match mode {
+                RhythmMode::Remove => notes.retain(|n| !matches(n)),
+                RhythmMode::Shift => {
+                    for note in notes.iter_mut().filter(|n| matches(n)) {
+                        note.start = shifted(note, offset)?;
+                    }
+                }
+                RhythmMode::Add => {
+                    let mut existing: std::collections::BTreeSet<_> =
+                        notes.iter().map(identity).collect();
+                    let mut additions = Vec::new();
+                    for note in notes.iter().filter(|n| matches(n)) {
+                        let added = Note {
+                            id: NoteId(0),
+                            start: shifted(note, offset)?,
+                            ..*note
+                        };
+                        if existing.insert(identity(&added)) {
+                            if notes.len() + additions.len() == MAX_TOOL_NOTES {
+                                return Err(output_limit());
+                            }
+                            additions.push(added);
+                        }
+                    }
+                    notes.extend(additions);
+                }
+            }
+        }
         NoteTransform::Legato => {
             let mut starts: Vec<_> = notes.iter().map(|n| n.start).collect();
             starts.dedup();
@@ -369,6 +729,48 @@ pub fn transform_selected_notes(
     }
     notes.sort_by_key(Note::sort_key);
     Ok(notes)
+}
+
+fn gated(length: u32, gate: f64) -> u32 {
+    (f64::from(length) * gate).round().max(1.0) as u32
+}
+
+fn output_limit() -> CommandError {
+    CommandError::invalid("rhythm tool would exceed 16384 notes")
+}
+
+fn push_piece(pieces: &mut Vec<Note>, note: Note) -> Result<(), CommandError> {
+    if pieces.len() == MAX_TOOL_NOTES {
+        return Err(output_limit());
+    }
+    // ID zero is a placeholder, but every other output property is checked.
+    valid_note(&Note {
+        id: NoteId(1),
+        ..note
+    })?;
+    pieces.push(note);
+    Ok(())
+}
+
+fn shifted(note: &Note, offset: i32) -> Result<u32, CommandError> {
+    let start = i64::from(note.start) + i64::from(offset);
+    if start < 0 || start + i64::from(note.length) > i64::from(MAX_PATTERN_TICKS) {
+        return Err(CommandError::invalid(
+            "rhythm offset moves a complete note outside the pattern",
+        ));
+    }
+    Ok(start as u32)
+}
+
+fn identity(note: &Note) -> (u32, u32, u8, u32, u32) {
+    let bits = |n: f32| if n == 0.0 { 0 } else { n.to_bits() };
+    (
+        note.start,
+        note.length,
+        note.key,
+        bits(note.velocity),
+        bits(note.pan),
+    )
 }
 
 fn nearest(tick: u32, grid: u32, groove: NoteGroove) -> u32 {
