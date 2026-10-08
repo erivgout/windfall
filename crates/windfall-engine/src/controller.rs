@@ -354,6 +354,24 @@ impl Controller {
         true
     }
 
+    /// A failed immutable snapshot never replaces the installed project.
+    /// Called only by the control-side publication paths, before State.
+    fn refuse_invalid_meters(&self, plan: &Plan) -> bool {
+        if plan.meters.is_ok() {
+            return false;
+        }
+        *self
+            .inner
+            .sampler_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(
+            crate::sampler_processing::SamplerPreparationError::Unsupported(
+                "Invalid song meter map; project preparation refused.",
+            ),
+        );
+        true
+    }
+
     /// Frames by which the project's instruments and effects delay the
     /// output of the stream that is open, at its sample rate. Zero with no
     /// stream. Every path through the mixer is delayed to match the slowest

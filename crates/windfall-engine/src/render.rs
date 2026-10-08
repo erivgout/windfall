@@ -281,6 +281,38 @@ impl From<crate::sampler_processing::SamplerPreparationError> for RenderError {
     }
 }
 
+impl RenderOptions {
+    pub fn check_region(&self) -> Result<(), String> {
+        if let Some(range) = self.region {
+            if self.mode != PlayMode::Song {
+                return Err("a timeline export region requires song mode".to_owned());
+            }
+            range.check()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum RenderError {
+    Timeline(String),
+    Sampler(crate::sampler_processing::SamplerPreparationError),
+}
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeline(error) => f.write_str(error),
+            Self::Sampler(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for RenderError {}
+impl From<crate::sampler_processing::SamplerPreparationError> for RenderError {
+    fn from(error: crate::sampler_processing::SamplerPreparationError) -> Self {
+        Self::Sampler(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

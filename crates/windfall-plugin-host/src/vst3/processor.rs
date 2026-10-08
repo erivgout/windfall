@@ -68,6 +68,26 @@ fn process_context(
     context.barPositionMusic = bar_start;
     Ok(context)
 }
+
+fn process_context(
+    transport: &Transport,
+    sample_rate: f64,
+    steady_time: u64,
+) -> Result<ProcessContext, ProcessFailed> {
+    let (bar_start, _) = transport.bar_position().ok_or(ProcessFailed)?;
+    // SAFETY: ProcessContext is POD, only flagged fields are consumed.
+    let mut context: ProcessContext = unsafe { std::mem::zeroed() };
+    context.state = 512 | 1024 | 2048 | 8192 | 131072 | if transport.playing { 2 } else { 0 };
+    context.sampleRate = sample_rate;
+    context.projectTimeSamples = (transport.position_seconds * sample_rate) as i64;
+    context.continousTimeSamples = steady_time.min(i64::MAX as u64) as i64;
+    context.projectTimeMusic = transport.position_beats;
+    context.tempo = transport.tempo_bpm;
+    context.timeSigNumerator = transport.numerator.into();
+    context.timeSigDenominator = transport.denominator.into();
+    context.barPositionMusic = bar_start;
+    Ok(context)
+}
 impl Ports {
     fn new(ports: &[AudioPort], max_block: usize) -> Self {
         let mut buffers: Vec<Vec<Vec<f32>>> = ports

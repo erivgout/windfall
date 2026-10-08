@@ -10,6 +10,13 @@ pub struct MeterAnchor {
     pub bar_origin_index: u32,
 }
 
+/// A song meter segment's first downbeat and zero-based bar index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeterAnchor {
+    pub bar_origin_beats: f64,
+    pub bar_origin_index: u32,
+}
+
 /// Musical position at the first frame of a processing block.
 #[derive(Debug, Clone, Copy)]
 pub struct PluginTransport {

@@ -69,6 +69,22 @@ pub struct TimelinePlaybackState {
     pub navigation_overflows: u32,
 }
 
+/// Session-only timeline playback state; no musical edit or undo entry.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TimelinePlaybackState {
+    /// Transient, exact JS-safe monotonic publication number. Never wraps.
+    #[ts(type = "number")]
+    pub request: u64,
+    #[ts(type = "number")]
+    pub generation: u64,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub region: Option<windfall_project::TickRange>,
+    pub navigation_overflows: u32,
+}
+
 /// A change to the transport. `None` leaves a field alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
