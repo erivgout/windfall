@@ -238,6 +238,7 @@ pub(crate) struct Sequencer {
     mode: PlayMode,
     pattern: PatternId,
     loop_song: bool,
+    region: Option<windfall_project::TickRange>,
     clock: Clock,
     /// Clock tick at which the pass of the pattern or song now playing
     /// began. Each time around adds the length of what was played.
@@ -267,6 +268,7 @@ impl Sequencer {
             mode: PlayMode::Pattern,
             pattern: PatternId(0),
             loop_song: false,
+            region: None,
             clock: Clock {
                 anchor_frame: 0,
                 anchor_tick: 0.0,
@@ -332,6 +334,9 @@ impl Sequencer {
             return self.position;
         }
         let tick = self.clock.tick_at(now) - self.pass_start;
+        if self.mode == PlayMode::Song && self.region.is_some() {
+            return self.place(plan, self.region_tick(plan, tick));
+        }
         let length = self.length(plan);
         // The wrap itself happens while the next block is processed.
         let wrapped = if tick >= length { tick - length } else { tick };
@@ -348,6 +353,9 @@ impl Sequencer {
         }
         let length = self.length(plan);
         let mut tick = self.clock.tick_at(frame) - self.pass_start;
+        if self.region.is_some() {
+            return Some(self.place(plan, self.region_tick(plan, tick)));
+        }
         if tick >= length {
             tick = if self.loops() { tick - length } else { length };
         }
@@ -381,6 +389,9 @@ impl Sequencer {
             return self.tick(plan, now);
         }
         let tick = self.clock.tick_at(now.saturating_sub(latency)) - self.pass_start;
+        if self.mode == PlayMode::Song && self.region.is_some() {
+            return self.place(plan, self.region_tick(plan, tick));
+        }
         let length = self.length(plan);
         let counted = if tick >= length {
             tick - length
@@ -481,8 +492,24 @@ impl Sequencer {
         }
         self.playing = true;
         self.passes_left = passes;
-        let from = self.counted(plan, from.unwrap_or(self.position));
+        let from = from.unwrap_or(self.position);
+        let from = if self.mode == PlayMode::Song {
+            self.region
+                .map_or(from, |r| from.clamp(f64::from(r.start), f64::from(r.end)))
+        } else {
+            from
+        };
+        let requested = self.counted(plan, from);
+        let from = if self.mode == PlayMode::Song && self.region.is_some() {
+            crate::timeline::aligned_tick(plan, from, self.sample_rate)
+        } else {
+            from
+        };
+        let from = self.counted(plan, from);
         self.jump(from, now);
+        // The first sample is aligned, but events at the original musical
+        // start still belong to that sample. Do not advance the event floor.
+        self.floor = Floor::Tick(requested);
         self.keep_in_range(plan, now);
     }
 
@@ -494,11 +521,23 @@ impl Sequencer {
     /// Moves the playhead. Returns true when that interrupted playback.
     pub fn seek(&mut self, tick: f64, plan: &Plan, now: u64) -> bool {
         let tick = if tick.is_finite() { tick.max(0.0) } else { 0.0 };
+        let tick = if self.mode == PlayMode::Song {
+            self.region
+                .map_or(tick, |r| tick.clamp(f64::from(r.start), f64::from(r.end)))
+        } else {
+            tick
+        };
         self.position = tick;
         if !self.playing {
             return false;
         }
-        self.jump(self.counted(plan, tick), now);
+        let aligned = if self.mode == PlayMode::Song && self.region.is_some() {
+            crate::timeline::aligned_tick(plan, tick, self.sample_rate)
+        } else {
+            tick
+        };
+        self.jump(self.counted(plan, aligned), now);
+        self.floor = Floor::Tick(self.counted(plan, tick));
         self.keep_in_range(plan, now);
         true
     }
@@ -758,7 +797,73 @@ impl Sequencer {
                 self.pattern(plan)
                     .map_or(FALLBACK_LOOP_TICKS, |pattern| pattern.length),
             ),
-            PlayMode::Song => plan.warp(f64::from(plan.song_end)),
+            PlayMode::Song => plan.warp(f64::from(self.song_end(plan))),
+        }
+    }
+
+    pub fn set_region(
+        &mut self,
+        region: Option<windfall_project::TickRange>,
+        plan: &Plan,
+        now: u64,
+    ) -> bool {
+        self.region = region;
+        if self.mode != PlayMode::Song {
+            return false;
+        }
+        let tick = self.raw_song_tick(plan, now);
+        if let Some(range) = region {
+            if tick < f64::from(range.start) || tick >= f64::from(range.end) {
+                return self.seek(f64::from(range.start), plan, now);
+            }
+        }
+        false
+    }
+
+    pub fn region(&self) -> Option<windfall_project::TickRange> {
+        self.region
+    }
+    pub fn navigation_enabled(&self) -> bool {
+        self.passes_left.is_none()
+    }
+    pub fn song_looping(&self) -> bool {
+        self.loop_song && self.navigation_enabled()
+    }
+    pub fn raw_song_tick(&self, plan: &Plan, now: u64) -> f64 {
+        if self.playing {
+            plan.unwarp((self.clock.tick_at(now) - self.pass_start).max(0.0))
+        } else {
+            self.position
+        }
+    }
+    pub fn song_frame(&self, plan: &Plan, tick: u32) -> u64 {
+        self.clock
+            .frame_of(self.pass_start + plan.warp(f64::from(tick)))
+    }
+    pub fn navigation_frame(&self, plan: &Plan, tick: u32, now: u64) -> Option<u64> {
+        self.due(plan.warp(f64::from(tick)), now, u64::MAX)
+    }
+    /// Selected loops return to their start, including automation lookahead.
+    fn region_tick(&self, plan: &Plan, tick: f64) -> f64 {
+        let range = self.region.expect("a selected song region exists");
+        let start = plan.warp(f64::from(range.start));
+        let end = plan.warp(f64::from(range.end));
+        if tick >= end && self.loops() {
+            start + (tick - end) % (end - start)
+        } else {
+            tick.clamp(start, end)
+        }
+    }
+    /// Pause/end retains the boundary as the resumed position.
+    pub fn pause_at(&mut self, tick: f64) {
+        self.playing = false;
+        self.position = tick;
+    }
+
+    fn song_end(&self, plan: &Plan) -> u32 {
+        match self.region {
+            Some(range) => range.end,
+            None => plan.song_end,
         }
     }
 
@@ -809,6 +914,37 @@ impl Sequencer {
     /// change to the plan left it past the end.
     fn keep_in_range(&mut self, plan: &Plan, now: u64) {
         if !self.playing {
+            return;
+        }
+        if self.mode == PlayMode::Song
+            && let Some(range) = self.region
+        {
+            let tick = self.raw_song_tick(plan, now);
+            if tick < f64::from(range.start) {
+                self.jump(
+                    plan.warp(crate::timeline::aligned_tick(
+                        plan,
+                        f64::from(range.start),
+                        self.sample_rate,
+                    )),
+                    now,
+                );
+                self.floor = Floor::Tick(plan.warp(f64::from(range.start)));
+            } else if tick >= f64::from(range.end) {
+                if self.loops() {
+                    self.jump(
+                        plan.warp(crate::timeline::aligned_tick(
+                            plan,
+                            f64::from(range.start),
+                            self.sample_rate,
+                        )),
+                        now,
+                    );
+                    self.floor = Floor::Tick(plan.warp(f64::from(range.start)));
+                } else {
+                    self.pause_at(f64::from(range.end));
+                }
+            }
             return;
         }
         let length = self.length(plan);

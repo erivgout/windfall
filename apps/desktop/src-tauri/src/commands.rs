@@ -271,6 +271,21 @@ fn transport_state(session: State<'_, Session>) -> TransportState {
 }
 
 #[tauri::command]
+fn timeline_state(session: State<'_, Session>) -> windfall_ipc::TimelinePlaybackState {
+    session.timeline_state()
+}
+
+#[tauri::command]
+fn timeline_region(
+    session: State<'_, Session>,
+    region: Option<windfall_project::TickRange>,
+    generation: u64,
+    revision: u64,
+) -> Result<windfall_ipc::TimelinePlaybackState, String> {
+    session.timeline_region(region, generation, revision)
+}
+
+#[tauri::command]
 fn realtime_subscribe(
     session: State<'_, Session>,
     window: WebviewWindow,
@@ -668,6 +683,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         transport_seek,
         transport_set,
         transport_state,
+        timeline_state,
+        timeline_region,
         realtime_subscribe,
         engine_status,
         engine_devices,

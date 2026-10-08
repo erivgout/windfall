@@ -11,6 +11,8 @@ use crate::pool::SamplePool;
 /// What [`render`] produces.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderOptions {
+    /// Linear, once-only song interval. Navigation markers are not rendered.
+    pub region: Option<windfall_project::TickRange>,
     pub sample_rate: u32,
     /// Pattern mode renders one pattern `pattern_loops` times. Song mode
     /// renders the playlist from the start to the end of its last clip.
@@ -44,6 +46,7 @@ pub(crate) const TAIL_HOLD_SECONDS: f64 = 0.1;
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
+            region: None,
             sample_rate: 48_000,
             mode: PlayMode::Pattern,
             pattern: None,
@@ -59,6 +62,7 @@ impl Default for RenderOptions {
 /// should be told about it.
 #[derive(Debug, Clone)]
 pub struct Rendered {
+    pub timeline_error: Option<String>,
     pub audio: AudioBuffer,
     /// Audio clips of the playlist that are not in the audio, because
     /// [`MAX_AUDIO_CLIPS`](crate::MAX_AUDIO_CLIPS) were playing already
@@ -104,10 +108,19 @@ pub fn render_reporting(
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Rendered {
     let sample_rate = options.sample_rate.max(1);
+    if let Err(error) = options.check_region() {
+        return Rendered {
+            audio: AudioBuffer::from_interleaved(sample_rate, 2, Vec::new()),
+            dropped_clips: 0,
+            sampler_error: None,
+            timeline_error: Some(error),
+        };
+    }
     let prepared_pool = match pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {}) {
         Ok(pool) => pool,
         Err(error) => {
             return Rendered {
+                timeline_error: None,
                 audio: AudioBuffer::from_interleaved(sample_rate, 2, Vec::new()),
                 dropped_clips: 0,
                 sampler_error: Some(error),
@@ -132,7 +145,11 @@ pub fn render_reporting(
         PlayMode::Song => (1, plan.warp(f64::from(plan.song_end))),
     };
     let frames_per_tick = samples_per_tick(plan.tempo_bpm, f64::from(sample_rate));
-    let body_frames = (ticks * frames_per_tick).ceil() as usize;
+    let region = options.region.filter(|_| options.mode == PlayMode::Song);
+    let body_frames = region.map_or((ticks * frames_per_tick).ceil() as usize, |range| {
+        let (first, last) = crate::timeline::region_frames(&plan, range, sample_rate);
+        (last - first) as usize
+    });
     let tail_frames = if options.tail_secs.is_finite() {
         (f64::from(options.tail_secs.max(0.0)) * f64::from(sample_rate)).round() as usize
     } else {
@@ -148,7 +165,13 @@ pub fn render_reporting(
         pattern,
         loop_song: Some(false),
     });
-    if ticks > 0.0 {
+    if let Some(range) = region {
+        controller
+            .set_timeline_region(Some(range))
+            .expect("region checked before preparation");
+        controller.seek(f64::from(range.start));
+    }
+    if ticks > 0.0 || region.is_some() {
         controller.play_passes(passes);
     }
 
@@ -199,9 +222,42 @@ pub fn render_reporting(
     }
     data.drain(..(latency * 2).min(data.len()));
     Rendered {
+        timeline_error: None,
         audio: AudioBuffer::from_interleaved(sample_rate, 2, data),
         dropped_clips: processor.clips_left_out(),
         sampler_error: None,
+    }
+}
+
+impl RenderOptions {
+    pub fn check_region(&self) -> Result<(), String> {
+        if let Some(range) = self.region {
+            if self.mode != PlayMode::Song {
+                return Err("a timeline export region requires song mode".to_owned());
+            }
+            range.check()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum RenderError {
+    Timeline(String),
+    Sampler(crate::sampler_processing::SamplerPreparationError),
+}
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeline(error) => f.write_str(error),
+            Self::Sampler(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for RenderError {}
+impl From<crate::sampler_processing::SamplerPreparationError> for RenderError {
+    fn from(error: crate::sampler_processing::SamplerPreparationError) -> Self {
+        Self::Sampler(error)
     }
 }
 

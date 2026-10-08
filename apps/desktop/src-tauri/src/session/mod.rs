@@ -76,6 +76,7 @@ mod samples;
 mod slicer;
 #[cfg(test)]
 mod tests;
+mod timeline;
 mod transport;
 mod versions;
 
