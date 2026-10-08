@@ -1,18 +1,30 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { DispatchResult, DocumentSnapshot } from "@/bindings"
+import type {
+  Command,
+  DispatchResult,
+  DocumentSnapshot,
+  ProjectPatch,
+} from "@/bindings"
+import { ActionButton } from "@/components/action-button"
+import { HistoryList } from "@/features/history/history-list"
+import { AppMenuBar } from "@/features/layout/menu-bar"
 import type { TimeGridView } from "@/lib/canvas"
 import { runAction } from "@/lib/actions"
 import {
   dispatch,
+  historyJump,
   loadSnapshot,
+  redo,
   refetchSnapshot,
+  setProjectPath,
   undo,
   useProjectStore,
 } from "@/lib/store/project"
 import { announceProjectReplaced } from "@/lib/store/replaced"
 import { settle } from "@/test/harness"
+import { MASTER_TRACK } from "@/lib/units"
 
 import { SessionContext } from "./context"
 import type { PointerInput } from "./editor"
@@ -178,6 +190,263 @@ describe("stamp choices during the real menu exit", () => {
     expect(element).toHaveFocus()
     expect(notesOf("Lead")).toEqual([])
     expect(undoSteps()).toBe(before)
+  })
+
+  it.each(
+    (["root", "mode", "guide", "pitch snap"] as const).flatMap((setting) =>
+      [false, true].map((returnToOriginal) => ({ setting, returnToOriginal }))
+    )
+  )(
+    "revokes a choice after a $setting change (return=$returnToOriginal)",
+    async ({ setting, returnToOriginal }) => {
+      grid()
+      const before = documentState()
+      const focus = vi.spyOn(roll.session, "focusGrid")
+      const choice = await closingChoice()
+      act(() => {
+        const state = usePianoRollStore.getState()
+        switch (setting) {
+          case "root":
+            state.setScaleRoot(2)
+            if (returnToOriginal) state.setScaleRoot(0)
+            break
+          case "mode":
+            state.setScaleId("minor")
+            if (returnToOriginal) state.setScaleId("major")
+            break
+          case "guide":
+            state.setHighlightScale(true)
+            if (returnToOriginal) state.setHighlightScale(false)
+            break
+          case "pitch snap":
+            state.setSnapToScale(true)
+            if (returnToOriginal) state.setSnapToScale(false)
+            break
+        }
+      })
+      await choice.finish()
+      expect(roll.editor.stampState).toBeNull()
+      expect(roll.editor.busy).toBe(false)
+      expect(focus).not.toHaveBeenCalled()
+      expect(documentState()).toEqual(before)
+    }
+  )
+
+  it.each(
+    (["tempo", "master gain", "other channel"] as const).flatMap((edit) =>
+      (["undo", "redo", "round trip", "jump"] as const).map((operation) => ({
+        edit,
+        operation,
+      }))
+    )
+  )(
+    "revokes a choice on non-lane $edit $operation",
+    async ({ edit, operation }) => {
+      await dispatch({
+        type: "addNotes",
+        pattern: currentPattern().id,
+        channel: channel("Lead").id,
+        notes: [{ start: 480, key: 60, length: 240, velocity: 0.4, pan: -0.2 }],
+      })
+      const command: Command =
+        edit === "tempo"
+          ? { type: "updateSettings", patch: { tempoBpm: 100 } }
+          : edit === "master gain"
+            ? {
+                type: "updateMixerTrack",
+                id: MASTER_TRACK,
+                patch: { volume: 0.4 },
+              }
+            : {
+                type: "updateChannel",
+                id: channel("Kick").id,
+                patch: { volume: 0.4 },
+              }
+      await dispatch(command)
+      if (operation === "redo") await undo()
+      const lane = notesOf("Lead")
+      const beforeCursor = undoSteps()
+      grid()
+      const focus = vi.spyOn(roll.session, "focusGrid")
+      const choice = await closingChoice()
+      await act(async () => {
+        if (operation === "jump") await historyJump(beforeCursor - 1)
+        else if (operation === "redo") await redo()
+        else {
+          await runAction("edit.undo")
+          expect(undoSteps()).toBe(beforeCursor - 1)
+          expect(notesOf("Lead")).toBe(lane)
+          if (operation === "round trip") await runAction("edit.redo")
+        }
+      })
+      expect(undoSteps()).toBe(
+        beforeCursor +
+          (operation === "redo" ? 1 : operation === "round trip" ? 0 : -1)
+      )
+      expect(notesOf("Lead")).toBe(lane)
+      const afterNavigation = documentState()
+      await choice.finish()
+      expect(roll.editor.stampState).toBeNull()
+      expect(roll.editor.busy).toBe(false)
+      expect(focus).not.toHaveBeenCalled()
+      expect(documentState()).toEqual(afterNavigation)
+    }
+  )
+
+  it.each([
+    { operation: "undo", source: "toolbar" },
+    { operation: "redo", source: "toolbar" },
+    { operation: "undo", source: "keyboard" },
+    { operation: "redo", source: "keyboard" },
+    { operation: "undo", source: "menu" },
+    { operation: "redo", source: "menu" },
+    { operation: "historyJump", source: "store" },
+    { operation: "historyJump", source: "history list" },
+  ] as const)(
+    "revokes a choice before a delayed $operation reply from $source",
+    async ({ operation, source }) => {
+      await dispatch({
+        type: "addNotes",
+        pattern: currentPattern().id,
+        channel: channel("Lead").id,
+        notes: [{ start: 480, key: 60, length: 240 }],
+      })
+      await dispatch({ type: "updateSettings", patch: { tempoBpm: 100 } })
+      if (operation === "redo") await undo()
+      const lane = notesOf("Lead")
+      const element = grid()
+      const focus = vi.spyOn(roll.session, "focusGrid")
+      const choice = await closingChoice()
+      const before = documentState()
+      let reply!: (patch: ProjectPatch | null) => void
+      const held = new Promise<ProjectPatch | null>((resolve) => {
+        reply = resolve
+      })
+      const original =
+        operation === "historyJump"
+          ? roll.backend.historyJump.bind(
+              roll.backend,
+              before.history.cursor - 1
+            )
+          : roll.backend[operation].bind(roll.backend)
+      let busyAtRequest: boolean | undefined
+      // Hold IPC before executing it: neither its event nor its reply can update
+      // the mirror until after the menu's actual Animation.finished resolves.
+      const request = vi
+        .spyOn(roll.backend, operation)
+        .mockImplementationOnce(() => {
+          busyAtRequest = roll.editor.busy
+          return held
+        })
+      try {
+        if (source === "toolbar") {
+          render(<ActionButton action={`edit.${operation}`} />)
+          fireEvent.click(
+            screen.getByRole("button", {
+              name: operation === "undo" ? "Undo" : "Redo",
+            })
+          )
+        } else if (source === "keyboard") {
+          element.focus()
+          const event = new KeyboardEvent("keydown", {
+            key: "z",
+            code: "KeyZ",
+            ctrlKey: true,
+            shiftKey: operation === "redo",
+            bubbles: true,
+            cancelable: true,
+          })
+          fireEvent(element, event)
+          expect(event.defaultPrevented).toBe(true)
+        } else if (source === "menu") {
+          render(<AppMenuBar />)
+          fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }))
+          fireEvent.click(
+            await screen.findByRole("menuitem", {
+              name: operation === "undo" ? /^Undo/ : /^Redo/,
+            })
+          )
+        } else if (source === "history list") {
+          render(<HistoryList />)
+          fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+        } else {
+          void historyJump(before.history.cursor - 1)
+        }
+        await waitFor(() => expect(request).toHaveBeenCalledOnce())
+        expect(busyAtRequest).toBe(false)
+        expect(documentState()).toEqual(before)
+        expect(notesOf("Lead")).toBe(lane)
+        await choice.finish()
+        expect(roll.editor.stampState).toBeNull()
+        expect(roll.editor.busy).toBe(false)
+        expect(focus).not.toHaveBeenCalled()
+        expect(documentState()).toEqual(before)
+      } finally {
+        await act(async () => {
+          reply(await original())
+          await settle()
+        })
+      }
+      expect(undoSteps()).toBe(
+        before.history.cursor + (operation === "redo" ? 1 : -1)
+      )
+      expect(notesOf("Lead")).toBe(lane)
+      expect(roll.editor.stampState).toBeNull()
+    }
+  )
+
+  it("keeps a valid choice through unchanged scale values and unrelated UI notifications", async () => {
+    const element = grid()
+    const focus = vi.spyOn(roll.session, "focusGrid")
+    const before = documentState()
+    const choice = await closingChoice()
+    act(() => {
+      const state = usePianoRollStore.getState()
+      state.setScaleRoot(state.scaleRoot)
+      state.setScaleId(state.scaleId)
+      state.setHighlightScale(state.highlightScale)
+      state.setSnapToScale(state.snapToScale)
+      state.setGhosts(false)
+      state.setFollow(true)
+      setProjectPath("/projects/same-document.windfall")
+    })
+    await choice.finish()
+    expect(roll.editor.stampState?.stamp).toBe(chord)
+    expect(focus).toHaveBeenCalledOnce()
+    expect(element).toHaveFocus()
+    expect(documentState()).toEqual(before)
+  })
+
+  it("does not treat ordinary non-lane dispatch as history navigation", async () => {
+    grid()
+    const choice = await closingChoice()
+    await act(async () => {
+      await dispatch({ type: "updateSettings", patch: { tempoBpm: 100 } })
+    })
+    const beforeCompletion = documentState()
+    await choice.finish()
+    expect(roll.editor.stampState?.stamp).toBe(chord)
+    expect(documentState()).toEqual(beforeCompletion)
+  })
+
+  it("revokes a choice on a no-op history jump without editing the document", async () => {
+    grid()
+    const choice = await closingChoice()
+    const focus = vi.spyOn(roll.session, "focusGrid")
+    const before = documentState()
+    await act(async () => {
+      await historyJump(before.history.cursor)
+    })
+    const afterNavigation = documentState()
+    expect(afterNavigation).toMatchObject({
+      notes: before.notes,
+      dirty: before.dirty,
+      history: before.history,
+    })
+    await choice.finish()
+    expect(roll.editor.stampState).toBeNull()
+    expect(focus).not.toHaveBeenCalled()
+    expect(documentState()).toEqual(afterNavigation)
   })
 
   it.each([

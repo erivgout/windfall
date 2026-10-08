@@ -12,6 +12,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { onHistoryNavigation } from "@/lib/store/project"
 import { useSession } from "./context"
 import type { PendingStampChoice } from "./editor"
 import { CHORD_STAMPS, SCALE_STAMPS, type Stamp } from "./stamps"
@@ -36,14 +37,25 @@ export function StampMenu() {
       // The closing menu may still own focus, so the grid keymap can ignore Esc.
       if (event.key === "Escape") cancelPending()
     }
-    const stopTool = usePianoRollStore.subscribe((next, previous) => {
-      if (next.tool !== previous.tool) cancelPending()
+    const stopSettings = usePianoRollStore.subscribe((next, previous) => {
+      if (
+        next.tool !== previous.tool ||
+        next.scaleRoot !== previous.scaleRoot ||
+        next.scaleId !== previous.scaleId ||
+        next.highlightScale !== previous.highlightScale ||
+        next.snapToScale !== previous.snapToScale
+      )
+        cancelPending()
     })
+    // History intent revokes this lease before IPC, including edits outside
+    // the lane. Returning to the same cursor must not restore its ownership.
+    const stopHistory = onHistoryNavigation(cancelPending)
     window.addEventListener("blur", cancelPending)
     window.addEventListener("keydown", onKeyDown)
     return () => {
       cancelPending()
-      stopTool()
+      stopSettings()
+      stopHistory()
       window.removeEventListener("blur", cancelPending)
       window.removeEventListener("keydown", onKeyDown)
     }
