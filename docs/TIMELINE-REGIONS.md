@@ -834,3 +834,115 @@ versioned ABI and checked render refusal, combined-root/artifact acceptance,
 physical UI/audio, installed external plugins and non-Windows behavior remain
 unverified here. Arrangements, per-pattern timelines, links/groups/make-unique/
 scrub, WAV marker metadata and scalar snap/grid refinements remain open.
+
+## Composed MIDI integration: canonical import sizing and metadata oracle
+
+After ordered T1 source through `3d2475c7` and the parent's N4 composition,
+the root native batch at reported `c0fcabea` found two failures in MIDI
+`project_round_trip`. The bounded repair starts directly from immutable
+`3d2475c74fba88fcb4314f7ebc614708e76e9e6f`; no root/other-branch source
+or generated regression artifact was imported.
+
+Both findings were independently compiled RED on that unchanged source:
+
+1. The notes/tempo property still expected exactly one scalar signature at
+   zero. The complete import map now legitimately includes default 4/4 at
+   zero and a later change. Its metadata-only oracle now derives the complete
+   expected map from the normalized input: supported numerator/denominator
+   bounds, in-range ticks, last event at a colliding tick, the bounded number
+   of retained changes, and default 4/4 before a late first event. It does not
+   derive expectations from the import plan or export. Every original note,
+   channel, mix, tempo, duration and one-undo/redo assertion remains unchanged.
+2. Import sizing still took the first meter event even when its tick was
+   nonzero. Export correctly inserted the scalar 4/4 default at zero, changing
+   the next import's sizing authority. The reported minimal case has no note
+   tracks, a tempo at tick 1, 1/1 at tick 1 (fitted to 1/2), and end tick 26881.
+   The original property maps tempo 405860 to its metronome value 480000.
+   The authored case reproduces those exact canonical bytes: first import
+   rounded to 28800 using 1/2, second import to 30720 using 4/4. Accordingly
+   `again` ended with delta `[129,239,127]`, versus `[129,224,127]` for `bytes`.
+   The executed order is growth by 1920 ticks, rather than shortening.
+
+The only production change is MIDI `import.rs`: use the effective last-wins
+tick-zero event for scalar settings and pattern-grid sizing, or the existing
+4/4 default before a late first event. A canonical export/reimport therefore
+uses the same authority both times. Ordered later events retain their exact
+absolute ticks. The root minimal case stabilizes at 30720 ticks on both trips,
+with 4/4 at zero and 1/2 at one, unchanged tempo/content and byte-identical output.
+The scalar pattern-cut/padding policy remains explicit; this does not implement
+the staged per-pattern meter or scalar snap/grid refinement. With signature
+import disabled, the existing file-derived initial pattern grid remains in use,
+without changing the project's signature/map. Existing option tests pass.
+
+Export's length authority required no change: last playlist clip end, including
+tempo clips and muted/other clip kinds, remains the project song end. The SMF
+writer's existing normalized end also includes metadata events. No new duration
+schema, export option, marker, synthetic length clip or project history behavior
+was introduced. `export.rs` is unchanged.
+
+Authored native `tests/timeline_duration.rs` is a standalone integration-test
+root discovered by Cargo, not an unregistered nested module. Its minimal case
+failed compiled RED with the exact root byte delta divergence before the fix.
+GREEN proves canonical bytes, independently expected meter events, tempo,
+SMF readback end, actual clip length and one checked undo/redo. A second authored
+case proves the effective last-wins tick-zero 7/8 signature, its later unaligned
+3/4 change, collision reporting, exact notes and stable 30240-tick clip duration
+without tempo automation. It also preserves byte identity and checked history.
+
+Executed checks (existing private target, jobs/tests 1, isolated TS export):
+
+```text
+cargo test -p windfall-midi --test project_round_trip -- --test-threads=1
+cargo test -p windfall-midi --test timeline_duration -- --test-threads=1
+cargo test -p windfall-midi --all-targets -- --test-threads=1
+cargo clippy -p windfall-midi --all-targets -- -D warnings
+cargo fmt --all -- --check
+git diff --check
+```
+
+Unchanged-source property RED used `PROPTEST_RNG_SEED=20261008` and
+`PROPTEST_DISABLE_FAILURE_PERSISTENCE=1`, reproducing **2 PASS / 2 FAIL** without
+writing a generated seed file. The exact authored RED is separate. Final full
+all-target GREEN uses the same RNG seed with persistence enabled, so existing
+checked-in regression seeds are also exercised. It passes **116 tests**: 16
+library, 15 export, 33 file fixtures, nine fuzz, 27 import, four project properties
+(300 cases each), eight file round-trip, two existing meter-map and two authored
+duration tests. Strict MIDI all-target Clippy, workspace fmt and diff check pass.
+There were no failures ignored, skipped or weakened outside the replaced
+obsolete metadata oracle. No UI, engine, Controller or Session checks are
+relabeled as execution in this MIDI-only increment.
+
+Local excluded logs are `target/timeline-midi-integration-red.log`,
+`timeline-midi-duration-red.log`, `timeline-midi-integration-green.log`,
+`timeline-midi-duration-green.log`, `timeline-midi-all-targets-green.log`,
+`timeline-midi-clippy.log` and `timeline-midi-fmt.log`. Final source SHA-256:
+
+| Source | SHA-256 |
+| --- | --- |
+| MIDI `src/import.rs` | `2495b38deda5a4ae29386673a5a3e5aca2b6bf018448aabe13359e29c820e0da` |
+| MIDI `tests/project_round_trip.rs` | `8bb42acd1e1e4159fbb04479d9cd8e73ba22120b980c3f4cf9c41b3958ba4ce2` |
+| MIDI `tests/timeline_duration.rs` | `5edf0caf152e536078c003080374afca3654bebd1e57a0d8d42cb976c00792a7` |
+
+Focused final executables, 2026-10-08 UTC, under the owned
+`target/timeline-verification/debug/deps`:
+
+| Binary | Written UTC | SHA-256 |
+| --- | --- | --- |
+| `windfall_midi-66f154c94306a188.exe` | 10:20:34 | `45c19e8bd0111910f852cd8c94b48902d8aefc4b615ee473a8dc84559279634c` |
+| `project_round_trip-12ea872f4724461b.exe` | 10:20:16 | `fc9f238556d9879af2056393b0fd251260a2f50b9c496450237256c09da00473` |
+| `timeline_duration-5f28d09ed635e23a.exe` | 10:19:31 | `f92949479b9197d20ced12ac3b9fe753dc138ae7a216bac6156bab3b9a304378` |
+
+Corresponding Cargo `.fingerprint/windfall-midi-{suffix}/test-*.json` records
+match these times; `.d` dependencies identify the bound worktree and actual
+test roots. Executed inventories list four project properties and two duration
+tests. The full all-target log identifies all nine compiled targets.
+
+Only MIDI import, the metadata oracle, the authored test and this evidence
+document change. No Plan/Controller/refusal tests, native bar helper, P1,
+utility/adoption, Session/IPC/registry/history source or root source is edited.
+The parent's composed invalid-meter native-owner snapshot gate remains its own
+repair/verification, separate from this work. No artifacts are generated or
+committed; root composition/reviews/artifact/platform acceptance remain parent
+gates. Full arrangements, per-pattern timelines, links/groups/make-unique/scrub,
+WAV marker metadata and scalar snap/grid refinements remain open; no parity or
+full T1 closure follows from these package checks.

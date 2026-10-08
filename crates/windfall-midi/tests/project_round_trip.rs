@@ -7,7 +7,9 @@ mod common;
 use common::*;
 use proptest::prelude::*;
 use windfall_midi::*;
-use windfall_project::{Document, MAX_TEMPO_BPM, MIN_TEMPO_BPM, Project, TimeSignature};
+use windfall_project::{
+    Document, MAX_SONG_TICKS, MAX_TEMPO_BPM, MAX_TIMELINE_ITEMS, MIN_TEMPO_BPM, Project,
+};
 
 /// Equal apart from `next_id`, which undo leaves alone.
 fn same_content(a: &Project, b: &Project) -> bool {
@@ -101,14 +103,37 @@ fn long_song() -> impl Strategy<Value = MidiSong> {
     })
 }
 
-/// The time signature an import gives a project for the first one of a
-/// song.
-fn fitted(song: &MidiSong) -> Option<TimeSignature> {
-    let first = song.time_signatures.first()?;
-    Some(TimeSignature {
-        numerator: first.numerator.clamp(1, 16),
-        denominator: first.denominator.clamp(2, 16),
-    })
+/// Expected complete import metadata, derived from the normalized source:
+/// supported signature bounds, last event on a tick, and 4/4 before a late
+/// first event. The oracle does not read the import plan or exported map.
+fn expected_time_signatures(song: &MidiSong) -> Vec<TimeSignatureChange> {
+    let checked: std::collections::BTreeMap<_, _> = song
+        .time_signatures
+        .iter()
+        .filter(|event| event.tick < MAX_SONG_TICKS)
+        .map(|event| {
+            (
+                event.tick,
+                TimeSignatureChange {
+                    tick: event.tick,
+                    numerator: event.numerator.clamp(1, 16),
+                    denominator: event.denominator.clamp(2, 16).next_power_of_two(),
+                },
+            )
+        })
+        .collect();
+    let mut expected: Vec<_> = checked.into_values().take(MAX_TIMELINE_ITEMS).collect();
+    if expected.first().is_none_or(|event| event.tick != 0) {
+        expected.insert(
+            0,
+            TimeSignatureChange {
+                tick: 0,
+                numerator: 4,
+                denominator: 4,
+            },
+        );
+    }
+    expected
 }
 
 proptest! {
@@ -218,13 +243,7 @@ proptest! {
             prop_assert!(got.abs_diff(wanted) <= 2, "tick {}: {} for {}", tick, got, wanted);
         }
 
-        let signature = fitted(&normal).unwrap_or(TimeSignature { numerator: 4, denominator: 4 });
-        prop_assert_eq!(exported.time_signatures.len(), 1);
-        let written = exported.time_signatures[0];
-        prop_assert_eq!(
-            (written.tick, written.numerator, written.denominator),
-            (0, signature.numerator, signature.denominator)
-        );
+        prop_assert_eq!(exported.time_signatures, expected_time_signatures(&normal));
     }
 
     #[test]
