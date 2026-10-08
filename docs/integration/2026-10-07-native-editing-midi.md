@@ -261,3 +261,59 @@ files and two JSON files; earlier references to 163 TypeScript files counted
 the JSON fixtures as well. Simulator freshness and parity checks also passed,
 with the WASM still 1,775,678 bytes. Subsequent source repairs require their own
 freshness and appropriate combined checks.
+
+## Browser, utility and stamp repairs; sampler integration
+
+Browser repair `d90db39e` and utility repair `99792c90` merged as `1dc0b5e1`
+and `bde3fd77`. Parent checks at `bde3fd77` passed 326 UI tests across 20 files,
+ESLint and the production TypeScript/Vite build. Native checks passed six core
+tests, 128 DSP unit and 149 DSP integration tests (three measurement ignores),
+103 engine unit and 220 engine integration tests, 12 desktop library tests and
+the 16-test samples filter. Scoped all-target Clippy with warnings denied and
+workspace formatting passed. The samples filter overlaps two library tests;
+these counts are per command, not an inflated unique-test total.
+
+Regeneration matched all 163 checked-in binding files exactly (161 TypeScript
+and two JSON). Simulator rebuild retained the 1,775,678-byte size but changed
+its binary hash as well as its source record; both were committed as `1f4e1482`.
+The three original findings in each feature were closed by independent round
+two. Browser review found three further P2 cases: an outstanding source reload
+can overwrite an accepted import, overlapping configured roots can reject a
+valid tree token, and a delayed rack-drop reply can select a replacement-project
+channel. Utility review found four further P2 cases: asymmetric live insertion,
+zero-to-delay and downstream-delay compensation timing, and bypass-fade wet-tail
+accounting. The existing owners are reproducing and repairing these cases.
+
+Stamp repair `a58e9e83` merged as `d8146b42`. Its delayed menu choice now owns
+cancellable completion, and idle preview updates require pointer presence while
+captured drags retain modifier behavior. Parent checks at that merged source
+passed 113 tests in six piano/flow files, ESLint and the production build.
+Independent review remains pending, so the stamp row remains in progress.
+
+Sampler source `68a30a61` merged as `42522322`. The shared file-opening conflict
+retains archive cancellation and sampler preparation refusal, including both
+test barriers. Native all-target desktop compilation passed after resolution.
+Regeneration produced 166 binding files (164 TypeScript and two JSON) and a
+current 1,794,146-byte document WASM. Full combined native/UI checks and an
+independent regeneration comparison are still running; no completed sampler
+parity claim is made. The implementation's signal, retained
+bank budget, source lifetime, cancellation and native fixture evidence is in
+[sampler stretch](../SAMPLER-STRETCH.md), with musical listening, installed native
+UI/device operation and non-Windows evidence explicitly outstanding.
+
+A T3 server restart cancelled the unfinished runtime, archive, browser, utility
+and rhythm implementation turns and both outstanding reviews. Their worktrees
+and edits survived. Each implementation owner resumed in its original bound
+worktree; replacement independent review tasks received the complete original
+brief, prior findings, repair response and preliminary cancelled-review evidence.
+Cancelled or cut-off checks are not counted as passing. Current parity totals
+remain 64 done, 49 in progress, 227 todo and two won't-do rows out of 342.
+This batch remains local while open review findings are resolved.
+
+Current GitHub inspection reported public visibility despite the user's private
+repository instruction. Visibility was restored and independently confirmed
+private. The alpha tag still dereferences to `157f96fd068b46adab046a6880ce27ea4b49aea1`,
+and both published release assets are unchanged. The `artoomreinhart` write
+invitation remains pending. Authenticated Git access through the existing GitHub
+CLI credential helper confirms remote main remains `c37ae0b9`; no source push or
+new release was made by this verification.

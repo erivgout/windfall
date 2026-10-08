@@ -97,7 +97,7 @@ As of 2026-10-07. Sources:
 | Channel settings: echo delay | Note echo | 2 | todo |  |
 | Channel settings: polyphony and portamento | Channel polyphony and glide | 2 | todo |  |
 | Channel settings: gate, shift and swing mix | Channel note timing | 2 | todo |  |
-| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | windfall-stretch implements independent time/pitch controls, three quality presets, approximate formant preservation and tempo fitting. Synthetic quality, allocation and throughput checks pass; sampler integration remains. Sampler loops still use tape-style pitch resampling. A bounded policy for prepared note-key variants and loop/release boundaries is needed; see docs/SAMPLER-LOOPS.md and crates/windfall-stretch/VALIDATION.md. |
+| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | Native sampler spectral preparation now persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Worker signal, lifecycle and callback-allocation checks passed; combined integration and independent review remain pending. Browser DSP preparation is unavailable and musical listening is unverified. See docs/SAMPLER-STRETCH.md and crates/windfall-stretch/VALIDATION.md. |
 | Layer channel (Fruity Layer) | Layer channel | 5 | todo | Listed in the manual's plugin index, not on the compare page. The manual points to the modular rack as the more flexible alternative. |
 | Piano roll: Draw tool | Piano roll draw tool | 2 | done |  |
 | Piano roll: Paint tool and drum sequencer mode | Piano roll paint tool | 2 | in-progress | Paint tool is in. No drum sequencer mode yet. |
@@ -216,7 +216,7 @@ As of 2026-10-07. Sources:
 | BassDrum | TBD | 5 | todo |  |
 | BeepMap | TBD | 5 | todo |  |
 | BooBass | TBD | 5 | todo |  |
-| Channel Sampler | TBD | 1 | in-progress | The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Filter and independent sampler time-stretch remain unfinished; see docs/SAMPLER-LOOPS.md. |
+| Channel Sampler | TBD | 1 | in-progress | The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Prepared independent spectral duration/pitch is undergoing combined integration and review; filter and further modulation controls remain unfinished. See docs/SAMPLER-LOOPS.md and docs/SAMPLER-STRETCH.md. |
 | DirectWave Player | TBD | 5 | todo |  |
 | Drumpad | TBD | 5 | todo |  |
 | FLEX | TBD | 5 | todo | Its preset packs are Image-Line content; a Windfall equivalent needs its own. Candidate basis: Vital or Surge XT (GPL-3.0). |
