@@ -42,7 +42,9 @@ it("adds, edits, deletes and undoes meters/markers through accessible menus and 
   expect(
     screen.getByRole("menuitem", { name: /^Play selected song region/ })
   ).toHaveAttribute("aria-disabled", "true")
-  await user.click(screen.getByRole("menuitem", { name: "Add meter change…" }))
+  await user.click(
+    screen.getByRole("menuitem", { name: "Add song meter change…" })
+  )
   fireEvent.change(screen.getByLabelText("Song tick"), {
     target: { value: "4001" },
   })

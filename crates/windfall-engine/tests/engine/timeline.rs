@@ -21,7 +21,7 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
     };
     use windfall_project::{EffectParams, MeterChange, PluginBinding, PluginTarget, TimeSignature};
     #[derive(Debug, Default)]
-    struct Probe([AtomicU64; 6]);
+    struct Probe([AtomicU64; 9]);
     struct Unit(Arc<Probe>);
     impl HostedEffect for Unit {
         fn transport(&mut self, t: PluginTransport) {
@@ -32,6 +32,11 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
                 t.position_seconds.to_bits(),
                 u64::from(t.numerator),
                 u64::from(t.denominator),
+                u64::from(t.meter_anchor.is_some()),
+                t.meter_anchor
+                    .map_or(0, |anchor| anchor.bar_origin_beats.to_bits()),
+                t.meter_anchor
+                    .map_or(0, |anchor| u64::from(anchor.bar_origin_index)),
             ]) {
                 cell.store(value, Ordering::Relaxed);
             }
@@ -143,6 +148,140 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
             assert_eq!(f64::from_bits(values[1]), 120.);
             assert_eq!(f64::from_bits(values[2]), tick / 960.);
             assert_eq!(f64::from_bits(values[3]), tick / 1920.);
+            if mode == PlayMode::Song {
+                assert_eq!(values[6], 1);
+                let (origin, index) = if tick >= 1001. { (1001., 1) } else { (0., 0) };
+                assert_eq!(f64::from_bits(values[7]), origin / 960.);
+                assert_eq!(values[8], index);
+            } else {
+                assert_eq!(&values[6..], &[0, 0, 0]);
+            }
+        }
+    }
+
+    // The original scalar 4/4 lasts through the shortened second bar.
+    // Both prepared hosted roles receive the actual cumulative bar origin,
+    // independently of absolute position/seconds and the tempo ramp.
+    rig.project.playlist.timeline.meters.clear();
+    for (tick, numerator, denominator) in [(4001, 7, 8), (7361, 3, 4), (7400, 7, 16)] {
+        let id = rig.project.next_id;
+        rig.project.next_id += 1;
+        rig.project.playlist.timeline.meters.push(MeterChange {
+            id: MeterChangeId(id),
+            tick,
+            signature: TimeSignature {
+                numerator,
+                denominator,
+            },
+        });
+    }
+    rig.project.playlist.clips[0].length = 12_000;
+    let lane = rig.playlist_track();
+    let tempo = rig.automation(
+        windfall_project::AutomationTarget::Tempo,
+        &[(0, (60. - 10.) / 512.), (10_000, (180. - 10.) / 512.)],
+    );
+    rig.automation_clip(lane, tempo, 0, 10_000);
+    let baseline_probes: Vec<_> = (0..4).map(|_| Arc::new(Probe::default())).collect();
+    let mut baseline = Rig {
+        project: rig.project.clone(),
+        pool: rig.pool.clone(),
+    };
+    baseline.project.playlist.timeline.meters.clear();
+    baseline
+        .pool
+        .set_plugin_factory(Arc::new(Factory(baseline_probes.clone())));
+    let (mut baseline_processor, baseline_controller) = baseline.song_processor(RATE);
+    let (mut processor, controller) = rig.song_processor(RATE);
+    for controller in [&controller, &baseline_controller] {
+        controller
+            .set_timeline_region(Some(TickRange {
+                start: 4001,
+                end: 10_000,
+            }))
+            .unwrap();
+    }
+    for (mode, source, requested_tick, tick, signature, anchor) in [
+        (PlayMode::Song, pattern, 0., 4001., (7, 8), Some((4001., 2))),
+        (
+            PlayMode::Song,
+            other_pattern,
+            7360.5,
+            7360.5,
+            (7, 8),
+            Some((4001., 2)),
+        ),
+        (
+            PlayMode::Song,
+            pattern,
+            7361.,
+            7361.,
+            (3, 4),
+            Some((7361., 3)),
+        ),
+        (
+            PlayMode::Song,
+            pattern,
+            7400.,
+            7400.,
+            (7, 16),
+            Some((7400., 4)),
+        ),
+        (PlayMode::Pattern, pattern, 2001.25, 2001.25, (4, 4), None),
+        (PlayMode::Pattern, other_pattern, 2001., 2001., (4, 4), None),
+        (
+            PlayMode::Song,
+            pattern,
+            4001.,
+            4001.,
+            (7, 8),
+            Some((4001., 2)),
+        ),
+    ] {
+        for controller in [&controller, &baseline_controller] {
+            controller.set_transport(TransportPatch {
+                mode: Some(mode),
+                pattern: Some(source),
+                ..Default::default()
+            });
+            controller.seek(requested_tick);
+            controller.play();
+        }
+        let mut out = [0.; 2];
+        assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+        assert_eq!(allocator_calls(|| baseline_processor.process(&mut out)), 0);
+        for (probe, baseline_probe) in probes.iter().zip(&baseline_probes) {
+            let values = probe.0.each_ref().map(|v| v.load(Ordering::Relaxed));
+            let baseline_values = baseline_probe
+                .0
+                .each_ref()
+                .map(|v| v.load(Ordering::Relaxed));
+            assert_eq!(
+                &values[..4],
+                &baseline_values[..4],
+                "native clock/tempo must retain the existing authority"
+            );
+            assert_eq!((values[4], values[5]), signature);
+            assert_eq!(values[0], 1);
+            assert!(f64::from_bits(values[1]).is_finite());
+            let actual_tick = f64::from_bits(values[2]) * 960.;
+            // The native clock reports the ceil-aligned first sample, at most
+            // one 180-bpm sample after the requested musical position.
+            assert!(actual_tick >= tick - 1e-9 && actual_tick <= tick + 0.06 + 1e-9);
+            let seconds = 60. / 960. * 10_000. / 120. * (1.0_f64 + 2. * actual_tick / 10_000.).ln();
+            assert!(
+                (f64::from_bits(values[3]) - seconds).abs() < 1e-8,
+                "{mode:?} expected seconds {seconds}, got {}",
+                f64::from_bits(values[3])
+            );
+            match anchor {
+                Some((origin, index)) => {
+                    assert_eq!(values[6], 1);
+                    assert_eq!(f64::from_bits(values[7]), origin / 960.);
+                    assert_eq!(values[8], index);
+                }
+                None => assert_eq!(&values[6..], &[0, 0, 0]),
+            }
         }
     }
 }

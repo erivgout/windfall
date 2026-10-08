@@ -343,30 +343,12 @@ export function TimelineControls() {
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuGroup>
-              <DropdownMenuItem onClick={() => choose({ type: "meter" })}>
-                Add meter change…
-              </DropdownMenuItem>
-              {(["named", "loop", "skip", "pause"] as const).map((type) => (
-                <DropdownMenuItem
-                  key={type}
-                  onClick={() =>
-                    choose({
-                      type: "marker",
-                      kind:
-                        type === "loop" || type === "skip"
-                          ? {
-                              type,
-                              end:
-                                selection?.end ?? Math.floor(songTick()) + 3840,
-                            }
-                          : { type },
-                    })
-                  }
-                >
-                  Add {type} marker…
-                </DropdownMenuItem>
-              ))}
               {[
+                "playlist.addMeterChange",
+                "playlist.addnamedMarker",
+                "playlist.addloopMarker",
+                "playlist.addskipMarker",
+                "playlist.addpauseMarker",
                 "playlist.playSelection",
                 "playlist.loopSelection",
                 "playlist.zoomRegion",

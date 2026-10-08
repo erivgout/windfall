@@ -69,6 +69,7 @@ export const TIMELINE_ACTIONS: Action[] = [
     section: "Playlist",
     keywords: "time signature bar beat timeline",
     enabled: inPlaylist,
+    whyDisabled: () => "Open the playlist first",
     run: () => editTimeline({ type: "meter" }),
   },
   ...(["named", "loop", "skip", "pause"] as const).map((type): Action => ({
@@ -77,6 +78,7 @@ export const TIMELINE_ACTIONS: Action[] = [
     section: "Playlist",
     keywords: "timeline navigation label",
     enabled: inPlaylist,
+    whyDisabled: () => "Open the playlist first",
     run: () =>
       editTimeline({
         type: "marker",

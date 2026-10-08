@@ -138,3 +138,112 @@ fn invalid_and_colliding_meter_ticks_never_divide_by_zero() {
     .unwrap();
     assert_eq!(map.tick_to_position(1_680).unwrap().bar, 2);
 }
+
+#[test]
+fn checked_segment_anchors_match_shortened_and_aligned_bars_without_tempo() {
+    let map = MeterMap::new(
+        signature(4, 4),
+        &[
+            MeterChange {
+                id: MeterChangeId(2),
+                tick: 4_001,
+                signature: signature(7, 8),
+            },
+            MeterChange {
+                id: MeterChangeId(3),
+                tick: 7_361,
+                signature: signature(3, 4),
+            },
+            MeterChange {
+                id: MeterChangeId(4),
+                tick: 7_400,
+                signature: signature(7, 16),
+            },
+        ],
+    )
+    .unwrap();
+    let anchors: Vec<_> = map
+        .segments()
+        .iter()
+        .map(|segment| {
+            (
+                segment.start_tick(),
+                segment.bar_origin_index(),
+                segment.signature(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        anchors,
+        [
+            (0, 0, signature(4, 4)),
+            (4_001, 2, signature(7, 8)),
+            (7_361, 3, signature(3, 4)),
+            (7_400, 4, signature(7, 16)),
+        ]
+    );
+    for segment in map.segments() {
+        assert_eq!(
+            map.tick_to_position(segment.start_tick()).unwrap().bar - 1,
+            segment.bar_origin_index()
+        );
+        assert!(segment.bar_origin_index() < i32::MAX as u32);
+    }
+    let zero = MeterMap::new(
+        signature(4, 4),
+        &[MeterChange {
+            id: MeterChangeId(1),
+            tick: 0,
+            signature: signature(7, 8),
+        }],
+    )
+    .unwrap();
+    assert_eq!(zero.segments().len(), 1);
+    assert_eq!(zero.segments()[0].bar_origin_index(), 0);
+    assert_eq!(zero.segments()[0].signature(), signature(7, 8));
+    let narrow = MeterMap::new(signature(1, 16), &[]).unwrap();
+    assert!(narrow.tick_to_position(MAX_SONG_TICKS).unwrap().bar - 1 < i32::MAX as u32);
+}
+
+#[test]
+fn typed_preparation_errors_preserve_the_document_string_adapter() {
+    use windfall_project::timeline::{MAX_TIMELINE_ITEMS, MeterMapError};
+    for (signature, cause, message) in [
+        (
+            signature(0, 4),
+            MeterMapError::Numerator(0),
+            "a time signature needs 1 to 16 beats per bar, not 0",
+        ),
+        (
+            signature(4, 0),
+            MeterMapError::Denominator(0),
+            "a time signature's beat unit must be 2, 4, 8 or 16, not 0",
+        ),
+    ] {
+        assert_eq!(MeterMap::checked(signature, &[]).err(), Some(cause));
+        assert_eq!(
+            MeterMap::new(signature, &[]).err().as_deref(),
+            Some(message)
+        );
+    }
+    let invalid = [MeterChange {
+        id: MeterChangeId(2),
+        tick: MAX_SONG_TICKS,
+        signature: signature(7, 8),
+    }];
+    assert_eq!(
+        MeterMap::checked(signature(4, 4), &invalid).err(),
+        Some(MeterMapError::UnorderedOrOutOfBounds)
+    );
+    let oversized: Vec<_> = (0..=MAX_TIMELINE_ITEMS)
+        .map(|tick| MeterChange {
+            id: MeterChangeId(tick as u32 + 2),
+            tick: tick as u32,
+            signature: signature(4, 4),
+        })
+        .collect();
+    assert_eq!(
+        MeterMap::checked(signature(4, 4), &oversized).err(),
+        Some(MeterMapError::TooManyChanges)
+    );
+}

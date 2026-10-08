@@ -557,3 +557,163 @@ browser, portable files, piano/history-intent and DSP seams remain untouched.
 Physical UI/audio, installed external plugins and non-Windows behavior remain
 unverified. Arrangements, per-pattern timelines, linked/group/make-unique/scrub,
 WAV marker metadata and scalar snap/grid refinements remain open.
+
+## R4: static creation actions and native bar origins
+
+R4 reviewed immutable `a8e33f209c3d5d85e3ecd55b876d02bdd5e22119` and
+requested both inherited findings be repaired:
+
+1. The five static Add entries still duplicated registered actions with local
+   labels/handlers. All five now use `ActionMenuItem` and their existing
+   registry IDs. The actual entity editor/CRUD controls stay local. Add actions
+   expose the registry's contextual disabled reason. No registry primitive,
+   panel layout or central registration changed.
+2. Song meter changes start new bars, but hosted adapters calculated bars as
+   though the current signature applied from tick zero. In the shared fixture,
+   4/4 to 7/8 at tick 4001 starts zero-based bar 2 at `4001 / 960` beats;
+   the old CLAP/VST3 ABI builders reported a downbeat at 3.5 beats instead.
+
+The separately consumable metadata prerequisite is source-only commit
+`94e168ae6d056bae8b17ef95dfcc8a92b0b1699a`, directly above `a8e33f20`.
+It contains exactly seven paths: engine `plugins.rs` adds the Rust-only
+`MeterAnchor { bar_origin_beats: f64, bar_origin_index: u32 }` and optional
+transport field; engine `processor.rs` initially supplies mechanical `None`;
+host `events.rs` supplies the same type/default and checked `bar_position()`;
+host `lib.rs` re-exports the type; CLAP/VST3 processor modules use the checked
+native bar fields and contain private ABI regressions; host
+`tests/processing.rs` adds only `meter_anchor: None` to its explicit literal.
+The realtime/VST3/example literals already use `..Default` and were untouched.
+No project/Plan/UI or N4 runtime/bridge/render-error hunk is in that prerequisite.
+
+The producer uses checked Rust-only immutable `MeterSegment` records, prepared
+off State/audio locks. Their absolute start ticks and cumulative zero-based bar
+indices come from the same shortened-bar conversion as the ruler. A bounded
+binary lookup selects the segment at the first frame. Song transports carry
+its anchor; Pattern transports carry `None` and the scalar signature. Native
+bar derivation is `origin + floor((position - origin) / width) * width`, with
+the cumulative index added to that relative bar. The host helper refuses
+nonfinite/negative anchors, positions preceding their anchor and CLAP index
+overflow. Adapters return the existing `ProcessFailed` before starting native
+processing on failure. Absolute beats/seconds/tempo/playing/signature are
+preserved; host `advance` changes the absolute clock without changing the anchor.
+Neither persisted numeric JSON, shared-WASM types nor IPC changed.
+
+Malformed raw meter data is also explicit failure. `MeterMap::checked` returns
+a Copy `MeterMapError`; the existing `MeterMap::new` string adapter preserves
+document error messages. Infallible Plan compilation retains
+`Result<Vec<MeterSegment>, MeterMapError>` for unpublished introspection.
+`Controller::try_prepare_project` checks before sampler preparation/snapshots.
+The approved control-side publication gates at `set_prepared_project` and
+`set_plan` latch existing
+`Unsupported("Invalid song meter map; project preparation refused.")` before
+State/factory/selected-pattern mutation and retain the installed plan.
+A healthy next installation clears the error. No panic, empty-map fallback,
+invalid anchor sentinel, callback error string or new general error API is used.
+The defensive callback invariant branch fills silence if an internal failed
+plan ever reaches it; public publication gates prevent that path.
+
+Executed RED/GREEN evidence:
+
+- Seven new actual-function/shared-WASM Add menu cases failed RED on the absent
+  registry titles. GREEN verifies configured shortcuts, direct registry
+  invocation, disabled reasons and real Rust document creation for all five
+  kinds, plus New/Open cancellation and fresh-source re-entry. The prior
+  timeline, hydration, chained lifetime and safe-request/reload cases pass.
+- Two compiled native ABI tests failed RED with the wrong 3.5-beat downbeat;
+  the two scalar Pattern controls already passed. Seven host meter tests now
+  pass, including fractional/exact bar boundaries, all unchanged transport
+  fields, invalid-anchor refusal, scalar legacy bars, index bounds and advance.
+  These execute the concrete CLAP `TransportEvent` and VST3 `ProcessContext`
+  builders used by processing, not an installed external plugin or bridge.
+- The expanded engine hosted-factory probe failed RED on missing Song anchors.
+  GREEN observes hosted instrument/effect roles for both saved format
+  identifiers through actual engine processing. It proves tick-4001 origin/
+  index, aligned/later changes, fractional seeks, selected-start clamping,
+  Song/Pattern/source switches and zero callback allocator/deallocator calls.
+  Its clock/tempo fields are bit-identical to a scalar-map control under the
+  same tempo ramp and frame timing. The new fixture was corrected to respect
+  existing tempo look-ahead, ceil-aligned first-sample positions and Pattern
+  source bounds; the original six-field assertions were preserved.
+- A compiled private Controller regression exercises raw invalid scalar
+  signatures and colliding meter changes through fallible preparation,
+  infallible compile, `set_prepared_project`, direct `set_plan` and convenience
+  `set_project`. The installed Plan Arc, playing transport, selected pattern,
+  cursor/range, native provider/preparation/process counts and owner remain
+  unchanged. Audio continues at 0.25 per channel with zero callback allocator/
+  deallocator calls; a healthy next install clears the error and reuses the
+  owner. Nine project timeline cases also preserve v1 persistence, numeric ID
+  validation/history and typed/string error compatibility.
+
+Final focused execution: **27 distinct native/project/engine tests** (seven
+host meter, ten engine timeline, one Controller refusal and nine project
+timeline); **93 shared-WASM UI tests in eight files**. The engine timeline run
+retains R1 stopped-skip automation/PDC/tails, all clip sources/offsets, tempo
+ramps, fixed/automatic tails, linear buffer/stream/stem parity and the 64-transition
+callback bound. UI coverage includes all 50 prior ordered lifetime cases,
+reload/exhaustion/hydration, selected export guards, the position readout and
+selection zoom. No prior assertions were removed or skipped.
+
+Strict all-target Clippy (`-D warnings`) passed for the three changed Rust
+packages (project, engine and plugin host), as did workspace fmt, desktop
+TypeScript, ESLint and changed-TypeScript Prettier. Commands used the existing
+isolated target, jobs/tests 1 and at most two UI workers:
+
+```text
+cargo test -p windfall-plugin-host --lib meter_tests -- --test-threads=1
+cargo test -p windfall-engine --lib timeline_invalid_meter_snapshots -- --test-threads=1
+cargo test -p windfall-engine --test engine timeline:: -- --test-threads=1
+cargo test -p windfall-project --test timeline -- --test-threads=1
+cargo clippy -p windfall-project -p windfall-engine -p windfall-plugin-host --all-targets -- -D warnings
+cargo fmt --all -- --check
+scripts/gen-bindings.sh "$PWD/target/timeline-ui-bindings"
+scripts/build-sim.sh
+node scripts/check-bindings.mjs target/timeline-ui-bindings
+node scripts/check-sim.mjs
+pnpm --dir apps/desktop exec vitest run [eight focused files] --maxWorkers=2
+pnpm --dir apps/desktop exec tsc -b
+pnpm --dir apps/desktop exec eslint .
+```
+
+The final UI run started at 08:16:04 UTC with 179 freshly regenerated bindings
+and a 1,965,327-byte simulator. WASM SHA-256:
+`2a09632df8c4d2e4588ad45f27b2d7b6208d0db7802ac127d64aed6d4665c7bb`;
+verified input fingerprint:
+`0d72dc6ccb1e953f083bab667b6a9dfe7469301e811642c19d4ca318da158a6b`.
+Validation artifacts are restored/excluded before commit, and no UI check is
+run against the subsequently restored legacy artifacts.
+
+Private executable provenance under `target/timeline-verification/debug/deps`
+(2026-10-08 UTC, validation only):
+
+| Binary | Written UTC | SHA-256 |
+| --- | --- | --- |
+| `windfall_plugin_host-a142c4b240164585.exe` | 07:50:52 | `b99cc4c40b9543444f4ddeb8c0af94ccf1c445f6fad2bd12d20c08c8d418ed9f` |
+| `windfall_engine-31efa27a98778ef9.exe` | 08:08:21 | `10111dd3ae310261c26f731241c58a9171c7fae1bc3ca9caa1a2a3a80a6b2239` |
+| `engine-d477693dd860322b.exe` | 08:11:23 | `0dfe009d15ce6f85796081b6d60d68f5304346cb7fa27152eab28f53e80732f9` |
+| `timeline-8c4ccc693213df2b.exe` | 08:13:34 | `93ff0f8387e8510fbfa7d60b949b94521e8c02e27cc7f3921abc8cbf97d3409d` |
+
+Their corresponding `.fingerprint/windfall-{package}-{suffix}/test-*.json`
+records and `.d` paths identify this bound checkout; inventories list seven
+host meter, one Controller refusal, ten engine timeline and nine project
+timeline tests. Final engine timeline source SHA-256:
+`5aaf1780686c53a85b7ca4baf6f633b91a44c909241c39721ccc19a9990a576a`;
+Controller source:
+`e7647f53595ae90ad11fea418fc016f136b6c24c9ecee5aa23a779bdaf60cd3b`;
+project timeline source:
+`ad1e8655cd142584f668d68331c6b6442366f7d5700c23f9f6a11d2decbebbb2`.
+Local RED/GREEN/strict-check logs are `target/timeline-r4-*.log`.
+
+N4 exclusively owns runtime anchor forwarding, its literal compatibility,
+versioned bridge ABI3 layout/codec/helper/adapter, and checked render/stem error
+reporting. Its precompile/finalization meter refusal must use the same public
+checked map and existing Unsupported classification before the void publication
+gate. T1 has not edited or imported those paths. Consequently combined bridge,
+desktop native tests/Clippy and malformed-map offline render refusal remain
+composition gates, not claimed GREEN here. No unversioned ABI2 extension was
+made. The parent regenerates combined artifacts after accepted integration.
+M1's Session/commands/IPC/backend registration window remains untouched, as do
+Rack/engine State, utility departures/adoption, sampler/browser/portable/history
+and native fixture classes. Physical audio/UI, installed external plugins and
+non-Windows behavior remain unverified. Full arrangements, per-pattern
+timelines, links/groups/make-unique/scrub, WAV marker metadata and scalar snap/
+grid refinements remain open.
