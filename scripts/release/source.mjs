@@ -223,6 +223,22 @@ export function sourceArchive(root, sha) {
   );
 }
 export function resources(root) {
+  // Pinned Tauri 2.12.1 accepts/merges JSON, JSON5 and TOML platform files.
+  // Inspect directory entries rather than Git's tracked list or existsSync:
+  // ignored files and dangling links must not bypass this closed resource seam.
+  const configRoot = inside(root, "apps/desktop/src-tauri");
+  const closed = new Set(["tauri.conf.json5", "tauri.toml"]);
+  for (const platform of ["windows", "linux", "macos", "android", "ios"])
+    for (const name of [
+      `tauri.${platform}.conf.json`,
+      `tauri.${platform}.conf.json5`,
+      `Tauri.${platform}.toml`,
+    ])
+      closed.add(name.toLowerCase());
+  check(
+    !fs.readdirSync(configRoot).some((name) => closed.has(name.toLowerCase())),
+    "platform/alternate config requires an accepted packaging contract",
+  );
   const conf = parseJson(
     fs.readFileSync(
       inside(root, "apps/desktop/src-tauri/tauri.conf.json"),
@@ -238,14 +254,6 @@ export function resources(root) {
       json({ "../../../content/factory/": "factory/" }),
     "unaccepted resource mapping (helper/model/resource seam requires parent integration)",
   );
-  for (const platform of ["windows", "linux", "macos"]) {
-    check(
-      !fs.existsSync(
-        path.join(root, `apps/desktop/src-tauri/tauri.${platform}.conf.json`),
-      ),
-      "platform-specific config requires an accepted packaging contract",
-    );
-  }
   for (const platform of ["macOS", "linux"]) {
     const p = conf.bundle[platform];
     check(
@@ -372,20 +380,14 @@ export async function githubIdentity(requested, token = process.env.GH_TOKEN) {
   const names = [requested.version, `v${requested.version}`].map((n) =>
     n.toLowerCase(),
   );
-  for (const ref of await api(
-    `git/matching-refs/tags/${encodeURIComponent(requested.version)}`,
-  ))
-    check(
-      !names.includes(ref.ref.slice("refs/tags/".length).toLowerCase()),
-      "release tag identity is already reserved",
-    );
-  for (const ref of await api(
-    `git/matching-refs/tags/${encodeURIComponent(`v${requested.version}`)}`,
-  ))
-    check(
-      !names.includes(ref.ref.slice("refs/tags/".length).toLowerCase()),
-      "release tag identity is already reserved",
-    );
+  for (const prefix of [requested.version, `v${requested.version}`])
+    for (const ref of await api(
+      `git/matching-refs/tags/${encodeURIComponent(prefix)}`,
+    ))
+      check(
+        !names.includes(ref.ref.slice("refs/tags/".length).toLowerCase()),
+        "release tag identity is already reserved",
+      );
   for (let page = 1; ; page++) {
     check(
       page <= 100,

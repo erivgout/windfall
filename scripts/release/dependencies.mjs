@@ -10,7 +10,6 @@ import {
   parseJson,
   portable,
   rootPath,
-  run,
   unique,
 } from "./files.mjs";
 import { cargoMetadata } from "./source.mjs";
@@ -156,7 +155,7 @@ function allowedDirectory(dir, roots) {
   );
   return rootPath(real);
 }
-export function dependencyEvidence(root, meta, licenses, allowedRoots) {
+function buildDependencyEvidence(root, meta, licenses, allowedRoots) {
   const locks = lockedDependencies(root);
   const copied = new Map();
   check(
@@ -193,13 +192,26 @@ export function dependencyEvidence(root, meta, licenses, allowedRoots) {
     cargo.set(key, p);
   }
   const ids = new Set(meta.packages.map((p) => p.id));
+  check(ids.size === meta.packages.length, "duplicate Cargo metadata id");
+  check(
+    new Set(meta.workspace_members).size === meta.workspace_members.length &&
+      meta.workspace_members.every((id) => ids.has(id)),
+    "truncated/duplicate Cargo workspace nodes",
+  );
+  const nodeIds = new Set();
   for (const node of meta.resolve.nodes) {
     check(
       ids.has(node.id) &&
+        !nodeIds.has(node.id) &&
         Array.isArray(node.dependencies) &&
-        node.dependencies.every((id) => ids.has(id)),
+        node.dependencies.every((id) => ids.has(id)) &&
+        new Set(node.dependencies).size === node.dependencies.length &&
+        Array.isArray(node.features) &&
+        Array.isArray(node.deps) &&
+        node.deps.every((d) => ids.has(d.pkg) && Array.isArray(d.dep_kinds)),
       "malformed Cargo dependency graph edges",
     );
+    nodeIds.add(node.id);
   }
   check(
     meta.resolve.nodes.length === ids.size,
@@ -241,14 +253,25 @@ export function dependencyEvidence(root, meta, licenses, allowedRoots) {
           locks.some((l) => keyOf(l) === key),
           "installed npm package outside pinned lock",
         );
-        check(!npm.has(key), "duplicate installed npm metadata");
+        const prior = npm.get(key);
+        if (prior) {
+          check(prior.base !== base, "duplicate installed npm metadata path");
+          const texts = (dir) => notices(dir, "comparison", new Map());
+          check(
+            prior.license ===
+              (typeof pkg.license === "string" ? pkg.license : null) &&
+              json(texts(prior.base)) === json(texts(base)),
+            "conflicting installed npm peer-context declarations/notices",
+          );
+        }
         observed.add(pkg.version);
         // Preserve the installed package's declaration. A summarized pnpm group
         // must never manufacture equivalence or override package metadata.
-        npm.set(key, {
-          base,
-          license: typeof pkg.license === "string" ? pkg.license : null,
-        });
+        if (!prior)
+          npm.set(key, {
+            base,
+            license: typeof pkg.license === "string" ? pkg.license : null,
+          });
       }
       check(
         p.versions.every((v) => observed.has(v)),
@@ -316,6 +339,21 @@ export function dependencyEvidence(root, meta, licenses, allowedRoots) {
           });
         })
         .sort(compare),
+      features: [...n.features].sort(compare),
+      edges: n.deps
+        .map((d) => ({
+          name: d.name,
+          package: keyOf({
+            ecosystem: "cargo",
+            ...meta.packages.find((p) => p.id === d.pkg),
+            source:
+              meta.packages.find((p) => p.id === d.pkg).source ?? "workspace",
+          }),
+          kinds: d.dep_kinds
+            .map((k) => ({ kind: k.kind, target: k.target }))
+            .sort((a, b) => compare(json(a), json(b))),
+        }))
+        .sort((a, b) => compare(json(a), json(b))),
     }))
     .sort((a, b) => compare(a.package, b.package));
   const inventory = {
@@ -326,30 +364,105 @@ export function dependencyEvidence(root, meta, licenses, allowedRoots) {
     packages,
     cargoGraph: graph,
   };
-  validateDependencies(root, inventory);
+  validateInventory(root, inventory);
   return { inventory, notices: copied };
 }
 export function captureDependencies(root) {
-  const meta = cargoMetadata(root, true);
-  const licenses = parseJson(
-    run(
-      "pnpm",
-      ["licenses", "list", "--json"],
-      path.join(root, "apps/desktop"),
-    ),
+  return buildDependencyEvidence(
+    root,
+    cargoMetadata(root, true),
+    installedNpmMetadata(root),
+    packageStores(root),
   );
+}
+function packageStores(root) {
   const cargoHome = process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo");
   const registry = path.join(cargoHome, "registry/src");
   const npmRoot = path.join(root, "apps/desktop/node_modules");
-  return dependencyEvidence(root, meta, licenses, {
+  return {
     cargo: [
       rootPath(root),
       ...(fs.existsSync(registry) ? [rootPath(registry)] : []),
     ],
-    npm: [rootPath(npmRoot)],
-  });
+    npm: fs.existsSync(npmRoot) ? [rootPath(npmRoot)] : [],
+  };
+}
+// The pinned pipeline uses a local pnpm virtual store. Discover declarations
+// independently of the submitted SBOM or a caller's summarized license groups.
+// Flat/nested node_modules are also read; links can only resolve inside this store.
+function installedNpmMetadata(root) {
+  const npmRoot = path.join(root, "apps/desktop/node_modules");
+  if (!fs.existsSync(npmRoot)) return {};
+  const store = rootPath(npmRoot);
+  const seen = new Set();
+  const groups = [];
+  function packageDir(dir) {
+    const base = allowedDirectory(dir, [store]);
+    if (seen.has(base)) return;
+    seen.add(base);
+    if (!fs.existsSync(path.join(base, "package.json"))) return;
+    const pkg = parseJson(
+      fs.readFileSync(inside(base, "package.json"), "utf8"),
+    );
+    string(pkg.name, "installed npm name");
+    string(pkg.version, "installed npm version");
+    groups.push({
+      name: pkg.name,
+      versions: [pkg.version],
+      paths: [base],
+      license: typeof pkg.license === "string" ? pkg.license : null,
+    });
+    if (fs.existsSync(path.join(base, "node_modules")))
+      modules(path.join(base, "node_modules"));
+  }
+  function modules(dir) {
+    const base = allowedDirectory(dir, [store]);
+    for (const entry of fs
+      .readdirSync(base, { withFileTypes: true })
+      .sort((a, b) => compare(a.name, b.name))) {
+      const child = path.join(base, entry.name);
+      if (entry.name === ".pnpm") {
+        rootPath(child);
+        for (const context of fs.readdirSync(child, { withFileTypes: true })) {
+          if (!context.isDirectory() || context.name === "node_modules")
+            continue;
+          const nested = path.join(child, context.name, "node_modules");
+          if (fs.existsSync(nested)) modules(nested);
+        }
+      } else if (entry.name.startsWith("@")) {
+        const scope = allowedDirectory(child, [store]);
+        for (const scoped of fs.readdirSync(scope, { withFileTypes: true }))
+          if (scoped.isDirectory() || scoped.isSymbolicLink())
+            packageDir(path.join(scope, scoped.name));
+      } else if (
+        !entry.name.startsWith(".") &&
+        (entry.isDirectory() || entry.isSymbolicLink())
+      )
+        packageDir(child);
+    }
+  }
+  modules(store);
+  return { installed: groups };
+}
+export function dependencyEvidence(root, meta, licenses, allowedRoots) {
+  const authoritative = cargoMetadata(root, true);
+  check(
+    json(meta) === json(authoritative),
+    "submitted Cargo metadata declarations/graph/packages differ from authoritative locked source",
+  );
+  const evidence = buildDependencyEvidence(root, meta, licenses, allowedRoots);
+  validateDependencies(root, evidence.inventory);
+  return evidence;
 }
 export function validateDependencies(root, inventory) {
+  validateInventory(root, inventory);
+  const expected = captureDependencies(root).inventory;
+  check(
+    json(inventory) === json(expected),
+    "dependency declarations/graph/notices differ from authoritative locked source and installed metadata",
+  );
+}
+function validateInventory(root, inventory) {
   fields(
     inventory,
     [
@@ -446,15 +559,38 @@ export function validateDependencies(root, inventory) {
   );
   const graphKeys = new Set();
   for (const node of inventory.cargoGraph) {
-    fields(node, ["package", "dependencies"], "dependency graph");
+    fields(
+      node,
+      ["package", "dependencies", "features", "edges"],
+      "dependency graph",
+    );
     check(
       keys.has(node.package) &&
         !graphKeys.has(node.package) &&
         Array.isArray(node.dependencies) &&
-        node.dependencies.every((k) => keys.has(k)),
+        node.dependencies.every((k) => keys.has(k)) &&
+        Array.isArray(node.features) &&
+        node.features.every((f) => typeof f === "string") &&
+        Array.isArray(node.edges),
       "malformed dependency graph",
     );
     graphKeys.add(node.package);
+    for (const edge of node.edges) {
+      fields(edge, ["name", "package", "kinds"], "Cargo graph edge");
+      string(edge.name, "Cargo edge name");
+      check(
+        keys.has(edge.package) && Array.isArray(edge.kinds),
+        "malformed Cargo edge",
+      );
+      for (const kind of edge.kinds) {
+        fields(kind, ["kind", "target"], "Cargo edge kind");
+        check(
+          [null, "dev", "build"].includes(kind.kind) &&
+            (kind.target === null || typeof kind.target === "string"),
+          "malformed Cargo edge platform/kind",
+        );
+      }
+    }
   }
   const installed = inventory.packages
     .filter(

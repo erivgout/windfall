@@ -17,6 +17,8 @@ import {
 } from "./dependencies.mjs";
 import {
   atomicNew,
+  compare,
+  fileRecord,
   inside,
   json,
   load,
@@ -209,6 +211,83 @@ function fixture(t, platform = "windows", architecture = "x64") {
 }
 function generate(f) {
   return createCandidate(f.options);
+}
+function graphFixture(t) {
+  const f = fixture(t);
+  const workspace = path.join(f.source, "Cargo.toml");
+  fs.writeFileSync(
+    workspace,
+    fs
+      .readFileSync(workspace, "utf8")
+      .replace(
+        'members = ["apps/desktop/src-tauri"]',
+        'members = ["apps/desktop/src-tauri", "crates/windfall-core"]',
+      ),
+  );
+  writeNew(
+    f.source,
+    "crates/windfall-core/Cargo.toml",
+    '[package]\nname = "windfall-core"\nversion.workspace = true\nedition.workspace = true\nlicense.workspace = true\n',
+  );
+  writeNew(
+    f.source,
+    "crates/windfall-core/src/lib.rs",
+    "// Authored graph fixture.\n",
+  );
+  fs.appendFileSync(
+    path.join(f.source, "apps/desktop/src-tauri/Cargo.toml"),
+    '\n[dependencies]\nwindfall-core = { path = "../../../crates/windfall-core" }\n[features]\ndefault = ["proof"]\nproof = []\n',
+  );
+  fs.writeFileSync(
+    path.join(f.source, "Cargo.lock"),
+    `version = 4\n\n[[package]]\nname = "windfall-core"\nversion = "${version}"\n\n[[package]]\nname = "windfall-desktop"\nversion = "${version}"\ndependencies = [\n "windfall-core",\n]\n`,
+  );
+  run("git", ["add", "."], f.source);
+  run(
+    "git",
+    [
+      "commit",
+      "--quiet",
+      "-m",
+      "Authored authoritative dependency graph fixture",
+    ],
+    f.source,
+  );
+  f.requested.commit = run("git", ["rev-parse", "HEAD"], f.source);
+  f.capture = sourceEvidence(f.source, f.requested);
+  f.dependencies = dependencyEvidence(
+    f.source,
+    cargoMetadata(f.source, true),
+    {},
+    { cargo: [f.source], npm: [] },
+  );
+  Object.assign(f.options, {
+    requested: f.requested,
+    capture: f.capture,
+    dependencies: f.dependencies,
+  });
+  return f;
+}
+function rewriteDependencyEvidence(f, edit) {
+  const p = path.join(f.options.output, "dependencies.json");
+  const inventory = load(p);
+  edit(inventory);
+  fs.writeFileSync(p, json(inventory));
+  const manifestPath = path.join(f.options.output, "manifest.json");
+  const m = load(manifestPath);
+  Object.assign(
+    m.artifacts.find((a) => a.file === "dependencies.json"),
+    fileRecord(f.options.output, "dependencies.json"),
+  );
+  fs.writeFileSync(manifestPath, json(m));
+  const records = [
+    ...m.artifacts,
+    fileRecord(f.options.output, "manifest.json"),
+  ].sort((a, b) => compare(a.file, b.file));
+  fs.writeFileSync(
+    path.join(f.options.output, "SHA256SUMS.txt"),
+    records.map((r) => `${r.sha256}  ${r.file}\n`).join(""),
+  );
 }
 function verify(f) {
   return verifyCandidate({
@@ -627,6 +706,171 @@ test("unaccepted helper/model/resource mappings are gated", (t) => {
   fs.writeFileSync(p, json(conf));
   assert.throws(() => resources(f.source), /resource mapping/);
 });
+test("all pinned Tauri platform JSON/JSON5/TOML overrides are refused even when ignored", (t) => {
+  const f = fixture(t);
+  assert.equal(resources(f.source).helpers, "not-admitted");
+  writeNew(
+    f.source,
+    ".gitignore",
+    "apps/desktop/src-tauri/*.json5\napps/desktop/src-tauri/*.toml\napps/desktop/src-tauri/tauri.*.conf.json\n",
+  );
+  run("git", ["add", ".gitignore"], f.source);
+  run(
+    "git",
+    ["commit", "--quiet", "-m", "Authored ignored config fixture"],
+    f.source,
+  );
+  f.requested.commit = run("git", ["rev-parse", "HEAD"], f.source);
+  for (const platform of ["windows", "macos", "linux", "android", "ios"]) {
+    for (const name of [
+      `tauri.${platform}.conf.json5`,
+      `Tauri.${platform}.toml`,
+      `tauri.${platform}.conf.json`,
+    ]) {
+      const file = path.join(f.source, "apps/desktop/src-tauri", name);
+      fs.writeFileSync(
+        file,
+        name.endsWith("toml")
+          ? '[bundle]\nexternalBin = ["unavailable-helper"]\n'
+          : '{"bundle":{"resources":{"model.bin":"model.bin"}}}\n',
+      );
+      assert.throws(() => resources(f.source), /platform.*config/);
+      if (name === "tauri.windows.conf.json5") {
+        const result = invoke(f, "preflight");
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /platform.*config/);
+      }
+      fs.unlinkSync(file);
+    }
+  }
+  for (const name of ["tauri.conf.json5", "Tauri.toml"]) {
+    const file = path.join(f.source, "apps/desktop/src-tauri", name);
+    fs.writeFileSync(file, "Authored refused alternate config.");
+    assert.throws(() => resources(f.source), /alternate config/);
+    fs.unlinkSync(file);
+  }
+  resources(f.source);
+});
+test("SBOM changed GPL declaration fails against authoritative Cargo metadata", (t) => {
+  const f = graphFixture(t);
+  const inventory = structuredClone(f.dependencies.inventory);
+  inventory.packages.find(
+    (p) => p.name === "windfall-desktop",
+  ).declaredLicense = "MIT";
+  assert.throws(
+    () => validateDependencies(f.source, inventory),
+    /authoritative/,
+  );
+});
+test("SBOM missing desktop-to-core edge fails against authoritative Cargo metadata", (t) => {
+  const f = graphFixture(t);
+  const inventory = structuredClone(f.dependencies.inventory);
+  const desktop = inventory.cargoGraph.find((p) =>
+    p.package.includes("windfall-desktop@"),
+  );
+  assert.equal(desktop.dependencies.length, 1);
+  desktop.dependencies = [];
+  assert.throws(
+    () => validateDependencies(f.source, inventory),
+    /authoritative/,
+  );
+});
+test("offline metadata inputs cannot bootstrap forged licenses, edges, features or workspace nodes", (t) => {
+  const f = graphFixture(t);
+  const meta = cargoMetadata(f.source, true);
+  for (const edit of [
+    (m) => {
+      m.packages[0].license = "MIT";
+    },
+    (m) => {
+      m.resolve.nodes.find((n) => n.dependencies.length).dependencies = [];
+    },
+    (m) => {
+      m.resolve.nodes[0].dependencies.push(m.resolve.nodes[0].id);
+    },
+    (m) => {
+      m.resolve.nodes[0].features = ["fictional"];
+    },
+    (m) => {
+      m.resolve.nodes.find((n) => n.deps.length).deps[0].dep_kinds[0].target =
+        "cfg(windows)";
+    },
+    (m) => {
+      m.workspace_members.pop();
+    },
+    (m) => {
+      m.packages.pop();
+    },
+  ]) {
+    const changed = structuredClone(meta);
+    edit(changed);
+    assert.throws(
+      () =>
+        dependencyEvidence(
+          f.source,
+          changed,
+          {},
+          { cargo: [f.source], npm: [] },
+        ),
+      /authoritative/,
+    );
+  }
+});
+for (const [label, edit] of [
+  [
+    "license",
+    (i) => {
+      i.packages.find((p) => p.name === "windfall-desktop").declaredLicense =
+        "MIT";
+    },
+  ],
+  [
+    "missing edge",
+    (i) => {
+      i.cargoGraph.find((n) => n.dependencies.length).dependencies = [];
+    },
+  ],
+  [
+    "false edge",
+    (i) => {
+      const core = i.cargoGraph.find((n) =>
+        n.package.includes("windfall-core@"),
+      );
+      core.dependencies.push(
+        i.cargoGraph.find((n) => n.package.includes("windfall-desktop@"))
+          .package,
+      );
+    },
+  ],
+  [
+    "features",
+    (i) => {
+      i.cargoGraph.find((n) => n.features.length).features = [];
+    },
+  ],
+  [
+    "platform",
+    (i) => {
+      i.cargoGraph.find((n) => n.edges.length).edges[0].kinds[0].target =
+        "cfg(windows)";
+    },
+  ],
+  [
+    "dependency kind",
+    (i) => {
+      i.cargoGraph.find((n) => n.edges.length).edges[0].kinds[0].kind = "build";
+    },
+  ],
+])
+  test(`independent verifier rejects forged SBOM ${label} after artifact hashes/checksums are updated`, (t) => {
+    const f = graphFixture(t);
+    generate(f);
+    rewriteDependencyEvidence(f, edit);
+    assert.throws(() => verify(f), /authoritative/);
+    const result = invoke(f, "verify", ["--candidate", f.options.output]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /authoritative/);
+  });
 test("additional auto-bundled desktop binaries require an accepted helper contract", (t) => {
   const f = fixture(t);
   fs.appendFileSync(
@@ -651,11 +895,42 @@ test("additional auto-bundled desktop binaries require an accepted helper contra
 });
 test("dependency capture is lock backed and missing provenance remains an explicit gate", (t) => {
   const f = fixture(t);
+  const packageManifest = path.join(
+    f.source,
+    "apps/desktop/src-tauri/Cargo.toml",
+  );
+  fs.writeFileSync(
+    packageManifest,
+    fs
+      .readFileSync(packageManifest, "utf8")
+      .replace("license.workspace = true\n", ""),
+  );
+  run("git", ["add", "."], f.source);
+  run(
+    "git",
+    [
+      "commit",
+      "--quiet",
+      "-m",
+      "Authored package without a license declaration",
+    ],
+    f.source,
+  );
+  f.requested.commit = run("git", ["rev-parse", "HEAD"], f.source);
+  f.capture = sourceEvidence(f.source, f.requested);
+  f.dependencies = dependencyEvidence(
+    f.source,
+    cargoMetadata(f.source, true),
+    {},
+    { cargo: [f.source], npm: [] },
+  );
   const inv = structuredClone(f.dependencies.inventory);
-  inv.packages[0].declaredLicense = null;
-  inv.packages[0].provenance = "missing-license-or-notice";
+  assert.equal(inv.packages[0].declaredLicense, null);
+  assert.equal(inv.packages[0].provenance, "missing-license-or-notice");
   createCandidate({
     ...f.options,
+    requested: f.requested,
+    capture: f.capture,
     dependencies: { ...f.dependencies, inventory: inv },
   });
   const m = verify(f);
@@ -675,7 +950,7 @@ test("malformed/truncated/duplicate dependency evidence and integrity are reject
         {},
         { cargo: [f.source], npm: [] },
       ),
-    /graph/,
+    /authoritative/,
   );
   assert.throws(
     () =>
@@ -695,7 +970,7 @@ test("malformed/truncated/duplicate dependency evidence and integrity are reject
         {},
         { cargo: [f.source], npm: [] },
       ),
-    /duplicate/,
+    /authoritative/,
   );
   const inv = structuredClone(f.dependencies.inventory);
   inv.packages = [];
@@ -729,8 +1004,11 @@ test("npm provenance uses actual installed declarations, pinned integrity and no
     integrity +
     "}\nsnapshots:\n";
   fs.writeFileSync(path.join(f.source, "apps/desktop/pnpm-lock.yaml"), lock);
-  const packageRoot = path.join(f.temp, "npm-package");
-  fs.mkdirSync(packageRoot);
+  const packageRoot = path.join(
+    f.source,
+    "apps/desktop/node_modules/.pnpm/x@1.0.0/node_modules/x",
+  );
+  fs.mkdirSync(packageRoot, { recursive: true });
   writeNew(
     packageRoot,
     "package.json",
@@ -741,15 +1019,36 @@ test("npm provenance uses actual installed declarations, pinned integrity and no
     "LICENSE",
     "Actual authored dependency notice bytes.\n",
   );
+  const peerRoot = path.join(
+    f.source,
+    "apps/desktop/node_modules/.pnpm/x@1.0.0_peer/node_modules/x",
+  );
+  const npmStore = path.join(f.source, "apps/desktop/node_modules");
+  fs.mkdirSync(peerRoot, { recursive: true });
+  writeNew(
+    peerRoot,
+    "package.json",
+    fs.readFileSync(path.join(packageRoot, "package.json")),
+  );
+  writeNew(
+    peerRoot,
+    "LICENSE",
+    fs.readFileSync(path.join(packageRoot, "LICENSE")),
+  );
   const meta = cargoMetadata(f.source, true);
   const groups = {
     MIT: [
-      { name: "x", versions: ["1.0.0"], paths: [packageRoot], license: "MIT" },
+      {
+        name: "x",
+        versions: ["1.0.0"],
+        paths: [packageRoot, peerRoot],
+        license: "MIT",
+      },
     ],
   };
   const ev = dependencyEvidence(f.source, meta, groups, {
     cargo: [f.source],
-    npm: [packageRoot],
+    npm: [npmStore],
   });
   const npm = ev.inventory.packages.find((p) => p.ecosystem === "npm");
   assert.equal(npm.declaredLicense, "Apache-2.0");
@@ -758,20 +1057,61 @@ test("npm provenance uses actual installed declarations, pinned integrity and no
     ev.notices.get(npm.notices[0].file),
     fs.readFileSync(path.join(packageRoot, "LICENSE")),
   );
+  const changed = structuredClone(ev.inventory);
+  changed.packages.find((p) => p.ecosystem === "npm").declaredLicense = "MIT";
+  assert.throws(() => validateDependencies(f.source, changed), /authoritative/);
+  const omitted = structuredClone(ev.inventory);
+  const omittedPackage = omitted.packages.find((p) => p.ecosystem === "npm");
+  omittedPackage.declaredLicense = null;
+  omittedPackage.provenance = "not-installed-on-this-platform";
+  omittedPackage.notices = [];
+  assert.throws(() => validateDependencies(f.source, omitted), /authoritative/);
   assert.throws(
     () =>
       dependencyEvidence(f.source, meta, groups, {
         cargo: [f.source],
-        npm: [f.source],
+        npm: [path.join(f.source, "apps/desktop/src-tauri")],
       }),
     /outside allowed/,
+  );
+  fs.writeFileSync(
+    path.join(peerRoot, "package.json"),
+    json({ name: "x", version: "1.0.0", license: "MIT" }),
+  );
+  assert.throws(
+    () =>
+      dependencyEvidence(f.source, meta, groups, {
+        cargo: [f.source],
+        npm: [npmStore],
+      }),
+    /conflicting/,
+  );
+  fs.writeFileSync(
+    path.join(peerRoot, "package.json"),
+    fs.readFileSync(path.join(packageRoot, "package.json")),
+  );
+  fs.writeFileSync(
+    path.join(peerRoot, "LICENSE"),
+    "Conflicting authored peer notice.\n",
+  );
+  assert.throws(
+    () =>
+      dependencyEvidence(f.source, meta, groups, {
+        cargo: [f.source],
+        npm: [npmStore],
+      }),
+    /conflicting/,
+  );
+  fs.writeFileSync(
+    path.join(peerRoot, "LICENSE"),
+    fs.readFileSync(path.join(packageRoot, "LICENSE")),
   );
   groups.MIT[0].versions = ["9.0.0"];
   assert.throws(
     () =>
       dependencyEvidence(f.source, meta, groups, {
         cargo: [f.source],
-        npm: [packageRoot],
+        npm: [npmStore],
       }),
     /identity\/metadata mismatch/,
   );
