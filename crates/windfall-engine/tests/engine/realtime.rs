@@ -519,7 +519,10 @@ fn effect_at(kind: EffectKind, step: u32) -> EffectParams {
         | EffectKind::Polarity
         | EffectKind::StereoMatrix
         | EffectKind::SoftClipper
-        | EffectKind::Distortion => {
+        | EffectKind::Distortion
+        | EffectKind::FastLowpass
+        | EffectKind::SelectableFilter
+        | EffectKind::BassShelf => {
             let mut params = kind.default_params();
             for (index, info) in kind.descriptors().iter().enumerate() {
                 params.set(index, info.min + turn * (info.max - info.min));
