@@ -38,7 +38,7 @@ use windfall_project::{
 
 use crate::automation::{self, LaneState};
 use crate::plan::Plan;
-use crate::rack::{Compensation, EffectUnit, InstrumentUnit};
+use crate::rack::{Compensation, DelayStage, EffectUnit, InstrumentUnit};
 use crate::ramp::Ramp;
 use crate::render::TAIL_SILENCE_DB;
 use crate::sequencer::Clock;
@@ -148,6 +148,8 @@ pub(crate) struct DelaySlot {
     /// The line. `None` while it waits to be moved across from the state
     /// being replaced, and for good in a place that needs no delay.
     pub line: Option<Compensation>,
+    /// The ordered shared-delay transfer to mirror, if it contains a matrix.
+    path: Vec<DelayStage>,
     /// The place needs a line.
     used: bool,
 }
@@ -157,44 +159,61 @@ impl DelaySlot {
         Self {
             target: 0,
             line: None,
+            path: Vec::new(),
             used: false,
         }
     }
 
     /// The slot for a delay of `delay` frames that could grow to `reach`
     /// with the plan's effects at other settings. A place that neither
-    /// needs a delay nor has one fading away gets none, so a project with
-    /// no latency in it pays nothing.
+    /// needs a delay nor has one fading away gets none. A matrix reference
+    /// path retains its zero-delay stages to prime the first delayed edit;
+    /// a plain project still pays nothing.
     fn seat(
         key: DelayKey,
         delay: usize,
         reach: usize,
+        path: Vec<DelayStage>,
         held: Option<&Ledger>,
         ledger: &mut Ledger,
     ) -> Self {
-        let before = held.and_then(|held| held.delays.get(&key)).copied();
-        let was = before.map_or(0, |(target, _)| target);
-        if delay == 0 && was == 0 {
+        let before = held.and_then(|held| held.delays.get(&key));
+        let was = before.map_or(0, |(target, _, _)| *target);
+        if delay == 0 && was == 0 && path.is_empty() {
             return Self::none();
         }
         let needed = delay.max(was);
         let line = match before {
-            Some((_, capacity)) if capacity >= needed => {
-                ledger.delays.insert(key, (delay, capacity));
+            Some((_, capacity, old_path))
+                if *capacity >= needed
+                    && old_path.len() == path.len()
+                    && old_path
+                        .iter()
+                        .zip(&path)
+                        .all(|(old, new)| old.same_line(new)) =>
+            {
+                ledger.delays.insert(key, (delay, *capacity, path.clone()));
                 None
             }
             _ => {
                 // With a processor running the line starts out as no delay
                 // at all, and `take_over` decides how it gets to its length.
                 let start = if held.is_some() { 0 } else { delay };
-                let line = Compensation::new(needed.max(reach), start);
-                ledger.delays.insert(key, (delay, line.capacity()));
+                let line = if path.is_empty() {
+                    Compensation::new(needed.max(reach), start)
+                } else {
+                    Compensation::with_path(needed.max(reach), start, &path, held.is_some())
+                };
+                ledger
+                    .delays
+                    .insert(key, (delay, line.capacity(), path.clone()));
                 Some(line)
             }
         };
         Self {
             target: delay,
             line,
+            path,
             used: true,
         }
     }
@@ -226,19 +245,19 @@ impl DelaySlot {
                 if let Some(before) = &old.line {
                     line.take_history(before);
                 }
-                line.retarget(target, fade_frames, wait);
+                line.retarget_path(target, &self.path, fade_frames, wait);
             }
             (None, Some(old)) => {
                 self.line = old.line.take();
                 if let Some(line) = &mut self.line {
-                    line.retarget(target, fade_frames, wait);
+                    line.retarget_path(target, &self.path, fade_frames, wait);
                 }
             }
             (Some(line), None) if sounding => {
                 let fill = u32::try_from(target).unwrap_or(u32::MAX);
-                line.retarget(target, fade_frames, wait.max(fill));
+                line.retarget_path(target, &self.path, fade_frames, wait.max(fill));
             }
-            (Some(line), None) => line.snap(target),
+            (Some(line), None) => line.snap(target, &self.path),
             // The line that was to come never did, so there is no delay.
             (None, None) => self.used = false,
         }
@@ -329,8 +348,8 @@ pub(crate) struct Ledger {
     effects: HashMap<EffectId, EffectKind>,
     instruments: HashMap<ChannelId, InstrumentKind>,
     /// The length each compensation delay is set to and the longest its
-    /// line can give.
-    delays: HashMap<DelayKey, (usize, usize)>,
+    /// line can give, plus the identity and prepared bounds of its stages.
+    delays: HashMap<DelayKey, (usize, usize, Vec<DelayStage>)>,
     /// The gain reduction meters of the compressors and limiters, in mixer
     /// order.
     pub meters: Vec<(EffectId, GainReductionMeter)>,
@@ -348,6 +367,8 @@ struct Layout {
     /// settings. Delay lines are made this long, so that moving a
     /// limiter's look-ahead never needs a longer one.
     reach: Vec<usize>,
+    arrival_path: Vec<Vec<DelayStage>>,
+    out_path: Vec<Vec<DelayStage>>,
 }
 
 impl Layout {
@@ -364,6 +385,8 @@ impl Layout {
         let mut arrival = vec![0_usize; count];
         let mut reach = vec![0_usize; count];
         let mut out = vec![0_usize; count];
+        let mut arrival_path = vec![Vec::new(); count];
+        let mut out_path = vec![Vec::new(); count];
         // An instrument that has left the project is only fading out, and
         // nothing waits for it.
         for channel in plan.channels.iter().filter(|channel| !channel.leaving) {
@@ -374,6 +397,16 @@ impl Layout {
                     })
                     .map_or_else(|| params.latency_samples(rate), |record| record.1)
                     .min(most);
+                if latency > arrival[channel.track] {
+                    arrival_path[channel.track] = vec![DelayStage {
+                        key: windfall_project::PluginTarget::Instrument {
+                            channel: channel.id,
+                        },
+                        delay: latency,
+                        maximum: latency,
+                        matrix: false,
+                    }];
+                }
                 arrival[channel.track] = arrival[channel.track].max(latency);
                 reach[channel.track] = reach[channel.track].max(latency);
             }
@@ -381,21 +414,61 @@ impl Layout {
         // In routing order every track that feeds a track is done before it.
         for &index in &plan.order {
             let track = &plan.tracks[index];
-            let chain = track.effects.iter().filter(|effect| !effect.leaving);
+            let chain = track.effects.iter();
+            let mut path = arrival_path[index].clone();
             let (latency, longest) = chain.fold((0, 0), |(latency, longest), effect| {
-                if let Some(record) =
-                    plugins.get(&windfall_project::PluginTarget::Effect { effect: effect.id })
-                {
+                let key = windfall_project::PluginTarget::Effect { effect: effect.id };
+                if effect.leaving {
+                    if effect.params.kind() == EffectKind::StereoMatrix
+                        && !plugins.contains_key(&key)
+                    {
+                        let maximum = effect.params.kind().max_latency_samples(rate);
+                        path.push(DelayStage {
+                            key,
+                            delay: 0,
+                            maximum,
+                            matrix: true,
+                        });
+                        // Retain this zero-target stage until the engine's
+                        // outer removal splice has drained through the route.
+                        return (latency, longest + maximum);
+                    }
+                    return (latency, longest);
+                }
+                if let Some(record) = plugins.get(&key) {
+                    if record.1 > 0 {
+                        path.push(DelayStage {
+                            key,
+                            delay: record.1,
+                            maximum: record.1,
+                            matrix: false,
+                        });
+                    }
                     return (latency + record.1, longest + record.1);
                 }
-                (
-                    latency + effect.params.latency_samples(rate),
-                    longest + effect.params.kind().max_latency_samples(rate),
-                )
+                let delay = effect.params.latency_samples(rate);
+                let maximum = effect.params.kind().max_latency_samples(rate);
+                if maximum > 0 {
+                    path.push(DelayStage {
+                        key,
+                        delay,
+                        maximum,
+                        matrix: effect.params.kind() == EffectKind::StereoMatrix,
+                    });
+                }
+                (latency + delay, longest + maximum)
             });
             out[index] = arrival[index] + latency;
+            out_path[index] = path;
             let out_reach = reach[index] + longest;
             for edge in &track.edges {
+                // A zero-delay matrix is still a potential reference path.
+                // Keep its stages primed while it shares latency zero.
+                if out[index] > arrival[edge.target]
+                    || (out[index] == arrival[edge.target] && out_reach > reach[edge.target])
+                {
+                    arrival_path[edge.target] = out_path[index].clone();
+                }
                 arrival[edge.target] = arrival[edge.target].max(out[index]).min(most);
                 reach[edge.target] = reach[edge.target].max(out_reach).min(most);
             }
@@ -404,7 +477,55 @@ impl Layout {
             arrival,
             out,
             reach,
+            arrival_path,
+            out_path,
         }
+    }
+
+    /// Factor a reference transfer into the incoming prefix and the serial
+    /// stages still needed. Fixed instrument/plugin prefixes can be removed
+    /// by their length. Distinct varying branches have no causal inverse;
+    /// those retain scalar PDC, as do paths beyond the one-second host bound.
+    fn compensation_path(
+        &self,
+        to: usize,
+        input: &[DelayStage],
+        delay: usize,
+        most: usize,
+    ) -> Vec<DelayStage> {
+        let reference = &self.arrival_path[to];
+        let mut path = if reference.starts_with(input) {
+            reference[input.len()..].to_vec()
+        } else if input
+            .iter()
+            .all(|stage| !stage.matrix && stage.maximum == stage.delay)
+        {
+            let mut remove: usize = input.iter().map(|stage| stage.delay).sum();
+            let mut path = reference.clone();
+            for stage in &mut path {
+                if stage.matrix || stage.maximum != stage.delay {
+                    break;
+                }
+                let taken = remove.min(stage.delay);
+                stage.delay -= taken;
+                stage.maximum -= taken;
+                remove -= taken;
+            }
+            if remove > 0 {
+                return Vec::new();
+            }
+            path.retain(|stage| stage.maximum > 0);
+            path
+        } else {
+            return Vec::new();
+        };
+        if !path.iter().any(|stage| stage.matrix)
+            || path.iter().map(|stage| stage.delay).sum::<usize>() != delay
+            || path.iter().map(|stage| stage.maximum).sum::<usize>() > most
+        {
+            path.clear();
+        }
+        path
     }
 }
 
@@ -490,12 +611,20 @@ impl PlanState {
                 };
                 let delay = layout.arrival[edge.target].saturating_sub(layout.out[index]);
                 let reach = layout.reach[edge.target];
-                edge_delays[edge.slot] = DelaySlot::seat(key, delay, reach, held, &mut ledger);
+                let path = layout.compensation_path(
+                    edge.target,
+                    &layout.out_path[index],
+                    delay,
+                    sample_rate as usize,
+                );
+                edge_delays[edge.slot] =
+                    DelaySlot::seat(key, delay, reach, path, held, &mut ledger);
             }
             direct.push(DelaySlot::seat(
                 DelayKey::Direct(track.id),
                 layout.arrival[index],
                 layout.reach[index],
+                layout.compensation_path(index, &[], layout.arrival[index], sample_rate as usize),
                 held,
                 &mut ledger,
             ));
@@ -574,6 +703,17 @@ impl PlanState {
                     DelayKey::Instrument(channel.id),
                     layout.arrival[channel.track].saturating_sub(behind),
                     layout.reach[channel.track],
+                    layout.compensation_path(
+                        channel.track,
+                        &[DelayStage {
+                            key: target,
+                            delay: behind,
+                            maximum: behind,
+                            matrix: false,
+                        }],
+                        layout.arrival[channel.track].saturating_sub(behind),
+                        sample_rate as usize,
+                    ),
                     held,
                     &mut ledger,
                 ),
@@ -852,7 +992,7 @@ impl PlanState {
                     (true, true) => unit.fade_out(fades.splice),
                     (true, false) => unit.drop_out(),
                     (false, true) if arrived => wait = wait.max(unit.fade_in(fades.splice)),
-                    (false, _) => {}
+                    (false, _) => wait = wait.max(unit.insertion_wait()),
                 }
             }
         }

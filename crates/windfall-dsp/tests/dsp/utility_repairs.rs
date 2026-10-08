@@ -22,6 +22,53 @@ fn run_slot(slot: &mut EffectSlot, left: &mut [f32], right: &mut [f32], blocks: 
 }
 
 #[test]
+fn r2_bypass_fade_reports_the_wet_impulse_tail_until_it_is_inaudible() {
+    for blocks in [&[1000][..], &[1, 7, 137][..]] {
+        for delay in [0.0, 2.0] {
+            for mix in [0.5, 1.0] {
+                for mix_off in [false, true] {
+                    let mut slot = EffectSlot::new(AnyEffect::new(&matrix(delay, 5.0)));
+                    slot.prepare(48_000.0, 137);
+                    slot.set_mix(mix);
+                    slot.process(&mut [1.0], &mut [1.0]);
+                    if mix_off {
+                        slot.set_mix(0.0);
+                    } else {
+                        slot.set_enabled(false);
+                    }
+                    let tail = slot.tail_samples();
+                    let gap = slot.gap_samples();
+                    assert!(tail >= 240, "wet bypass tail reported {tail}");
+                    assert!(gap >= 240, "wet bypass gap reported {gap}");
+                    let (mut l, mut r) = (vec![0.0; 1000], vec![0.0; 1000]);
+                    run_slot(&mut slot, &mut l, &mut r, blocks);
+                    assert!(
+                        (r[239] - mix * 0.5).abs() < 1e-5,
+                        "right impulse must remain audible: {}",
+                        r[239]
+                    );
+                    assert!(
+                        l[tail..]
+                            .iter()
+                            .chain(&r[tail..])
+                            .all(|sample| *sample == 0.0)
+                    );
+                    assert!(
+                        l[gap..]
+                            .iter()
+                            .chain(&r[gap..])
+                            .all(|sample| *sample == 0.0)
+                    );
+                    let dry = (delay * 48.0).round() as usize;
+                    assert_eq!(slot.tail_samples(), dry);
+                    assert_eq!(slot.gap_samples(), dry);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn asymmetric_matrix_wake_primes_both_outputs_before_bypass_or_mix_fade() {
     for blocks in [&[4096][..], &[1, 137, 29, 511, 3][..]] {
         for mix_wake in [false, true] {
