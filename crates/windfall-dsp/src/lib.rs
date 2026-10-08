@@ -56,6 +56,7 @@ mod delay;
 mod distortion;
 mod effect;
 mod eq;
+pub mod filter_family;
 mod instrument;
 mod limiter;
 mod param;
