@@ -32,6 +32,7 @@ import type {
   MidiImportPreview,
   MidiExportOptions,
 } from "@/bindings"
+import type { AnalysisBackend } from "@/features/analysis/types"
 
 export type Unsubscribe = () => void
 
@@ -63,7 +64,7 @@ export type AudioClipPlace = {
  * the shell needs. A failed call rejects with an `Error` whose message is
  * plain text that can be shown to the user.
  */
-export interface Backend {
+export interface Backend extends AnalysisBackend {
   midiHardwareState(): Promise<import("@/bindings").MidiHardwareState>
   midiHardwareRefresh(): Promise<import("@/bindings").MidiHardwareState>
   midiHardwareConfigure(

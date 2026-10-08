@@ -57,6 +57,7 @@
 //! lock held and then touches the document or the sample pool compares it
 //! first and gives up if another document has taken its place.
 
+mod analysis_jobs;
 mod archive;
 mod audio;
 mod audio_editor;
@@ -153,6 +154,8 @@ impl WeakSession {
 }
 
 struct Inner {
+    /// Native analysis control ownership; never accessed by the audio callback.
+    analysis: analysis_jobs::Service,
     archive_job: Mutex<Option<Arc<AtomicBool>>>,
     midi_hardware: Mutex<Option<Arc<windfall_engine::midi_hardware::Runtime>>>,
     midi_configuring: Mutex<()>,
@@ -323,6 +326,7 @@ impl Session {
             )
             .collect();
         let library = crate::library::Library::new(settings.library_file(), roots);
+        let analysis = analysis_jobs::Service::new(settings.recordings_dir().join("Analysis"));
 
         let project = default_project();
         let decoded = samples::decode_all(&cache, &project, None, &factory_dir);
@@ -333,6 +337,7 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                analysis,
                 archive_job: Mutex::new(None),
                 midi_hardware: Mutex::new(None),
                 midi_configuring: Mutex::new(()),

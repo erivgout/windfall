@@ -322,6 +322,166 @@ and final integration/publication. Mock must honestly report native inference
 unavailable. No production adapter is available for a user-visible successful
 analysis until a separately reviewed actual algorithm/model is integrated.
 
+## Registered native app adapter (M1 infrastructure stage)
+
+The analysis-only registration window adds `Session::analysis_*`, an Inner-owned
+`analysis_jobs::Service`, exported IPC DTOs, blocking native command wrappers,
+Backend/Tauri/browser adapters and an Analysis action in the selected audio clip
+inspector. The native invoke list lives in `commands::handler`; `src/lib.rs`
+already installs that handler and needs no second registration. The foundation
+commits `89d5ffbd` and `f006ce1b` are unchanged. This stage uses the existing
+fallible `Controller::prepare_project` and existing checked Document batch,
+source synchronization, history, save and archive implementations.
+
+**Production has no inference adapter.** Native capability reports `native:
+true, available: false` with an explicit reason; submit refuses with
+`analysis:unavailable`. Importing a model does not install an algorithm. The
+browser reports native unavailability and refuses import, jobs, review and
+apply; it never synthesizes an analyzed result. The private `cfg(test)` adapter
+uses the pinned authored CPU fixture and real workers/WAVs solely to exercise
+the infrastructure. Denoising, separation, pitch and audio-to-MIDI remain
+unavailable and M2–M4 remain required. This is no ML or 342-row parity closure.
+
+### Service and IPC ownership
+
+`Session::new` constructs the service with
+`settings.recordings_dir()/Analysis`, without filesystem work or workers under
+State. `analysis_model_import` explicitly verifies a user-supplied local file
+against an ID/version/revision, SHA256, exact bytes, shape and provenance/license
+manifest. No network transfers or guessed model metadata occur. The registry
+retains at most eight compact manifests, with monotonic revisions per ID/version;
+a changed manifest at the same revision is refused. Registry manifests are
+process-local; reopening the app requires explicit reimport, including actual
+checksum verification of an already cached file. Binary checksum verification
+does not independently establish the caller's provenance or weight-license claim.
+
+One lazy native manager belongs to this Inner, with one worker, two queued jobs,
+eight retained records, 192 MiB admitted job memory, 1 GiB output disk and 256
+published/temporary file slots. Whole capture PCM and encoded source bytes each
+cap at 16 MiB; combined output PCM caps at 32 MiB; adapter scratch reserves
+32 MiB; work caps at 500,000,000 units and 120 seconds. Native model limits are
+64 MiB per file, 256 MiB cache, eight entries and one import. Model cache,
+unique Session/Jobs staging and persistent Outputs have separate ownership.
+Session staging uses a retained unique namespace, rather than a recursive parent
+TempDir destructor; shutdown removes only empty parent containers. Refused
+native cleanup remains evidenced and charged, and can be retried/forgotten only
+through the foundation's rules. No final or competitor is garbage-collected.
+
+All u64 IDs/counts/revisions are canonical decimal strings on IPC; conversion
+never uses a JS number. Job, ticket, submit-request and apply-claim identities use
+the foundation's process-global monotonic allocator across manager replacement
+and fail before rollover. None are saved in a project. Control methods expose
+capability, local model import, submit, status, cancel, forget, retry cleanup,
+review, apply, preparation cancellation and shutdown. Claim/publish/retire are
+internal parts of apply, rather than remotely held leases that could survive a
+window indefinitely. Prefixes distinguish unavailable/modelAbsent/stale/
+cancelled/samplerPreparation/budget/io/collision/shutdown failures.
+
+The service's bounded preparation gate serializes capture/import/apply. Status
+and cancellation do not wait for that gate. Explicit shutdown cancels ongoing
+preparation, waits for the gate, cancels/joins workers off State and retains the
+manager for status/cleanup evidence. Inner ownership invokes the same shutdown
+on service drop; dropping the last Session is a control-thread operation. A
+trusted adapter must still obey cooperative chunk checkpoints; blocking codec,
+filesystem and existing sampler preparation calls cannot be interrupted mid-call.
+
+### Capture and actual guarded commit
+
+Capture first acquires recording-before-State, copies the exact clip/sample
+metadata and compact source handle, and records generation, edits, replacement
+request, roots and tempo. Off State it opens the native source with Windows
+no-write/no-delete sharing, reads bounded exact bytes, hashes those bytes and
+decodes that same snapshot. Its decoded PCM fingerprint must equal the currently
+loaded immutable source. Neither mtime/size nor the sample-cache key substitutes
+for content. Existing `audio_edit::render_view` supplies playback-equivalent
+clip PCM before mixer effects; analysis preflights its narrower memory limits
+before rendering. The canonical binding digest covers the whole clip, sample,
+tempo and path roots; the retained original AudioIdentity remains distinct from
+the rendered capture identity. Tempo automation is explicitly refused. A final
+capture guard rechecks recording and the exact original source/document binding
+before job admission.
+
+Apply verifies the review submit request and current pinned manifest, rehashes
+the actual source off State and retains its file-version authority. It snapshots
+the current Document/pool/load intent using the existing Session snapshot seam;
+candidate dispatch, claim, publication, strict output decode/checksum/cache-PCM
+comparison, complete candidate pool/commands and fallible controller preparation
+then run off State. Published output handles are acquired before decoding and
+held through commit. Windows tests demonstrate that writes and deletes of both
+original and output files are refused throughout the final preparation window.
+On platforms without that sharing authority, external filesystem mutation after
+recheck is not an interprocess transaction guarantee; this adapter targets the
+native Windows app.
+
+The final recording-before-State section checks generation/edit/replacement,
+exact clip/sample/path/tempo/source identity, full original pool identity,
+loaded/loading/failed sets, current sampler-preparation request and cancellation.
+It borrows `PreparedApply::check_eligibility`, executes **one actual checked
+Document batch**, installs the prepared sources/controller, and calls
+`acknowledge_commit` only after the real commit. Input/progress/staging retirement
+and candidate/file-handle drops occur after all guards. The two foundation calls
+are measured allocation/free-free in actual one-output and sixteen-output
+Session commits; existing Document and controller publication are not claimed
+to be allocation-free. Snapshot metadata copies and application-owned project
+history/pools are not an OS heap budget or a sandbox for a future runtime.
+
+Complete-range replacement removes the original clip and creates derived
+samples/clips in one undo entry. Partial ranges only add clips, at the nearest
+timeline tick to their rendered frame origin, with duration rounded up to ticks;
+the stored PCM/frame origin remains exact. Invalid partial replacement is refused
+before any publication. Source assets and original file bytes remain intact.
+Published files persist after failed/stale preparation, cancellation, consumption,
+forget and shutdown, including history/save/archive use; retries pin the same
+bounded destinations and cannot accumulate additional output sets. Failed apply
+restores Ready; consumed apply cannot execute twice and later cancellation is a
+no-op. The existing pending-load attachment barrier survives apply and undo.
+
+### App controls and attributable checks
+
+The panel displays native availability, explicit local manifest/file import,
+pinned model selection, exact frame endpoints, progress/status, cancellation,
+cleanup retry/forget, source/model/output hashes and author/license provenance,
+review and explicit apply. Project replacement/selection changes invalidate the
+panel; late replies do not install a patch. Unmount and late-submit retirement
+use at most 600 control polls over 120 seconds, never a static job map or direct
+filesystem deletion. A cleanup refusal preserves native quota/evidence and
+reports the retained job identity instead of removing files.
+
+Fourteen registered real Session tests cover actual one-batch commit/undo/redo/
+save/reopen/portable archive, complete/partial range placement, exact same-size/
+same-mtime file changes, capture and final recording authority, source/full-pool/
+loaded/loading/failed/sampler-request/generation/edit races, model/request
+staleness, absent model and invalid ranges, actual fallible sampler budget
+refusal, pending-load history intent, queued/running/ready/consumed cancellation,
+shutdown joining off State, global IDs across manager replacement, persistent
+final ownership, native Windows sharing and publication collision preservation.
+The one- and sixteen-output checks observe `(eligibility, acknowledgement) =
+(0, 0)` allocator calls, including frees; sixteen committed files leave zero
+reserved disk bytes/file slots after retirement. The latest targeted native run
+also passed three existing slicer analysis regressions (seventeen tests in
+1.30 seconds) and eleven IPC checks (one decimal/serde/TS contract plus ten
+task-local DTO export checks). One-output Ready admission charged 35,784,946
+memory bytes, 203,808 reserved disk bytes and two file slots; consumption kept
+one 858-byte final and 131,072 record bytes, with zero remaining reservations.
+Sixteen outputs kept 13,728 final bytes and the same record charge, with zero
+remaining disk/file reservations. Source-content staleness is tested while
+preserving native file identity as well as size and mtime. Seven frontend tests
+exercise decimal protocol, honest browser refusal, stale selection review, late
+submit retirement and late actual project-replacement patch delivery. TypeScript
+checking, scoped ESLint and scoped Prettier pass. Checks are executed with one
+Cargo process, `--locked --offline`, jobs/threads one and the unique native target.
+Strict `--all-targets` Clippy passed for analysis, IPC and desktop; owned Rust
+formatting and diff checks passed. No desktop window, live device, real inference
+or end-to-end native webview execution is claimed by these headless checks.
+
+The only app-stage lockfile change is one `"windfall-analysis"` reference in the
+existing windfall-desktop dependency list, generated offline. No existing package
+version/checksum/features or other lock bytes changed; root/desktop manifests add
+only the approved workspace path reference. Parent still owns generated bindings,
+fresh composed integration and independent review. No T1/root sources were
+imported, and closed editor/history/cache/project/engine implementations were
+left unchanged.
+
 ## Dependency license evidence
 
 The only dependency graph addition is the native analysis package; sha2 0.10.9

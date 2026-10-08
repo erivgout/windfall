@@ -42,6 +42,7 @@ import {
 } from "@/lib/units"
 import { cn } from "@/lib/utils"
 import { AudioEditorButton } from "@/features/audio-editor"
+import { AnalysisButton } from "@/features/analysis"
 
 import { usePlaylistStore } from "../store"
 import { describeFade, speedOf, ticksPerSecond } from "./geometry"
@@ -414,6 +415,7 @@ function Strip() {
         className={cn("contents", idle && "invisible")}
       >
         <SliceControls clips={clips} />
+        <AnalysisButton clip={clips.length === 1 ? clips[0].id : null} />
         <AudioEditorButton
           clip={clips[0]?.id ?? null}
           disabled={clips.length !== 1}

@@ -23,6 +23,84 @@ use crate::session::{ClipPlace, Session};
 use windfall_ipc::{LibraryFileToken, LibraryMetadata, LibraryResults, LibrarySearch};
 use windfall_ipc::{MidiExportOptions, MidiImportOptions, MidiImportPreview};
 
+// Native analysis controls. Slow preparation, cleanup and joining stay on
+// blocking tasks; cancellation itself never waits for the preparation gate.
+#[tauri::command]
+fn analysis_capability(session: State<'_, Session>) -> windfall_ipc::AnalysisCapability {
+    session.analysis_capability()
+}
+#[tauri::command]
+async fn analysis_model_import(
+    session: State<'_, Session>,
+    path: String,
+    model: windfall_ipc::AnalysisModel,
+) -> Result<windfall_ipc::AnalysisModel, String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_model_import(&path, model)).await
+}
+#[tauri::command]
+async fn analysis_submit(
+    session: State<'_, Session>,
+    request: windfall_ipc::AnalysisSubmit,
+) -> Result<windfall_ipc::AnalysisJob, String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_submit(request)).await
+}
+#[tauri::command]
+fn analysis_status(
+    session: State<'_, Session>,
+    job: String,
+) -> Result<windfall_ipc::AnalysisJob, String> {
+    session.analysis_status(&job)
+}
+#[tauri::command]
+async fn analysis_cancel(
+    session: State<'_, Session>,
+    job: String,
+) -> Result<windfall_ipc::AnalysisJob, String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_cancel(&job)).await
+}
+#[tauri::command]
+fn analysis_cancel_preparation(session: State<'_, Session>) {
+    session.analysis_cancel_preparation();
+}
+#[tauri::command]
+async fn analysis_forget(session: State<'_, Session>, job: String) -> Result<(), String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_forget(&job)).await
+}
+#[tauri::command]
+async fn analysis_retry_cleanup(session: State<'_, Session>, job: String) -> Result<(), String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_retry_cleanup(&job)).await
+}
+#[tauri::command]
+async fn analysis_review(
+    session: State<'_, Session>,
+    ticket: String,
+) -> Result<windfall_ipc::AnalysisReview, String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_review(&ticket)).await
+}
+#[tauri::command]
+async fn analysis_apply(
+    session: State<'_, Session>,
+    request: windfall_ipc::AnalysisApply,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.analysis_apply(request)).await
+}
+#[tauri::command]
+async fn analysis_shutdown(session: State<'_, Session>) -> Result<(), String> {
+    let session = session.inner().clone();
+    blocking(move || {
+        session.analysis_shutdown();
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn slice_analyze(
     session: State<'_, Session>,
@@ -636,6 +714,17 @@ async fn plugin_editor(
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        analysis_capability,
+        analysis_model_import,
+        analysis_submit,
+        analysis_status,
+        analysis_cancel,
+        analysis_cancel_preparation,
+        analysis_forget,
+        analysis_retry_cleanup,
+        analysis_review,
+        analysis_apply,
+        analysis_shutdown,
         midi_hardware_state,
         midi_hardware_refresh,
         midi_hardware_configure,

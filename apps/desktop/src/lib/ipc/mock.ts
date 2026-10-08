@@ -1,3 +1,4 @@
+import { unavailableAnalysis } from "@/features/analysis/unavailable"
 import type {
   FlpImportPreview,
   ImportReport,
@@ -577,6 +578,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    ...unavailableAnalysis(),
     projectSaveNewVersion: async () => {
       throw new Error("Numbered saves require the desktop app.")
     },

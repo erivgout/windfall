@@ -62,6 +62,26 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    analysisCapability: () => call("analysis_capability"),
+    analysisModelImport: (path, model) =>
+      call("analysis_model_import", { path, model }),
+    async pickAnalysisModel() {
+      const picked = await open({
+        title: "Import explicitly pinned local model",
+        multiple: false,
+        directory: false,
+      })
+      return typeof picked === "string" ? picked : null
+    },
+    analysisSubmit: (request) => call("analysis_submit", { request }),
+    analysisStatus: (job) => call("analysis_status", { job }),
+    analysisCancel: (job) => call("analysis_cancel", { job }),
+    analysisCancelPreparation: () => call("analysis_cancel_preparation"),
+    analysisForget: (job) => call("analysis_forget", { job }),
+    analysisRetryCleanup: (job) => call("analysis_retry_cleanup", { job }),
+    analysisReview: (ticket) => call("analysis_review", { ticket }),
+    analysisApply: (request) => call("analysis_apply", { request }),
+    analysisShutdown: () => call("analysis_shutdown"),
     midiHardwareState: () => call("midi_hardware_state"),
     midiHardwareRefresh: () => call("midi_hardware_refresh"),
     midiHardwareConfigure: (settings) =>

@@ -1,0 +1,111 @@
+/** Native process-volatile protocol. u64 identifiers/counts stay decimal strings. */
+export type AnalysisProvenance = {
+  origin: string
+  sourceRevision: string
+  author: string
+  licenseSpdx: string
+  licenseReference: string
+  adapterId: string
+  adapterVersion: string
+  device: string
+}
+export type AnalysisModel = {
+  id: string
+  version: string
+  revision: string
+  sha256: string
+  bytes: string
+  maxBytes: string
+  provenance: AnalysisProvenance
+  sampleRate: number
+  inputChannels: number
+  maxInputFrames: string
+  outputs: { role: string; channels: number }[]
+}
+export type AnalysisCapability = {
+  native: boolean
+  available: boolean
+  reason: string | null
+  models: AnalysisModel[]
+}
+export type AnalysisSubmit = {
+  clip: number
+  modelId: string
+  modelVersion: string
+  modelRevision: string
+  startFrame: string
+  endFrame: string
+}
+export type AnalysisStatus =
+  | "queued"
+  | "running"
+  | "cancelling"
+  | "cancelled"
+  | "failed"
+  | "ready"
+  | "consumed"
+export type AnalysisJob = {
+  job: string
+  ticket: string
+  request: string
+  sequence: string
+  status: AnalysisStatus
+  completedWork: string
+  maximumWork: string
+  failure: string | null
+}
+export type AnalysisReview = {
+  job: AnalysisJob
+  clip: number
+  generation: string
+  editRevision: string
+  sourceSha256: string
+  bindingSha256: string
+  startFrame: string
+  endFrame: string
+  inputFrames: string
+  model: AnalysisModel
+  artifacts: {
+    name: string
+    role: string
+    frames: string
+    channels: number
+    sampleRate: number
+    frameOrigin: string
+    bytes: string
+    sha256: string
+  }[]
+}
+export type AnalysisApply = {
+  ticket: string
+  request: string
+  replaceOriginal: boolean
+}
+export interface AnalysisBackend {
+  analysisCapability(): Promise<AnalysisCapability>
+  analysisModelImport(
+    path: string,
+    model: AnalysisModel
+  ): Promise<AnalysisModel>
+  pickAnalysisModel(): Promise<string | null>
+  analysisSubmit(request: AnalysisSubmit): Promise<AnalysisJob>
+  analysisStatus(job: string): Promise<AnalysisJob>
+  analysisCancel(job: string): Promise<AnalysisJob>
+  analysisCancelPreparation(): Promise<void>
+  analysisForget(job: string): Promise<void>
+  analysisRetryCleanup(job: string): Promise<void>
+  analysisReview(ticket: string): Promise<AnalysisReview>
+  analysisApply(
+    request: AnalysisApply
+  ): Promise<import("@/bindings").DispatchResult>
+  analysisShutdown(): Promise<void>
+}
+export function decimal(value: string): boolean {
+  return (
+    /^(0|[1-9][0-9]{0,19})$/.test(value) &&
+    BigInt(value) <= 18446744073709551615n
+  )
+}
+export function validRange(start: string, end: string): boolean {
+  return decimal(start) && decimal(end) && BigInt(start) < BigInt(end)
+}
