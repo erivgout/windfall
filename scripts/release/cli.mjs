@@ -9,20 +9,21 @@ import { githubIdentity, resources, sourceEvidence } from "./source.mjs";
 function args(argv) {
   const values = {};
   const command = argv.shift();
-  const allowed = [
-    "source",
-    "commit",
-    "version",
-    "channel",
-    "mode",
-    "output",
-    "capture",
-    "bundle-root",
-    "candidate",
-    "platform",
-    "architecture",
-    "github",
-  ];
+  const common = ["source", "commit", "version", "channel", "mode"];
+  const specific = {
+    preflight: ["github"],
+    capture: ["output"],
+    candidate: [
+      "output",
+      "capture",
+      "bundle-root",
+      "platform",
+      "architecture",
+      "github",
+    ],
+    verify: ["candidate"],
+  };
+  const allowed = [...common, ...Object.values(specific).flat()];
   while (argv.length) {
     const name = argv.shift();
     check(
@@ -39,36 +40,15 @@ function args(argv) {
     }
   }
   check(
-    ["preflight", "capture", "candidate", "verify"].includes(command),
+    Object.hasOwn(specific, command),
     "usage: cli.mjs preflight|capture|candidate|verify --source DIR --commit SHA --version VERSION --channel prerelease|stable --mode unsigned-development [command options]",
   );
-  const specific = {
-    preflight: ["github"],
-    capture: ["output"],
-    candidate: [
-      "output",
-      "capture",
-      "bundle-root",
-      "platform",
-      "architecture",
-      "github",
-    ],
-    verify: ["candidate"],
-  };
   for (const k of Object.keys(values))
     check(
-      [
-        "source",
-        "commit",
-        "version",
-        "channel",
-        "mode",
-        ...specific[command],
-      ].includes(k),
+      [...common, ...specific[command]].includes(k),
       `--${k} is not valid for ${command}`,
     );
-  for (const k of ["source", "commit", "version", "channel", "mode"])
-    check(values[k], `missing --${k}`);
+  for (const k of common) check(values[k], `missing --${k}`);
   for (const k of specific[command].filter((k) => k !== "github"))
     check(values[k], `missing --${k}`);
   return { command, values };
