@@ -17,9 +17,9 @@ pub mod session;
 pub mod settings;
 mod shell;
 mod sync;
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod test_alloc;
-#[cfg(test)]
+#[cfg(all(test, windows))]
 #[global_allocator]
 static TEST_ALLOCATOR: test_alloc::CountingAllocator = test_alloc::CountingAllocator;
 pub mod template;
