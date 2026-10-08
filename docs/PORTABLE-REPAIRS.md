@@ -306,3 +306,168 @@ including that fixture; this subsequent source repair still needs the parent's
 actual fixture and combined integration rerun after integration. No full
 workspace suite, UI tests, scanner/fixture build, bindings/WASM regeneration,
 artifact edits, push or release occurred here. Version stays `v0.1.0-alpha.1`.
+
+## Round-three source identity, ZIP local records and copy reporting
+
+The next independent read-only review was against
+`dc57588a6a0207928b00d3511e1df04dc0bc2f50`. Its evidence was source tracing
+and bounded Python models, not native execution. The original allocation,
+numbered-root, concurrent sample publication and ordinary history-only repairs
+remain in place. This round adds compiled reproductions and repairs; it does
+not establish a traversal, memory-allocation or code-execution exploit.
+
+### Original source identities
+
+Source tracing found no production command that changes a retained sample ID
+from one path to another while leaving its older path in history. `AddSample`
+allocates a fresh ID (or finds a current matching path); undo does not reuse
+allocated IDs. There is no sample-path setter command. Production file moves
+relink matching source occurrences together, and FLP rewrites happen before
+constructing the document. Production command reachability of the review's
+same-ID/different-path fixture is therefore not established.
+
+The public exact-source helper deliberately supports that model shape. A
+small internal Document fixture checks every current/undo/redo project against
+the unchanged project invariants and JSON cold loading. No path-uniqueness or
+schema exception is introduced. A native file fixture supplies occurrences
+from two individually valid document versions through the same source iterator
+used by retained history. It forces current `a.wav` to be carried as
+`a (2).wav`, while a different historical source already has that original
+name. Before repair, cold loading the historical version decoded the current
+source's PCM instead. After repair, both versions retain their distinct exact
+decoded PCM through undo/redo and fresh-cache file loading. Old source files,
+the destination competitor and the carried bytes are checked unchanged.
+This native fixture checks the supported source/classification seam; it is not
+claimed as an end-to-end command route to the differing-path Document shape.
+
+`left_behind` now recovers the saved sample's original `(SampleId, SamplePath)`
+from its carry mapping before classifying history occurrences. It never uses
+a renamed output path as evidence that a different original source was carried.
+Historical occurrences are preserved as their original absolute files first,
+then only matching original occurrences get the carried output path. Existing
+conservative conflict refusal and complete history are retained.
+
+### ZIP local binding and checked extents
+
+The cached locked ZIP 6.0.0 source inspected for this round was `read.rs`
+(`find_data_start`, `find_content`), `write.rs` (stream writer and descriptor
+emission), and `types.rs` (ZIP32 descriptor fields). The reader uses local
+name/extra lengths to find data but does not compare the local name, flags,
+method, CRC or sizes with its central metadata. Its bounded compressed reader
+can finish deflate before exhausting a declared compressed extent, so a larger
+extent can escape those predicates without a CRC failure.
+
+The actual public archive reader accepted all 11 bounded malformed cases
+before repair: six local/central mismatches (including a local traversal name
+and local encryption/method disagreements), two oversized compressed extents
+(past EOF and overlapping the next local record), and three incorrect signed
+descriptor fields (CRC/compressed/expanded sizes). Each fixture is under 4 KiB
+and contains small valid manifest/project payloads; no large index or OOM was
+attempted. Extraction uses central names, so accepting a contradictory local
+traversal name alone does not demonstrate traversal.
+
+Preflight now compares local identity/flags/method and CRC/size semantics
+before initializing ZIP or creating a managed destination. Checked arithmetic
+bounds local headers, names, extras, compressed extents and descriptors to the
+file's data region before the validated central directory. Sorted member
+ranges must not overlap. Payloads remain streamed later through the existing
+CRC and expanded-size checks; preflight reads only bounded metadata. Local
+names retain the existing 240-byte generated-member policy, and each extra
+read/allocation is bounded by the ZIP32 16-bit length.
+
+Both signed and unsigned ZIP32 descriptors bind all three authoritative
+central fields. Descriptor-mode local fields may be zero or match the central
+values. The optional-signature ambiguity is covered even when a legitimate
+CRC equals the signature. Valid stored/deflated streamed archives, zero/filled
+local fields, UTF-8 flags, Unicode project metadata and ordinary Unicode
+comments all round-trip. A positive fixture allows unknown local-only extras
+that differ from the central extras; unnecessary timestamps, extra equality
+or other parser fields are not mirrored. Existing directory/non-regular,
+unsafe path, encryption, ZIP64, duplicate, size and malformed CRC refusals and
+the canonical central-directory snapshot adapter remain intact.
+
+### Reporting a published copy after concurrent edits
+
+The existing real-command conflict fixture now also makes a settings edit at
+`save:write`, preserving both conflicting source identities in applied history.
+The project copy is published before live relinking is conservatively refused.
+Both unchanged and concurrent branches now include its exact filename and
+say that the live project/history stayed unchanged. The concurrent message no
+longer says saving was unfinished. The test cold-loads the published captured
+snapshot, compares the entire live snapshot/root, retains undo/redo, and checks
+the old project and sample bytes.
+
+### Round-three compiled RED evidence
+
+Commands below ran serially in the existing worktree after
+`source scripts/msvc-env.sh`, with `CARGO_BUILD_JOBS=1`,
+`RUST_TEST_THREADS=1`, `CARGO_TARGET_DIR="$PWD/target/portable-repairs-verification"`
+and `TS_RS_EXPORT_DIR="$PWD/target/portable-repairs-bindings"`.
+
+| Command before production repair | Result |
+| --- | --- |
+| `cargo test --locked -p windfall-archive --test archive local_ -- --test-threads=1` | Exit 1; 3 failed, 0 passed; all 11 malformed cases accepted; 0.13s execution |
+| `cargo test --locked -p windfall-desktop --lib portable_carry_output -- --test-threads=1` | Exit 1; 1 failed, 0 passed; wrong historical PCM after cold loading; 0.02s |
+| `cargo test --locked -p windfall-desktop --lib portable_source_conflict -- --test-threads=1` | Exit 1; 1 failed, 0 passed; concurrent branch omitted the published filename; 0.04s |
+
+The new native helper fixture initially had private-module access and a
+missing type import compilation error, corrected before the compiled RED run.
+The first concurrent conflict fixture discarded its redo-only source when
+adding the pending edit, so it did not retain the intended conflict. It was
+corrected to store both sources in applied history before the pending edit;
+only that corrected compiled run is the RED evidence above. No compilation
+failure or inappropriate fixture interleaving is counted as reproduction.
+
+### Round-three final scoped GREEN checks
+
+All commands below exited 0 on the repaired source, using the same serial
+MSVC environment and unique cached target/binding directories. Counts are
+unique tests, excluding repeated development runs.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --locked -p windfall-project --lib source_tests -- --test-threads=1` | 2 passed, 0.00s |
+| `cargo test --locked -p windfall-project --test commands relink -- --test-threads=1` | 5 passed, 0.01s |
+| `cargo test --locked -p windfall-desktop --lib session::tests::files -- --test-threads=1` | 31 passed, 1.13s |
+| `cargo test --locked -p windfall-desktop --lib session::files::tests -- --test-threads=1` | 7 passed, 0.06s |
+| `cargo test --locked -p windfall-desktop --lib session::tests::versions -- --test-threads=1` | 7 passed, 0.44s |
+| `cargo test --locked -p windfall-desktop --lib session::tests::archive -- --test-threads=1 --skip selected_native_plugin_capture_archive_and_export_round_trip` | 7 passed, 1.20s |
+| `cargo test --locked -p windfall-desktop --lib sampler_processing_open_and_history_prepare_off_lock_and_reject_project_replacement -- --test-threads=1` | 1 passed, 0.04s |
+| `cargo test --locked -p windfall-archive --lib --test archive -- --test-threads=1` | 6 parser + 15 archive integration passed, 0.06/0.41s |
+
+Total: 81 focused tests, preserving the prior 71 and adding 10. The three
+compiled RED filters are included in these GREEN suites. The archive fixtures
+also check truncated/missing metadata boundaries and unsigned descriptor
+damage before extraction. The CRC fixture now binds the same wrong CRC in
+both local and central records, ensuring the later streamed reader still
+rejects payload CRC disagreement after preflight succeeds. Existing unsafe
+directory/non-ASCII generated paths remain refused.
+
+The forced independent save interleaving still verifies both numbered files
+reopen their own exact PCM and produce sampler output, with competitors and
+old project/audio bytes unchanged. History-only moves, additions undone before
+or during capture, dirty/history semantics, no-replace publication races and
+the backup-shaped numbered destination remain covered. Source inspection and
+native tests retain both `Cancelled` and `SamplerPreparation` install refusals
+and the `archive:install` / `sampler:install-prepared` barriers.
+
+```bash
+cargo clippy --locked -p windfall-project -p windfall-archive -p windfall-desktop --lib --tests -- -D warnings
+cargo fmt -p windfall-project -p windfall-archive -p windfall-desktop -- --check
+git diff --check
+```
+
+All exited 0. Strict Clippy finished in 14.03 seconds with no warnings. No
+cancelled or merely observed running command is counted as passed. Changes are
+limited to owned source/tests and these two documents; no models, schema,
+timeline, UI, runtime, generated bindings/WASM or artifacts changed in this
+round. The package stays `v0.1.0-alpha.1`.
+
+The actual native CLAP archive fixture is explicitly excluded and remains
+parent-owned, together with the combined integration rerun on the subsequent
+source commit. Parent reported base checks including that fixture; those do
+not establish this later source's combined acceptance. Cross-machine large
+project throughput, power-loss behavior on specific filesystems, other OS
+dialogs and third-party plugin corpora remain external evidence. There was no
+full workspace suite, fixture/scanner build, UI test, artifact regeneration,
+push or release here.

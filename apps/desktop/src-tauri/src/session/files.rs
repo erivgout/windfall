@@ -30,7 +30,8 @@ pub const NO_FILE_YET: &str = "This project has no file yet. Use Save as.";
 /// the project was edited before it could finish, and the new name is one
 /// that a sample in the undo history already has. The edits cannot be kept
 /// and the sample renamed both, so the open project stays where it was.
-pub const EDITED_WHILE_MOVING: &str = "The project was edited while it was being saved to the new folder, so the save was not finished. Save it there again.";
+/// The error also reports the copy's already-published filename.
+pub const EDITED_WHILE_MOVING: &str = "The open project could not move without losing sample sources in its undo history after a concurrent edit. The open project and history are unchanged.";
 
 /// Numbered names tried for a sample whose own name is taken in the folder
 /// a project is saved into.
@@ -294,7 +295,9 @@ impl Session {
                 // Do this first so their old relative names do not block a
                 // carried sample's new name in the destination root.
                 let mut relinks = match &previous_dir {
-                    Some(from) if moved => left_behind(&state.document, &project, &renamed, from),
+                    Some(from) if moved => {
+                        left_behind(state.document.sample_sources(), &project, &renamed, from)
+                    }
                     _ => Vec::new(),
                 };
                 relinks.extend(renamed);
@@ -316,7 +319,12 @@ impl Session {
                             paths::display(&target)
                         ));
                     }
-                    None => return Err(EDITED_WHILE_MOVING.to_owned()),
+                    None => {
+                        return Err(format!(
+                            "A copy was saved at {}. {EDITED_WHILE_MOVING}",
+                            paths::display(&target)
+                        ));
+                    }
                 }
             }
             // A sample that was missing may be there in the new folder.
@@ -540,21 +548,25 @@ fn relink(document: &Document, renamed: &[SampleRelink]) -> Option<(Document, To
 /// Sources in the live document or its retained history that were not
 /// carried in `written`. Preserve their exact old files as absolute paths,
 /// including missing files: a same-name file in the new root is unrelated.
-fn left_behind(
-    open: &Document,
+fn left_behind<'a>(
+    sources: impl IntoIterator<Item = (SampleId, &'a SamplePath)>,
     written: &Project,
     carried: &[SampleRelink],
     from: &Path,
 ) -> Vec<SampleRelink> {
     let mut seen = HashSet::new();
-    open.sample_sources()
+    sources
+        .into_iter()
         .filter(|(_, source)| matches!(source, SamplePath::Project(_)))
         .filter(|(id, source)| {
             !written.sample(*id).is_some_and(|sample| {
-                sample.path == **source
-                    || carried.iter().any(|(carried_id, old, new)| {
-                        carried_id == id && old == *source && new == &sample.path
-                    })
+                // A written output name can equal another historical source
+                // path. Recover the captured original identity first.
+                let original = carried
+                    .iter()
+                    .find(|(carried_id, _, new)| carried_id == id && new == &sample.path)
+                    .map_or(&sample.path, |(_, old, _)| old);
+                original == *source
             })
         })
         .filter_map(|(id, source)| {
@@ -790,6 +802,119 @@ fn read_full(file: &mut File, buffer: &mut [u8]) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_carry_output_name_never_classifies_a_different_original_source_as_carried() {
+        use windfall_project::Command;
+        fn version(path: &str) -> Document {
+            let mut document = Document::new(Project::new("Source version"));
+            let sample = SampleId(
+                document
+                    .dispatch(
+                        Command::AddSample {
+                            name: "Version".into(),
+                            path: SamplePath::Project(path.into()),
+                        },
+                        None,
+                    )
+                    .unwrap()
+                    .created[0],
+            );
+            let channel = document
+                .dispatch(
+                    Command::AddChannel {
+                        name: None,
+                        sample: Some(sample),
+                        instrument: None,
+                        index: None,
+                        mixer_track: None,
+                    },
+                    None,
+                )
+                .unwrap();
+            document
+                .dispatch(
+                    Command::ToggleStep {
+                        pattern: windfall_project::PatternId(1),
+                        channel: windfall_project::ChannelId(channel.created[0]),
+                        step: 0,
+                    },
+                    None,
+                )
+                .unwrap();
+            document
+        }
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("old");
+        let to = root.path().join("new");
+        let tone = |path: &Path, value, frames| {
+            let audio =
+                windfall_core::AudioBuffer::from_interleaved(48_000, 2, vec![value; frames]);
+            windfall_codec::write_wav(path, &audio, windfall_codec::WavSampleFormat::Int24)
+                .unwrap();
+        };
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&to).unwrap();
+        tone(&from.join("a.wav"), 0.25, 9600);
+        tone(&from.join("a (2).wav"), -0.75, 4800);
+        tone(&to.join("a.wav"), -0.75, 4800);
+        let original_current = fs::read(from.join("a.wav")).unwrap();
+        let original_history = fs::read(from.join("a (2).wav")).unwrap();
+        let competitor = fs::read(to.join("a.wav")).unwrap();
+        let current = version("a.wav");
+        let history = version("a (2).wav");
+        let sample = current.project().samples[0].id;
+        assert_eq!(sample, history.project().samples[0].id);
+        // Two legal document versions provide the source occurrences to the
+        // same iterator seam used by a live document's retained history. No
+        // production command currently creates this differing-path shape.
+        let mut written = current.project().clone();
+        let carried = carry_samples(&mut written, &from, &to, || {}).unwrap();
+        assert_eq!(
+            written.sample(sample).unwrap().path,
+            SamplePath::Project("a (2).wav".into())
+        );
+        let sources = current.sample_sources().chain(history.sample_sources());
+        let mut relinks = left_behind(sources, &written, &carried, &from);
+        relinks.extend(carried);
+        for (document, source, name) in [
+            (current, "a.wav", "current.windfall"),
+            (history, "a (2).wav", "historical.windfall"),
+        ] {
+            let audio = windfall_codec::decode_file(from.join(source)).unwrap();
+            let (mut document, _) = relink(&document, &relinks).unwrap();
+            let before = document.project().clone();
+            let steps = document.history().entries.len();
+            for _ in 0..steps {
+                document.undo().unwrap();
+                document.project().check().unwrap();
+            }
+            for _ in 0..steps {
+                document.redo().unwrap();
+                document.project().check().unwrap();
+            }
+            assert_eq!(document.project(), &before);
+            let saved = to.join(name);
+            file::save(document.project(), &saved).unwrap();
+            let reopened = file::load(&saved).unwrap();
+            let cold = decode_all(
+                &crate::samples::SampleCache::new(),
+                &reopened,
+                Some(&to),
+                root.path(),
+            );
+            assert!(cold.warnings.is_empty(), "{:?}", cold.warnings);
+            assert!(cold.loaded.contains(&sample));
+            assert!(
+                cold.pool.get(sample).unwrap().samples() == audio.samples(),
+                "cold loading {source} aliased another source's carried output"
+            );
+        }
+        assert_eq!(fs::read(from.join("a.wav")).unwrap(), original_current);
+        assert_eq!(fs::read(from.join("a (2).wav")).unwrap(), original_history);
+        assert_eq!(fs::read(to.join("a.wav")).unwrap(), competitor);
+        assert_eq!(fs::read(to.join("a (2).wav")).unwrap(), original_current);
+    }
 
     #[test]
     fn the_project_extension_is_added_only_when_missing() {
