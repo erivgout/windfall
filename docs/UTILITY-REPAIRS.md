@@ -170,6 +170,79 @@ limit; departing history lasts only its actual finite splice, rather than
 accumulating completed or never-heard definitions across edits. Pending
 message/garbage storage still follows the existing controller queue policy.
 
+## Fourth review: restore during an unfinished removal (3073d220 source)
+
+The review's new tone predictions were reproduced with compiled native
+regressions before changing production source. At 48 kHz, a 0.25-amplitude
+500 Hz sampler tone was primed for 4092 frames through an idle 1 ms limiter
+followed by a 1/1 ms identity matrix. Removing the limiter, processing 80
+frames, and restoring the same slot id produced adjacent step
+`0.09216105` at edit frame 128. The prepared real 32-frame hosted-delay
+counterpart produced `0.07232481` at the same frame. Both exceeded the
+existing **0.04** bound. The constant-one restoration regression had proved
+fresh native ownership, but concealed this temporal splice cut. A rapid
+restore/remove tone regression also failed at `0.46637738` before the fix.
+
+With the approved internal departure hook, a heard outgoing definition stays
+serially ahead of a restored active definition. Its finite removal fade
+continues from the actual remaining count. The fresh owner runs unheard
+until that departure completes and then primes its own full delay from the
+post-departure input before beginning its 5 ms insertion fade. Removing an
+already partly audible insertion starts at its current outer wet weight;
+it does not jump back to a fully wet removal. Same-id parameters and
+automation address only the active definition. Leaving definitions keep the
+settings of their audible owner, while still receiving the existing native
+control-boundary service. No native facade or adoption hook is changed.
+
+The progress marker has an internal generation number, separate from the
+persisted effect id and native ownership. Compensation stages and departing
+native-latency metadata distinguish the outgoing and current generations,
+including a revised 32-to-64-frame native binding and provider revision.
+Each serial compensation stage follows its own rack generation's remaining
+wait. While validating that serial handover, a compiled overlapping-removal/
+restoration regression measured residual
+`0.06888252` with an aggregate wait; per-generation waits close that case.
+A non-periodic 173 Hz cancellation check also exposed `0.44261545` after a
+completed departure: a fresh leading stage had adopted the aggregate tap and
+counted the retained downstream matrices twice. A new leading stage ahead of
+an unchanged suffix now inherits raw input history at identity; completed
+zero-delay departure stages do not add another delay. These are fixes
+inside the prepared serial compensation contract, not added phase exceptions.
+
+For a restored id there is at most **one audible outgoing owner and one
+current active owner**. The fresh owner cannot become audible until the
+predecessor has finished. Removing an unheard fresh owner excludes it from
+leaving definitions, so repeated restores cannot build a lineage or restart
+the old fade. The predecessor field contains only one progress marker, never
+another definition or native handle. A Plan regression performs 1000
+restore/remove rounds at `MAX_EFFECT_SLOTS`, verifies at most twice that many
+definitions, preserves each original outgoing generation, resolves active
+indices to fresh slots, and removes finished predecessors. Native tests
+verify live-owner counts and 40 superseded fresh restores with zero processing
+and one destruction per preparation. The original 40 speculative-owner guard
+also remains unchanged and passing.
+
+Prepared units, rings, tap vectors and latency records are constructed off RT.
+Handover moves owners or copies into reserved storage; generation matching
+and wait assignment only scan existing bounded plan/stage storage. No callback
+creates or destroys an owner or progress marker, nor takes a lock or waits.
+As with the prior departure policy, finishing publishes progress; the next
+control snapshot omits the completed definition and metadata, and existing
+control-side collection destroys its native owner. The retirement regression
+includes that snapshot before asserting the unchanged two-created,
+one-destroyed ownership result.
+
+The two exact tone tests now measure maximum steps **0.016350782** (limiter)
+and **0.016432416** (hosted delay), below the unchanged 0.04 bound. Coverage
+also restores fixed processors before, between and after two matrices, uses
+irregular and single-frame partitions, removes partial insertions, repeats
+restores, checks the final requested delay, preserves unity, and cancels
+opposite 173 Hz tracks at full/half/dry/bypassed slot policies. Actual native
+parameter and playlist automation probes update only the fresh owner while
+the old one remains audible. Revised bindings keep their own latency and
+retire the departing native owner only on the control side. All these
+callbacks are guarded for zero alloc/realloc/free calls.
+
 ## Transition policy and bounds
 
 When history is ready, a retarget freezes the current tap mixture at its
@@ -213,14 +286,14 @@ enabled by these repairs.
 ## Causal routing contract and remaining limits
 
 The control side records the selected longest shared-latency route as
-ordered stages keyed by effect/instrument identity. Equal current delays
+ordered stages keyed by effect/instrument identity and internal effect generation. Equal current delays
 prefer the route with greater prepared reach, retaining a zero-delay
 matrix reference. Compensation factors out an identical incoming prefix,
 or a fixed instrument/plugin prefix that can be removed from the reference's
 fixed leading stages. Remaining matrix, limiter and fixed group-delay
-stages process in the same order as the reference. Limiter stages retain
-the limiter's destination-joining policy; matrix stages preserve their
-audible tap mixtures. A fixed distortion stage represents its group delay,
+stages process in the same order as the reference. Ordinary limiter setting edits retain
+the limiter's destination-joining policy; matrix stages and outer removal
+splices preserve their audible tap mixtures. A fixed distortion stage represents its group delay,
 not its nonlinear/FIR transfer.
 
 Stage identities, bounds and order let unchanged prepared paths move
@@ -383,3 +456,53 @@ and must be retained by the parent integration. Generated descriptors/WASM
 and combined native/shared-WASM parity remain with the parent. The explicit
 causal graph and one-second prepared-bound limitations above remain; unity
 dropouts and premature splice completion are not covered by those limits.
+
+## Fourth-repair verification (3073d220 source)
+
+All commands reuse this bound worktree's `target/utility-repairs-native` and
+`target/utility-repairs-bindings`. Native commands use
+`source scripts/msvc-env.sh`, `CARGO_BUILD_JOBS=1`, and
+`RUST_TEST_THREADS=1`, with only one Cargo process at a time.
+
+The original exact-case RED command was
+`cargo test -p windfall-engine --test engine utility_effects_r4 -- --nocapture`:
+both new exact tone tests failed at the measured values above before source
+edits. The additional original-source rapid RED used the filter
+`utility_effects_r4_repeated`. During implementation, the non-periodic
+cancellation and differing restoration clocks were also compiled RED before
+their respective history/wait fixes; the latter command used the filter
+`utility_effects_r4_overlapping`.
+
+Completed fixed-source checks:
+
+- `cargo test -p windfall-engine --test engine effects --quiet`:
+  **65 passed**, 183 unrelated tests filtered out. Includes all prior R1/R2/R3
+  regressions, seven R4 restoration tests, original utility behavior,
+  limiter policies and callback allocator guards.
+- `cargo test -p windfall-engine --test engine utility_effects_r4 -- --nocapture`:
+  **seven passed**, with the exact GREEN tone maxima printed above.
+- `cargo test -p windfall-engine --lib repeated_restores --quiet`:
+  **one passed**, including 1000 rounds at the maximum active slot count.
+- `cargo test -p windfall-engine --lib rack::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib state::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib plugins::tests --quiet`: **eight passed**.
+- `cargo test -p windfall-dsp --test dsp utility_repairs --quiet`:
+  **nine passed**. DSP source is unchanged in this followup.
+- `cargo clippy -p windfall-dsp -p windfall-engine --all-targets -- -D warnings`
+  and `cargo fmt --all --check`: **passed**. The new Plan test was adjusted
+  to Clippy's constant-array chunk API without changing its assertions.
+- Prettier on both utility documents and `git diff --check`: **passed**.
+- New restoration, per-generation waits, parameter/automation routing,
+  speculative-owner exclusion, history transfer and control-side retirement
+  callbacks: **zero alloc/realloc/free calls**. Progress and test probes use
+  atomics; source inspection finds no added callback lock or wait.
+
+No full workspace, desktop or UI suite was duplicated. No parent commit,
+native adoption facade/hook, controller, processor, navigation field,
+persisted id/model, descriptor or generated artifact is changed. Generated
+WASM and combined acceptance remain with the parent. Existing independent
+varying-branch/topology phase limits and the one-second compensation fallback
+remain as previously documented; the solo restoration splice cut, completed
+identity-prefix history, and differing serial restoration clocks are fixed
+without another exception. Hardware listening and worst-case device deadline
+measurements are not claimed.

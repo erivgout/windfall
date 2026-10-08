@@ -86,6 +86,8 @@ pub(crate) struct EffectUnit {
     splice_frames: u32,
     /// Frames already supplied during the current insertion/removal splice.
     splice_elapsed: u32,
+    /// Removal starts at the audible insertion weight, even mid fade-in.
+    splice_scale: f32,
     /// The track whose chain the effect was last part of.
     pub track: TrackId,
     sample_rate: f32,
@@ -121,6 +123,7 @@ impl EffectUnit {
             splice: Splice::Steady,
             splice_frames: 1,
             splice_elapsed: 0,
+            splice_scale: 1.0,
             track,
             sample_rate: sample_rate as f32,
             life: effect.life.clone(),
@@ -257,6 +260,7 @@ impl EffectUnit {
         .unwrap_or(u32::MAX);
         self.splice_frames = frames.max(1);
         self.splice_elapsed = 0;
+        self.splice_scale = 1.0;
         self.splice = Splice::In {
             wait,
             remaining: self.splice_frames,
@@ -273,6 +277,20 @@ impl EffectUnit {
         }
     }
 
+    pub fn removal_remaining(&self) -> u32 {
+        match self.splice {
+            Splice::Out(remaining) => remaining,
+            _ => 0,
+        }
+    }
+
+    /// Prime with the post-departure input before joining a restored id.
+    pub fn wait_for_departure(&mut self, remaining: u32) {
+        if let Splice::In { wait, .. } = &mut self.splice {
+            *wait = wait.saturating_add(remaining);
+        }
+    }
+
     /// Starts fading the effect out over `frames` frames.
     pub fn fade_out(&mut self, frames: u32) {
         if matches!(self.splice, Splice::Gone | Splice::Out(_)) {
@@ -282,6 +300,11 @@ impl EffectUnit {
             self.drop_out();
             return;
         }
+        self.splice_scale = match self.splice {
+            Splice::In { wait: 0, remaining } => 1.0 - remaining as f32 / self.splice_frames as f32,
+            Splice::In { .. } => 0.0,
+            _ => 1.0,
+        };
         self.splice_frames = frames.max(1);
         self.splice = Splice::Out(self.splice_frames);
     }
@@ -346,7 +369,7 @@ impl EffectUnit {
             if self.splice == Splice::Steady {
                 break;
             }
-            let wet = self.splice.next(length);
+            let wet = self.splice.next(length) * self.splice_scale;
             if wet > 0.0 {
                 self.heard = true;
                 self.life.hear();
@@ -895,15 +918,22 @@ impl CompensationLine {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DelayStage {
     pub key: windfall_project::PluginTarget,
+    pub generation: u64,
     pub delay: usize,
     pub maximum: usize,
     pub readiness: usize,
+    /// Remaining priming/departure wait of this exact rack generation.
+    pub wait: u32,
     pub matrix: bool,
+    pub leaving: bool,
 }
 
 impl DelayStage {
     pub fn same_line(&self, other: &Self) -> bool {
-        self.key == other.key && self.maximum == other.maximum && self.matrix == other.matrix
+        self.key == other.key
+            && self.generation == other.generation
+            && self.maximum == other.maximum
+            && self.matrix == other.matrix
     }
 }
 
@@ -963,9 +993,9 @@ impl Compensation {
             stage.line.retarget_ready(
                 spec.delay,
                 fade_frames,
-                wait,
+                spec.wait,
                 if spec.matrix { spec.readiness } else { 0 },
-                !spec.matrix,
+                !spec.matrix && !spec.leaving,
             );
             stage.spec = *spec;
         }
@@ -996,7 +1026,18 @@ impl Compensation {
         let mut prefix = 0;
         for index in 0..self.stages.len() {
             let (prefix_stages, rest) = self.stages.split_at_mut(index);
-            let stage = &mut rest[0];
+            let (stage, following) = rest.split_first_mut().unwrap();
+            let retained = || {
+                other.stages.iter().filter(|before| {
+                    !(before.spec.leaving && before.line.fade.longest_delay() == 0)
+                })
+            };
+            let inserted_first = index == 0
+                && !following.is_empty()
+                && retained().count() == following.len()
+                && retained()
+                    .zip(following.iter())
+                    .all(|(before, after)| before.spec.same_line(&after.spec));
             if let Some(before) = other
                 .stages
                 .iter()
@@ -1011,6 +1052,12 @@ impl Compensation {
                 }
             } else if let Some(previous) = prefix_stages.last() {
                 stage.line.take_output_history(&previous.line);
+            } else if inserted_first {
+                // The existing suffix already supplies its complete transfer.
+                // A fresh leading insertion starts at identity, with raw
+                // history only; adopting the aggregate tap would count that
+                // suffix twice. Completed departures are identity too.
+                stage.line.take_input_history(&other.line, 0);
             } else {
                 // A change from one staged reference to another also has
                 // usable raw history. Preserve the previous aggregate tap

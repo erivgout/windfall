@@ -391,6 +391,11 @@ fn utility_effects_r3_restored_native_id_uses_a_new_active_owner_not_a_retiring_
             .all(|s| *s == 1.0)
     );
     controller.frame();
+    // A completed departure is omitted by the next control snapshot; its
+    // native owner is destroyed when that old state is collected off RT.
+    controller.set_project(&rig.project, &rig.pool);
+    guarded_run(&mut processor, 137, 137);
+    controller.frame();
     assert_eq!(
         factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
         2
@@ -400,6 +405,592 @@ fn utility_effects_r3_restored_native_id_uses_a_new_active_owner_not_a_retiring_
         1
     );
     assert_eq!(controller.latency_frames(), 80);
+}
+
+fn r4_restore_tone(hosted: bool) {
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(sine(RATE, 500.0, 1.0), first);
+    rig.channel_mut(channel).volume = 0.5;
+    rig.steps(channel, &[0]);
+    let fixed = rig.effect(
+        first,
+        if hosted {
+            EffectKind::Balance.default_params()
+        } else {
+            idle_limiter(1.0)
+        },
+    );
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = windfall_project::PluginBinding {
+        target: windfall_project::PluginTarget::Effect { effect: fixed },
+        format: "clap".into(),
+        path: "r4-restored-delay.clap".into(),
+        id: "r4-delay".into(),
+        name: "Prepared delay".into(),
+        state: vec![],
+        parameters: vec![],
+    };
+    let factory = std::sync::Arc::new(R3DelayFactory::default());
+    if hosted {
+        rig.project.plugins.push(binding.clone());
+        rig.pool.set_plugin_factory(factory.clone());
+    }
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    let slot = rig.remove_effect(fixed);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    let mut audio = guarded_run(&mut processor, 80, 7);
+    rig.track_mut(first).effects.insert(0, slot);
+    if hosted {
+        rig.project.plugins.push(binding);
+    }
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 1000, 29));
+    let (at, step) = left(&audio)
+        .windows(2)
+        .enumerate()
+        .map(|(at, p)| (at + 1, (p[1] - p[0]).abs()))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    println!("restored tone maximum step {step} at {at}, hosted {hosted}");
+    assert!(
+        step < 0.04,
+        "restored tone step {step} at {at}, hosted {hosted}"
+    );
+    if hosted {
+        controller.frame();
+        controller.set_project(&rig.project, &rig.pool);
+        guarded_run(&mut processor, 137, 137);
+        controller.frame();
+        assert_eq!(
+            factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+}
+
+#[test]
+fn utility_effects_r4_limiter_restore_retains_the_unfinished_removal_tone() {
+    r4_restore_tone(false);
+}
+
+#[test]
+fn utility_effects_r4_hosted_restore_retains_the_unfinished_removal_tone() {
+    r4_restore_tone(true);
+}
+
+#[test]
+fn utility_effects_r4_repeated_restore_remove_tones_before_between_after_matrices() {
+    for hosted in [false, true] {
+        for place in 0..=2 {
+            let mut rig = Rig::new();
+            let first = rig.track();
+            let channel = rig.channel_on(sine(RATE, 500.0, 1.0), first);
+            rig.channel_mut(channel).volume = 0.5;
+            rig.steps(channel, &[0]);
+            rig.effect(first, matrix(1.0, 1.0));
+            rig.effect(first, matrix(1.0, 1.0));
+            let fixed = rig.effect(
+                first,
+                if hosted {
+                    EffectKind::Balance.default_params()
+                } else {
+                    idle_limiter(1.0)
+                },
+            );
+            let mut slot = Some(rig.remove_effect(fixed));
+            rig.track_mut(first)
+                .effects
+                .insert(place, slot.take().unwrap());
+            let binding = windfall_project::PluginBinding {
+                target: windfall_project::PluginTarget::Effect { effect: fixed },
+                format: "clap".into(),
+                path: "r4-rapid-restored-delay.clap".into(),
+                id: "r4-delay".into(),
+                name: "Prepared delay".into(),
+                state: vec![],
+                parameters: vec![],
+            };
+            let factory = std::sync::Arc::new(R3DelayFactory::default());
+            if hosted {
+                rig.project.plugins.push(binding.clone());
+                rig.pool.set_plugin_factory(factory.clone());
+            }
+            let (mut processor, controller) = rig.processor(RATE);
+            controller.play();
+            let mut audio = guarded_run(&mut processor, 4092, 137);
+            for (restore, frames, block) in [
+                (false, 80, 7),
+                (true, 400, 29),
+                (false, 17, 1),
+                (true, 80, 7),
+                (false, 7, 1),
+                (true, 1000, 137),
+                (false, 80, 7),
+                (true, 1000, 29),
+            ] {
+                if restore {
+                    rig.track_mut(first)
+                        .effects
+                        .insert(place, slot.take().unwrap());
+                    if hosted {
+                        rig.project.plugins.push(binding.clone());
+                    }
+                } else {
+                    slot = Some(rig.remove_effect(fixed));
+                    rig.project.plugins.clear();
+                }
+                controller.set_project(&rig.project, &rig.pool);
+                audio.extend(guarded_run(&mut processor, frames, block));
+                controller.frame();
+            }
+            let maximum = left(&audio[4000 * 2..])
+                .windows(2)
+                .map(|p| (p[1] - p[0]).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                maximum < 0.04,
+                "rapid restored tone step {maximum}, hosted {hosted}, place {place}"
+            );
+            // The final owner must still apply its full requested delay.
+            let total = 96 + if hosted { 32 } else { 48 };
+            assert_eq!(controller.latency_frames(), total);
+            let final_frame = audio.len() / 2 - 1;
+            let expected = 0.25
+                * (std::f64::consts::TAU * (final_frame - total as usize) as f64 / 96.0).sin()
+                    as f32;
+            assert!((audio[audio.len() - 2] - expected).abs() < 1e-6);
+            controller.set_project(&rig.project, &rig.pool);
+            guarded_run(&mut processor, 137, 137);
+            controller.frame();
+            if hosted {
+                let creates = factory.0.creates.load(std::sync::atomic::Ordering::Relaxed);
+                assert_eq!(
+                    factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
+                    creates - 1
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn utility_effects_r4_restoration_keeps_serial_route_compensation_cancelling() {
+    for hosted in [false, true] {
+        for place in 0..=2 {
+            for (mix, enabled) in [(1.0, true), (0.5, true), (0.0, true), (1.0, false)] {
+                let mut rig = Rig::new();
+                let (first, second) = (rig.track(), rig.track());
+                let tone = sine(RATE, 173.0, 1.0);
+                for (track, sample) in [
+                    (first, tone.clone()),
+                    (second, crate::support::inverted(&tone)),
+                ] {
+                    let channel = rig.channel_on(sample, track);
+                    rig.channel_mut(channel).volume = 0.5;
+                    rig.steps(channel, &[0]);
+                }
+                rig.effect(first, matrix(1.0, 1.0));
+                rig.effect(first, matrix(1.0, 1.0));
+                let fixed = rig.effect(
+                    first,
+                    if hosted {
+                        EffectKind::Balance.default_params()
+                    } else {
+                        idle_limiter(1.0)
+                    },
+                );
+                rig.effect_mut(fixed).mix = mix;
+                rig.effect_mut(fixed).enabled = enabled;
+                let mut slot = Some(rig.remove_effect(fixed));
+                rig.track_mut(first)
+                    .effects
+                    .insert(place, slot.take().unwrap());
+                let binding = windfall_project::PluginBinding {
+                    target: windfall_project::PluginTarget::Effect { effect: fixed },
+                    format: "clap".into(),
+                    path: "r4-cancelling-delay.clap".into(),
+                    id: "r4-delay".into(),
+                    name: "Prepared delay".into(),
+                    state: vec![],
+                    parameters: vec![],
+                };
+                if hosted {
+                    rig.project.plugins.push(binding.clone());
+                    rig.pool
+                        .set_plugin_factory(std::sync::Arc::new(R3DelayFactory::default()));
+                }
+                let (mut processor, controller) = rig.processor(RATE);
+                controller.play();
+                assert!(peak(&guarded_run(&mut processor, 4092, 137)) < 1e-6);
+                for (restore, frames, block) in [
+                    (false, 80, 7),
+                    (true, 400, 29),
+                    (false, 17, 1),
+                    (true, 80, 7),
+                    (false, 7, 1),
+                    (true, 1000, 137),
+                    (false, 1000, 29),
+                    (true, 1000, 137),
+                ] {
+                    if restore {
+                        rig.track_mut(first)
+                            .effects
+                            .insert(place, slot.take().unwrap());
+                        if hosted {
+                            rig.project.plugins.push(binding.clone());
+                        }
+                    } else {
+                        slot = Some(rig.remove_effect(fixed));
+                        rig.project.plugins.clear();
+                    }
+                    controller.set_project(&rig.project, &rig.pool);
+                    let residual = peak(&guarded_run(&mut processor, frames, block));
+                    assert!(
+                        residual < 1e-6,
+                        "restore PDC residual {residual}, hosted {hosted}, place {place}, mix {mix}, enabled {enabled}, restore {restore}, frames {frames}"
+                    );
+                    controller.frame();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn utility_effects_r4_overlapping_restorations_keep_each_serial_splice_clock() {
+    let mut rig = Rig::new();
+    let (first, second) = (rig.track(), rig.track());
+    let tone = sine(RATE, 173.0, 1.0);
+    for (track, sample) in [
+        (first, tone.clone()),
+        (second, crate::support::inverted(&tone)),
+    ] {
+        let channel = rig.channel_on(sample, track);
+        rig.channel_mut(channel).volume = 0.5;
+        rig.steps(channel, &[0]);
+    }
+    let limiter = rig.effect(first, idle_limiter(1.0));
+    rig.effect(first, matrix(1.0, 1.0));
+    let plugin = rig.effect(first, EffectKind::Balance.default_params());
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = r4_binding(plugin);
+    let stats = std::sync::Arc::new(R4Owners::default());
+    rig.pool
+        .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+    rig.project.plugins.push(binding.clone());
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    assert!(peak(&guarded_run(&mut processor, 4092, 137)) < 1e-6);
+    let limiter_slot = rig.remove_effect(limiter);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(peak(&guarded_run(&mut processor, 80, 7)) < 1e-6);
+    let plugin_slot = rig.remove_effect(plugin);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(peak(&guarded_run(&mut processor, 17, 1)) < 1e-6);
+    rig.track_mut(first).effects.insert(0, limiter_slot);
+    rig.track_mut(first).effects.insert(2, plugin_slot);
+    rig.project.plugins.push(binding);
+    controller.set_project(&rig.project, &rig.pool);
+    let residual = peak(&guarded_run(&mut processor, 1000, 29));
+    assert!(
+        residual < 1e-6,
+        "overlapping restored serial clocks residual {residual}"
+    );
+    assert_eq!(controller.latency_frames(), 176);
+    controller.frame();
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(peak(&guarded_run(&mut processor, 137, 137)) < 1e-6);
+    controller.frame();
+    use std::sync::atomic::Ordering::Relaxed;
+    assert_eq!(stats.creates.load(Relaxed), 2);
+    assert_eq!(stats.owners[0].drops.load(Relaxed), 1);
+    assert_eq!(stats.owners[1].drops.load(Relaxed), 0);
+}
+
+#[derive(Debug, Default)]
+struct R4OwnerStats {
+    processes: std::sync::atomic::AtomicUsize,
+    last_parameter: std::sync::atomic::AtomicU32,
+    drops: std::sync::atomic::AtomicUsize,
+}
+#[derive(Debug)]
+struct R4Owners {
+    creates: std::sync::atomic::AtomicUsize,
+    revision: std::sync::atomic::AtomicU64,
+    owners: [R4OwnerStats; 64],
+}
+impl Default for R4Owners {
+    fn default() -> Self {
+        Self {
+            creates: Default::default(),
+            revision: Default::default(),
+            owners: std::array::from_fn(|_| R4OwnerStats::default()),
+        }
+    }
+}
+#[derive(Debug)]
+struct R4Factory(std::sync::Arc<R4Owners>);
+impl windfall_engine::plugins::PluginFactory for R4Factory {
+    fn revision(&self) -> u64 {
+        self.0.revision.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn effect(
+        &self,
+        binding: &windfall_project::PluginBinding,
+        _: u32,
+        _: usize,
+    ) -> Result<Box<dyn windfall_engine::plugins::HostedEffect>, String> {
+        let owner = self
+            .0
+            .creates
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        assert!(owner < self.0.owners.len());
+        Ok(Box::new(R4HostedDelay {
+            ring: [[0.0; 2]; 64],
+            write: 0,
+            delay: binding.state.first().copied().map_or(32, usize::from),
+            owner,
+            stats: self.0.clone(),
+        }))
+    }
+    fn instrument(
+        &self,
+        _: &windfall_project::PluginBinding,
+        _: u32,
+        _: usize,
+    ) -> Result<Box<dyn windfall_engine::plugins::HostedInstrument>, String> {
+        Err("effect fixture".into())
+    }
+}
+struct R4HostedDelay {
+    ring: [[f32; 2]; 64],
+    write: usize,
+    delay: usize,
+    owner: usize,
+    stats: std::sync::Arc<R4Owners>,
+}
+impl Drop for R4HostedDelay {
+    fn drop(&mut self) {
+        self.stats.owners[self.owner]
+            .drops
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+impl windfall_engine::plugins::HostedEffect for R4HostedDelay {
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.stats.owners[self.owner]
+            .processes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        for (left, right) in left.iter_mut().zip(right) {
+            let old = self.ring[self.write];
+            self.ring[self.write] = [*left, *right];
+            self.write = (self.write + 1) % self.delay;
+            [*left, *right] = old;
+        }
+    }
+    fn set_param(&mut self, id: u32, value: f32) {
+        assert_eq!(id, 7);
+        self.stats.owners[self.owner]
+            .last_parameter
+            .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+    fn set_tempo(&mut self, _: f32) {}
+    fn latency(&self) -> usize {
+        self.delay
+    }
+    fn tail(&self) -> usize {
+        self.delay
+    }
+}
+fn r4_binding(effect: windfall_project::EffectId) -> windfall_project::PluginBinding {
+    windfall_project::PluginBinding {
+        target: windfall_project::PluginTarget::Effect { effect },
+        format: "clap".into(),
+        path: "r4-owner-delay.clap".into(),
+        id: "r4-owner-delay".into(),
+        name: "Prepared delay".into(),
+        state: vec![32],
+        parameters: vec![windfall_project::PluginParameter {
+            id: 7,
+            name: "Probe".into(),
+            min: 0.0,
+            max: 1.0,
+            value: 0.25,
+            stepped: false,
+            read_only: false,
+            automatable: true,
+        }],
+    }
+}
+
+#[test]
+fn utility_effects_r4_revised_native_restoration_routes_controls_and_automation_only_to_current_owner()
+ {
+    use std::sync::atomic::Ordering::Relaxed;
+    for place in 0..=2 {
+        let mut rig = Rig::new();
+        let first = rig.track();
+        let lane = rig.playlist_track();
+        rig.audio_clip(lane, sine(RATE, 500.0, 1.0), first, 0, 1920);
+        rig.track_mut(first).volume = 0.5;
+        rig.effect(first, matrix(1.0, 1.0));
+        rig.effect(first, matrix(1.0, 1.0));
+        let id = rig.effect(first, EffectKind::Balance.default_params());
+        let slot = rig.remove_effect(id);
+        rig.track_mut(first).effects.insert(place, slot);
+        let binding = r4_binding(id);
+        rig.project.plugins.push(binding.clone());
+        let stats = std::sync::Arc::new(R4Owners::default());
+        rig.pool
+            .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+        let (mut processor, controller) = rig.song_processor(RATE);
+        controller.play();
+        guarded_run(&mut processor, 4092, 137);
+        let slot = rig.remove_effect(id);
+        rig.project.plugins.clear();
+        controller.set_project(&rig.project, &rig.pool);
+        let mut audio = guarded_run(&mut processor, 80, 7);
+        let mut restored = binding;
+        restored.state = vec![64];
+        restored.parameters[0].value = 0.5;
+        stats.revision.store(1, Relaxed);
+        rig.track_mut(first).effects.insert(place, slot);
+        rig.project.plugins.push(restored);
+        controller.set_project(&rig.project, &rig.pool);
+        audio.extend(guarded_run(&mut processor, 7, 7));
+        assert_eq!(stats.creates.load(Relaxed), 2);
+        assert_eq!(
+            f32::from_bits(stats.owners[0].last_parameter.load(Relaxed)),
+            0.25
+        );
+        assert_eq!(
+            f32::from_bits(stats.owners[1].last_parameter.load(Relaxed)),
+            0.5
+        );
+        assert_eq!(stats.owners[0].drops.load(Relaxed), 0);
+        // A second control plan and a live automation lane share the restored
+        // id. Neither is allowed to control the still audible old owner.
+        rig.project.plugins[0].parameters[0].value = 0.625;
+        controller.set_project(&rig.project, &rig.pool);
+        audio.extend(guarded_run(&mut processor, 7, 7));
+        assert_eq!(
+            f32::from_bits(stats.owners[1].last_parameter.load(Relaxed)),
+            0.625
+        );
+        let automation = rig.automation(
+            AutomationTarget::EffectParam {
+                track: first,
+                effect: id,
+                param: 0,
+            },
+            &[(0, 0.75)],
+        );
+        let lane = rig.playlist_track();
+        rig.automation_clip(lane, automation, 0, 1920);
+        controller.set_project(&rig.project, &rig.pool);
+        audio.extend(guarded_run(&mut processor, 80, 7));
+        assert_eq!(
+            f32::from_bits(stats.owners[0].last_parameter.load(Relaxed)),
+            0.25
+        );
+        assert_eq!(
+            f32::from_bits(stats.owners[1].last_parameter.load(Relaxed)),
+            0.75
+        );
+        audio.extend(guarded_run(&mut processor, 1000, 29));
+        let step = left(&audio)
+            .windows(2)
+            .map(|p| (p[1] - p[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            step < 0.04,
+            "revised restored tone step {step}, place {place}"
+        );
+        assert_eq!(controller.latency_frames(), 160);
+        assert_eq!(stats.owners[0].drops.load(Relaxed), 0);
+        controller.frame();
+        controller.set_project(&rig.project, &rig.pool);
+        guarded_run(&mut processor, 137, 137);
+        controller.frame();
+        assert_eq!(stats.creates.load(Relaxed), 2);
+        assert_eq!(stats.owners[0].drops.load(Relaxed), 1);
+        assert_eq!(stats.owners[1].drops.load(Relaxed), 0);
+    }
+}
+
+#[test]
+fn utility_effects_r4_superseded_restores_cannot_accumulate_or_activate_native_owners() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(sine(RATE, 500.0, 1.0), first);
+    rig.channel_mut(channel).volume = 0.5;
+    rig.steps(channel, &[0]);
+    let id = rig.effect(first, EffectKind::Balance.default_params());
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = r4_binding(id);
+    rig.project.plugins.push(binding.clone());
+    let stats = std::sync::Arc::new(R4Owners::default());
+    rig.pool
+        .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    guarded_run(&mut processor, 4092, 137);
+    let mut slot = Some(rig.remove_effect(id));
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    let mut audio = guarded_run(&mut processor, 80, 7);
+    for _ in 0..40 {
+        rig.track_mut(first).effects.insert(0, slot.take().unwrap());
+        rig.project.plugins.push(binding.clone());
+        controller.set_project(&rig.project, &rig.pool);
+        slot = Some(rig.remove_effect(id));
+        rig.project.plugins.clear();
+        // Supersede the fresh plan before it is heard. It must not join the
+        // outgoing lineage or inherit that owner's native authority.
+        controller.set_project(&rig.project, &rig.pool);
+        audio.extend(guarded_run(&mut processor, 1, 1));
+        controller.frame();
+        let count = stats.creates.load(Relaxed);
+        let dropped: usize = stats
+            .owners
+            .iter()
+            .map(|owner| owner.drops.load(Relaxed))
+            .sum();
+        assert_eq!(count - dropped, 1);
+        assert!(
+            stats.owners[1..count]
+                .iter()
+                .all(|owner| owner.processes.load(Relaxed) == 0)
+        );
+    }
+    audio.extend(guarded_run(&mut processor, 1000, 29));
+    let step = left(&audio)
+        .windows(2)
+        .map(|p| (p[1] - p[0]).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        step < 0.04,
+        "speculative restoration interrupted departure: {step}"
+    );
+    controller.set_project(&rig.project, &rig.pool);
+    guarded_run(&mut processor, 137, 137);
+    controller.frame();
+    assert_eq!(stats.creates.load(Relaxed), 41);
+    assert!(
+        stats.owners[..41]
+            .iter()
+            .all(|owner| owner.drops.load(Relaxed) == 1)
+    );
 }
 
 #[test]

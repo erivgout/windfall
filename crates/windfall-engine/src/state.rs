@@ -218,6 +218,27 @@ impl DelaySlot {
         }
     }
 
+    /// A serial reference mirrors each generation's actual outer clock.
+    /// Scalar fallback keeps the existing aggregate wait policy.
+    fn align_splices(&mut self, plan: &Plan, chains: &[Vec<Option<EffectUnit>>]) {
+        for stage in &mut self.path {
+            stage.wait = plan
+                .tracks
+                .iter()
+                .enumerate()
+                .find_map(|(track, entry)| {
+                    let place = entry
+                        .effects
+                        .iter()
+                        .position(|effect| effect.life.generation == stage.generation)?;
+                    chains[track][place]
+                        .as_ref()
+                        .map(EffectUnit::insertion_wait)
+                })
+                .unwrap_or(0);
+        }
+    }
+
     /// Carries on from the slot that delayed the same thing under the plan
     /// being replaced: its line is moved here, or its past copied into the
     /// longer line built to replace it, and the delay crossfades to its
@@ -345,7 +366,7 @@ fn last_sound(block: &[[f32; 2]], silence: f32) -> (Option<usize>, Option<usize>
 pub(crate) struct Ledger {
     plugins: HashMap<windfall_project::PluginTarget, (u64, usize)>,
     /// Latency metadata only, excluded from active native-owner reuse.
-    departing_plugins: HashMap<windfall_project::PluginTarget, (u64, usize)>,
+    departing_plugins: HashMap<(windfall_project::PluginTarget, u64), (u64, usize)>,
     pub sample_rate: u32,
     effects: HashMap<EffectId, EffectKind>,
     instruments: HashMap<ChannelId, InstrumentKind>,
@@ -378,7 +399,7 @@ impl Layout {
         plan: &Plan,
         sample_rate: u32,
         plugins: &HashMap<windfall_project::PluginTarget, (u64, usize)>,
-        known_plugins: &HashMap<windfall_project::PluginTarget, (u64, usize)>,
+        known_plugins: &HashMap<(windfall_project::PluginTarget, u64), (u64, usize)>,
     ) -> Self {
         let rate = sample_rate as f32;
         // No path is compensated for more than a second of latency. Past
@@ -405,10 +426,13 @@ impl Layout {
                         key: windfall_project::PluginTarget::Instrument {
                             channel: channel.id,
                         },
+                        generation: 0,
+                        wait: 0,
                         delay: latency,
                         maximum: latency,
                         readiness: latency,
                         matrix: false,
+                        leaving: false,
                     }];
                 }
                 arrival[channel.track] = arrival[channel.track].max(latency);
@@ -423,7 +447,7 @@ impl Layout {
             let (latency, longest) = chain.fold((0, 0), |(latency, longest), effect| {
                 let key = windfall_project::PluginTarget::Effect { effect: effect.id };
                 if effect.leaving {
-                    let native = plugins.get(&key).or_else(|| known_plugins.get(&key));
+                    let native = known_plugins.get(&(key, effect.life.generation));
                     let maximum = native.map_or_else(
                         || effect.params.kind().max_latency_samples(rate),
                         |record| record.1,
@@ -431,6 +455,9 @@ impl Layout {
                     if maximum > 0 {
                         path.push(DelayStage {
                             key,
+                            generation: effect.life.generation,
+                            wait: 0,
+                            leaving: true,
                             delay: 0,
                             maximum,
                             readiness: 0,
@@ -447,6 +474,9 @@ impl Layout {
                     if record.1 > 0 {
                         path.push(DelayStage {
                             key,
+                            generation: effect.life.generation,
+                            wait: 0,
+                            leaving: false,
                             delay: record.1,
                             maximum: record.1,
                             readiness: record.1,
@@ -460,6 +490,9 @@ impl Layout {
                 if maximum > 0 {
                     path.push(DelayStage {
                         key,
+                        generation: effect.life.generation,
+                        wait: 0,
+                        leaving: false,
                         delay,
                         maximum,
                         readiness: match effect.params {
@@ -607,11 +640,12 @@ impl PlanState {
             .filter(|effect| effect.leaving)
             .filter_map(|effect| {
                 let key = windfall_project::PluginTarget::Effect { effect: effect.id };
-                let record = known_plugins.get(&key).or_else(|| {
-                    held.filter(|held| held.sample_rate == sample_rate)
-                        .and_then(|held| held.departing_plugins.get(&key))
-                })?;
-                Some((key, *record))
+                let generation = (key, effect.life.generation);
+                let record = held
+                    .filter(|held| held.sample_rate == sample_rate)
+                    .and_then(|held| held.departing_plugins.get(&generation))
+                    .or_else(|| known_plugins.get(&key))?;
+                Some((generation, *record))
             })
             .collect();
         let layout = Layout::of(plan, sample_rate, &plugins, &departing_plugins);
@@ -737,6 +771,9 @@ impl PlanState {
                         channel.track,
                         &[DelayStage {
                             key: target,
+                            generation: 0,
+                            wait: 0,
+                            leaving: false,
                             delay: behind,
                             maximum: behind,
                             readiness: behind,
@@ -994,35 +1031,41 @@ impl PlanState {
                 let seat = &mut self.chains[index][place];
                 let new = seat.is_some();
                 if !new {
-                    let held = old_plan.effect_ids.get(effect.id.0);
-                    let (old_track, old_place) =
-                        match held {
-                            Some(held) => old_plan.effect_places[held],
-                            None if effect.leaving => {
-                                let held = old_plan.tracks.iter().enumerate().find_map(
-                                    |(track, entry)| {
-                                        entry
-                                            .effects
-                                            .iter()
-                                            .position(|before| {
-                                                before.id == effect.id
-                                                    && before.leaving
-                                                    && std::sync::Arc::ptr_eq(
-                                                        &before.life,
-                                                        &effect.life,
-                                                    )
-                                            })
-                                            .map(|place| (track, place))
-                                    },
-                                );
-                                let Some(held) = held else {
-                                    effect.life.finish();
-                                    continue;
-                                };
-                                held
-                            }
-                            None => continue,
-                        };
+                    // Departing and restored active definitions may share
+                    // a project id. Only the exact progress generation owns
+                    // this seat; the id index deliberately finds active units.
+                    let active = old_plan
+                        .effect_ids
+                        .get(effect.id.0)
+                        .map(|index| old_plan.effect_places[index])
+                        .filter(|&(track, place)| {
+                            std::sync::Arc::ptr_eq(
+                                &old_plan.tracks[track].effects[place].life,
+                                &effect.life,
+                            )
+                        });
+                    let held = active.or_else(|| {
+                        old_plan
+                            .tracks
+                            .iter()
+                            .enumerate()
+                            .find_map(|(track, entry)| {
+                                entry
+                                    .effects
+                                    .iter()
+                                    .position(|before| {
+                                        before.id == effect.id
+                                            && std::sync::Arc::ptr_eq(&before.life, &effect.life)
+                                    })
+                                    .map(|place| (track, place))
+                            })
+                    });
+                    let Some((old_track, old_place)) = held else {
+                        if effect.leaving {
+                            effect.life.finish();
+                        }
+                        continue;
+                    };
                     *seat = old.chains[old_track][old_place]
                         .take_if(|unit| unit.kind() == effect.params.kind());
                 }
@@ -1032,7 +1075,7 @@ impl PlanState {
                     }
                     continue;
                 };
-                if !new {
+                if !new && !effect.leaving {
                     unit.apply(effect);
                     if let Some(binding) = plan.plugins.iter().find(|binding| {
                         binding.target
@@ -1049,8 +1092,47 @@ impl PlanState {
                 match (effect.leaving, heard[index]) {
                     (true, true) => unit.fade_out(fades.splice),
                     (true, false) => unit.drop_out(),
-                    (false, true) if arrived => wait = wait.max(unit.fade_in(fades.splice)),
+                    (false, true) if arrived => {
+                        unit.fade_in(fades.splice);
+                        // The predecessor is processed first in this serial
+                        // chain. Do not expose a fresh owner's input history
+                        // until the old splice and its own priming are done.
+                    }
                     (false, _) => wait = wait.max(unit.insertion_wait()),
+                }
+            }
+        }
+
+        for (index, track) in plan.tracks.iter().enumerate() {
+            for (place, effect) in track
+                .effects
+                .iter()
+                .enumerate()
+                .filter(|(_, effect)| !effect.leaving)
+            {
+                let predecessor = effect.after.as_ref().and_then(|life| {
+                    track.effects.iter().position(|before| {
+                        before.leaving && std::sync::Arc::ptr_eq(&before.life, life)
+                    })
+                });
+                let remaining = predecessor
+                    .and_then(|before| self.chains[index][before].as_ref())
+                    .map_or(0, EffectUnit::removal_remaining);
+                if let Some(unit) = &mut self.chains[index][place] {
+                    // Only a freshly prepared owner starts this wait. Retained
+                    // owners carry the numeric countdown through later plans.
+                    let previously_active =
+                        old_plan.effect_ids.get(effect.id.0).is_some_and(|before| {
+                            let (track, place) = old_plan.effect_places[before];
+                            std::sync::Arc::ptr_eq(
+                                &old_plan.tracks[track].effects[place].life,
+                                &effect.life,
+                            )
+                        });
+                    if !previously_active {
+                        unit.wait_for_departure(remaining);
+                    }
+                    wait = wait.max(unit.insertion_wait());
                 }
             }
         }
@@ -1065,6 +1147,7 @@ impl PlanState {
                 .unit
                 .as_ref()
                 .is_some_and(|unit| unit.sounding(now, RECENT_FRAMES));
+            seat.delay.align_splices(plan, &self.chains);
             seat.delay.take_over(
                 before.map(|before| &mut before.delay),
                 sounding,
@@ -1074,6 +1157,7 @@ impl PlanState {
         }
         for (index, track) in plan.tracks.iter().enumerate() {
             let found = old_plan.track_ids.get(track.id.0);
+            self.direct[index].align_splices(plan, &self.chains);
             self.direct[index].take_over(
                 found.map(|found| &mut old.direct[found]),
                 voiced[index],
@@ -1087,6 +1171,7 @@ impl PlanState {
                         old_edge.target_id == edge.target_id && old_edge.send == edge.send
                     })
                 });
+                self.edge_delays[edge.slot].align_splices(plan, &self.chains);
                 self.edge_delays[edge.slot].take_over(
                     before.map(|before| &mut old.edge_delays[before.slot]),
                     heard[index],
