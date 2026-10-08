@@ -501,6 +501,69 @@ mod meter_tests {
     use crate::MeterAnchor;
 
     #[test]
+    fn independently_converted_ticks_report_the_exact_native_downbeat() {
+        let context = process_context(
+            &Transport {
+                playing: true,
+                tempo_bpm: 137.0,
+                position_beats: 3845.0 / 960.0,
+                position_seconds: 9.25,
+                numerator: 7,
+                denominator: 8,
+                meter_anchor: Some(MeterAnchor {
+                    bar_origin_beats: 485.0 / 960.0,
+                    bar_origin_index: 1,
+                }),
+            },
+            48_000.0,
+            123,
+        )
+        .unwrap_or_else(|_| panic!("valid transport"));
+        assert_eq!(context.barPositionMusic, 3845.0 / 960.0);
+        assert_eq!(context.projectTimeMusic, 3845.0 / 960.0);
+        assert_eq!(context.projectTimeSamples, 444_000);
+        assert_eq!(context.continousTimeSamples, 123);
+        assert_eq!(context.sampleRate, 48_000.0);
+        assert_eq!(context.tempo, 137.0);
+        assert_eq!(context.timeSigNumerator, 7);
+        assert_eq!(context.timeSigDenominator, 8);
+        assert_eq!(context.state, 512 | 1024 | 2048 | 8192 | 131072 | 2);
+    }
+
+    #[test]
+    fn native_bars_keep_positions_immediately_before_the_downbeat_in_the_prior_bar() {
+        let downbeat = 3845.0_f64 / 960.0;
+        for (beats, start) in [
+            (3844.0 / 960.0, 485.0 / 960.0),
+            (3844.5 / 960.0, 485.0 / 960.0),
+            (downbeat.next_down(), 485.0 / 960.0),
+            (downbeat, 3845.0 / 960.0),
+            (downbeat.next_up(), 3845.0 / 960.0),
+            (3845.5 / 960.0, 3845.0 / 960.0),
+            (7205.0 / 960.0, 7205.0 / 960.0),
+        ] {
+            let context = process_context(
+                &Transport {
+                    position_beats: beats,
+                    numerator: 7,
+                    denominator: 8,
+                    meter_anchor: Some(MeterAnchor {
+                        bar_origin_beats: 485.0 / 960.0,
+                        bar_origin_index: 1,
+                    }),
+                    ..Transport::default()
+                },
+                48_000.0,
+                0,
+            )
+            .unwrap_or_else(|_| panic!("valid transport"));
+            assert_eq!(context.barPositionMusic, start, "{beats}");
+            assert_eq!(context.projectTimeMusic, beats);
+            assert_eq!(context.state & 2, 0);
+        }
+    }
+
+    #[test]
     fn native_bar_fields_follow_shortened_song_bars() {
         let origin = 4001.0 / 960.0;
         for (beats, bar_start) in [

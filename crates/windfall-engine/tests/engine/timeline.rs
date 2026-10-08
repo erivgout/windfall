@@ -159,6 +159,74 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
         }
     }
 
+    // Independent division of the 485-tick anchor and the 3845-tick downbeat
+    // must reach both hosted roles intact; their beat subtraction rounds below
+    // one 7/8 bar. Observe actual engine seeks, source switches and selection.
+    rig.project.playlist.timeline.meters.clear();
+    let id = rig.project.next_id;
+    rig.project.next_id += 1;
+    rig.project.playlist.timeline.meters.push(MeterChange {
+        id: MeterChangeId(id),
+        tick: 485,
+        signature: TimeSignature {
+            numerator: 7,
+            denominator: 8,
+        },
+    });
+    rig.project.playlist.clips[0].length = 12_000;
+    let (mut processor, controller) = rig.song_processor(RATE);
+    for (mode, source, tick) in [
+        (PlayMode::Song, pattern, 3844.),
+        (PlayMode::Song, pattern, 3845.),
+        (PlayMode::Song, other_pattern, 7205.),
+        (PlayMode::Pattern, other_pattern, 2001.),
+        (PlayMode::Song, pattern, 3845.),
+    ] {
+        controller.set_transport(TransportPatch {
+            mode: Some(mode),
+            pattern: Some(source),
+            ..Default::default()
+        });
+        controller.seek(tick);
+        controller.play();
+        let mut out = [0.; 2];
+        assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+        for probe in &probes {
+            let values = probe.0.each_ref().map(|v| v.load(Ordering::Relaxed));
+            assert_eq!(values[0], 1);
+            assert_eq!(f64::from_bits(values[1]), 120.);
+            assert_eq!(f64::from_bits(values[2]), tick / 960.);
+            assert_eq!(f64::from_bits(values[3]), tick / 1920.);
+            if mode == PlayMode::Song {
+                assert_eq!(&values[4..7], &[7, 8, 1]);
+                assert_eq!(f64::from_bits(values[7]), 485. / 960.);
+                assert_eq!(values[8], 1);
+            } else {
+                assert_eq!(&values[4..], &[4, 4, 0, 0, 0]);
+            }
+        }
+    }
+    controller
+        .set_timeline_region(Some(TickRange {
+            start: 3845,
+            end: 10_000,
+        }))
+        .unwrap();
+    controller.seek(0.);
+    controller.play();
+    let mut out = [0.; 2];
+    assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+    for probe in &probes {
+        let values = probe.0.each_ref().map(|v| v.load(Ordering::Relaxed));
+        assert_eq!(values[0], 1);
+        assert_eq!(f64::from_bits(values[1]), 120.);
+        assert_eq!(f64::from_bits(values[2]), 3845. / 960.);
+        assert_eq!(f64::from_bits(values[3]), 3845. / 1920.);
+        assert_eq!(&values[4..7], &[7, 8, 1]);
+        assert_eq!(f64::from_bits(values[7]), 485. / 960.);
+        assert_eq!(values[8], 1);
+    }
+
     // The original scalar 4/4 lasts through the shortened second bar.
     // Both prepared hosted roles receive the actual cumulative bar origin,
     // independently of absolute position/seconds and the tempo ramp.

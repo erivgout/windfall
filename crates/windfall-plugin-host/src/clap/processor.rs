@@ -358,6 +358,60 @@ mod meter_tests {
     use crate::MeterAnchor;
 
     #[test]
+    fn independently_converted_ticks_report_the_exact_native_downbeat() {
+        let transport = Transport {
+            playing: true,
+            tempo_bpm: 137.0,
+            position_beats: 3845.0 / 960.0,
+            position_seconds: 9.25,
+            numerator: 7,
+            denominator: 8,
+            meter_anchor: Some(MeterAnchor {
+                bar_origin_beats: 485.0 / 960.0,
+                bar_origin_index: 1,
+            }),
+        };
+        let event = transport_event(&transport).unwrap_or_else(|_| panic!("valid transport"));
+        assert_eq!(event.bar_start, BeatTime::from_float(3845.0 / 960.0));
+        assert_eq!(event.bar_number, 2);
+        assert_eq!(event.song_pos_beats, BeatTime::from_float(3845.0 / 960.0));
+        assert_eq!(event.song_pos_seconds, SecondsTime::from_float(9.25));
+        assert_eq!(event.tempo, 137.0);
+        assert_eq!(event.time_signature_numerator, 7);
+        assert_eq!(event.time_signature_denominator, 8);
+        assert!(event.flags.contains(TransportFlags::IS_PLAYING));
+    }
+
+    #[test]
+    fn native_bars_keep_positions_immediately_before_the_downbeat_in_the_prior_bar() {
+        let downbeat = 3845.0_f64 / 960.0;
+        for (beats, start, number) in [
+            (3844.0 / 960.0, 485.0 / 960.0, 1),
+            (3844.5 / 960.0, 485.0 / 960.0, 1),
+            (downbeat.next_down(), 485.0 / 960.0, 1),
+            (downbeat, 3845.0 / 960.0, 2),
+            (downbeat.next_up(), 3845.0 / 960.0, 2),
+            (3845.5 / 960.0, 3845.0 / 960.0, 2),
+            (7205.0 / 960.0, 7205.0 / 960.0, 3),
+        ] {
+            let event = transport_event(&Transport {
+                position_beats: beats,
+                numerator: 7,
+                denominator: 8,
+                meter_anchor: Some(MeterAnchor {
+                    bar_origin_beats: 485.0 / 960.0,
+                    bar_origin_index: 1,
+                }),
+                ..Transport::default()
+            })
+            .unwrap_or_else(|_| panic!("valid transport"));
+            assert_eq!(event.bar_start, BeatTime::from_float(start), "{beats}");
+            assert_eq!(event.bar_number, number, "{beats}");
+            assert_eq!(event.song_pos_beats, BeatTime::from_float(beats));
+        }
+    }
+
+    #[test]
     fn native_bar_fields_follow_shortened_song_bars() {
         let origin = 4001.0 / 960.0;
         for (beats, bar_start, bar_number) in [

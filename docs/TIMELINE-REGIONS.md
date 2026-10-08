@@ -717,3 +717,120 @@ and native fixture classes. Physical audio/UI, installed external plugins and
 non-Windows behavior remain unverified. Full arrangements, per-pattern
 timelines, links/groups/make-unique/scrub, WAV marker metadata and scalar snap/
 grid refinements remain open.
+
+## R5: exact native downbeats after independently converted ticks
+
+R5 reviewed immutable `c5448921960ead05d0f0d4846fc627fbcf035fc6`
+(above immutable prerequisite `94e168ae` and `a8e33f20`). Its P2 trigger is a
+4/4 song with a 7/8 change at tick 485, played at tick 3845 in a longer song.
+The origin and current position are independently divided by 960. Subtracting
+these rounded beats before division yields `0.9999999999999999` bars, so the
+old helper reports the preceding downbeat. The correct origin is tick 3845,
+zero-based bar 2, consistent with the project's shortened-bar conversion.
+
+The repair changes only the checked arithmetic in host `Transport::bar_position`.
+It does not add fields, alter the public anchor/default/advance contract, change
+the bridge ABI, or modify absolute beats, seconds, tempo, playing or signature.
+For anchors that round-trip exactly from an integer 960-PPQ tick and integer
+bar widths, downbeats are derived from the absolute integer tick sum followed
+by division by 960. The supported song ticks are exactly representable in f64;
+the helper explicitly bounds reconstructed ticks to `2^53`. Other anchors use
+absolute fused multiply-add boundaries without claiming a tick-grid origin.
+The initial quotient supplies a candidate, with at most one correction in each
+direction. A final half-open-boundary check refuses unrepresentable results.
+There is no epsilon, rounding of the current position, loop, allocation, lock,
+wait, I/O, error string or plugin call in the helper. `None` retains the exact
+legacy scalar calculation, including negative pre-roll bars. Invalid anchors
+and native i32 index overflow remain refusal, rather than lost metadata.
+
+Actual compiled RED/GREEN:
+
+- Before the production fix, both new concrete ABI regressions failed at
+  `origin = 485 / 960`, `position = 3845 / 960`. CLAP's bar start was
+  `FixedPoint(1084926635)` instead of `FixedPoint(8601119403)`; VST3's
+  `barPositionMusic` was `0.5052083333333334` instead of
+  `4.005208333333333`. The native builders are the same functions used by
+  processing. GREEN checks the exact tick-derived origin and CLAP index 2,
+  preserving their absolute clock/tempo/signature/playing fields.
+- Concrete CLAP/VST3 tests separately check one tick before, fractional ticks
+  before/after, `next_down`, exact boundary, `next_up` and the next complete
+  bar. Inputs use independent absolute tick divisions, not anchor-plus-width
+  construction. A one-ULP earlier position stays in the preceding bar;
+  it is not promoted by a tolerance.
+- Host helper cases cover five anchor magnitudes (including near u32's upper
+  bound), denominator 2/4/8/16 bar widths, three successive boundaries and
+  their representable neighbors. Non-grid anchors, last valid i32 bar,
+  overflow exactly at the boundary, unrepresentable anchors, legacy `None`,
+  invalid signatures and unchanged `advance` remain checked. All seven prior
+  host meter tests are retained without weakening their assertions.
+- The actual engine hosted instrument/effect probe for both saved format
+  identifiers now observes independent tick-485 anchors and tick-3845/7205
+  positions, song/pattern/source switches and selected-start clamping to 3845.
+  It preserves all prior transport assertions and zero callback allocator/
+  deallocator calls. This observes engine forwarding to hosted factory probes;
+  it does not execute the N4 runtime/bridge or an installed external plugin.
+- The project's new fixture proves tick 485 starts one-based bar 2, tick 3845
+  starts bar 3, tick 7205 starts bar 4, and neighboring ticks/inverse conversion
+  and shortened-bar rejection agree. No project production validator changed.
+
+Final executed GREEN is **33 focused tests**: 13 host meter tests, ten engine
+timeline tests and ten project timeline tests. The engine run retains the
+stopped-skip hold, PDC/tails, all clip sources/offsets, tempo-ramp and linear
+buffer/stream/stem parity, navigation and bounded-callback regressions.
+Strict all-target Clippy (`-D warnings`) passed for project, engine and plugin
+host; workspace fmt and `git diff --check` passed. Commands use the existing
+private target, one Cargo process, jobs/tests 1 and isolated TS export directory:
+
+```text
+cargo test -p windfall-plugin-host --lib independently_converted_ticks_report_the_exact_native_downbeat -- --test-threads=1
+cargo test -p windfall-plugin-host --lib meter_tests -- --test-threads=1
+cargo test -p windfall-engine --test engine timeline:: -- --test-threads=1
+cargo test -p windfall-project --test timeline -- --test-threads=1
+cargo clippy -p windfall-project -p windfall-engine -p windfall-plugin-host --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+The first command is the two-case compiled RED; the remaining commands are
+GREEN/strict checks. Local excluded evidence logs are
+`target/timeline-r5-host-red.log`, `timeline-r5-host-green.log`,
+`timeline-r5-engine-green.log`, `timeline-r5-project-green.log`,
+`timeline-r5-clippy.log` and `timeline-r5-fmt.log`.
+
+Final private executable provenance, 2026-10-08 UTC, under
+`target/timeline-verification/debug/deps`:
+
+| Binary | Written UTC | SHA-256 |
+| --- | --- | --- |
+| `windfall_plugin_host-a142c4b240164585.exe` | 09:05:32 | `32aec03029aa56e1fb9892740dc1db193e0250311f20437a89cc1d83f46a3770` |
+| `engine-d477693dd860322b.exe` | 09:02:38 | `580d6b4077615952f7d2bf673d7590082c27c2f2c8712727df0ab8725001cec0` |
+| `timeline-8c4ccc693213df2b.exe` | 09:03:53 | `cbf81dd84d77d68613d8fdb548d00a79fab14b4d970d940bd900e1f37a2a70ac` |
+
+Their corresponding Cargo `.fingerprint/windfall-{package}-{suffix}/test-*.json`
+timestamps match; `.d` dependency paths identify this bound checkout. Executed
+inventories confirm 13 host meter, ten engine timeline and ten project tests.
+Final source SHA-256 values:
+
+| Source | SHA-256 |
+| --- | --- |
+| host `events.rs` | `6cc27bc5ad26977596bf86ca5aae1234068f91e25643da0dc5eb2903af2c09eb` |
+| host `clap/processor.rs` | `3e6a3008045b2c1b1f7039067d1daca49e62abfb99234e2ef96f46912a966297` |
+| host `vst3/processor.rs` | `4655911c38811370f97065d9a0ee9438db6ac6d56b33d71eeb0aa5a82a3b16de` |
+| engine `tests/engine/timeline.rs` | `24beda1025f6402e5193b4bfed84832bedb99b108b5c90f4ef23d310ae5d1649` |
+| project `tests/timeline/meter.rs` | `ad446aac231e4d34eb22648a7bb8e5f65e2498e9e362575142ddcdbb9ee471fb` |
+
+No WASM input/model/UI source changed in this repair; no bindings/WASM were
+generated or committed, and no UI tests were run against restored artifacts.
+Earlier UI/Session/Controller evidence remains its original provenance. Their
+canonical generation/revision/request guards, cancellation/hydration policies,
+meter publication gates and typed preparation error are unchanged. The R5 P3
+signature-validator duplication is nonblocking and intentionally unchanged in
+this authorized arithmetic-only repair.
+
+The acknowledged whole-composition P1 preparation/retirement-under-guards
+objection remains open for its serialized owner. No Controller/Plan/State/Rack,
+utility/adoption, Session/IPC/runtime/bridge/render, sampler/portable/history,
+native fixture, root or other-owner source was edited or imported. N4 forwarding,
+versioned ABI and checked render refusal, combined-root/artifact acceptance,
+physical UI/audio, installed external plugins and non-Windows behavior remain
+unverified here. Arrangements, per-pattern timelines, links/groups/make-unique/
+scrub, WAV marker metadata and scalar snap/grid refinements remain open.

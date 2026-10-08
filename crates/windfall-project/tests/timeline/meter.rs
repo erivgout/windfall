@@ -140,6 +140,45 @@ fn invalid_and_colliding_meter_ticks_never_divide_by_zero() {
 }
 
 #[test]
+fn tick_485_meter_starts_the_second_bar_and_tick_3845_starts_the_third() {
+    let map = MeterMap::checked(
+        signature(4, 4),
+        &[MeterChange {
+            id: MeterChangeId(2),
+            tick: 485,
+            signature: signature(7, 8),
+        }],
+    )
+    .unwrap();
+    assert_eq!(map.segments()[1].start_tick(), 485);
+    assert_eq!(map.segments()[1].bar_origin_index(), 1);
+    for (tick, bar, beat, within) in [
+        (484, 1, 1, 484),
+        (485, 2, 1, 0),
+        (3844, 2, 7, 479),
+        (3845, 3, 1, 0),
+        (3846, 3, 1, 1),
+        (7205, 4, 1, 0),
+    ] {
+        let position = MusicalPosition {
+            bar,
+            beat,
+            tick: within,
+        };
+        assert_eq!(map.tick_to_position(tick).unwrap(), position);
+        assert_eq!(map.position_to_tick(position).unwrap(), tick);
+    }
+    assert!(
+        map.position_to_tick(MusicalPosition {
+            bar: 1,
+            beat: 1,
+            tick: 485,
+        })
+        .is_err()
+    );
+}
+
+#[test]
 fn checked_segment_anchors_match_shortened_and_aligned_bars_without_tempo() {
     let map = MeterMap::new(
         signature(4, 4),
