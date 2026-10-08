@@ -1,5 +1,7 @@
 //! Independent VST3 factory and component fixtures for the scanner.
 #![allow(non_snake_case)]
+mod native_thread;
+use native_thread::CreatorThread;
 use std::ffi::c_void;
 use std::ptr;
 use vst3::Steinberg::Vst::*;
@@ -124,7 +126,7 @@ impl IPluginFactoryTrait for Factory {
                 },
                 bridge_hang: class == cid(11),
                 activations: std::sync::atomic::AtomicU32::new(0),
-                creator: std::thread::current().id(),
+                creator: CreatorThread::current(),
                 notified: std::sync::atomic::AtomicBool::new(false),
                 handler: std::cell::UnsafeCell::new(None),
                 fault: if class == cid(4) {
@@ -219,7 +221,7 @@ struct Component {
     bridge_event_flood: bool,
     bridge_capture_fault: crate::bridge_behaviors::CaptureFault,
     activations: std::sync::atomic::AtomicU32,
-    creator: std::thread::ThreadId,
+    creator: CreatorThread,
     notified: std::sync::atomic::AtomicBool,
     handler: std::cell::UnsafeCell<Option<ComPtr<IComponentHandler>>>,
     fault: u8,
@@ -259,7 +261,7 @@ impl IPluginBaseTrait for Component {
     unsafe fn terminate(&self) -> tresult {
         assert_eq!(
             self.creator,
-            std::thread::current().id(),
+            CreatorThread::current(),
             "native destruction left the creating owner"
         );
         kResultOk
@@ -327,7 +329,7 @@ impl IComponentTrait for Component {
     unsafe fn setActive(&self, state: TBool) -> tresult {
         assert_eq!(
             self.creator,
-            std::thread::current().id(),
+            CreatorThread::current(),
             "native lifecycle left the creating owner"
         );
         if state != 0
