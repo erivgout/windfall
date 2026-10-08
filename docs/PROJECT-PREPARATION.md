@@ -5,7 +5,19 @@ the first isolated deliverable, not an implementation or a new acceptance claim.
 No existing source, generated bindings, artifacts, parity files or release
 records were changed. No Cargo/build/test command was run for this design stage.
 
-The isolated branch is `gpt/t3-project-preparation-p1`, fixed at
+Design revision R2 responds to the independent review of immutable
+`07cdb24b5628ae79ae56c7933df26a050abfe1ce`; that checkpoint remains unchanged.
+The parent granted only this incremental document response and temporary
+diagnostics. The four findings are answered in sections 2a/2b (row mapping and
+pending publications), 2c/2d (selected history and inherited capacity), 3a
+(owned publication intent), and the attachment caller/file window below.
+Existing serial callback adoption is the policy; no processor transaction
+or same-callback commit-group guarantee is proposed.
+R2 additionally read root `a0ec6372200251c3170178cb29737a229dca5ba4`, the N4
+runtime writer/adaptation draft, and installed rtrb 0.4.0 READ ONLY. None was
+imported. All implementation/test obligations below remain unimplemented.
+
+The isolated branch is `gpt/t3-project-preparation-p1`, with fixed base
 `6d0773804199faba65f866feda21b8c4ba9a6b9a`. The authoritative root was read at that
 same SHA. Read-only draft observations on 2026-10-08: T1 worktree HEAD
 `c5448921960ead05d0f0d4846fc627fbcf035fc6`, M1 HEAD
@@ -76,6 +88,7 @@ impl PreparationSnapshot {
         self,
         project: &Project,
         pool: &SamplePool,
+        intent: ProjectPublicationIntent,
     ) -> Result<PreparedPublication, ProjectPreparationError>;
     // private counterpart for already prepared sampler/clip pools
 }
@@ -88,11 +101,19 @@ impl ProjectPublicationLease<'_> {
     pub fn install(self) -> ProjectRetirement;
 }
 
+pub enum ProjectPublicationIntent {
+    Edit,
+    Replace { transport: TransportPatch }, // New/Open/FLP/archive
+}
+
 pub enum ProjectPreparationError {
     Sampler(SamplerPreparationError),
     Native { target: PluginTarget, reason: String },
     Unsupported(&'static str),
     IdentityChanged,
+    StreamTransitioning,
+    UnresolvedProgress,
+    SizeOverflow,
     MemoryLimit { required: usize, limit: usize },
 }
 
@@ -150,7 +171,9 @@ must not masquerade as that sampler/unsupported latch.
 Private `EnginePreparationIdentity` contains an Arc ownership identity for the
 controller instance (validated by pointer equality, with no static registry),
 checked non-wrapping plan-publication generation, stream generation, attached rate
-and block capacity (or explicit detached state). Transport sequence, musical
+and block capacity, plus Detached/Starting/Running/Closing phase. Starting and
+Closing snapshots refuse StreamTransitioning off guards; their publication
+counterparts refuse StaleStream. Transport sequence, musical
 playhead and elapsed fade counts are deliberately not freshness identities.
 Ordinary play/stop/query operations must remain usable while construction stalls.
 
@@ -163,7 +186,8 @@ use the identities actually prepared or reused, not a mutable factory's current
 revision or the older plan's compilation snapshot.
 
 Private `PreparedPublication` holds that expected identity, the frozen factory
-stamp, `Arc<Plan>`, the prepared sampler pool, and either an attached payload
+stamp, owned publication intent, candidate first-pattern metadata, `Arc<Plan>`,
+the prepared sampler pool, and either an attached payload
 (`Box<PlanState>`, `Arc<Ledger>`, prebuilt commit messages and retirement slots)
 or an explicit detached payload. Its fields use owned optional envelopes so
 install can move them out without running their destructors. The captured plan,
@@ -223,6 +247,9 @@ Adoption/process do not select the token; only installed `Audio.transport` does.
    Box/Arc envelopes, queue message, indexes, meters and retirement capacity are
    constructed here. Preparation of a held owner is a metadata reuse decision:
    its constructor is never called, and no speculative duplicate is captured.
+   Stage the candidate Session pool from the ready sampler pool here too, before
+   taking a lease: the lease's mutable borrow of Ready must not force a later
+   sampler-pool accessor or cache completion under State.
 3. **Final acceptance.** Reacquire recording, caller-specific library guard,
    State, then the controller publication lease. Recheck all original Session
    guards and engine/factory identity, plus reserved storage/capacity. Only after
@@ -230,6 +257,8 @@ Adoption/process do not select the token; only installed `Audio.transport` does.
    history and pool handles or consume its review. A refused candidate remains
    in an outer ownership scope. No stop/seek, progress cancellation or runtime
    revision installation is performed on the refusal path.
+   Bind the owned intent to late transport as specified in 3a, then obtain the
+   exact borrowed lease before any successful musical Document dispatch.
 4. **Commit and report.** Install the candidate through the lease using prepared
    storage. For New/Open, the required stop/transport/seek messages are reserved
    in the same commit envelope; do not call locking Controller methods while
@@ -369,6 +398,14 @@ cannot prove that arbitrary external code holds no unrelated mutex; do not
 claim that capability. The production Session module controls the lexical
 ownership and borrowed helper types, and checking destructors verify it.
 
+The returned retirement carrier immediately moves into an outer
+`Option<ProjectRetirement>` checked as None before admission. Never declare
+`let retired = lease.install()` inside the State scope: later event-reporting
+unwind would drop it before the State guard. Never overwrite even an empty
+prior carrier under guards; its reserved Vec owns heap storage. The private
+finishing seam owns this outer destination and the staged edit, so ordinary
+Session callers cannot transfer candidate ownership into a locked helper.
+
 The install body contains only prepared field moves, numeric/atomic updates and
 reserved SPSC pushes; no generic callback, String formatting, allocation, FFI,
 fallible command lowering or panic assertion runs there. A private reserved
@@ -383,10 +420,23 @@ Known rack seats remain `None` in the candidate's PlanState. At takeover, their
 actual concrete EffectUnit/InstrumentUnit moves out of the immediately preceding
 processor state by the accepted kind/native identity/generation. It carries its
 current curve/smoothing/table/asset references and owner-local heard state with
-it. Compensation takes the actual old line's current ring, TapCrossfade weights,
+it. Its prepared kind/native identity/rate are bounded metadata fields carried
+with the unit; callback comparison performs no binding hash, factory call or
+revision read. Compensation takes the actual old line's current ring, TapCrossfade weights,
 wait/pending/readiness and valid history, into reserved capacity. Neither the
 compile-time Plan nor the immutable ledger supplies these mutable values.
 The ledger only certifies identity, rate, kind, prepared capacity and layouts.
+Generation retention and the builder's `known` decision use the same actual
+Ledger reuse predicate. Equal kind plus exact prepared binding/provider/revision
+and rate preserves the predecessor generation and moves its unit; an ineligible
+unit gets a fresh generation **and** a fresh off-guard construction. Do not leave
+a fresh-generation seat None merely because a target-only native record matched.
+N4's staged Runtime wrapper and installed Runtime can have different factory
+Arc pointers but the same provider identity and accepted revision. Raw factory
+Arc inequality cannot break generation retention while the builder reuses that
+same native owner. Preserve the existing XOR identity calculation; strengthen
+the common predicate with the captured provider/revision/rate metadata, rather
+than asking the old mutable factory for its past revision.
 If a future immutable asset/table identity requires a new prepared processor,
 that identity belongs in this reuse key; do not treat kind equality as proof
 that a changed prepared asset can be applied in the callback. Current Copy
@@ -394,100 +444,271 @@ parameter edits retain the existing adoption-before-dedup/control behavior.
 
 ### 2. Late-heard choice, destinations, route storage, and its bound
 
-The worker reserves at most two source generations per logical outgoing seat:
-the captured audible/departing generation and captured current active generation.
-It never builds DSP/native processors for either source. Their processor owners
-already exist in the old processor or ordered pending states. A genuinely fresh
-requested active seat has exactly one new DSP/native construction; a retained
-active seat has zero. Thus alternatives add **zero** constructors, zero native
-boxes and zero duplicate DSP tables. They add definition/choice metadata and
-reserved compensation storage only.
+#### 2a. Physical row to source-definition mapping
 
-Choice is a single packed AtomicU8 per reservation: unset, provisional-none/
-outgoing/active, or adopted-none/outgoing/active. At lease acceptance, a consistent
-bounded read of source progress publishes a provisional choice with one atomic
-store. This is advisory eligibility, never prepared native identity. At callback
-takeover the audio owner reads the actual two concrete seats and their Splice/
-heard state, chooses the one still audible under R4's serial-predecessor rule,
-moves it to the reserved destination and publishes the adopted choice with one
-atomic store. The callback does not wait for the lease's progress sample. It
-continues the actual removal remainder; a fresh insertion waits that remainder
-plus its own actual priming. Gone/unheard alternatives stay owned by the retired
-old state. A lease choice is never taken as proof that the matching native box
-was heard or even taken over.
+Use private `DepartureReservation` metadata with two flat `SourceDefinition`
+entries at most. Each entry contains an ordinary outgoing definition (no nested
+reservation), its EffectLife/generation, source kind, and the actual prepared
+native record from the captured Ledger where applicable. No entry contains a
+native/DSP owner. Each also names its candidate destination `(track, row)`.
+Same-position alternatives share a physical row; different positions reserve
+two rows. A row records its reservation index and the alternatives allowed
+there. All such rows are always leaving for active indexing. Requested active
+definitions have separate ordinary rows and retain their existing active-only
+indexes. A fresh active's predecessor is the reservation index, so takeover can
+find the selected outgoing unit's actual remainder, whichever row it occupies.
 
-Different alternatives can occupy different tracks/chain positions. The worker
-therefore reserves the union of those definition positions, with an empty
-conditional placeholder where an alternative is inactive. Same-position
-alternatives share a placeholder. Only one position receives the concrete
-outgoing owner. Active indexes are built against this fixed union, never
-relinked/allocated on the callback. The existing installed-definition limit
-includes every conditional placeholder: **at most 2 * MAX_EFFECT_SLOTS = 20
-rows per track**, 2560 rows at MAX_MIXER_TRACKS=128. If the union exceeds that
-limit, or an unresolved earlier reservation would require a third source
-generation, preparation/lease refuses visibly before Document commit; it must
-not hide the additional rows in an uncounted collection to pass the bound test.
-Once accepted, hearing can change which of the two choices applies, but cannot
-create a third source or another destination. There is no callback
-`UnresolvedProgress` return, and no refusal after Document commit.
+The worker computes positions using the existing keep_leaving serial ordering
+with possible source definitions rather than a worker-time heard filter. It
+keeps the existing removed-track policy (no destination means immediate
+departure), then merges identical positions. There is no callback insertion,
+relink or removal of vector rows. Only the chosen position receives the concrete
+outgoing unit; unchosen positions stay empty. A source retained as the exact
+requested active owner is excluded from the outgoing alternatives.
 
-The initial suggestion of only taking the maximum of two local delay bounds
-is insufficient for arbitrary changes of reference route. The concrete proposed
-reservation is a **union stage bank per compensation destination**, plus fixed
-capacity scratch for resolving the causal reference route. Set `D = T + E + I`
-for direct track, edge and instrument compensation destinations in the frozen
-candidate, and `K = U + I` for its unique effect-generation union (`U <= 20*T`)
-and possible instrument prefix stages. Reserve one aggregate CompensationLine
-and at most K stage lines per destination, plus K active-stage indexes and
-DelayStage metadata. Callback resolution uses bounded scans/assignments in these
-preallocated banks; only selected stages process. It selects the actual source
-generation/maximum before copying matching old histories. Physical reserve
-capacity may exceed a selected stage's `spec.maximum`; that does not change
-`same_line`'s actual identity or use a mutable intention as an ownership key.
+Let `P` be physical rows, `R` logical reservations, and `G` distinct possible
+generation identities. Every physical placeholder counts in `P`:
+`P_track <= 2*MAX_EFFECT_SLOTS = 20`, `P <= 20*T <= 2560`.
+Each reservation has at most two alternatives, `R <= P`, and there are at most
+`2*R` alternative entries plus the ordinary active definitions in the metadata
+count. Count actual `G` separately; it is not bounded by `P` alone. Ten shared
+outgoing rows choosing g0/g1 plus ten fresh g2 active rows have `P=20`, `G=30`.
+There are ten live outgoing destinations and ten fresh active constructors,
+with **zero** alternative constructors, native boxes or DSP tables.
 
-This reserves at most `D*(K+1)` routing CompensationLines, **not 2^U complete
-graphs**. It prepares zero alternative EffectUnit/InstrumentUnit objects. Each
-line bound is the maximum required by the finite candidate/held alternatives,
-including the actual old ledger capacity when tap history is inherited. Pure
-route resolution into fixed scratch is the additional narrow state/rack work;
-the existing allocating `Layout::of` cannot be called on the callback unchanged.
-Its native PDC values all come from already negotiated ready owners. The
-one-second causal/scalar policy still applies to the selected real path; the
-larger union reservation is storage, not a new audible delay or a phase exception.
+The ready Ledger has active records separate from departure-generation records.
+Departure metadata can name both prepared alternatives even when one physical
+row is shared. Every native record came from a successfully constructed or
+reused prior unit at the accepted rate; provisional progress is never evidence
+that an owner was prepared. R6 native_identity still queries active records only.
 
-Exact requested payload accounting for each line is
+#### 2b. Successive pending publications and final choice
+
+For each predecessor reservation, the worker performs one Acquire read of its
+packed choice. `AdoptedNone` contributes no departure; `AdoptedA/B` contributes
+that one ordinary source definition. An unset/provisional choice contributes
+both flat source definitions, regardless of the provisional value. Add the
+predecessor's ordinary active definition if this edit makes it depart; exclude
+an exact retained active owner. Deduplicate by EffectLife Arc ownership plus
+generation/kind/prepared native identity, not by project id or a numeric marker
+alone. More than two possible source definitions
+for a logical outgoing seat gives `UnresolvedProgress` before constructors or
+Document commit. The caller retries from a fresh snapshot after adoption.
+No child stores a parent reservation or follows a recursive choice lineage.
+
+Thus a pending g0/g1 reservation plus active g2 permits a queued parameter edit
+retaining g2: its flat outgoing universe stays `{g0,g1}`. Removing/replacing g2
+requires `{g0,g1,g2}` and refuses until the predecessor is actually adopted.
+After adopted g0 or g1 is observed, `{selected,g2}` fits; adopted-none leaves
+only g2. Metadata therefore never accumulates older unresolved generations.
+Reading an adopted choice while audio advances is safe: that final identity
+never changes again; its unit may finish, which final takeover handles as None.
+
+Lease checks cover the exact predecessor plan/stream/actual Ledger and all
+reserved positions/capacities. An advisory progress sample may change while the
+worker or lease runs; it cannot prune the flat universe. In particular, two
+separate EffectLife loads can observe g0 before it finishes and g1 afterwards;
+the proposal does not require those loads to be a coherent owner snapshot.
+The sole callback writer chooses from the actual immediately preceding state:
+
+- Continue an audible outgoing unit with its current Out remainder, excluding
+  Gone even if its owner-local heard boolean is still true.
+- Otherwise choose the departing ordinary active unit only if it has actually
+  been heard; start its departure using its actual current splice scale.
+- Otherwise choose None. Exact retained active owners stay active.
+
+R4's serial waits exclude two simultaneously audible predecessors. Takeover
+looks in the concrete old chains using the unit's life/generation and prepared
+kind/native metadata. A shared physical row's nominal g0 definition is not the
+lookup key when it actually contains selected g1. The old plan's adopted view
+supplies definition/placement, while the unit certifies ownership and progress.
+Takeover neither uses the provisional choice nor instantiates a missing source. It moves the
+chosen unit intact and publishes `AdoptedNone/A/B` with one Release store.
+Unselected sources remain in the old state for control-side retirement; an
+empty conditional row does not finish an unselected source's progress marker.
+The fresh insertion waits the selected unit's **actual** removal remainder plus
+its own negotiated priming. No selection error, third-source refusal, allocation
+or wait is possible after lease issuance or Document commit. Ordered queued
+SetPlans ensure the predecessor state exists at this takeover, even if neither
+queued plan has processed sound yet.
+
+#### 2c. Ordered selected views and history transfer
+
+For compensation, use a bank keyed by physical row, not by every alternative
+generation: `K = P + I` possible simultaneously selected stage positions, where
+`I` counts actual instrument prefix positions. Each destination has one aggregate
+line, at most K stage lines, and preallocated selected-index/spec buffers. Resolve
+the chosen rack definitions and causal route into those buffers using bounded
+numeric scans in routing order. Preserve Layout::of's current tie breaking,
+prefix factoring and one-second causal/scalar policy. The allocating Layout::of
+cannot run on the callback. Native latency is already negotiated.
+
+Both old and new Compensation expose an ordered selected view. Scalar mode
+means **selected length zero**, even if the physical bank contains inactive
+lines. Processing, retarget, snap, tail/readiness accounting and every history
+decision use that view. Physical-bank length/order is never a route decision.
+At adoption, resolve all selected specs first; then copy all histories; only
+then retarget all selected lines. Retargeting a preceding stage before copying
+its successor's input history would lose the actual prior transfer.
+
+History rules reproduce the current rack algorithm on selected views:
+
+1. Copy the old aggregate raw ring and current tap/wait/pending/readiness/valid
+   state into the reserved new aggregate line.
+2. Compute the fixed-prefix sum from new selected non-matrix stages only.
+   Scalar promotion requires old selected length zero, settled old aggregate
+   taps, and that sum equal to old aggregate delay.
+3. For each new selected stage in causal order, first match an old selected
+   stage by exact `key/generation/spec.maximum/matrix` and copy its actual
+   history. Inactive lines are not candidates for matching.
+4. With no match, scalar promotion reconstructs input from raw history at the
+   selected fixed prefix. Otherwise reconstruct from the preceding **selected**
+   new stage's copied output history if there is one.
+5. For a first insertion before a retained suffix, compare the ordered selected
+   following stages against old selected retained stages, filtering exactly
+   the existing completed-departure condition (leaving with longest tap zero).
+   Equal lengths and same_line matches mean raw identity input for the new
+   first stage; applying the aggregate tap here would count the suffix twice.
+6. Other first-stage reference changes copy old aggregate history. Preserve
+   R3's short-history fallback: if its audible tap exceeds valid history, use
+   the sum of old selected audible taps, bounded by actual valid history.
+   This preserves the existing causal fallback, not an inverse phase promise.
+7. Align waits by exact selected generation against the newly adopted concrete
+   rack, then retarget aggregate and selected stages with the existing fade,
+   pending/readiness and joining policies. Inactive stages contribute nothing.
+
+The lease's choice may have been g0 while takeover chooses g1 during an unfinished
+tap transition. Every step above uses the actual old state's selected view and
+current lines at takeover, not the lease's route or compile-time tap mixture.
+
+#### 2d. Inherited storage and exact payload admission
+
+Ledger delay metadata records aggregate ring capacity and tap-vector capacity,
+plus each physical bank row's prepared capacities and flat alternative specs.
+It retains the same final-choice metadata needed to resolve old selected views;
+it does not claim provisional specs are the actual heard route. These immutable
+records certify storage already prepared; mutable history still comes only
+from PlanState. Snapshot capture clones the Ledger Arc, not these maps/vectors.
+
+For an unresolved destination, first implementation always prepares a new bank
+off guards and leaves the old bank to retire with its state. It does not leave
+an unresolved `line=None` and hope an incompatible old line can be moved later.
+An unchanged fully resolved layout may retain the existing exact-layout move
+fast path, but only with identical bank mapping and certified adequate capacities.
+
+For each destination let H be the maximum of its held aggregate capacity and
+all held potentially selected stage capacities. Reserve the new aggregate and
+each possible new stage for at least H and its own largest possible requirement.
+Reserve tap storage for at least the maximum inherited tap capacity and the new
+ring length. This conservative rule also covers first-stage aggregate fallback;
+checking only a same_line match would miss that transfer. Every transferred
+old tap delay fits the new prepared range, so TapCrossfade::take_history does
+not clamp/merge distinct inherited taps. Stage `spec.maximum` and same_line
+identity remain the selected real path values, independent of storage capacity.
+Use maxima of finite prepared capacities, not an additive lineage of prior
+reservations; repeated handoffs do not grow capacity solely through inheritance.
+
+There are at most `D*(K+1)` lines, `D=T+E+I`, `K=P+I`, not exponentially many
+complete graphs. Count alternative-definition storage separately from this
+physical line count. Exact line payload is
 `size_of::<CompensationLine>() + L*size_of::<Frame>() + tap_capacity*size_of::<Tap>()`,
-where `L = checked_next_power_of_two(maximum + 1)` and tap_capacity is the actual
-reserved Vec capacity (at least L). Include all bank envelopes, index/DelayStage
-scratch and reservation metadata using their actual capacities and `size_of`,
-with checked sums/products. On the current x64 layout Frame=8 and Tap=16 bytes;
-with tap_capacity=L the variable payload is 24*L bytes per line. For example,
-a one-second 48k bound has L=65536 and 1,572,864 variable bytes per reserved line.
-The conservative bound is the checked sum over at most D*(K+1) such lines, not
-the misleading assertion that MAX_EFFECT_SLOTS alone fixes a byte count.
-Instrument/channel count and sample rate are additional inputs; the model has
-no fixed maximum channel count. Factory-internal/helper process memory is also
-not measured by these Rust payload sizes.
+where `L=checked_next_power_of_two(checked_add(required_capacity,1))` covers both
+current requirements and H. Count all bank envelopes, chosen index/spec arrays,
+route scratch, both alternative definitions and retirement/message envelopes
+using actual capacities. Every sum/product is checked; overflow is `SizeOverflow`,
+not a fabricated numeric required-byte value. Current x64 Frame=8, Tap=16; with
+tap capacity L the variable payload is 24*L bytes per line.
 
-Proposed private bound for **new alternative/route reservation payload** is
-256 MiB per candidate. Exceeding it or any checked-size overflow produces
-`MemoryLimit { required, limit }` before constructors/Document mutation whenever
-the inputs already determine the count; otherwise it refuses before lease
-after actual negotiated latency is known. Native helper allocation is not
-falsely charged as known Rust memory. This numerical engineering bound needs
-parent review; it is not a measured device deadline or overall process-memory
-guarantee. Existing sampler banks retain their independent aggregate budget.
-The union-bank design is deliberately conservative; its practical CPU/memory
-cost and exact history behavior need the unchanged cancellation/bounds tests
-before it can be an accepted implementation.
+The proposed private new route/alternative payload limit remains 256 MiB per
+candidate, subject to parent review. A full bank for T=8,E=7,I=0,P=160 with every
+line reserved to L=65536 requests 2,415 lines and 3,798,466,560 variable bytes
+before envelopes: it **refuses**, even for a legal dense project. This shows the
+conservative design's cost, not practical feasibility or measured memory. At
+L=1024 the same variable payload is 59,351,040 bytes. Native/helper process
+memory is not inferred from these Rust sizes. Exceeding a determinable budget
+refuses before constructors; negotiated latency may cause a later MemoryLimit,
+still before lease, with successful candidates retired off guards. Never clamp
+latency or drop history to claim Ready. Existing sampler budgets remain separate.
+The unchanged R3/R4/R5 signal and allocation regressions are required production
+proof of this selected-bank implementation, not already green evidence.
 
 ### 3. Stream generation, outer carrier capacity, and no allocating install
+
+#### 3a. One owned intent and late-bound commit envelope
+
+`PreparationSnapshot::prepare(project,pool,intent)` takes the owned
+`ProjectPublicationIntent` shown in the public interface. Edit is used for
+ordinary checked commands, history, imports, sample/clip work and plugin refresh;
+Replace covers New/Open/FLP/archive with its saved `TransportPatch`. No separate
+public methods or generic under-lock callback are needed. The prepared token
+owns the intent, candidate first-pattern/membership metadata, and a fixed
+four-slot message envelope. The worker builds its SetPlan payload and all
+owner-bearing fields; it reserves optional owner-free numeric message slots.
+
+Replacement preparation normalizes a supplied saved pattern against candidate
+patterns, falling back to the candidate's first pattern. New supplies Pattern
+mode and no saved pattern/loop override, matching the current files.rs rule.
+Mode/pattern/loop fields omitted from the patch inherit the **late current**
+controller state, not worker-time transport. First-pattern and validity data
+are candidate-owned and prepared before guards.
+
+Before issuing the lease, bind the fixed slots and final small controller/shared
+updates using the state protected by that lease:
+
+| Intent  | Reserved slots | Bound messages and effects                                                                                                                                                         |
+| ------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Edit    | 2              | SetPlan, then SetTransport only if the late requested pattern is absent and a candidate first pattern exists; preserve late play/stop/seek, mode and loop                          |
+| Replace | 4              | Stop with current sequence.wrapping_add(1), SetPlan, SetTransport with normalized saved patch over late state, then Seek(0); final requested playing=false and shared tick/start=0 |
+
+This preserves the existing transport sequence arithmetic; new plan/stream
+identity counters still use checked_add. Stop retains the existing hardware
+panic and detached/resume behavior. A detached token installs its plan and
+those same control values without claiming rate-specific native readiness or
+creating/dropping a fake SetPlan state. Attachment/resume separately binds its
+bootstrap messages to the late control state.
+
+Bind/check only numeric fields and indexed candidate metadata. Generation,
+stream/factory/predecessor identity, empty outer retirement destinations,
+empty backlog and enough **actual** producer slots are all checked before the
+lease is returned. A failed check leaves the intent/payload in the outer token
+and changes no live sequence, transport, shared position, document, pool or
+history. A prior play/stop/seek request does not itself stale the token; it is
+preserved by Edit and intentionally superseded by accepted Replace.
+
+Install first moves displaced ownership to the outer carrier and applies the
+already bound control values, then publishes the prepared message slots in the
+table's order through the sole producer. It calls none of Controller::stop,
+set_transport, seek, send or maintain recursively. Owning the controller guard
+prevents another producer from consuming reserved capacity; the audio consumer
+can only add space. No QueueFull branch or native/fallible preparation remains
+after Document commit. The source implementation must encapsulate that sole-
+producer proof; it cannot use a legacy allocating backlog fallback.
+
+Use existing per-message pushes for this policy. Consumer interleaving between
+pushes and stopping at GARBAGE_HEADROOM remain permitted existing serial
+semantics. There is no claim that all four messages are processed in one
+callback. A batch tail adds no required guarantee here and is not selected for
+this implementation, avoiding new initialized-prefix unwind ownership. There
+are no processor transaction edits in this window.
+
+N4 factory revision reads remain bounded metadata, but a controller mutex does
+not freeze arbitrary trait implementations. Actual Session retry/replacement
+revision writers serialize under the same recording-before-State admission.
+Plugin refresh stages a preparation revision using existing prepare_document
+rather than invalidating installed revision with retry before preparation can
+fail. Existing install_document publishes it only in the accepted commit
+scope; direct callers' independent later revision changes are separate new
+transactions after the lease's acceptance point. Preserve actual ready Ledger
+stamps rather than refreshing them from a live revision during install.
+
+#### 3b. Carrier and stream transitions
 
 Prepare an outer retirement envelope on the worker, before final recording/
 State acquisition. It contains fixed Option destinations for old Plan, Ledger,
 Link, backlog container and provider/snapshot bookkeeping, plus a Vec reserved
 for exactly GARBAGE_CAPACITY=4096 current-ring garbage entries. Its vector is
-never grown under guards. `take_retired` pops at most the free carrier slots;
+never grown under guards. `take_retired` pops at most its initial free carrier
+slots and GARBAGE_CAPACITY, even if audio concurrently refills the ring;
 full capacity leaves the next value in the existing ring. The realtime worker
 creates its reusable carrier outside all subject guards as part of its control
 thread startup. The publication interface does not implicitly drain it.
@@ -505,10 +726,8 @@ bound without separately changing and visibly reporting that existing policy.
 Project preparation adds no messages to that backlog: admission requires it to
 be empty and reserves actual ring slots before any musical mutation.
 
-For normal edits reserve SetPlan plus a possible pattern correction (at most
-two messages). New/Open reserves SetPlan, Stop, SetTransport and Seek (at most
-four messages), with the existing sequence/playhead semantics committed through
-the lease. Reattachment prepares fresh rings and its bootstrap messages before
+Normal edits and New/Open use 3a's exact reserved intent/order. Reattachment
+prepares fresh rings and its bootstrap message envelopes before
 the guarded link swap. Empty carrier destinations and adequate slots are lease
 preconditions. Insufficient message capacity refuses QueueFull; an occupied
 transition carrier is drained/destroyed outside guards before taking another
@@ -526,6 +745,24 @@ CPAL attempt followed by detach/suspend/another attach invalidates earlier
 tokens even at the same rate. Counter overflow refuses before mutation. Device
 error/stream closure cleanup uses an outer carrier, never a refusal that drops
 the old native-bearing link under the mutex.
+
+rtrb's final endpoint owner drops queued values. A whole-Link move alone does
+not prove control-side final destruction if an old Processor can outlive it.
+The device adapter marks Closing and advances the checked stream identity in
+a short guard scope **before** dropping the stream; it neither destroys old
+ownership nor finalizes transport there. It preserves Supervisor's shutdown
+order for resources and resume calculation: close/drop the old stream outside
+Session/controller guards, then finalize suspend/detach from the late control
+state and retire the old endpoint. The outer transition carrier retains that
+control endpoint through Processor teardown. All musical publication is refused
+while Closing, including the interval where unit fields have been destroyed but
+the rtrb Consumer field still exists. producer.is_abandoned() is a further bounded
+metadata check, not the sole ownership/liveness fence. A still-attached direct
+replacement
+without shutdown ordering refuses StaleStream before mutation. A failed
+prepared attach owns both endpoints and its Processor in the outer staging
+scope until accepted; abandoned candidates retire off guards. N4's process/
+endpoint lifetime through confirmed helper exit remains its responsibility.
 
 ### 4. Unavailable provider versus constructor error
 
@@ -600,15 +837,58 @@ existing emergency `mem::forget` behavior as its normal capacity policy.
   Native readiness is deferred to attachment, never silently represented as a
   fully prepared streaming state. A stream attaching during detached preparation
   changes stream generation and refuses the candidate before musical commit.
-- **Attachment/reopen:** `attach(rate)` captures current plan/provider identity,
-  builds fresh complete PlanState, ledger, queues and processor off-lock, then
-  accepts only that same plan/stream/provider snapshot. `try_attach` is the
-  fallible production device route; stale attachment retries on the device
-  control thread with a visible finite retry exhaustion reason. Native failure
-  returns the exact cause. Successful installation freezes the actual prepared
-  R6 ledger. Failed CPAL attempts and abandoned processors retire off guards;
-  suspension/reopen keeps existing transport resume semantics. `Processor::new`
-  retains its empty-controller compatibility construction.
+- **Attachment/reopen:** crate-private `try_attach(rate,mode)` returns
+  `Result<(Processor,AttachmentAdmission,ProjectRetirement),AttachmentError>`;
+  mode is Device or Independent, and AttachmentAdmission is a private numeric
+  identity token for finishing device startup (already final for Independent).
+  AttachmentError wraps preparation versus publication refusal distinctly. It captures the exact
+  current plan/provider and detached stream identity, builds fresh complete
+  PlanState/Ledger/queues/Processor off guards, then accepts only that source
+  identity. A live attached link is not silently replaced. For reopen, its
+  worker clone of Plan.current contains only the requested active graph: strip
+  outgoing/conditional effect and departing instrument rows, give fresh
+  concrete active units fresh EffectLife markers, and relink indexes off-lock.
+  The disposed old stream supplies no mutable history or native reuse evidence.
+  Freeze the successful units' actual rate/revision/latency in the R6 ledger;
+  never treat stale compile-time life.heard as evidence of a fresh unit hearing.
+  Successful attach changes stream identity and the installed prepared plan
+  identity together; both counter advances are prechecked. `Processor::new`
+  retains its empty-controller compatibility route. Existing crate-private
+  infallible attach may remain only for the empty constructor and successful
+  test fixtures; on error it explicitly reports/panics off guards, never returns
+  a fake healthy processor. Production device/render adapters use try_attach.
+  The device mode installs the prepared link as Starting; project admission
+  remains closed until CPAL build/play has succeeded and the same numeric
+  admission token marks it Running under a short guard. Independent offline
+  attachment is immediately Running and uses its separate factory. No callback
+  transaction or wait is added. An actual starting Processor still belongs to
+  the unchanged installed document; candidates for a different document cannot
+  gain capture ownership during this interval.
+- **Device adapter, proposed P1 serialized window:** device.rs::build obtains
+  `(processor,admission,retirement)` through try_attach before creating the
+  Feeder/CPAL callback. Its outer retirement destination exists before any controller
+  guard. Native preparation/refusal is converted to a preparation-specific
+  backend failure before calling CPAL, not success or an unavailable unit.
+  A private build-error distinction prevents fatal native preparation from
+  being silently retried as an unsupported driver format. Stale preparation
+  gets at most **three fresh snapshot attempts** on the existing device control
+  thread; exhaustion reports the last refusal and attempt count. No latency
+  deadline or detached startup thread is invented. Constructor failure stops
+  that attempt. Starting fences musical admission even if CPAL internally
+  destroys the Feeder before returning a build error. CPAL build/play failure
+  disposes its candidate Feeder/stream outside all subject guards, then moves
+  the Starting link into retirement and marks Detached. On success the exact
+  admission identity changes Starting to Running before open reports success.
+  Supervisor configure/poll/failed-open and thread-exit cleanup keep a control
+  endpoint until their Processor has stopped. Preflight stream-generation
+  headroom before closing: the device thread is the sole production writer
+  for that controller, and an attach attempt reserves capacity for successful
+  attach plus possible failed-CPAL detach. Closing/Starting tickets own only
+  numeric identity and outer carrier borrows, never a mutex guard across CPAL
+  work. A token from before Closing/Starting cannot publish while native units
+  are disappearing, even at the same sample rate. Overflow is a visible refusal
+  before transition mutation. Scripted backend fixtures use the same fallible adapter.
+  These are requested device/controller windows, not source grants already given.
 - **Offline:** `render` and stems `Pass::new` currently compile a plan, `set_plan`,
   then `attach`. The same off-lock attachment construction applies. N4 owns
   render/stems/pool/export and freezes the adapter to `try_attach` or an explicit
@@ -679,8 +959,13 @@ existing caller scopes only if necessary, with an exact extra grant.
    and departure reservation/linking; `rack.rs` only concrete departure selection
    and reserved compensation history; `plugins.rs` only private prepare/error
    propagation and bounded metadata documentation, preserving N4's render_error;
-   `message.rs` only ownership/capacity carrier if needed; `lib.rs` exports.
-   Tests stay in controller/state and existing utility modules/registration.
+   `message.rs` only ownership/capacity carrier if needed; `lib.rs` exports;
+   **`device.rs`** only the build/Feeder try_attach adapter, private preparation
+   versus driver error propagation, finite stale retries, and Supervisor
+   configure/poll/failed-open/thread-exit retirement scopes and their existing
+   scripted fixtures. P1 requests this adapter window explicitly; N4 retains
+   offline render/stems adapters. Tests stay in controller/state/device and
+   existing utility modules/registration.
    No project model, meter/transport/sequencer, processor, host ABI or IPC edits.
 2. **Session window after M1 freeze:** new
    `apps/desktop/src-tauri/src/session/project_preparation.rs` for candidate/guard/
@@ -751,6 +1036,36 @@ utility/sampler/native-ownership groups on the actually composed source, then
 the parent's required strict checks. Do not run builds or full suites merely
 to validate this proposal. Allocator/source tests establish their specific
 contracts, not listening quality, a hardware deadline or other-platform proof.
+
+R2's four review conditions require these additional explicit schedules:
+
+1. Queue a shared g0/g1 reservation with fresh g2; queue an edit retaining g2
+   without extra construction; refuse a removal requiring three unresolved
+   sources before Document dispatch. Adopt the predecessor, retry with its
+   actual selected identity, then advance outgoing completion and g1/g2 first
+   hearing after lease acceptance. Count physical rows and alternative entries
+   independently; preserve active indexes and source stamps throughout.
+2. Give physical banks inactive lines around a selected suffix and an empty
+   selected scalar view. Delay takeover until g0/g1 choice and tap mixture
+   change; check promotion, inserted-first suffix, reference switch and current
+   readiness against ordered selected views. Inherit a ring/tap capacity larger
+   than new spec.maximum, retaining distinct old taps without clamping. Preserve
+   unchanged R3 short-history and R4/R5 signal assertions, zero callback alloc/free,
+   and bounded capacities across repeated handoffs.
+3. While worker preparation is blocked, play, stop and seek and change the
+   requested pattern. Edit uses late control values and repairs a removed
+   pattern; Replace uses saved patch plus late omitted fields and the exact
+   Stop/SetPlan/SetTransport/Seek order. Exercise full/one-short/exact-capacity
+   queues and consumer progress between each push, including headroom stopping
+   partway through the serial messages. Refusal changes none of the musical
+   state; success needs no same-callback transaction assertion.
+4. Use the real fallible device adapter and its scripted backend for constructor
+   Err, failed CPAL attempt, same-rate stale retry, exhaustion, suspend/reopen and
+   full garbage/message/backlog retirement. Last-reference destructors record
+   that relevant caller guards are free and the old Processor has stopped before
+   final control-endpoint release. Keep native error, stale admission, sampler
+   failure and explicit unavailable provider distinct. N4 owns helper/bridge
+   shutdown and offline integration evidence on its final source pin.
 
 Additional N4 owner provenance supplied after the initial proposal: thirteen
 individual graph cases are reported green, including CLAP/VST3 latency 561
