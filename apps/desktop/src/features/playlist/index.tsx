@@ -17,6 +17,7 @@ import { Ruler } from "./ruler"
 import { Scrollbar } from "./scrollbar"
 import { usePlaylistStore } from "./store"
 import { PlaylistToolbar } from "./toolbar"
+import { TimelineControls } from "./timeline-controls"
 import { TrackCorner, TrackHeaders } from "./track-headers"
 
 const GRID_TEMPLATE = {
@@ -70,6 +71,7 @@ function Playlist() {
         {...scope}
       >
         <PlaylistToolbar metrics={metrics} />
+        <TimelineControls metrics={metrics} />
         <ClipInspector />
         <div className="flex min-h-0 flex-1">
           {pickerOpen && <PatternPicker />}

@@ -265,6 +265,20 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let doc = SimDocument.create(options.project ?? demoProject())
   let path: string | null = null
   let transport = new TransportSim(doc.project().patterns[0].id)
+  let timelineDocument = doc
+  let timelineGeneration = 1
+  function timelineState() {
+    if (timelineDocument !== doc) {
+      timelineDocument = doc
+      timelineGeneration += 1
+    }
+    return {
+      generation: timelineGeneration,
+      revision: doc.snapshot(path).revision,
+      region: transport.region,
+      navigationOverflows: transport.navigationOverflows,
+    }
+  }
   let audioSettings = storedSettings({})
   let engine = describeStatus(audioSettings)
   let roots: BrowserRoot[] = [...defaultRoots(), ...storedBrowserRoots(storage)]
@@ -628,6 +642,18 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       throw new Error("Native editors require the Windows desktop app")
     },
 
+    timelineState: () => ipc(timelineState),
+    timelineRegion: (region, generation, revision) =>
+      ipc(() => {
+        const current = timelineState()
+        if (generation !== current.generation || revision !== current.revision)
+          throw new Error(
+            "The project changed before the timeline region was applied."
+          )
+        sim.call("timeline_range", 0, region)
+        transport.setRegion(region, doc.project())
+        return timelineState()
+      }),
     documentSnapshot: () => ipc(() => doc.snapshot(path)),
     dispatch: (command, gesture) => ipc(() => dispatchNow(command, gesture)),
     undo: () =>
@@ -1077,6 +1103,24 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
     exportAudio: (exportOptions) =>
       ipc(() => {
+        if (exportOptions.region) {
+          if (exportOptions.mode !== "song")
+            throw new Error("A timeline export region requires song mode.")
+          sim.call("timeline_range", 0, exportOptions.region)
+        }
+        if (
+          exportOptions.regionGeneration !== undefined ||
+          exportOptions.regionRevision !== undefined
+        ) {
+          const current = timelineState()
+          if (
+            exportOptions.regionGeneration !== current.generation ||
+            exportOptions.regionRevision !== current.revision
+          )
+            throw new Error(
+              "The project changed before the selected region could be exported."
+            )
+        }
         if (
           doc
             .project()

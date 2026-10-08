@@ -32,6 +32,8 @@ import {
 import { playlist, selectedClips } from "./selectors"
 import { SNAP_MODES } from "./snap"
 import { usePlaylistStore } from "./store"
+import { TIMELINE_ACTIONS } from "./timeline-actions"
+import { useTimelineStore } from "./timeline-store"
 
 const SECTION = "Playlist"
 
@@ -127,6 +129,7 @@ function capital(word: string): string {
 export const toolActionId = (tool: Tool) => `playlist.tool${capital(tool)}`
 
 const ACTIONS: Action[] = [
+  ...TIMELINE_ACTIONS,
   ...TOOL_ACTIONS.map(({ tool, title, key, words }): Action => ({
     id: toolActionId(tool),
     title,
@@ -501,6 +504,11 @@ export function registerPlaylistActions(): () => void {
       state.selection,
       state.clipboard,
       state.targetTrack,
+    ]),
+    invalidateActionsOn(useTimelineStore, (state) => [
+      state.tool,
+      state.selection,
+      state.active,
     ]),
   ]
   return () => {
