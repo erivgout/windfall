@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
 import type { ChannelId } from "@/bindings"
+import { useProjectStore } from "@/lib/store/project"
 import { onProjectReplaced } from "@/lib/store/replaced"
 
 /**
@@ -9,6 +10,7 @@ import { onProjectReplaced } from "@/lib/store/replaced"
  * root key, six octaves, or every key there is.
  */
 export type KeyboardRange = "auto" | "wide" | "full"
+export type RackNoteView = "auto" | "steps" | "notes"
 
 type RackState = {
   /** Whether the channel settings are showing beside the rack. */
@@ -18,6 +20,9 @@ type RackState = {
   keyboardRange: KeyboardRange
   /** The channel whose color swatches are open, if any. */
   colorPickerFor: ChannelId | null
+  /** Per-lane display choices, never saved into a project or preferences. */
+  noteViews: Record<string, RackNoteView>
+  setNoteView(lane: string, view: RackNoteView): void
 
   setInspectorOpen(open: boolean): void
   toggleInspector(): void
@@ -37,6 +42,14 @@ export const useRackStore = create<RackState>()(
       keyboardLabels: true,
       keyboardRange: "auto",
       colorPickerFor: null,
+      noteViews: {},
+      setNoteView: (lane, view) =>
+        set((state) => {
+          const noteViews = { ...state.noteViews }
+          if (view === "auto") delete noteViews[lane]
+          else noteViews[lane] = view
+          return { noteViews }
+        }),
 
       setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
       toggleInspector: () =>
@@ -59,4 +72,28 @@ export const useRackStore = create<RackState>()(
 
 // The channel the swatches were open for is not a channel of the next
 // project, though one there may have its id.
-onProjectReplaced(() => useRackStore.setState({ colorPickerFor: null }))
+onProjectReplaced(() =>
+  useRackStore.setState({ colorPickerFor: null, noteViews: {} })
+)
+
+// Deleting a target forgets its choice even if undo later restores its id.
+useProjectStore.subscribe((state, previous) => {
+  if (
+    state.project.channels === previous.project.channels &&
+    state.project.patterns === previous.project.patterns
+  )
+    return
+  const views = useRackStore.getState().noteViews
+  const noteViews = Object.fromEntries(
+    Object.entries(views).filter(([key]) => {
+      const [pattern, channel] = key.split(":").map(Number)
+      return (
+        state.project.patterns.some((item) => item.id === pattern) &&
+        state.project.channels.some((item) => item.id === channel)
+      )
+    })
+  )
+  if (Object.keys(noteViews).length !== Object.keys(views).length) {
+    useRackStore.setState({ noteViews })
+  }
+})

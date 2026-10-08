@@ -45,6 +45,7 @@ import {
 import { channelTarget, channelValueItems } from "./menus"
 import { MixerBadge } from "./mixer-badge"
 import { MuteLamp } from "./mute-lamp"
+import { RackNoteArea } from "./note-preview"
 import { detailSteps, litSteps } from "./steps"
 import type { WaveShape } from "./synth/wave-glyph"
 import { useGestureValue } from "./use-gesture-value"
@@ -300,29 +301,40 @@ export const ChannelRow = memo(function ChannelRow({
           selected && "bg-accent/45"
         )}
         style={{ paddingLeft: STEPS_INSET, paddingRight: STEPS_TRAIL }}
-        {...stepsHint}
       >
-        <StepGrid
-          steps={steps}
+        <RackNoteArea
+          pattern={pattern}
+          channel={id}
+          name={channel.name}
+          notes={notes}
+          lengthSteps={lengthSteps}
           color={colorToCss(channel.color)}
-          groupSize={groupSize}
-          aria-label={`${channel.name} steps`}
-          stepLabel={stepLabel}
-          onToggle={onToggle}
-          onGestureStart={gesture.begin}
-          onGestureEnd={gesture.end}
-          className={cn("h-5.5", quiet && "opacity-40")}
-          style={gridStyle}
-        />
-        {detail.map((step) => (
-          <span
-            key={step}
-            aria-hidden
-            data-detail-step={step}
-            className="pointer-events-none absolute top-[5px] size-1.5 rounded-full bg-foreground ring-1 ring-background"
-            style={{ left: pitches(step + 1, STEPS_INSET - STEP_GAP - 8) }}
-          />
-        ))}
+          quiet={quiet}
+        >
+          <div className="contents" {...stepsHint}>
+            <StepGrid
+              steps={steps}
+              color={colorToCss(channel.color)}
+              groupSize={groupSize}
+              aria-label={`${channel.name} steps`}
+              stepLabel={stepLabel}
+              onToggle={onToggle}
+              onGestureStart={gesture.begin}
+              onGestureEnd={gesture.end}
+              className={cn("h-5.5", quiet && "opacity-40")}
+              style={gridStyle}
+            />
+            {detail.map((step) => (
+              <span
+                key={step}
+                aria-hidden
+                data-detail-step={step}
+                className="pointer-events-none absolute top-[5px] size-1.5 rounded-full bg-foreground ring-1 ring-background"
+                style={{ left: pitches(step + 1, STEPS_INSET - STEP_GAP - 8) }}
+              />
+            ))}
+          </div>
+        </RackNoteArea>
       </div>
     </div>
   )
