@@ -303,6 +303,7 @@ fn the_plugin_is_told_where_the_song_is() {
         position_seconds: 3.2,
         numerator: 3,
         denominator: 4,
+        meter_anchor: None,
     });
     processor.process(&mut left, &mut right);
     assert_eq!(instance.param_value(gain::PLAYING), Some(1.0));
