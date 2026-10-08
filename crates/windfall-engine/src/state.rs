@@ -380,6 +380,16 @@ pub(crate) struct Ledger {
     pub latency: u32,
 }
 
+impl Ledger {
+    /// Identity recorded when the current native owner was prepared or reused.
+    /// Departing owners are deliberately excluded from active adoption.
+    pub fn native_identity(&self, effect: EffectId) -> Option<u64> {
+        self.plugins
+            .get(&windfall_project::PluginTarget::Effect { effect })
+            .map(|(identity, _)| *identity)
+    }
+}
+
 /// How far behind each track's signal is.
 struct Layout {
     /// Frames by which the input of each track is behind.

@@ -231,8 +231,9 @@ pub(crate) struct PlanEffect {
     /// [`Plan::keep_leaving`].
     pub leaving: bool,
     pub life: Arc<EffectLife>,
-    /// Control-side snapshot of binding/provider/revision identity. A live
-    /// factory Arc can change revision without changing the project binding.
+    /// Requested binding/provider/revision at compilation or installation.
+    /// Running identity comes from preparation's ledger: this snapshot can
+    /// predate attachment, and a live factory Arc can change revision.
     native_owner: Option<u64>,
     /// A restored id waits for this audible departure before its fresh
     /// owner joins. Progress only; never a native-owner handle or lineage.
@@ -295,7 +296,7 @@ pub(crate) struct PlanAudioClip {
 }
 
 impl Plan {
-    fn snapshot_native_owners(&mut self) {
+    pub(crate) fn snapshot_native_owners(&mut self) {
         let provider = self.plugin_factory.as_ref().map_or(0, |factory| {
             factory.revision().rotate_left(17) ^ factory.provider_identity()
         });
@@ -328,10 +329,12 @@ impl Plan {
     /// with the rack: unheard speculative slots and completed departures
     /// are excluded here, and their storage retires on the control side.
     /// Instrument channels retain their existing one-plan departure policy.
+    /// With a stream, `prepared` supplies the identities actually prepared
+    /// or reused, rather than the previous plan's compilation-time snapshot.
     ///
     /// A track that is gone takes its effects with it at once: there is
     /// nowhere left for them to be heard.
-    pub fn keep_leaving(&mut self, previous: &Plan) {
+    pub fn keep_leaving(&mut self, previous: &Plan, prepared: Option<&crate::state::Ledger>) {
         // Refresh on installation too: precompilation may precede a retry.
         // Never query the old plan's mutable factory for its past revision.
         self.snapshot_native_owners();
@@ -349,8 +352,13 @@ impl Plan {
             let (track, place) = previous.effect_places[before];
             let before = &previous.tracks[track].effects[place];
             let native = effect.native_owner;
+            // A detached or precompiled plan can predate stream preparation.
+            // Only the preparation ledger freezes the running native identity;
+            // querying the previous factory now would observe its new revision.
+            let before_native =
+                prepared.map_or(before.native_owner, |held| held.native_identity(effect.id));
             if effect.params.kind() == before.params.kind()
-                && native == before.native_owner
+                && native == before_native
                 && (native.is_none() || same_factory)
             {
                 effect.life = before.life.clone();
@@ -1127,7 +1135,7 @@ mod tests {
         for _ in 0..1000 {
             project.mixer.tracks[0].effects.clear();
             let mut removed = compile(&project, &pool);
-            removed.keep_leaving(&previous);
+            removed.keep_leaving(&previous, None);
             assert_eq!(removed.tracks[0].effects.len(), MAX_EFFECT_SLOTS);
             assert!(
                 removed.tracks[0]
@@ -1137,7 +1145,7 @@ mod tests {
             );
             project.mixer.tracks[0].effects = slots.clone();
             let mut restored = compile(&project, &pool);
-            restored.keep_leaving(&removed);
+            restored.keep_leaving(&removed, None);
             assert_eq!(restored.tracks[0].effects.len(), 2 * MAX_EFFECT_SLOTS);
             for (index, pair) in restored.tracks[0]
                 .effects
@@ -1162,7 +1170,7 @@ mod tests {
             effect.life.finish();
         }
         let mut settled = compile(&project, &pool);
-        settled.keep_leaving(&previous);
+        settled.keep_leaving(&previous, None);
         assert_eq!(settled.tracks[0].effects.len(), MAX_EFFECT_SLOTS);
         assert!(
             settled.tracks[0]

@@ -235,10 +235,11 @@ impl Controller {
         let Some(held) = held else {
             // With no stream there is nobody to tell: the next processor
             // starts out on the plan kept here.
+            plan.snapshot_native_owners();
             state.plan = Arc::new(plan);
             return;
         };
-        plan.keep_leaving(&state.plan);
+        plan.keep_leaving(&state.plan, Some(held));
         let plan = Arc::new(plan);
         let (plan_state, hosted) = PlanState::build(&plan, held.sample_rate, Some(held));
         state.hosted = Some(hosted);
@@ -513,6 +514,8 @@ impl Controller {
         self.panic_hardware();
         // Every effect and instrument is built anew, prepared for this
         // stream's sample rate. What the last stream ran went with it.
+        // The returned ledger freezes the identities actually prepared,
+        // including revisions changed since this plan was installed.
         let (plan_state, hosted) = PlanState::build(&state.plan, sample_rate, None);
         let processor = Processor::with_queues(
             sample_rate,
@@ -707,6 +710,305 @@ mod tests {
             processor.process(block);
         }
         (0..frames).filter(|frame| out[frame * 2] != 0.0).collect()
+    }
+
+    #[derive(Debug, Default)]
+    struct R6Native {
+        revision: std::sync::atomic::AtomicU64,
+        creates: std::sync::atomic::AtomicUsize,
+        prepared_revision: [std::sync::atomic::AtomicU64; 8],
+        processes: [std::sync::atomic::AtomicUsize; 8],
+        drops: [std::sync::atomic::AtomicUsize; 8],
+    }
+    #[derive(Debug)]
+    struct R6Factory(Arc<R6Native>);
+    impl crate::plugins::PluginFactory for R6Factory {
+        fn revision(&self) -> u64 {
+            self.0.revision.load(Ordering::Relaxed)
+        }
+        fn effect(
+            &self,
+            _: &windfall_project::PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn crate::plugins::HostedEffect>, String> {
+            let owner = self.0.creates.fetch_add(1, Ordering::Relaxed);
+            self.0.prepared_revision[owner].store(self.revision(), Ordering::Relaxed);
+            Ok(Box::new(R6Delay {
+                ring: [[0.0; 2]; 32],
+                write: 0,
+                owner,
+                stats: self.0.clone(),
+            }))
+        }
+        fn instrument(
+            &self,
+            _: &windfall_project::PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn crate::plugins::HostedInstrument>, String> {
+            Err("effect fixture".into())
+        }
+    }
+    struct R6Delay {
+        ring: [[f32; 2]; 32],
+        write: usize,
+        owner: usize,
+        stats: Arc<R6Native>,
+    }
+    impl Drop for R6Delay {
+        fn drop(&mut self) {
+            self.stats.drops[self.owner].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    impl crate::plugins::HostedEffect for R6Delay {
+        fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+            self.stats.processes[self.owner].fetch_add(1, Ordering::Relaxed);
+            for (left, right) in left.iter_mut().zip(right) {
+                let old = self.ring[self.write];
+                self.ring[self.write] = [*left, *right];
+                self.write = (self.write + 1) % 32;
+                [*left, *right] = old;
+            }
+        }
+        fn set_param(&mut self, _: u32, _: f32) {}
+        fn set_tempo(&mut self, _: f32) {}
+        fn latency(&self) -> usize {
+            32
+        }
+        fn tail(&self) -> usize {
+            32
+        }
+    }
+    fn r6_fixture(cancel: bool) -> (Project, SamplePool, Arc<R6Native>) {
+        use windfall_project::{EffectId, EffectParams, EffectSlot, PluginBinding, PluginTarget};
+        let (mut project, mut pool) = clicks(&[0]);
+        let tone: Vec<f32> = (0..48_000)
+            .map(|n| (std::f64::consts::TAU * n as f64 * 173.0 / 48_000.0).sin() as f32 * 0.5)
+            .collect();
+        pool.insert(
+            SampleId(900),
+            AudioBuffer::from_interleaved(48_000, 1, tone.clone()),
+        );
+        let mut first = project.mixer.tracks[0].clone();
+        first.id = TrackId(11);
+        first.output = Some(TrackId::MASTER);
+        first.effects = vec![
+            EffectSlot {
+                id: EffectId(20),
+                enabled: true,
+                mix: 1.0,
+                params: windfall_project::EffectKind::Balance.default_params(),
+            },
+            EffectSlot {
+                id: EffectId(21),
+                enabled: true,
+                mix: 1.0,
+                params: EffectParams::StereoMatrix(windfall_dsp::StereoMatrixParams {
+                    left_delay_ms: 1.0,
+                    right_delay_ms: 1.0,
+                    ..Default::default()
+                }),
+            },
+        ];
+        project.mixer.tracks.push(first);
+        project.channels[0].mixer_track = TrackId(11);
+        project.channels[0].volume = 0.5;
+        if cancel {
+            let mut second = project.mixer.tracks[0].clone();
+            second.id = TrackId(12);
+            second.output = Some(TrackId::MASTER);
+            project.mixer.tracks.push(second);
+            pool.insert(
+                SampleId(901),
+                AudioBuffer::from_interleaved(
+                    48_000,
+                    1,
+                    tone.iter().map(|sample| -*sample).collect(),
+                ),
+            );
+            let mut channel = project.channels[0].clone();
+            channel.id = ChannelId(902);
+            channel.mixer_track = TrackId(12);
+            channel.source = ChannelSource::Sampler(SamplerSettings {
+                sample: Some(SampleId(901)),
+                ..Default::default()
+            });
+            project.channels.push(channel);
+            let mut lane = project.patterns[0].lanes[0].clone();
+            lane.channel = ChannelId(902);
+            lane.notes[0].id = NoteId(1100);
+            project.patterns[0].lanes.push(lane);
+        }
+        project.plugins.push(PluginBinding {
+            target: PluginTarget::Effect {
+                effect: EffectId(20),
+            },
+            format: "clap".into(),
+            path: "r6-detached-delay.clap".into(),
+            id: "r6-delay".into(),
+            name: "Prepared delay".into(),
+            state: vec![],
+            parameters: vec![],
+        });
+        let stats = Arc::new(R6Native::default());
+        pool.set_plugin_factory(Arc::new(R6Factory(stats.clone())));
+        (project, pool, stats)
+    }
+    fn r6_audio(processor: &mut Processor, frames: usize, block: usize) -> Vec<f32> {
+        let mut audio = vec![0.0; frames * 2];
+        for out in audio.chunks_mut(block * 2) {
+            assert_eq!(
+                crate::test_alloc::allocator_calls(|| processor.process(out)),
+                0
+            );
+        }
+        audio
+    }
+    fn r6_detached_precompiled_adoption(cancel: bool, revise_before_attach: bool) {
+        let (mut project, pool, stats) = r6_fixture(cancel);
+        let controller = Controller::new();
+        let prepared = Controller::prepare_project(&project, &pool);
+        stats.revision.store(1, Ordering::Relaxed);
+        controller.set_prepared_project(&project, prepared);
+        if revise_before_attach {
+            stats.revision.store(2, Ordering::Relaxed);
+        }
+        let mut processor = controller.attach(48_000);
+        controller.play();
+        let prime = r6_audio(&mut processor, 4092, 137);
+        if cancel {
+            assert!(prime.iter().all(|sample| sample.abs() < 1e-6));
+        }
+        assert_eq!(controller.latency_frames(), 80);
+        assert_eq!(stats.creates.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            stats.prepared_revision[0].load(Ordering::Relaxed),
+            if revise_before_attach { 2 } else { 1 }
+        );
+        let mut audio = prime[prime.len() - 2..].to_vec();
+        let before = stats.processes[0].load(Ordering::Relaxed);
+        controller.set_project(&project, &pool);
+        let adopted = r6_audio(&mut processor, 1000, 1);
+        if cancel {
+            let residual = adopted.iter().copied().map(f32::abs).fold(0.0, f32::max);
+            println!("detached prepared adoption residual {residual}");
+            assert!(
+                residual < 1e-6,
+                "detached prepared adoption residual {residual}"
+            );
+        }
+        audio.extend(adopted);
+        if !cancel {
+            let step = audio
+                .as_chunks::<2>()
+                .0
+                .windows(2)
+                .map(|frames| (frames[1][0] - frames[0][0]).abs())
+                .fold(0.0, f32::max);
+            println!("detached prepared adoption solo step {step}");
+            assert!(step < 0.04, "detached prepared adoption solo step {step}");
+        }
+        assert!(
+            stats.processes[0].load(Ordering::Relaxed) > before,
+            "running native owner stopped processing"
+        );
+        controller.frame();
+        assert_eq!(stats.creates.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.drops[0].load(Ordering::Relaxed), 0);
+        for block in [7, 137, 1] {
+            let before = stats.processes[0].load(Ordering::Relaxed);
+            if block == 137 {
+                controller
+                    .set_prepared_project(&project, Controller::prepare_project(&project, &pool));
+            } else {
+                controller.set_project(&project, &pool);
+            }
+            let continuation = r6_audio(&mut processor, 137, block);
+            if cancel {
+                assert!(continuation.iter().all(|sample| sample.abs() < 1e-6));
+            }
+            assert!(stats.processes[0].load(Ordering::Relaxed) > before);
+            assert_eq!(controller.latency_frames(), 80);
+            controller.frame();
+            assert_eq!(stats.creates.load(Ordering::Relaxed), 1);
+            assert_eq!(stats.drops[0].load(Ordering::Relaxed), 0);
+        }
+        project.mixer.tracks[1].effects.remove(0);
+        project.plugins.clear();
+        controller.set_project(&project, &pool);
+        let removal = r6_audio(&mut processor, 1000, 29);
+        if cancel {
+            assert!(removal.iter().all(|sample| sample.abs() < 1e-6));
+        }
+        controller.set_project(&project, &pool);
+        r6_audio(&mut processor, 137, 137);
+        controller.frame();
+        assert_eq!(stats.drops[0].load(Ordering::Relaxed), 1);
+        assert_eq!(controller.latency_frames(), 48);
+    }
+    #[test]
+    fn utility_r6_detached_precompiled_adoption_keeps_native_cancellation() {
+        r6_detached_precompiled_adoption(true, false);
+    }
+    #[test]
+    fn utility_r6_detached_precompiled_adoption_keeps_native_continuity_and_owner() {
+        r6_detached_precompiled_adoption(false, false);
+    }
+
+    #[test]
+    fn utility_r6_revision_after_detached_install_uses_actual_preparation() {
+        r6_detached_precompiled_adoption(true, true);
+    }
+
+    #[test]
+    fn utility_r6_attachment_retry_and_reopen_freeze_native_identity() {
+        let (project, pool, stats) = r6_fixture(true);
+        let controller = Controller::new();
+        controller.set_project(&project, &pool);
+        stats.revision.store(1, Ordering::Relaxed);
+        let abandoned = controller.attach(48_000);
+        assert_eq!(stats.prepared_revision[0].load(Ordering::Relaxed), 1);
+        drop(abandoned);
+        assert_eq!(stats.processes[0].load(Ordering::Relaxed), 0);
+        assert_eq!(stats.drops[0].load(Ordering::Relaxed), 1);
+
+        stats.revision.store(2, Ordering::Relaxed);
+        let mut processor = controller.attach(48_000);
+        controller.play();
+        let prime = r6_audio(&mut processor, 4092, 29);
+        assert!(prime.iter().all(|sample| sample.abs() < 1e-6));
+        assert_eq!(stats.prepared_revision[1].load(Ordering::Relaxed), 2);
+        let before = stats.processes[1].load(Ordering::Relaxed);
+        controller.set_project(&project, &pool);
+        let adopted = r6_audio(&mut processor, 1000, 7);
+        assert!(adopted.iter().all(|sample| sample.abs() < 1e-6));
+        assert!(stats.processes[1].load(Ordering::Relaxed) > before);
+        controller.frame();
+        assert_eq!(controller.latency_frames(), 80);
+        assert_eq!(stats.creates.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.drops[1].load(Ordering::Relaxed), 0);
+
+        controller.suspend();
+        drop(processor);
+        assert_eq!(stats.drops[1].load(Ordering::Relaxed), 1);
+        stats.revision.store(3, Ordering::Relaxed);
+        let mut processor = controller.attach(48_000);
+        let resumed = r6_audio(&mut processor, 4092, 137);
+        assert!(resumed.iter().all(|sample| sample.abs() < 1e-6));
+        assert_eq!(stats.prepared_revision[2].load(Ordering::Relaxed), 3);
+        let before = stats.processes[2].load(Ordering::Relaxed);
+        controller.set_prepared_project(&project, Controller::prepare_project(&project, &pool));
+        let adopted = r6_audio(&mut processor, 1000, 1);
+        assert!(adopted.iter().all(|sample| sample.abs() < 1e-6));
+        assert!(stats.processes[2].load(Ordering::Relaxed) > before);
+        controller.frame();
+        assert_eq!(controller.latency_frames(), 80);
+        assert_eq!(stats.creates.load(Ordering::Relaxed), 3);
+        assert_eq!(stats.drops[2].load(Ordering::Relaxed), 0);
+        controller.detach();
+        drop(processor);
+        assert_eq!(stats.drops[2].load(Ordering::Relaxed), 1);
     }
 
     /// A controller playing from tick 240, with its playhead at tick 604 as
