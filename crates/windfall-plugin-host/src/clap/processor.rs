@@ -353,4 +353,7 @@ impl ProcessorBackend for ClapProcessor {
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }

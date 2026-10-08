@@ -18,6 +18,7 @@ use ts_rs::TS;
 use crate::blocks::delay_line::DelayLine;
 use crate::blocks::math::ms_to_samples;
 use crate::blocks::smooth::LinearRamp;
+use crate::blocks::tap_crossfade::TapCrossfade;
 use crate::compressor::{Compressor, CompressorParams};
 use crate::delay::{Delay, DelayParams};
 use crate::eq::{EqParams, ParametricEq};
@@ -80,6 +81,13 @@ pub trait Effect: Send {
     /// `set_params`.
     fn latency_samples(&self) -> usize {
         0
+    }
+
+    /// Samples to run unheard after waking from cleared state, so every
+    /// delayed output is ready before the slot fades it in. This can exceed
+    /// the shared latency used for compensation, for example in a matrix.
+    fn warm_up_samples(&self) -> usize {
+        self.latency_samples()
     }
 
     /// Samples for which the output can keep sounding after the input has
@@ -499,6 +507,11 @@ impl AnyEffect {
         each_effect!(self, effect => effect.latency_samples())
     }
 
+    /// See [`Effect::warm_up_samples`].
+    pub fn warm_up_samples(&self) -> usize {
+        each_effect!(self, effect => effect.warm_up_samples())
+    }
+
     /// The largest latency any setting of this effect can have at
     /// `sample_rate`. A host that reserves this much never has to grow a
     /// compensation buffer while playing.
@@ -540,9 +553,9 @@ const INPUT_LIMIT: f32 = 1.0e3;
 /// Switching the slot off crossfades to the untouched input over a few
 /// milliseconds instead of cutting, and then stops running the effect,
 /// which costs nothing while it is off. Switched back on, the effect
-/// starts with its memory cleared; one with latency first runs unheard for
-/// as long as that latency, so the fade back in finds its output already
-/// there. The mix blends the untouched input
+/// starts with its memory cleared and runs unheard until every delayed
+/// output is primed, so the fade back in finds its output already there.
+/// The mix blends the untouched input
 /// with the effect's output. Both use an input delayed by the effect's
 /// latency, so the slot's delay is the same whether it is on, off or
 /// half-mixed and compensation never has to change. When the latency
@@ -565,24 +578,21 @@ pub struct EffectSlot {
     wet: LinearRamp,
     dry_left: DelayLine,
     dry_right: DelayLine,
-    /// The delay of the dry signal in samples, which follows the effect's
-    /// latency.
-    dry_delay: usize,
-    /// The delay being faded out after the latency changed, and how many
-    /// samples of that fade are left.
-    dry_from: usize,
-    dry_fade_left: u32,
-    dry_fade_len: u32,
+    /// Shared-delay transition, preserving every currently audible dry tap.
+    dry_fade: TapCrossfade,
     scratch_left: Box<[f32]>,
     scratch_right: Box<[f32]>,
     /// The effect has faded out and has not run since, so its memory is
     /// stale and must be cleared before it is heard again.
     dormant: bool,
     /// Samples the effect still has to run unheard after it was woken. An
-    /// effect with latency puts out nothing for that long once its memory
+    /// effect with delayed outputs puts out nothing for that long once its memory
     /// has been cleared, and fading it in at once would let its output
     /// burst in part way through the fade.
     warm_up: usize,
+    /// Samples already run since the dormant effect was cleared. A delay
+    /// increased during priming extends the wait without losing this history.
+    warm_up_elapsed: usize,
     fresh: bool,
 }
 
@@ -598,14 +608,12 @@ impl EffectSlot {
             wet: LinearRamp::new(1.0),
             dry_left: DelayLine::default(),
             dry_right: DelayLine::default(),
-            dry_delay: 0,
-            dry_from: 0,
-            dry_fade_left: 0,
-            dry_fade_len: 1,
+            dry_fade: TapCrossfade::new(0, 0),
             scratch_left: Box::default(),
             scratch_right: Box::default(),
             dormant: false,
             warm_up: 0,
+            warm_up_elapsed: 0,
             fresh: true,
         }
     }
@@ -618,6 +626,7 @@ impl EffectSlot {
         let latency = self.effect.max_latency_samples(self.sample_rate);
         self.dry_left = DelayLine::new(latency);
         self.dry_right = DelayLine::new(latency);
+        self.dry_fade = TapCrossfade::new(latency, self.effect.latency_samples());
         self.scratch_left = vec![0.0; max_block].into_boxed_slice();
         self.scratch_right = vec![0.0; max_block].into_boxed_slice();
         self.reset();
@@ -628,9 +637,10 @@ impl EffectSlot {
         self.effect.reset();
         self.dry_left.clear();
         self.dry_right.clear();
-        self.dry_fade_left = 0;
+        self.dry_fade.snap(self.effect.latency_samples());
         self.dormant = false;
         self.warm_up = 0;
+        self.warm_up_elapsed = 0;
         self.fresh = true;
         self.wet.snap(self.wet_target());
     }
@@ -671,7 +681,15 @@ impl EffectSlot {
 
     /// See [`AnyEffect::set_params`].
     pub fn set_params(&mut self, params: &EffectParams) -> bool {
-        self.effect.set_params(params)
+        let accepted = self.effect.set_params(params);
+        if accepted && self.warm_up > 0 {
+            self.warm_up = self.warm_up.max(
+                self.effect
+                    .warm_up_samples()
+                    .saturating_sub(self.warm_up_elapsed),
+            );
+        }
+        accepted
     }
 
     /// See [`Effect::set_tempo`].
@@ -694,23 +712,27 @@ impl EffectSlot {
         self.effect.latency_samples()
     }
 
-    /// See [`Effect::tail_samples`]. A slot that is off only has its
-    /// latency left to play out.
+    /// See [`Effect::tail_samples`]. A slot that is off has its aligned dry
+    /// delays left to play out, including old taps during a transition.
     pub fn tail_samples(&self) -> usize {
         if self.enabled {
             self.effect.tail_samples()
         } else {
-            self.effect.latency_samples()
+            self.dry_fade
+                .longest_delay()
+                .max(self.effect.latency_samples())
         }
     }
 
-    /// See [`Effect::gap_samples`]. A slot that is off only has its
-    /// latency to wait for.
+    /// See [`Effect::gap_samples`]. A slot that is off waits for its aligned
+    /// dry delays, including old taps during a transition.
     pub fn gap_samples(&self) -> usize {
         if self.enabled {
             self.effect.gap_samples()
         } else {
-            self.effect.latency_samples()
+            self.dry_fade
+                .longest_delay()
+                .max(self.effect.latency_samples())
         }
     }
 
@@ -743,54 +765,31 @@ impl EffectSlot {
         }
 
         let latency = self.effect.latency_samples();
-        if latency != self.dry_delay {
-            // The first block takes the latency as it finds it. After that
-            // a change is crossfaded, and one that comes during a
-            // crossfade joins it, which is what the limiter does with its
-            // own delay: the dry and the processed signal stay together.
-            if fresh {
-                self.dry_fade_left = 0;
-            } else if self.dry_fade_left == 0 {
-                self.dry_from = self.dry_delay;
-                self.dry_fade_len = ms_to_samples(LOOKAHEAD_FADE_MS, self.sample_rate);
-                self.dry_fade_left = self.dry_fade_len;
-            }
-            self.dry_delay = latency;
+        let fade_samples = if fresh {
+            0
+        } else {
+            ms_to_samples(LOOKAHEAD_FADE_MS, self.sample_rate)
+        };
+        if self.effect.kind() == EffectKind::StereoMatrix {
+            self.dry_fade.retarget(latency, fade_samples);
+        } else {
+            self.dry_fade.retarget_joining(latency, fade_samples);
         }
+        let dry_transition = self.dry_fade.remaining() as usize;
         let dry_left = &mut self.scratch_left[..frames];
         let dry_right = &mut self.scratch_right[..frames];
-        if latency == 0 && self.dry_fade_left == 0 {
-            dry_left.copy_from_slice(left);
-            dry_right.copy_from_slice(right);
-            // A matrix can acquire latency from an initial zero-delay state.
-            // Keep its dry history primed for that first crossfade too.
-            for (&l, &r) in left.iter().zip(right.iter()) {
-                self.dry_left.push(l);
-                self.dry_right.push(r);
+        for index in 0..frames {
+            for (line, input, dry) in [
+                (&mut self.dry_left, left[index], &mut dry_left[index]),
+                (&mut self.dry_right, right[index], &mut dry_right[index]),
+            ] {
+                *dry = self
+                    .dry_fade
+                    .read(|delay| if delay == 0 { input } else { line.tap(delay) });
+                // Prime even at zero shared latency for later delayed edits.
+                line.push(input);
             }
-        } else {
-            let (from, fade_len) = (self.dry_from, self.dry_fade_len as f32);
-            let delays = [
-                (&mut self.dry_left, &*left, &mut *dry_left),
-                (&mut self.dry_right, &*right, &mut *dry_right),
-            ];
-            for (line, input, dry) in delays {
-                let mut fade_left = self.dry_fade_left;
-                for (input, dry) in input.iter().zip(dry.iter_mut()) {
-                    // A delay of nothing is the sample that is coming in.
-                    let tap = |delay: usize| if delay == 0 { *input } else { line.tap(delay) };
-                    let mut delayed = tap(latency);
-                    if fade_left > 0 {
-                        let old = fade_left as f32 / fade_len;
-                        delayed += (tap(from) - delayed) * old;
-                        fade_left -= 1;
-                    }
-                    *dry = delayed;
-                    line.push(*input);
-                }
-            }
-            let done = u32::try_from(frames).unwrap_or(u32::MAX);
-            self.dry_fade_left = self.dry_fade_left.saturating_sub(done);
+            self.dry_fade.advance();
         }
 
         if self.wet.is_settled() && self.wet.value() == 0.0 {
@@ -802,7 +801,13 @@ impl EffectSlot {
         if self.dormant {
             self.effect.reset();
             self.dormant = false;
-            self.warm_up = latency;
+            self.warm_up = self.effect.warm_up_samples().max(dry_transition);
+            self.warm_up_elapsed = 0;
+        }
+        if self.warm_up > 0 {
+            // Reset snaps the wet taps, so keep them unheard until any
+            // simultaneous dry/PDC transition has also reached its target.
+            self.warm_up = self.warm_up.max(dry_transition);
         }
         self.effect.process(left, right);
         if self.warm_up == 0 && self.wet.is_settled() && self.wet.value() == 1.0 {
@@ -824,6 +829,7 @@ impl EffectSlot {
                 right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
             }
         }
+        self.warm_up_elapsed = self.warm_up_elapsed.saturating_add(frames);
         // A fade can finish inside this piece. Waking must clear stale state
         // even if no subsequent fully dry block arrived before re-enabling.
         self.dormant = self.wet.is_settled() && self.wet.value() == 0.0;

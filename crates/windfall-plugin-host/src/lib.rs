@@ -107,7 +107,7 @@ pub use descriptor::{
     AudioPort, MAX_PARAMETERS, MAX_PORT_CHANNELS, MAX_PORTS, PluginDescriptor, PluginFormat,
     PluginKind, PluginLayout,
 };
-pub use error::PluginError;
+pub use error::{DeactivationError, PluginError};
 pub use events::{HostEvent, PluginEvent, Transport};
 pub use gui::{EditorError, EditorInfo, EditorOptions};
 pub use host::{LogLevel, PluginHost, PluginModule};

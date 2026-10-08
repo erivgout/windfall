@@ -63,6 +63,7 @@ pub(super) enum Refusal {
     /// The document was edited after the request was made.
     Edited,
     Cancelled,
+    SamplerPreparation,
 }
 
 impl Refusal {
@@ -71,6 +72,9 @@ impl Refusal {
     pub(super) fn message(self, what: &str) -> String {
         match self {
             Refusal::Cancelled => "Project archive cancelled.".into(),
+            Refusal::SamplerPreparation => format!(
+                "{what}: sampler preparation failed. Reduce its duration/key range or let retained voices retire; see the project warning."
+            ),
             Refusal::Recording => "Stop or cancel recording before replacing the project.".into(),
             Refusal::Superseded => {
                 format!("{what} because another project was opened or started after it.")
@@ -375,6 +379,9 @@ impl Session {
     /// slow work, and hand the result to [`install`](Self::install).
     pub(super) fn begin_replacement(&self) -> Replacement {
         let mut state = self.state();
+        self.inner
+            .sampler_ticket
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         state.replacements += 1;
         Replacement {
             request: state.replacements,
@@ -410,12 +417,19 @@ impl Session {
         if let Some(staged) = &staged {
             decoded.pool.set_plugin_factory(staged.clone());
         }
+        decoded.pool.share_sampler_budget(&self.state().pool);
         let prepared =
-            windfall_engine::Controller::prepare_project(document.project(), &decoded.pool);
+            windfall_engine::Controller::prepare_project(document.project(), &decoded.pool)
+                .map_err(|error| {
+                    self.emit(Event::ProjectWarnings(vec![error.to_string()]));
+                    Refusal::SamplerPreparation
+                })?;
         #[cfg(test)]
         if ticket.cancelled.is_some() {
             self.pause("archive:install");
         }
+        #[cfg(test)]
+        self.pause("sampler:install-prepared");
         let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
         let mut state = self.state();
         if ticket
@@ -456,6 +470,9 @@ impl Session {
         if let Some(runtime) = runtime {
             decoded.pool.set_plugin_factory(runtime);
         }
+        decoded
+            .pool
+            .install_sampler_preparation(prepared.sampler_pool());
         *state = State {
             midi_target: None,
             document,

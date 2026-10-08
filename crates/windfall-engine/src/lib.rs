@@ -131,6 +131,7 @@ mod processor;
 mod rack;
 mod ramp;
 mod render;
+pub mod sampler_processing;
 mod sequencer;
 mod shared;
 mod state;
@@ -147,7 +148,8 @@ pub use pool::SamplePool;
 pub use processor::Processor;
 pub use render::{RenderOptions, Rendered, TAIL_SILENCE_DB, render, render_reporting};
 pub use stems::{
-    Stem, StemError, StemMode, StemOptions, Streamed, render_stems, render_streaming, stems,
+    Stem, StemError, StemMode, StemOptions, Streamed, render_stems, render_streaming,
+    render_streaming_checked, stems,
 };
 pub use voice::PREVIEW_GAIN_DB;
 

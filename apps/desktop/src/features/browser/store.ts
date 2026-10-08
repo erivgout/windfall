@@ -41,6 +41,8 @@ export type Selection = {
   /** Set when it is a top-level folder. */
   root: BrowserRoot | null
   library?: LibraryFileToken
+  /** Immutable even when the token lookup has not finished. */
+  librarySelection?: Readonly<{ epoch: number; rootPath: string }>
 }
 
 export type InfoState =
@@ -341,7 +343,7 @@ export function refreshFolder(path: string) {
 
 export function setFilter(filter: string) {
   set({ filter })
-  invalidateLibrary()
+  invalidateLibrary({ selections: false })
 }
 
 export function setAutoPreview(autoPreview: boolean) {
@@ -391,5 +393,12 @@ export function selectionOf(row: EntryRow): Selection {
     parentPath: row.parentPath,
     root: row.root,
     library,
+    librarySelection:
+      row.kind === "folder"
+        ? undefined
+        : Object.freeze({
+            epoch: useLibraryStore.getState().epoch,
+            rootPath: parseRowId(row.id)?.root ?? "",
+          }),
   }
 }

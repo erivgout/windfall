@@ -12,7 +12,7 @@ import { backend } from "@/lib/ipc"
 import { FORMAT_VERSION, MASTER_TRACK } from "@/lib/units"
 
 import { applyPatch, type DocumentState } from "./patch"
-import { getProjectGeneration } from "./replaced"
+import { getProjectGeneration, onProjectReplaced } from "./replaced"
 
 /** Shown for the instant before the first snapshot arrives. */
 const BLANK_PROJECT: Project = {
@@ -130,6 +130,37 @@ export function receivePatch(patch: ProjectPatch) {
   }
 }
 
+/** Waits for this edit, while recovery of later edits continues independently. */
+async function waitForRevision(
+  generation: number,
+  revision: number
+): Promise<boolean> {
+  let unsubscribeProject = () => {}
+  let unsubscribeGeneration = () => {}
+  try {
+    const mirrored = new Promise<boolean>((resolve) => {
+      const check = () => {
+        if (generation !== getProjectGeneration()) resolve(false)
+        else if (useProjectStore.getState().revision >= revision) resolve(true)
+      }
+      unsubscribeProject = useProjectStore.subscribe(check)
+      unsubscribeGeneration = onProjectReplaced(check)
+      check()
+    })
+    return await Promise.race([
+      mirrored,
+      refetchSnapshot().then(
+        () =>
+          generation === getProjectGeneration() &&
+          useProjectStore.getState().revision >= revision
+      ),
+    ])
+  } finally {
+    unsubscribeProject()
+    unsubscribeGeneration()
+  }
+}
+
 /**
  * Sends an edit to the backend. Pass the same `gesture` id for every edit of
  * one drag so they become a single undo step. Resolves to `null` when the
@@ -147,13 +178,12 @@ export async function dispatch(
     if (generation !== getProjectGeneration()) return null
     receivePatch(result.patch)
     if (useProjectStore.getState().revision < result.patch.revision) {
-      await refetchSnapshot()
-      if (
-        generation !== getProjectGeneration() ||
-        useProjectStore.getState().revision < result.patch.revision
-      )
+      if (!(await waitForRevision(generation, result.patch.revision)))
         return null
     }
+    // A replacement loads its snapshot before announcing the new generation.
+    // Recheck after any store notification or awaited recovery.
+    if (generation !== getProjectGeneration()) return null
     return result
   } catch (error) {
     if (generation === getProjectGeneration()) reportError(error)

@@ -329,6 +329,9 @@ impl Session {
             Some(held) => (held.id, project.next_id),
             None => (SampleId(project.next_id), project.next_id.saturating_add(1)),
         };
+        if browser.is_some() {
+            self.check_loaded_import(&state, sample, &buffer, &file)?;
+        }
         let mut commands = vec![Command::AddSample {
             name: name.clone(),
             path: sample_path,
@@ -470,6 +473,9 @@ impl Session {
             .iter()
             .find(|held| held.path == sample_path)
             .map_or(SampleId(project.next_id), |held| held.id);
+        if browser.is_some() {
+            self.check_loaded_import(&state, sample, &buffer, file)?;
+        }
         let batch = Command::Batch {
             label: Some(label.to_owned()),
             commands: vec![
@@ -490,6 +496,27 @@ impl Session {
             created: applied.created,
             patch: self.publish(&mut state, &applied.touched),
         })
+    }
+
+    /// Checked path deduplication may reuse only the version the project plays.
+    /// Runs before dispatch, after recording -> library -> State guards; this
+    /// cache comparison reads in-memory provenance and never touches the disk.
+    fn check_loaded_import(
+        &self,
+        state: &State,
+        sample: SampleId,
+        buffer: &AudioBuffer,
+        file: &Path,
+    ) -> Result<(), String> {
+        if let Some(held) = state.pool.get(sample)
+            && !self.inner.cache.same_file_version(held, buffer)
+        {
+            return Err(format!(
+                "The project is already using an older or unverified version of \"{}\". Import the changed file under a new path, or reopen the project to reload its sources.",
+                paths::name(file)
+            ));
+        }
+        Ok(())
     }
 }
 

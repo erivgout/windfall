@@ -109,6 +109,18 @@ pub(super) struct VstProcessor {
 // Changes shares arenas only between queues of this same exclusive owner.
 unsafe impl Send for VstProcessor {}
 impl VstProcessor {
+    /// Owner-only lifecycle; a refusal retains both native and Rust ownership.
+    pub(super) fn quiesce(&mut self) -> Result<(), PluginError> {
+        if self.started {
+            if unsafe { self.objects.processor.setProcessing(0) } != kResultOk {
+                return Err(PluginError::Deactivate(
+                    "setProcessing(false) refused".into(),
+                ));
+            }
+            self.started = false;
+        }
+        Ok(())
+    }
     /// The native owner calls this only after exclusive audio ownership returns.
     /// Preserve editor points still queued for process as deferred state overrides.
     pub(super) fn retain_pending_edits(&mut self) {
@@ -464,14 +476,12 @@ impl ProcessorBackend for VstProcessor {
     }
     fn stop(&mut self) {
         let _guard = AudioCall::enter();
-        if self.started {
-            unsafe {
-                self.objects.processor.setProcessing(0);
-            }
-            self.started = false;
-        }
+        let _ = self.quiesce();
     }
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }

@@ -18,6 +18,7 @@ import { activateRow, refresh, selectRow } from "./commands"
 import { TreeFooter } from "./empty-states"
 import { rowMenu } from "./row-menu"
 import { useLibraryStore } from "./library-store"
+import { captureFile, fileRequestCurrent } from "./file-token"
 import {
   collapseFolder,
   expandFolder,
@@ -276,8 +277,13 @@ export function TreeView() {
       return
     }
     const name = stemOf(row.name, row.kind)
+    const file = captureFile(row.path, row.library)
+    if (!fileRequestCurrent(file)) {
+      event.preventDefault()
+      return
+    }
     const browser =
-      row.library ??
+      file.browser ??
       (library
         ? {
             path: row.path,

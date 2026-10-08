@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::clip_processing::{ClipAudioCache, render};
+use crate::sampler_processing::{SamplerAudioCache, SamplerBank, SamplerPreparationError};
 use windfall_core::AudioBuffer;
 use windfall_project::{ClipStretch, SampleId};
 
@@ -16,10 +17,128 @@ use windfall_project::{ClipStretch, SampleId};
 pub struct SamplePool {
     samples: Arc<HashMap<SampleId, AudioBuffer>>,
     clip_audio: Arc<Mutex<ClipAudioCache>>,
+    sampler_audio: Arc<Mutex<SamplerAudioCache>>,
     pub(crate) plugin_factory: Option<Arc<dyn crate::plugins::PluginFactory>>,
 }
 
 impl SamplePool {
+    /// Creates an independent cache sharing the same retained-bank budget.
+    /// Used by document replacement so old plans/voices remain charged.
+    pub fn share_sampler_budget(&mut self, other: &Self) {
+        self.sampler_audio = Arc::new(Mutex::new(
+            other
+                .sampler_audio
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        ));
+    }
+
+    /// A smaller strict bound for callers/tests; existing reservations are untouched.
+    pub fn with_sampler_budget(limit: usize) -> Self {
+        Self {
+            sampler_audio: Arc::new(Mutex::new(SamplerAudioCache::with_limit(limit))),
+            ..Self::default()
+        }
+    }
+
+    pub fn sampler_retained_bytes(&self) -> usize {
+        self.sampler_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .used()
+    }
+
+    /// Accepted tape/range/source edits evict unused cache references. Plans,
+    /// active voices and pending jobs keep their banks charged independently.
+    pub fn prune_sampler_preparation(&self, project: &windfall_project::Project) {
+        self.sampler_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .prune(project, |id| self.get(id).cloned());
+    }
+
+    pub(crate) fn sampler_bank(
+        &self,
+        settings: &windfall_project::SamplerSettings,
+    ) -> Option<Arc<SamplerBank>> {
+        let source = self.get(settings.sample?)?;
+        self.sampler_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(source, settings)
+    }
+
+    pub fn needs_sampler_preparation(&self, project: &windfall_project::Project) -> bool {
+        project.channels.iter().any(|channel| {
+            let windfall_project::ChannelSource::Sampler(settings) = &channel.source else {
+                return false;
+            };
+            matches!(
+                settings.stretch,
+                windfall_project::SamplerStretch::Spectral { .. }
+            ) && settings
+                .sample
+                .and_then(|id| self.get(id))
+                .is_some_and(|source| source.frames() > 0)
+                && self.sampler_bank(settings).is_none()
+        })
+    }
+
+    /// Prepares a private candidate cache. Failed/cancelled/stale jobs never
+    /// change the live pool. Only requested banks survive cache replacement.
+    pub fn prepare_samplers(
+        &self,
+        project: &windfall_project::Project,
+        keep_going: &mut dyn FnMut() -> bool,
+        progress: &mut dyn FnMut(windfall_project::ChannelId, u8, u8),
+    ) -> Result<Self, SamplerPreparationError> {
+        let mut cache = self
+            .sampler_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fresh();
+        for channel in &project.channels {
+            let windfall_project::ChannelSource::Sampler(settings) = &channel.source else {
+                continue;
+            };
+            if !matches!(
+                settings.stretch,
+                windfall_project::SamplerStretch::Spectral { .. }
+            ) {
+                continue;
+            }
+            let Some(source) = settings
+                .sample
+                .and_then(|id| self.get(id))
+                .filter(|audio| audio.frames() > 0)
+            else {
+                continue;
+            };
+            if cache.get(source, settings).is_some() {
+                continue;
+            }
+            let bank = match self.sampler_bank(settings) {
+                Some(bank) => bank,
+                None => crate::sampler_processing::prepare(
+                    source,
+                    settings,
+                    &cache.budget,
+                    keep_going,
+                    &mut |done, total| progress(channel.id, done, total),
+                )?,
+            };
+            cache.insert(bank);
+        }
+        let mut result = self.clone();
+        result.sampler_audio = Arc::new(Mutex::new(cache));
+        Ok(result)
+    }
+
+    /// Installs worker results only after the session has checked its tickets.
+    pub fn install_sampler_preparation(&mut self, prepared: &Self) {
+        self.sampler_audio = prepared.sampler_audio.clone();
+    }
     /// Installs the control-side native plugin provider used by playback and render.
     pub fn set_plugin_factory(&mut self, factory: Arc<dyn crate::plugins::PluginFactory>) {
         self.plugin_factory = Some(factory);

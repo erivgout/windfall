@@ -36,10 +36,12 @@ afterEach(() => {
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
     resolve = done
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 it("selects every chopped piece after deferred revision-gap recovery", async () => {
@@ -89,17 +91,108 @@ it("drops a tool reply when the project changes during revision-gap recovery", a
     recovery.promise
   )
   openNoteTools("chop")
+  let completed: boolean | undefined
+  const work = applyNoteTool(useNoteTools.getState().request!, {
+    type: "chop",
+    grid: 240,
+  }).then((result) => {
+    completed = result
+    return result
+  })
+  await settle()
+  const committed = await original()
+  const resumed = refetchSnapshot()
+  await roll.backend.projectNew()
+  const replacement = useProjectStore.getState()
+  await settle()
+  try {
+    // Replacement ends the wait even while the old fetch remains pending.
+    expect(completed).toBe(false)
+    expect(useProjectStore.getState().project).toEqual(replacement.project)
+    expect(useProjectStore.getState().history).toEqual(replacement.history)
+    expect(roll.editor.selectionCount).toBe(0)
+  } finally {
+    recovery.resolve(committed)
+    await resumed
+    await work
+  }
+  expect(useProjectStore.getState().project).toEqual(replacement.project)
+})
+
+it("ends a failed recovery without following IDs and permits a later retry", async () => {
+  const original = roll.backend.documentSnapshot.bind(roll.backend)
+  const old = await original()
+  await roll.backend.dispatch({
+    type: "updateSettings",
+    patch: { name: "Missed event" },
+  })
+  loadSnapshot(old)
+  const recovery = deferred<DocumentSnapshot>()
+  vi.spyOn(roll.backend, "documentSnapshot").mockReturnValueOnce(
+    recovery.promise
+  )
+  openNoteTools("chop")
   const work = applyNoteTool(useNoteTools.getState().request!, {
     type: "chop",
     grid: 240,
   })
   await settle()
-  const committed = await original()
-  await roll.backend.projectNew()
-  const replacement = useProjectStore.getState()
-  recovery.resolve(committed)
+  recovery.reject(new Error("Snapshot unavailable"))
   expect(await work).toBe(false)
-  expect(useProjectStore.getState().project).toEqual(replacement.project)
-  expect(useProjectStore.getState().history).toEqual(replacement.history)
-  expect(roll.editor.selectionCount).toBe(0)
+  expect(roll.editor.busy).toBe(false)
+  expect(notesOf("Lead")).toHaveLength(1)
+  await refetchSnapshot()
+  expect(notesOf("Lead")).toHaveLength(2)
+  expect(useProjectStore.getState().project.settings.name).toBe("Missed event")
+  expect(roll.editor.selectionCount).toBe(1)
+})
+
+it("finishes Chop when its revision is mirrored while later recovery continues", async () => {
+  const original = roll.backend.documentSnapshot.bind(roll.backend)
+  const old = await original()
+  await roll.backend.dispatch({
+    type: "updateSettings",
+    patch: { name: "Missed event" },
+  })
+  loadSnapshot(old)
+  const first = deferred<DocumentSnapshot>()
+  const later = deferred<DocumentSnapshot>()
+  const snapshot = vi
+    .spyOn(roll.backend, "documentSnapshot")
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(later.promise)
+  openNoteTools("chop")
+  let completed: boolean | undefined
+  const work = applyNoteTool(useNoteTools.getState().request!, {
+    type: "chop",
+    grid: 240,
+  }).then((result) => {
+    completed = result
+    return result
+  })
+  await settle()
+  const chopped = await original()
+  await roll.backend.dispatch({
+    type: "updateSettings",
+    patch: { name: "Later edit" },
+  })
+  const recovery = refetchSnapshot()
+  first.resolve(chopped)
+  await settle()
+  try {
+    expect(snapshot).toHaveBeenCalledTimes(2)
+    expect(useProjectStore.getState().revision).toBe(chopped.revision)
+    expect(completed).toBe(true)
+    expect([...roll.editor.selection].sort()).toEqual(
+      notesOf("Lead")
+        .map((n) => n.id)
+        .sort()
+    )
+  } finally {
+    // The later, unrelated recovery is independent but still must finish.
+    later.resolve(await original())
+    await recovery
+    await work
+  }
+  expect(useProjectStore.getState().project.settings.name).toBe("Later edit")
 })

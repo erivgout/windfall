@@ -35,7 +35,8 @@ export function LibraryControls() {
   const roots = useBrowserStore((s) => s.roots)
   const rootsStatus = useBrowserStore((s) => s.rootsStatus)
   const filter = useBrowserStore((s) => s.filter)
-  const { favoritesOnly, tags, results, error, revision } = useLibraryStore()
+  const { favoritesOnly, tags, results, error, revision, epoch } =
+    useLibraryStore()
   const tag = tags[0] ?? ""
   const availableTags = [
     ...new Set([...(results?.availableTags ?? []), ...tags]),
@@ -46,18 +47,19 @@ export function LibraryControls() {
     let timer: ReturnType<typeof setTimeout>
     useLibraryStore.setState({ pending: true, error: null, results: null })
     async function search() {
+      if (epoch !== useLibraryStore.getState().epoch) return
       try {
         const results = await backend.librarySearch({
           query: filter,
           favoritesOnly,
           tags,
         })
-        if (!current) return
+        if (!current || epoch !== useLibraryStore.getState().epoch) return
         useLibraryStore.setState({ results, pending: false, error: null })
         if (results.status === "indexing")
           timer = setTimeout(() => void search(), 250)
       } catch (error) {
-        if (current)
+        if (current && epoch === useLibraryStore.getState().epoch)
           useLibraryStore.setState({
             pending: false,
             error: errorMessage(error),
@@ -70,7 +72,7 @@ export function LibraryControls() {
       current = false
       clearTimeout(timer)
     }
-  }, [roots, rootsStatus, filter, favoritesOnly, tags, revision])
+  }, [roots, rootsStatus, filter, favoritesOnly, tags, revision, epoch])
 
   return (
     <div className="flex max-h-48 shrink-0 flex-col gap-1 overflow-y-auto border-b p-1.5">

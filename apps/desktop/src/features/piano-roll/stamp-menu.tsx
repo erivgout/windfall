@@ -1,0 +1,150 @@
+import { useEffect, useRef, useSyncExternalStore } from "react"
+
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { useSession } from "./context"
+import type { PendingStampChoice } from "./editor"
+import { CHORD_STAMPS, SCALE_STAMPS, type Stamp } from "./stamps"
+import { usePianoRollStore } from "./store"
+
+export function StampMenu() {
+  const session = useSession()
+  const { editor } = session
+  const pending = useRef<PendingStampChoice | null>(null)
+  const state = useSyncExternalStore(
+    (listener) => editor.subscribe(listener),
+    () => editor.stampState,
+    () => null
+  )
+  const choose = (stamp: Stamp) => {
+    pending.current = editor.deferStamp(stamp)
+  }
+
+  useEffect(() => {
+    const cancelPending = () => pending.current?.cancel()
+    const onKeyDown = (event: KeyboardEvent) => {
+      // The closing menu may still own focus, so the grid keymap can ignore Esc.
+      if (event.key === "Escape") cancelPending()
+    }
+    const stopTool = usePianoRollStore.subscribe((next, previous) => {
+      if (next.tool !== previous.tool) cancelPending()
+    })
+    window.addEventListener("blur", cancelPending)
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      cancelPending()
+      stopTool()
+      window.removeEventListener("blur", cancelPending)
+      window.removeEventListener("keydown", onKeyDown)
+    }
+  }, [editor])
+
+  return (
+    <>
+      <DropdownMenu
+        onOpenChangeComplete={(open) => {
+          if (open) return
+          const chosen = pending.current
+          pending.current = null
+          // Closing menus manage focus until their exit transition completes.
+          if (chosen?.complete()) session.focusGrid()
+        }}
+      >
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant={state ? "secondary" : "outline"}
+              size="sm"
+              aria-label="Choose chord or scale stamp"
+            />
+          }
+        >
+          Stamp
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-80">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>
+              Choose a pattern, then click its root in the grid
+            </DropdownMenuLabel>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Chords</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-64">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Simultaneous notes</DropdownMenuLabel>
+                  {CHORD_STAMPS.map((stamp) => (
+                    <DropdownMenuItem
+                      key={stamp.id}
+                      onClick={() => choose(stamp)}
+                    >
+                      {stamp.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            {(["ascending", "descending"] as const).map((direction) => (
+              <DropdownMenuSub key={direction}>
+                <DropdownMenuSubTrigger>
+                  {direction === "ascending"
+                    ? "Ascending scales"
+                    : "Descending scales"}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-72">
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel>
+                      One note length per scale step
+                    </DropdownMenuLabel>
+                    {SCALE_STAMPS.filter(
+                      (stamp) => stamp.layout === direction
+                    ).map((stamp) => (
+                      <DropdownMenuItem
+                        key={stamp.id}
+                        onClick={() => choose(stamp)}
+                      >
+                        {stamp.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ))}
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {state && (
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label="Cancel stamp placement"
+            onClick={() => {
+              editor.cancel()
+              session.focusGrid()
+            }}
+          >
+            Cancel
+          </Button>
+          <span
+            role="status"
+            aria-label="Stamp placement"
+            className="max-w-80 shrink-0 truncate text-muted-foreground"
+            title={state.error ?? undefined}
+          >
+            {state.error ??
+              `${state.stamp.label}: click to place · Esc cancels`}
+          </span>
+        </>
+      )}
+    </>
+  )
+}

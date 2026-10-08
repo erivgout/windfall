@@ -13,6 +13,7 @@ import { attempt, refuse } from "@/lib/errors"
 import { backend } from "@/lib/ipc"
 import { newGestureId } from "@/lib/store/gesture"
 import { dispatch, receivePatch, useProjectStore } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
 import { MASTER_TRACK, MAX_MIXER_TRACKS } from "@/lib/units"
 
 import { clipInits, spanFits, tracksNeeded, type NewClip } from "../edit"
@@ -98,9 +99,14 @@ export function patchSelectedAudioClips(
 export async function addAudioFile(
   path: string,
   place: { row?: number; start: number },
-  browser?: LibraryFileToken
+  browser?: LibraryFileToken,
+  current: () => boolean = () => true
 ): Promise<ClipId | null> {
+  const generation = getProjectGeneration()
+  const valid = () => generation === getProjectGeneration() && current()
+  if (!valid()) return null
   const mixerTrack = await mixerTrackForFile(path)
+  if (!valid()) return null
   const track =
     place.row === undefined ? undefined : playlist().tracks[place.row]?.id
   const target = {
@@ -114,7 +120,7 @@ export async function addAudioFile(
       : backend.addAudioClipFromFile(path, target),
     "Could not add the sound to the playlist"
   )
-  if (!result) return null
+  if (!result || !valid()) return null
   // The same patch also arrives as an event; the store ignores the repeat.
   receivePatch(result.patch)
   const clip = result.created.at(-1)

@@ -38,7 +38,8 @@ impl Session {
                 })?;
             }
         }
-        let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool);
+        let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool)
+            .map_err(|error| error.to_string())?;
         #[cfg(test)]
         self.pause("clip:prepared");
         let _recording = self.recording_idle()?;
@@ -137,10 +138,31 @@ impl Session {
                     state.edits,
                 )
             };
-            let prepared = windfall_engine::Controller::prepare_project(&project, &pool);
+            if pool.needs_sampler_preparation(&project) {
+                // A source reload belongs to the sampler's recording/request
+                // guarded worker, even when a clip worker was already running.
+                let state = self.state();
+                self.inner
+                    .preparing_clips
+                    .store(false, std::sync::atomic::Ordering::Release);
+                self.push_project(&state);
+                return;
+            }
+            let prepared = match windfall_engine::Controller::prepare_project(&project, &pool) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.emit(crate::events::Event::ProjectWarnings(vec![
+                        error.to_string(),
+                    ]));
+                    self.inner
+                        .preparing_clips
+                        .store(false, std::sync::atomic::Ordering::Release);
+                    return;
+                }
+            };
             #[cfg(test)]
             self.pause("clip:background-prepared");
-            let state = self.state();
+            let mut state = self.state();
             if state.generation != generation
                 || state.edits != edits
                 || state.pool.iter().any(|(id, audio)| {
@@ -150,6 +172,9 @@ impl Session {
             {
                 continue;
             }
+            state
+                .pool
+                .install_sampler_preparation(prepared.sampler_pool());
             self.controller()
                 .set_prepared_project(state.document.project(), prepared);
             self.sync_transport();

@@ -408,7 +408,7 @@ impl InstanceBackend for ClapInstance {
         )))
     }
 
-    fn deactivate(&mut self, processor: Option<Box<dyn ProcessorBackend>>) {
+    fn finish_deactivation(&mut self, processor: Option<Box<dyn ProcessorBackend>>) {
         let processor = processor.and_then(|processor| {
             processor
                 .into_any()

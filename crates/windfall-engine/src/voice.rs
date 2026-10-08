@@ -396,6 +396,7 @@ struct Voice {
     /// Held for as long as the voice may read it. A stopped voice can still
     /// hold its sample for a moment when there was no room to hand it back.
     sample: Option<AudioBuffer>,
+    bank: Option<std::sync::Arc<crate::sampler_processing::SamplerBank>>,
     origin: Origin,
     /// The channel that started the voice. Meaningless for a preview.
     channel: ChannelId,
@@ -435,6 +436,7 @@ impl Voice {
         Self {
             active: false,
             sample: None,
+            bank: None,
             origin: Origin::Sequenced,
             channel: ChannelId(0),
             route: Route::Master,
@@ -463,6 +465,7 @@ impl Voice {
     fn copy(&self) -> Self {
         Self {
             sample: self.sample.clone(),
+            bank: self.bank.clone(),
             ..*self
         }
     }
@@ -604,7 +607,12 @@ impl VoicePool {
     pub fn start(&mut self, plan: &Plan, garbage: &mut Producer<Garbage>, note: Note, now: u64) {
         let channel = &plan.channels[note.channel];
         let sampler = &channel.sampler;
-        let Some(sample) = &sampler.sample else {
+        let selected = if sampler.spectral {
+            sampler.bank.as_ref().and_then(|bank| bank.at(note.key))
+        } else {
+            sampler.sample.as_ref()
+        };
+        let Some(sample) = selected else {
             return;
         };
 
@@ -635,10 +643,15 @@ impl VoicePool {
         let Some(slot) = self.free_slot(plan, garbage) else {
             return;
         };
-        let pitch = 2.0_f64.powf(f64::from(f32::from(note.key) + sampler.key_offset) / 12.0);
+        let pitch = if sampler.spectral {
+            1.0
+        } else {
+            2.0_f64.powf(f64::from(f32::from(note.key) + sampler.key_offset) / 12.0)
+        };
         self.voices[slot] = Voice {
             active: true,
             sample: Some(sample.clone()),
+            bank: sampler.bank.clone(),
             origin: note.origin,
             channel: channel.id,
             route: Route::Channel(note.channel),
@@ -647,9 +660,13 @@ impl VoicePool {
             started: now,
             end: note.end,
             region: Region {
-                first: sampler.start,
-                frames: sampler.end - sampler.start,
-                reverse: sampler.reverse,
+                first: if sampler.spectral { 0 } else { sampler.start },
+                frames: if sampler.spectral {
+                    sample.frames()
+                } else {
+                    sampler.end - sampler.start
+                },
+                reverse: !sampler.spectral && sampler.reverse,
             },
             position: 0.0,
             loop_region: sampler.loop_region,
@@ -696,6 +713,7 @@ impl VoicePool {
             step: f64::from(sample.sample_rate()) / self.sample_rate,
             gain: self.preview_gain,
             sample: Some(sample),
+            bank: None,
             ..Voice::idle()
         };
         None
@@ -971,6 +989,19 @@ impl VoicePool {
         let Some(sample) = voice.sample.take() else {
             return;
         };
+        if let Some(bank) = voice.bank.take() {
+            if plan.holds_sampler_bank(&bank) {
+                drop(sample);
+                drop(bank);
+            } else if garbage.is_full() {
+                voice.sample = Some(sample);
+                voice.bank = Some(bank);
+            } else {
+                drop(sample); // the bank still retains this buffer
+                retire(garbage, Garbage::SamplerBank(bank));
+            }
+            return;
+        }
         if plan.holds(&sample) {
             // The plan keeps the audio alive, so this drop frees nothing.
             drop(sample);

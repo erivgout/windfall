@@ -17,6 +17,11 @@ pub mod session;
 pub mod settings;
 mod shell;
 mod sync;
+#[cfg(test)]
+mod test_alloc;
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: test_alloc::CountingAllocator = test_alloc::CountingAllocator;
 pub mod template;
 
 use tauri::{Manager, WindowEvent};

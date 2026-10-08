@@ -250,9 +250,10 @@ pub fn check_in_process(path: &Path, id: &str, out: &mut dyn Write) {
         // VST3 component state is a main-thread operation that must not
         // race process. Return ownership before saving/restoring either format.
         processor.stop();
-        instance.deactivate(processor);
         instance
-            .save_state()
+            .deactivate(processor)
+            .map_err(|error| error.error)
+            .and_then(|()| instance.save_state())
             .and_then(|saved| {
                 instance.load_state(&saved)?;
                 let again = instance.save_state()?;
@@ -276,10 +277,14 @@ pub fn check_in_process(path: &Path, id: &str, out: &mut dyn Write) {
 
     stage!(CheckStep::Deactivate, {
         processor.stop();
-        instance.deactivate(processor);
+        let result = instance
+            .deactivate(processor)
+            .map_err(|error| error.to_string());
         let inactive = !instance.is_active();
         drop(instance);
-        if inactive {
+        if let Err(error) = result {
+            Err(error)
+        } else if inactive {
             Ok(((), "deactivated and destroyed".to_owned()))
         } else {
             Err("the plugin stayed active".to_owned())

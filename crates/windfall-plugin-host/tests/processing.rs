@@ -72,7 +72,7 @@ fn an_effect_that_allows_it_is_processed_in_place() {
         assert_eq!(right[frame], dry_right[frame] * 0.5);
     }
     assert_eq!(instance.param_value(gain::IN_PLACE), Some(1.0));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
     assert!(!instance.is_active());
 }
 
@@ -96,7 +96,7 @@ fn a_parameter_change_lands_on_its_frame() {
     right.fill(1.0);
     processor.process(&mut left, &mut right);
     assert!(left.iter().all(|&sample| sample == 2.0));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn a_long_block_is_split_and_its_events_stay_on_their_frames() {
     assert!(left[64..777].iter().all(|&sample| sample == 0.25));
     assert!(left[777..999].iter().all(|&sample| sample == 1.5));
     assert_eq!(left[999], 0.125);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn notes_start_and_stop_on_their_frames_and_latency_is_reported() {
             channel: 0
         }]
     );
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -188,7 +188,7 @@ fn a_note_that_spans_blocks_keeps_its_phase() {
         let expected = sine(60, frame - SINE_LATENCY) * 0.5 * 0.5;
         assert!((sample - expected).abs() < 1.0e-6, "frame {frame}");
     }
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn a_plugin_that_only_speaks_midi_gets_midi() {
     right.fill(0.0);
     processor.process(&mut left, &mut right);
     assert!(left[SINE_LATENCY..].iter().all(|&sample| sample == 0.0));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn all_notes_off_silences_a_clap_instrument() {
     processor.push_event(HostEvent::AllNotesOff { time: 0 });
     processor.process(&mut left, &mut right);
     assert!(left[SINE_LATENCY..].iter().all(|&sample| sample == 0.0));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn a_plugin_that_forbids_it_is_not_processed_in_place() {
     processor.process(&mut left, &mut right);
     assert_eq!(left, dry_right);
     assert_eq!(right, dry_left);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn every_port_a_plugin_declares_gets_a_buffer() {
     assert!(!processor.health().failed);
     // The plugin's tail extension is read on the audio thread.
     assert_eq!(processor.tail_samples(), Some(4_800));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn a_mono_plugin_gets_the_sum_and_feeds_both_sides() {
         assert_eq!(left[frame], expected);
         assert_eq!(right[frame], expected);
     }
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn the_plugin_is_told_where_the_song_is() {
     processor.set_tempo(90.0);
     processor.process(&mut left, &mut right);
     assert_eq!(instance.param_value(gain::TEMPO), Some(90.0));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn denormals_are_flushed_while_the_plugin_runs_and_not_after() {
     }
     let tiny = std::hint::black_box(f32::MIN_POSITIVE) * std::hint::black_box(0.5_f32);
     assert!(tiny > 0.0, "the host's own arithmetic is left as it was");
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn a_plugin_can_be_activated_again_at_another_rate() {
         let quarter = SINE_LATENCY + (rate / 440.0 / 4.0).round() as usize;
         assert!((left[quarter] - 0.5).abs() < 1.0e-3, "{}", left[quarter]);
         processor.stop();
-        instance.deactivate(processor);
+        instance.deactivate(processor).unwrap();
     }
 }
 
@@ -371,7 +371,7 @@ fn reset_ends_notes_and_forgets_queued_events() {
     processor.reset();
     processor.process(&mut left, &mut right);
     assert!(left.iter().all(|&sample| sample == 0.0));
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }
 
 #[test]
@@ -380,9 +380,10 @@ fn a_processor_from_another_plugin_is_refused() {
     let (_second_module, mut second) = create(GAIN);
     let processor = first.activate(RATE, 64).unwrap();
     let other = second.activate(RATE, 64).unwrap();
-    first.deactivate(other);
+    let other = first.deactivate(other).unwrap_err().returned;
+    second.deactivate(other).unwrap();
     assert!(first.is_active(), "the wrong processor changed nothing");
-    first.deactivate(processor);
+    first.deactivate(processor).unwrap();
     assert!(!first.is_active());
 }
 
@@ -410,5 +411,5 @@ fn invalid_events_do_not_cross_the_plugin_abi() {
     processor.process(&mut left, &mut right);
     assert_eq!(left, [1.0; 64]);
     assert_eq!(processor.health().dropped_events, 5);
-    instance.deactivate(processor);
+    instance.deactivate(processor).unwrap();
 }

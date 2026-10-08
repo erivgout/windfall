@@ -155,6 +155,35 @@ fn effects_never_allocate_after_prepare() {
 }
 
 #[test]
+fn rapid_matrix_edits_across_every_prepared_tap_never_allocate_or_free() {
+    let mut slot = EffectSlot::new(AnyEffect::new(&EffectKind::StereoMatrix.default_params()));
+    slot.prepare(48_000.0, 1);
+    slot.set_mix(0.5);
+    let (mut left, mut right) = ([1.0], [-1.0]);
+    let calls = allocator_calls(|| {
+        // Distinct taps on every sample fill the entire 0..=2400 bound;
+        // repeated visits must merge entries rather than grow the mixture.
+        for n in 0..4802 {
+            let delay = (n % 2401) as f32 / 48.0;
+            slot.set_params(&EffectParams::StereoMatrix(StereoMatrixParams {
+                left_delay_ms: delay,
+                right_delay_ms: delay,
+                ..Default::default()
+            }));
+            left[0] = 1.0;
+            right[0] = -1.0;
+            slot.process(&mut left, &mut right);
+        }
+        slot.set_enabled(false);
+        slot.set_mix(0.0);
+        slot.reset();
+        slot.process(&mut left, &mut right);
+    });
+    assert_eq!(calls, 0, "full prepared tap range touched the allocator");
+    assert!(left[0].is_finite() && right[0].is_finite());
+}
+
+#[test]
 fn a_slot_longer_than_its_prepared_block_still_does_not_allocate() {
     let mut slot = EffectSlot::new(AnyEffect::new(&EffectKind::Reverb.default_params()));
     slot.prepare(44_100.0, 64);

@@ -103,6 +103,36 @@ describe("limiter latency", () => {
     ).toBe(240 + 72)
   })
 
+  it("counts rounded shared matrix delay and distortion even when bypassed or dry", () => {
+    const matrix: EffectSlot = {
+      id: 3,
+      enabled: false,
+      mix: 0,
+      params: {
+        ...effectDescriptor("stereoMatrix").defaults,
+        leftDelayMs: 2,
+        rightDelayMs: 5,
+      },
+    }
+    const distortion: EffectSlot = {
+      id: 4,
+      enabled: false,
+      mix: 0,
+      params: effectDescriptor("distortion").defaults,
+    }
+    expect(chainLatencyFrames([matrix, eq, distortion], 48_000)).toBe(128)
+    expect(chainLatencyFrames([matrix, distortion], 44_100)).toBe(120)
+    expect(chainLatencyFrames([matrix, distortion, limiter(1.5)], 96_000)).toBe(
+      368
+    )
+    matrix.params = {
+      ...effectDescriptor("stereoMatrix").defaults,
+      leftDelayMs: 0,
+      rightDelayMs: 5,
+    }
+    expect(chainLatencyFrames([matrix, distortion], 48_000)).toBe(32)
+  })
+
   it("prints frames with the time they take", () => {
     expect(formatLatency(240, 48_000)).toBe("5.0 ms (240 samples)")
     expect(formatLatency(1, 48_000)).toBe("0.0 ms (1 sample)")

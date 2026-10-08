@@ -9,6 +9,73 @@ use super::{Session, State};
 use crate::events::Event;
 
 impl Session {
+    /// Native notifications schedule here; neither State nor owner idle waits
+    /// for a processor. Recording exclusion covers the joined owner lifetime.
+    pub(crate) fn capture_plugin_update(
+        &self,
+        runtime: &crate::plugins::Runtime,
+        request: crate::plugins::PendingUpdate,
+    ) -> Result<bool, String> {
+        let crate::plugins::Update::Capture { target, .. } = request.update else {
+            return Err("Not a native state request".into());
+        };
+        let _recording = self.recording_idle()?;
+        let current = |state: &State| {
+            runtime.is_current(request.revision, request.token)
+                && state
+                    .document
+                    .project()
+                    .plugin(target)
+                    .is_some_and(|binding| {
+                        crate::plugins::binding_identity(binding) == request.binding
+                    })
+        };
+        {
+            let state = self.state();
+            if !current(&state) {
+                return Ok(false);
+            }
+        }
+        let Some(captured) = runtime.capture_pending(request.clone())? else {
+            return Ok(false);
+        };
+        let mut state = self.state();
+        if !current(&state) {
+            return Ok(false);
+        }
+        let binding = state
+            .document
+            .project()
+            .plugin(target)
+            .expect("checked binding");
+        let mut commands: Vec<_> = captured
+            .parameters
+            .into_iter()
+            .filter(|(id, _)| {
+                binding
+                    .parameters
+                    .iter()
+                    .any(|param| param.id == *id && !param.read_only)
+            })
+            .map(|(id, value)| Command::SetPluginParam { target, id, value })
+            .collect();
+        commands.push(Command::SetPluginState {
+            target,
+            state: captured.bytes,
+        });
+        let applied = state
+            .document
+            .dispatch(
+                Command::Batch {
+                    label: Some("Native plugin state".into()),
+                    commands,
+                },
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        self.publish(&mut state, &applied.touched);
+        Ok(captured.restart)
+    }
     pub fn document_snapshot(&self) -> DocumentSnapshot {
         let state = self.state();
         state.document.snapshot(state.path_text())
@@ -23,6 +90,15 @@ impl Session {
     ) -> Result<DispatchResult, String> {
         let _recording = self.recording_idle()?;
         let mut state = self.state();
+        let mut candidate = state.document.clone();
+        candidate
+            .dispatch(command.clone(), gesture)
+            .map_err(|error| error.to_string())?;
+        if state.pool.needs_sampler_preparation(candidate.project()) {
+            drop(state);
+            drop(_recording);
+            return self.prepare_sampler_edit(command, gesture, None);
+        }
         let applied = state
             .document
             .dispatch(command, gesture)
@@ -181,6 +257,9 @@ impl Session {
                 }
             }
             if let Some(prepared) = prepared {
+                state
+                    .pool
+                    .install_sampler_preparation(prepared.sampler_pool());
                 self.controller()
                     .set_prepared_project(state.document.project(), prepared);
                 self.sync_transport();
@@ -196,6 +275,16 @@ impl Session {
     /// transport off a pattern that no longer exists, and the UI is told of
     /// that before it hears of the edit that removed the pattern.
     pub(super) fn push_project(&self, state: &State) {
+        if state
+            .pool
+            .needs_sampler_preparation(state.document.project())
+        {
+            self.queue_sampler_preparation();
+            return;
+        }
+        state
+            .pool
+            .prune_sampler_preparation(state.document.project());
         if let Some(pool) = state.pool.cached_clip_pool(state.document.project()) {
             self.controller()
                 .set_project(state.document.project(), &pool);
@@ -226,8 +315,8 @@ impl Session {
     // its target snapshot before reacquiring the session lock as well.
     fn prepare_history(&self, action: HistoryMove) -> Option<ProjectPatch> {
         drop(self.recording_idle().ok()?);
-        loop {
-            let (mut document, mut pool, directory, generation, edits) = {
+        for _ in 0..8 {
+            let (mut document, mut pool, directory, generation, edits, replacements) = {
                 let state = self.state();
                 (
                     state.document.clone(),
@@ -235,6 +324,7 @@ impl Session {
                     state.sample_dir.clone(),
                     state.generation,
                     state.edits,
+                    state.replacements,
                 )
             };
             action.apply(&mut document)?;
@@ -247,10 +337,22 @@ impl Session {
                     pool.insert(asset.id, audio);
                 }
             }
-            let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool);
+            let prepared =
+                match windfall_engine::Controller::prepare_project(document.project(), &pool) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        self.emit(Event::ProjectWarnings(vec![error.to_string()]));
+                        return None;
+                    }
+                };
+            #[cfg(test)]
+            self.pause("sampler:history-prepared");
             let _recording = self.recording_idle().ok()?;
             let mut state = self.state();
-            if state.generation != generation || state.edits != edits {
+            if state.generation != generation || state.replacements != replacements {
+                return None;
+            }
+            if state.edits != edits {
                 continue;
             }
             // Existing sources must also still be the ones compiled.
@@ -263,5 +365,9 @@ impl Session {
             let touched = action.apply(&mut state.document)?;
             return Some(self.publish_prepared(&mut state, &touched, prepared));
         }
+        self.emit(Event::ProjectWarnings(vec![
+            "Sampler history preparation was superseded by repeated edits. Try again.".into(),
+        ]));
+        None
     }
 }

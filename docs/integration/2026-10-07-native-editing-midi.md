@@ -69,7 +69,8 @@ Native file tokens check root generation and filesystem identity for audition,
 waveform and rack/playlist/replacement imports. See
 [browser library](../BROWSER-LIBRARY.md) for bounds and deliberate limits.
 
-The combined artifacts contain 155 TypeScript files and a 1,743,421-byte WASM
+The combined artifacts contain 155 binding files (153 TypeScript and two JSON)
+and a 1,743,421-byte WASM
 module. Parent browser/rack/playlist-import UI checks passed all 403 tests
 across 20 files, followed by ESLint and the production TypeScript/Vite build.
 Native library and sample-cache checks passed 16 and 14 tests respectively.
@@ -109,7 +110,8 @@ including 11 actual-inspector regressions, plus typecheck and focused lint.
 Independent editing round three and document-reply round two are pending.
 
 Seven measured utility effects `3181d87a` are merged through `5254a40e`.
-The parent regenerated 163 TypeScript files and the shared browser WASM to
+The parent regenerated 163 binding files (161 TypeScript and two JSON) and the
+shared browser WASM to
 1,775,678 bytes. [Utility effects](../UTILITY-EFFECTS.md) records the worker's
 signal, smoothing, allocation, latency, aliasing and throughput evidence;
 combined parent validation and independent review remain pending.
@@ -143,4 +145,119 @@ progress, totaling 57 done, 54 in progress, 229 todo and two won't-do rows.
 All changes remain local pending open review repairs and validation. The
 private repository and immutable `v0.1.0-alpha.1` release are unchanged.
 
-Production VST3 additions remain disabled. Dirty-state scheduling, events during capture and fallible native deactivation are being implemented separately. MIDI note recording/controller mapping/sequenced output, playable slice mapping, advanced audio-editor tools and independent sampler stretch remain unfinished. Physical MIDI/audio hardware, installed native UI and new macOS/Linux desktop workflows have not been verified by these synthetic tests. Hosted CI evidence for the earlier sampler/portability commit is recorded separately from these unpublished feature changes.
+At this portable-file checkpoint, production VST3 additions remained disabled;
+the later delivery below supersedes that gate state. MIDI note recording/
+controller mapping/sequenced output, playable slice mapping, advanced audio-
+editor tools and independent sampler stretch remain unfinished. Physical MIDI/
+audio hardware, installed native UI and new macOS/Linux desktop workflows have
+not been verified by these synthetic tests. Hosted CI evidence for the earlier
+sampler/portability commit is recorded separately from these unpublished changes.
+
+## Recovery follow-up and VST3 delivery
+
+Editing review round three closed the inspector lifetime finding. Its delayed
+browser-token wrong-document reproduction is the same P1 already assigned to
+the browser repair owner. Document-reply review round two closed the New/Open
+and original Chop-selection findings but reproduced a new starvation case:
+dispatch awaited later recursive recovery even after its own result was mirrored.
+
+Parent repair `314ac502` waits for its captured generation and own revision,
+while later recovery proceeds independently. Deferred real-WASM regressions
+cover continuing edits, immediate replacement cancellation and failed recovery
+followed by retry. The starvation case failed before repair. After repair, 63
+focused tests, ESLint and TypeScript/Vite build passed; the full combined UI
+suite at that source passed **2,274 tests across 148 files**. The prior full run's
+only failure was an inventory count expecting 122 automation ranges rather than
+141 after the utility additions. The forward/inverse value checks were retained.
+Independent document-reply review round three closed starvation and preserved
+the earlier fixes, with 23 pinned in-memory checks passing. No actionable issue
+remained in revision waits, listener cleanup, replacement ordering, failed-fetch
+retry, created-ID following or loaded-event authority.
+
+Portable review found a P1 where ZIP parser fallback can select metadata outside
+the preflighted directory, and a P2 where a timestamp-shaped backup base name
+produces mismatched numbered-save sample roots. One dedicated repair task owns
+both bounded regressions and fixes. Utility review found three P2 issues in
+asymmetric-delay unbypass warmup, rapid delay retargeting, and UI chain latency
+accounting. Another dedicated task owns those repairs. Their rows remain in
+progress.
+
+The first combined native suite at `bfe1be6c` passed 1,405 tests with five ignored
+before stopping at the VST3 scanner's six-versus-seven fixture-class assertion.
+The source defined six classes, but the test copied a seven-class DLL from the
+older fixture cache. Removing only the fixture package's cached build artifacts
+(23.3 MiB) and rerunning that scanner test passed. No assertion was relaxed.
+The full suite had not reached its Clippy/format stages; this is not a native
+workspace-green claim.
+
+VST3 delivery `7476b074` was cherry-picked as `72718071`. Scanned VST3 additions
+are now enabled. Deferred native state capture carries token/revision/binding
+identity through recording exclusion; queued owner jobs cancel safely, and
+already-running native calls are joined through recovery. Fallible deactivation
+returns exact ownership on refusal. Bounded desired parameter/current-note
+reconciliation also fixes the independently reproduced committed CLAP parameter
+loss under saturation. The worker passed 106 host, 202 desktop, 314 engine and
+six plugin UI tests, plus scoped strict Clippy, formatting, types and lint.
+These are worker results at the feature commit. Independent runtime review round
+three found three additional P2 issues: save-before-drain capture can replace a
+committed parameter with an older native value, bundle validation stamps the
+directory rather than its inner binary, and full multi-channel panic expansion
+can exceed native event capacity. The same runtime owner is reproducing and
+repairing them in its existing isolated T3 worktree. Live parameter delivery and
+the original CLAP panic/retirement findings remain closed. A fresh combined
+native suite at `72718071` is still running.
+
+The generated 163 bindings and 1,775,678-byte WASM remain current: no exported
+model/IPC/DSP descriptor or simulator dependency changed in the recovery/VST3
+repairs. Parent parity and simulator freshness checks passed. No new release,
+tag, visibility or access change was made. The batch remains local pending
+open review repairs and appropriate combined checks.
+
+## Scale and stamp integration
+
+Scale/stamp source `46de77e3` merged cleanly as `73149138`. Root/scale preferences,
+opt-in highlighting and pitch snap, rigid-group pitch policy, and atomic chord/
+single-octave scale stamps use existing project commands. No exported field or
+renderer shader changed. The worker passed 265 focused tests and browser/
+Canvas 2D/WebGL2 checks; WebGPU hardware and native Tauri windows remain untested.
+
+Parent checks at the merged source passed 281 tests in 15 piano/canvas/playlist/
+flow/store files, ESLint and the production TypeScript/Vite build. Six plugin UI
+tests and their focused lint also passed after the VST3 integration. Independent
+review passed 23 focused tests and additional real-WASM selection/lifetime
+checks, then reproduced two stamp defects: a choice awaiting menu exit can arm
+after blur/tool-change cancellation, and modifier keys can restore a preview
+after the pointer leaves the grid. The original scale/stamp owner is adding
+focused regressions and repairs. Scale guidance/snap has no actionable finding
+and is accepted; the stamp row remains in progress.
+
+The parent T3 preview reconnected on port 5190. At the merged source, the scale
+menu and chord choices were present, and Escape cancelled an armed major-triad
+stamp with Undo still disabled. Tap tempo showed four taps and 43.74 BPM while
+the project remained at 128 BPM with Undo disabled. Apply changed the displayed
+tempo to 43.74 and marked the document dirty; one Undo restored 128, the clean
+title and disabled Undo, with Redo available. This is browser/real-WASM UI
+evidence, not a physical device or native-window check.
+
+Six accepted piano rows are now done: quantize, glue, strum, key limit, flip and
+velocity scaling. Articulation retains pending portamento; chopping retains
+pending custom patterns despite its reviewed grid workflow. A new isolated T3
+task owns custom chopping, arpeggio, flam and rhythm-reshape transforms. Current
+accounting is 64 done, 49 in progress, 227 todo and two won't-do rows, preserving
+all 342 requirements. Open native/library/archive/utility findings still prevent
+publishing this batch as verified progress.
+
+## Native validation checkpoint before further repair merges
+
+The combined native suite at `72718071` completed with **1,777 passing tests and
+nine ignored tests**, then passed strict workspace/all-target Clippy and workspace
+formatting. Rust source remained unchanged through the scale/UI documentation
+commits at `8ff536a5`. This is Windows headless/fixture evidence; it does not
+close the independently found runtime, archive or utility behavior gaps.
+
+At `8ff536a5`, regeneration into a separate temporary directory exactly matched
+all checked-in bindings and fixtures. The 163 files comprise 161 TypeScript
+files and two JSON files; earlier references to 163 TypeScript files counted
+the JSON fixtures as well. Simulator freshness and parity checks also passed,
+with the WASM still 1,775,678 bytes. Subsequent source repairs require their own
+freshness and appropriate combined checks.
