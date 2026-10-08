@@ -90,7 +90,7 @@
         },
         {
           "name": "Authored release fixtures",
-          "run": "node --test --test-concurrency=1 release-tools/scripts/release/release.test.mjs"
+          "run": "node --test --test-concurrency=1 release-tools/scripts/release/release.test.mjs release-tools/scripts/release/workflow.test.mjs"
         },
         {
           "name": "Source and read-only published identity gate",
@@ -136,15 +136,21 @@
       },
       "env": {
         "CARGO_TARGET_DIR": "${{ github.workspace }}/source/target/release-r1-native",
-        "TS_RS_EXPORT_DIR": "${{ runner.temp }}/release-r1-bindings",
-        "CANDIDATE_OUTPUT": "${{ runner.temp }}/windfall-candidate-${{ matrix.platform }}-${{ matrix.architecture }}",
-        "SOURCE_CAPTURE": "${{ runner.temp }}/windfall-source-capture.json",
         "NATIVE_PLATFORM": "${{ matrix.platform }}",
         "NATIVE_ARCHITECTURE": "${{ matrix.architecture }}",
         "NATIVE_TARGET": "${{ matrix.target }}",
         "NATIVE_BUNDLES": "${{ matrix.bundles }}"
       },
       "steps": [
+        {
+          "name": "Resolve native runner paths for later steps",
+          "env": {
+            "TS_RS_EXPORT_DIR": "${{ runner.temp }}/release-r1-bindings",
+            "CANDIDATE_OUTPUT": "${{ runner.temp }}/windfall-candidate-${{ matrix.platform }}-${{ matrix.architecture }}",
+            "SOURCE_CAPTURE": "${{ runner.temp }}/windfall-source-capture.json"
+          },
+          "run": "printf 'TS_RS_EXPORT_DIR=%s\\nCANDIDATE_OUTPUT=%s\\nSOURCE_CAPTURE=%s\\n' \"$TS_RS_EXPORT_DIR\" \"$CANDIDATE_OUTPUT\" \"$SOURCE_CAPTURE\" >> \"$GITHUB_ENV\""
+        },
         {
           "name": "Checkout immutable workflow tools",
           "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",

@@ -4,8 +4,87 @@ import { fileURLToPath } from "node:url";
 import { check, fields, TARGETS } from "./contracts.mjs";
 import { parseJson } from "./files.mjs";
 
-// JSON is a YAML 1.2 subset. Keeping this workflow in that subset permits strict
-// dependency-free parsing, including duplicate-field detection.
+// JSON/YAML syntax does not establish GitHub expression-context validity.
+// These bounded scope checks follow GitHub's context-availability table and the
+// official workflow-parser 0.3.61 schema. They are not a full server validator.
+const GLOBAL = ["github", "inputs", "vars"];
+const JOB = [...GLOBAL, "needs", "strategy", "matrix"];
+const STEP = [...JOB, "job", "runner", "env", "steps"];
+const FUNCTIONS = [
+  "contains",
+  "startswith",
+  "endswith",
+  "format",
+  "join",
+  "tojson",
+  "fromjson",
+];
+
+function expressions(
+  value,
+  contexts,
+  location,
+  special = [],
+  implicit = false,
+) {
+  if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value))
+      expressions(child, contexts, `${location}.${key}`, special);
+    return;
+  }
+  if (typeof value !== "string") return;
+  if (implicit && !value.includes("${{")) value = `\u0024{{ ${value} }}`;
+  for (let offset = 0; ; ) {
+    const start = value.indexOf("${{", offset);
+    if (start < 0) return;
+    let quoted = false;
+    let body = "";
+    let end = start + 3;
+    for (; end < value.length; end++) {
+      const character = value[end];
+      if (character === "'") {
+        if (quoted && value[end + 1] === "'") {
+          end++;
+          continue;
+        }
+        quoted = !quoted;
+        body += " ";
+      } else if (!quoted && value.slice(end, end + 2) === "}}") break;
+      else body += quoted ? " " : character;
+    }
+    check(
+      end < value.length && !quoted,
+      `unterminated expression at ${location}`,
+    );
+    check(
+      body.trim().length > 0 || value.slice(start + 3, end).includes("'"),
+      `empty expression at ${location}`,
+    );
+    check(!body.includes('"'), `unsupported expression quoting at ${location}`);
+    body = body.replace(/\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g, " ");
+    for (const token of body.matchAll(/[A-Za-z_][A-Za-z0-9_-]*/g)) {
+      const name = token[0];
+      if (body.slice(0, token.index).trimEnd().endsWith(".")) continue;
+      if (["true", "false", "null"].includes(name)) continue;
+      if (
+        body
+          .slice(token.index + name.length)
+          .trimStart()
+          .startsWith("(")
+      )
+        check(
+          [...FUNCTIONS, ...special].includes(name.toLowerCase()),
+          `unavailable expression function ${name} at ${location}`,
+        );
+      else
+        check(
+          contexts.includes(name),
+          `unavailable expression context ${name} at ${location}`,
+        );
+    }
+    offset = end + 2;
+  }
+}
 const workflow = fileURLToPath(
   new URL("../../.github/workflows/release-candidate.yml", import.meta.url),
 );
@@ -25,6 +104,8 @@ export function validateWorkflow(file = workflow) {
     "workflow",
   );
   fields(w.on, ["workflow_dispatch"], "workflow triggers");
+  expressions(w.env, [...GLOBAL, "secrets"], "env");
+  expressions(w.concurrency, GLOBAL, "concurrency");
   check(
     JSON.stringify(w.permissions) === JSON.stringify({ contents: "read" }),
     "workflow must have read-only repository permissions",
@@ -45,9 +126,26 @@ export function validateWorkflow(file = workflow) {
     "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
     "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
   ]);
-  for (const job of Object.values(w.jobs)) {
+  for (const [id, job] of Object.entries(w.jobs)) {
+    const location = `jobs.${id}`;
+    expressions(job.env, [...JOB, "secrets"], `${location}.env`);
+    for (const key of ["name", "runs-on", "timeout-minutes"])
+      expressions(job[key], JOB, `${location}.${key}`);
+    expressions(job.strategy, [...GLOBAL, "needs"], `${location}.strategy`);
     check(!job.permissions, "jobs cannot override read-only permissions");
-    for (const step of job.steps) {
+    for (const [index, step] of job.steps.entries()) {
+      const position = `${location}.steps.${index}`;
+      for (const key of ["name", "env", "with", "working-directory"])
+        expressions(step[key], [...STEP, "secrets"], `${position}.${key}`, [
+          "hashfiles",
+        ]);
+      expressions(
+        step.if,
+        STEP,
+        `${position}.if`,
+        ["hashfiles", "always", "cancelled", "success", "failure"],
+        true,
+      );
       check(!step.permissions, "step cannot alter permissions");
       if (step.uses)
         check(pins.has(step.uses), "unverified workflow action pin");
@@ -112,8 +210,14 @@ if (
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   try {
-    validateWorkflow();
-    console.log("Candidate workflow contract passed (JSON/YAML 1.2 subset).");
+    check(
+      process.argv.length <= 3,
+      "usage: check-workflow.mjs [workflow-file]",
+    );
+    validateWorkflow(process.argv[2]);
+    console.log(
+      "Candidate workflow syntax, bounded expression scopes and release contract passed.",
+    );
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
