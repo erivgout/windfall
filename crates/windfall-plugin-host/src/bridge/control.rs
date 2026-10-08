@@ -17,6 +17,26 @@ const PREFIX: usize = 24;
 pub const MAX_METADATA_BYTES: usize = 1 << 20;
 pub const MAX_PACKET_BYTES: usize = PREFIX + MAX_METADATA_BYTES + MAX_STATE_BYTES;
 
+/// The wire limit covers the complete WFPS container, not only native bytes.
+pub(crate) fn checked_state_size(bytes: usize) -> io::Result<()> {
+    if bytes > MAX_STATE_BYTES {
+        return Err(invalid(
+            "native state wrapper exceeds bridge control budget",
+        ));
+    }
+    Ok(())
+}
+fn checked_frame_size(metadata: usize, state: usize) -> io::Result<usize> {
+    checked_state_size(state)?;
+    if metadata == 0 || metadata > MAX_METADATA_BYTES {
+        return Err(invalid("invalid bridge control lengths"));
+    }
+    PREFIX
+        .checked_add(metadata)
+        .and_then(|size| size.checked_add(state))
+        .ok_or_else(|| invalid("bridge control length overflow"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Owner {
@@ -178,12 +198,10 @@ impl Packet {
         }
     }
     pub fn validate(&self) -> io::Result<()> {
-        if self.request == 0
-            || !Identity::from(self.owner).valid()
-            || self.state.len() > MAX_STATE_BYTES
-        {
+        if self.request == 0 || !Identity::from(self.owner).valid() {
             return Err(invalid("invalid bridge control identity/size"));
         }
+        checked_state_size(self.state.len())?;
         if !self.state.is_empty() {
             if !matches!(self.body, Message::Load { .. } | Message::Captured { .. }) {
                 return Err(invalid("state on an unsupported control message"));
@@ -201,9 +219,7 @@ impl Packet {
             body: self.body.clone(),
         })
         .map_err(invalid)?;
-        if metadata.len() > MAX_METADATA_BYTES {
-            return Err(invalid("bridge metadata too large"));
-        }
+        checked_frame_size(metadata.len(), self.state.len())?;
         let mut prefix = [0u8; PREFIX];
         prefix[..4].copy_from_slice(MAGIC);
         prefix[4..8].copy_from_slice(&VERSION.to_le_bytes());
@@ -258,10 +274,23 @@ fn invalid(message: impl std::fmt::Display) -> io::Error {
 pub struct Decoder {
     bytes: Vec<u8>,
 }
+pub(crate) enum ReadStep {
+    Packet(Box<Packet>),
+    /// One bounded read made progress, or an interrupted read must be retried.
+    Progress,
+    /// No bytes are available on the nonblocking socket (WouldBlock).
+    Idle,
+}
 impl Decoder {
     pub fn poll(&mut self, socket: &mut TcpStream) -> io::Result<Option<Packet>> {
+        Ok(match self.poll_step(socket)? {
+            ReadStep::Packet(packet) => Some(*packet),
+            ReadStep::Progress | ReadStep::Idle => None,
+        })
+    }
+    pub(crate) fn poll_step(&mut self, socket: &mut impl Read) -> io::Result<ReadStep> {
         if let Some(packet) = self.parse()? {
-            return Ok(Some(packet));
+            return Ok(ReadStep::Packet(Box::new(packet)));
         }
         let mut chunk = [0u8; 8192];
         match socket.read(&mut chunk) {
@@ -282,19 +311,16 @@ impl Decoder {
                 }
                 self.bytes.extend_from_slice(&chunk[..length]);
             }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock
-                        | io::ErrorKind::TimedOut
-                        | io::ErrorKind::Interrupted
-                ) =>
-            {
-                return Ok(None);
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(ReadStep::Idle),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                return Ok(ReadStep::Progress);
             }
             Err(error) => return Err(error),
         }
-        self.parse()
+        Ok(match self.parse()? {
+            Some(packet) => ReadStep::Packet(Box::new(packet)),
+            None => ReadStep::Progress,
+        })
     }
     fn parse(&mut self) -> io::Result<Option<Packet>> {
         if self.bytes.len() < PREFIX {
@@ -309,10 +335,7 @@ impl Decoder {
         let request = u64::from_le_bytes(prefix[8..16].try_into().expect("prefix"));
         let metadata_len = u32::from_le_bytes(prefix[16..20].try_into().expect("prefix")) as usize;
         let state = u32::from_le_bytes(prefix[20..24].try_into().expect("prefix")) as usize;
-        if metadata_len == 0 || metadata_len > MAX_METADATA_BYTES || state > MAX_STATE_BYTES {
-            return Err(invalid("invalid bridge control lengths"));
-        }
-        let total = PREFIX + metadata_len + state;
+        let total = checked_frame_size(metadata_len, state)?;
         if self.bytes.len() < total {
             return Ok(None);
         }
@@ -333,6 +356,77 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn incomplete_reads_report_progress_and_eof_is_a_failure_not_idle() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&VERSION.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&10u32.to_le_bytes());
+        bytes.extend_from_slice(&64u32.to_le_bytes());
+        bytes.extend_from_slice(b"{");
+        let mut stream = std::io::Cursor::new(bytes);
+        let mut decoder = Decoder::default();
+        assert!(matches!(
+            decoder.poll_step(&mut stream).unwrap(),
+            ReadStep::Progress
+        ));
+        assert_eq!(
+            decoder.poll_step(&mut stream).err().unwrap().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+        struct Empty;
+        impl Read for Empty {
+            fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+                assert_eq!(bytes.len(), 8192);
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+        }
+        let before = decoder.bytes.len();
+        assert!(matches!(
+            decoder.poll_step(&mut Empty).unwrap(),
+            ReadStep::Idle
+        ));
+        assert_eq!(decoder.bytes.len(), before);
+    }
+    #[test]
+    fn wrapped_native_budget_and_frame_lengths_are_checked_before_payloads() {
+        let overhead = PluginState::native(&[]).as_bytes().len();
+        assert_eq!(overhead, 6);
+        for (raw, accepted) in [
+            (MAX_STATE_BYTES - overhead - 1, true),
+            (MAX_STATE_BYTES - overhead, true),
+            (MAX_STATE_BYTES - overhead + 1, false),
+            (MAX_STATE_BYTES, false),
+        ] {
+            let wrapped = raw.checked_add(overhead).unwrap();
+            assert_eq!(checked_state_size(wrapped).is_ok(), accepted);
+            assert_eq!(checked_frame_size(1, wrapped).is_ok(), accepted);
+            let mut prefix = [0u8; PREFIX];
+            prefix[..4].copy_from_slice(MAGIC);
+            prefix[4..8].copy_from_slice(&VERSION.to_le_bytes());
+            prefix[8..16].copy_from_slice(&1u64.to_le_bytes());
+            prefix[16..20].copy_from_slice(&1u32.to_le_bytes());
+            prefix[20..24].copy_from_slice(&(wrapped as u32).to_le_bytes());
+            let mut decoder = Decoder {
+                bytes: prefix.to_vec(),
+            };
+            assert_eq!(decoder.parse().is_ok(), accepted);
+            assert_eq!(decoder.bytes.len(), PREFIX);
+        }
+        assert_eq!(
+            checked_frame_size(MAX_METADATA_BYTES, MAX_STATE_BYTES).unwrap(),
+            MAX_PACKET_BYTES
+        );
+        for (metadata, state) in [
+            (0, 0),
+            (usize::MAX, 0),
+            (1, usize::MAX),
+            (MAX_METADATA_BYTES + 1, 0),
+        ] {
+            assert!(checked_frame_size(metadata, state).is_err());
+        }
+    }
     #[test]
     fn partial_control_writes_preserve_framing_and_check_every_retry() {
         struct Pressure {

@@ -2,7 +2,7 @@
 
 use super::{
     adapter::ParameterSpec,
-    control::{ControlParameter, Decoder, Message, Packet},
+    control::{ControlParameter, Decoder, Message, Packet, ReadStep},
     mapping::Mapping,
     protocol::*,
     slots::{InputBlock, OutputBlock, Region},
@@ -22,6 +22,13 @@ use std::{
 
 fn error(message: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+}
+fn captured_state(state: PluginState) -> io::Result<Vec<u8>> {
+    // Native save has its own raw cap. The transport cap includes WFPS bytes;
+    // refusal belongs to this recoverable control operation, never reply IO.
+    super::control::checked_state_size(state.as_bytes().len())?;
+    state.content().map_err(error)?;
+    Ok(state.into_bytes())
 }
 fn reply(socket: &mut TcpStream, packet: &Packet) -> io::Result<()> {
     socket.set_nonblocking(false)?;
@@ -298,8 +305,7 @@ impl Native {
             // Accepted CLAP semantics keep the active instance and notes intact.
             // Unprocessed intent accompanies opaque state; it is not DSP readback.
             self.instance.idle(&mut |_| {});
-            let state = self.instance.save_state().map_err(error)?;
-            state.content().map_err(error)?;
+            let state = captured_state(self.instance.save_state().map_err(error)?)?;
             let mut values = self.values();
             if generation > processed {
                 for (value, intent) in values.iter_mut().zip(pending) {
@@ -316,7 +322,7 @@ impl Native {
             {
                 return Err(error("native capture parameter values are malformed"));
             }
-            return Ok((state.into_bytes(), values, processed, 0));
+            return Ok((state, values, processed, 0));
         }
         self.deactivate()?;
         let result = (|| {
@@ -342,8 +348,7 @@ impl Native {
                     }
                 }
             }
-            let state = self.instance.save_state().map_err(error)?;
-            state.content().map_err(error)?;
+            let state = captured_state(self.instance.save_state().map_err(error)?)?;
             let values = self.values();
             if values
                 .iter()
@@ -352,7 +357,7 @@ impl Native {
                 return Err(error("native capture parameter values are malformed"));
             }
             Ok((
-                state.into_bytes(),
+                state,
                 values,
                 processed,
                 if generation > processed {
@@ -399,12 +404,13 @@ pub fn entry() -> bool {
 }
 
 fn run(address: SocketAddr) -> io::Result<()> {
-    let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
+    let bootstrap = super::auth::Bootstrap::read(&mut std::io::stdin().lock())?;
+    let mut socket = TcpStream::connect_timeout(&address, bootstrap.remaining()?)?;
     socket.set_nodelay(true)?;
-    let session = super::auth::helper_hello(&mut socket)?;
+    bootstrap.hello(&mut socket)?;
     socket.set_nonblocking(true)?;
     let mut decoder = Decoder::default();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = bootstrap.deadline;
     // Private debug-only test bootstrap: actual native owner and launch path,
     // no extra public API/env/key/argv fields. Production filename never selects it.
     #[cfg(debug_assertions)]
@@ -416,17 +422,23 @@ fn run(address: SocketAddr) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(500));
     }
     let load = loop {
-        if let Some(packet) = decoder.poll(&mut socket)? {
-            break packet;
-        }
         if Instant::now() >= deadline {
             return Err(error("helper load request timed out"));
         }
-        std::thread::sleep(Duration::from_millis(1));
+        let step = decoder.poll_step(&mut socket)?;
+        if Instant::now() >= deadline {
+            return Err(error("helper load request timed out"));
+        }
+        match step {
+            ReadStep::Packet(packet) => break *packet,
+            ReadStep::Progress => {}
+            ReadStep::Idle => std::thread::sleep(Duration::from_millis(1)),
+        }
     };
-    if load.owner.session != session {
+    if load.owner.session != bootstrap.session {
         return Err(error("helper session mismatch"));
     }
+    drop(bootstrap); // Clear the launch key before any native module load.
     let Message::Load {
         mapping,
         settings,

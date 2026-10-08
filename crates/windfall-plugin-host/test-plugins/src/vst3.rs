@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        18
+        19
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..18).contains(&index) {
+        if info.is_null() || !(0..19).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -70,6 +70,7 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Bridge Partial State Failure",
                         "VST3 Bridge Unsupported Latency",
                         "VST3 Bridge Native Event Flood",
+                        "VST3 Bridge Successful Native State Limit",
                     ][index as usize],
                 ),
             });
@@ -90,7 +91,7 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..18).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..19).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
@@ -104,8 +105,9 @@ impl IPluginFactoryTrait for Factory {
                 multi_params: class == cid(9),
                 bridge_delayed: class == cid(10)
                     || class == cid(11)
-                    || (13..18).any(|i| class == cid(i)),
+                    || (13..19).any(|i| class == cid(i)),
                 bridge_bad_latency: class == cid(16),
+                bridge_state_boundary: class == cid(18),
                 bridge_event_flood: class == cid(17),
                 bridge_capture_fault: if class == cid(13) {
                     crate::bridge_behaviors::CaptureFault::Exit
@@ -147,7 +149,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..18).contains(&index) {
+        if info.is_null() || !(0..19).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -176,6 +178,7 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Bridge Partial State Failure",
                         "VST3 Bridge Unsupported Latency",
                         "VST3 Bridge Native Event Flood",
+                        "VST3 Bridge Successful Native State Limit",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -204,6 +207,7 @@ struct Component {
     bridge_delayed: bool,
     bridge_hang: bool,
     bridge_bad_latency: bool,
+    bridge_state_boundary: bool,
     bridge_event_flood: bool,
     bridge_capture_fault: crate::bridge_behaviors::CaptureFault,
     activations: std::sync::atomic::AtomicU32,
@@ -354,6 +358,11 @@ impl IComponentTrait for Component {
         unsafe { self.read_state(state) }
     }
     unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        if self.bridge_state_boundary
+            && f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) >= 0.75
+        {
+            return unsafe { self.write_boundary_state(state) };
+        }
         unsafe { self.write_state(state) }
     }
 }
@@ -411,6 +420,38 @@ impl Component {
         }
         self.gain
             .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        kResultOk
+    }
+    unsafe fn write_boundary_state(&self, state: *mut IBStream) -> tresult {
+        let Some(stream) = (unsafe { vst3::ComRef::from_raw(state) }) else {
+            return kInvalidArgument;
+        };
+        // Native VST2 container adds16B, ordinary controller adds8B. This
+        // component supplies exactly the remaining native payload budget.
+        let target = crate::bridge_behaviors::STATE_LIMIT - 24;
+        let mut gain = self
+            .gain
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .to_le_bytes();
+        let mut actual = 0;
+        if unsafe { stream.write(gain.as_mut_ptr().cast(), gain.len() as i32, &mut actual) }
+            != kResultOk
+            || actual != gain.len() as i32
+        {
+            return kResultFalse;
+        }
+        let mut written = gain.len();
+        let mut padding = [0u8; 8192];
+        while written < target {
+            let count = (target - written).min(padding.len());
+            if unsafe { stream.write(padding.as_mut_ptr().cast(), count as i32, &mut actual) }
+                != kResultOk
+                || actual != count as i32
+            {
+                return kResultFalse;
+            }
+            written += count;
+        }
         kResultOk
     }
     unsafe fn write_state(&self, state: *mut IBStream) -> tresult {
