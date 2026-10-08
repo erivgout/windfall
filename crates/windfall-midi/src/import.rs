@@ -58,7 +58,8 @@ pub struct ImportOptions {
     /// Sets the project's tempo to the file's first, and follows the
     /// file's tempo changes with a tempo automation.
     pub tempo: bool,
-    /// Sets the project's time signature to the file's first.
+    /// Sets the scalar signature from the effective tick-zero meter and
+    /// imports the ordered song meter changes.
     pub time_signature: bool,
     /// Sets each channel's volume and pan from the first channel volume
     /// (controller 7) and pan (controller 10) its MIDI channel is given.
@@ -119,7 +120,9 @@ pub struct ImportPlan {
     pub time_signature: Option<TimeSignature>,
     /// Ordered song meter events. Importing replaces the prior song map.
     pub meters: Vec<(u32, TimeSignature)>,
-    /// How long the imported song is, in ticks: a whole number of bars.
+    /// The imported clip layout's length, rounded to whole bars of the
+    /// tick-zero signature (4/4 before a late first event). Later meter
+    /// changes keep their absolute ticks; pattern cutting uses this scalar grid.
     pub length: u32,
     /// The samples the project will be given, each path once. Only a drum
     /// kit brings any.
@@ -396,15 +399,24 @@ fn counted(count: usize, one: &str, many: &str) -> String {
 ///   beat unit of a whole note becomes a half note and anything shorter
 ///   than a sixteenth note a sixteenth.
 /// - Pitch bend, controllers other than the first volume and pan,
-///   aftertouch, program changes, key signatures, markers and later time
-///   signatures are not imported. The [`MidiSong`] still holds them.
+///   aftertouch, program changes, key signatures and markers are not imported.
+///   The [`MidiSong`] still holds them. Ordered meter changes are imported,
+///   with colliding and over-limit events reported.
 ///
 /// Two more things change without a line in the list. Names are cut to 64
 /// characters and lose their control characters. And a `MidiSong` that is
 /// not in its normal form is imported as its normal form.
 pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
     let song = song.clone().normalized();
-    let first = song.time_signatures.first();
+    // A late first event does not change the signature before it. Export
+    // explicitly writes that initial meter, so sizing must use the same
+    // authority before and after a canonical file round trip. Of several
+    // tick-zero events, the last is the one the checked meter map retains.
+    let first = song
+        .time_signatures
+        .iter()
+        .take_while(|event| event.tick == 0)
+        .last();
     let signature = first.map(|first| fit_signature(first.numerator, first.denominator));
     let bar = signature.unwrap_or(COMMON_TIME).ticks_per_bar();
     // The longest song and the longest pattern that are whole bars.
@@ -424,8 +436,7 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
         plan: ImportPlan {
             name: song.name.as_deref().and_then(clean_name),
             tempo_bpm: None,
-            time_signature: signature
-                .filter(|_| options.time_signature && first.is_some_and(|s| s.tick == 0)),
+            time_signature: signature.filter(|_| options.time_signature),
             meters: Vec::new(),
             length,
             samples: Vec::new(),
