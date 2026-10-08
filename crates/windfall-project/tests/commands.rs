@@ -5944,6 +5944,64 @@ fn undo_and_redo_bring_a_relinked_sample_back_under_its_new_path() {
 }
 
 #[test]
+fn sample_sources_include_removed_and_undone_history_and_relink_exact_paths() {
+    let mut doc = document();
+    let removed = add_project_sample(&mut doc, "removed");
+    run(&mut doc, Command::RemoveSample { id: removed });
+    let undone = add_project_sample(&mut doc, "undone");
+    doc.undo().unwrap();
+    assert!(doc.project().samples.is_empty());
+    let sources = || {
+        doc.sample_sources()
+            .map(|(id, path)| (id, path.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert!(sources().contains(&(removed, project_path("removed.wav"))));
+    assert!(sources().contains(&(undone, project_path("undone.wav"))));
+    let history = doc.history();
+    let dirty = doc.is_dirty();
+    let before = doc.project().clone();
+    assert_eq!(
+        doc.relink_sample_source(
+            undone,
+            &project_path("another.wav"),
+            project_path("moved.wav")
+        )
+        .unwrap_err(),
+        not_found("sample", undone.0)
+    );
+    assert_eq!(doc.project(), &before);
+    assert_eq!(doc.history(), history);
+    assert_eq!(doc.is_dirty(), dirty);
+    assert!(
+        doc.relink_sample_source(
+            undone,
+            &project_path("undone.wav"),
+            project_path("moved/undone.wav")
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        doc.relink_sample_source(
+            removed,
+            &project_path("removed.wav"),
+            project_path("moved/removed.wav")
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert_eq!(doc.history(), history);
+    assert_eq!(doc.is_dirty(), dirty);
+    doc.redo().unwrap();
+    assert_eq!(path_of(&doc, undone), project_path("moved/undone.wav"));
+    doc.undo().unwrap();
+    doc.undo().unwrap();
+    assert_eq!(path_of(&doc, removed), project_path("moved/removed.wav"));
+    doc.project().check().unwrap();
+}
+
+#[test]
 fn a_sample_that_only_the_history_holds_can_be_relinked() {
     let mut doc = document();
     let kick = add_project_sample(&mut doc, "kick");

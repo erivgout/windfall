@@ -88,6 +88,23 @@ impl Document {
         &self.project
     }
 
+    /// Source identities in the current project and every retained undo or
+    /// redo edit. An identity may occur more than once; different paths for
+    /// the same id remain distinct. Use this when moving a document's sample
+    /// root, since samples absent from the project can still return later.
+    pub fn sample_sources(&self) -> impl Iterator<Item = (SampleId, &SamplePath)> + Clone {
+        self.project
+            .samples
+            .iter()
+            .chain(
+                self.entries
+                    .iter()
+                    .flat_map(|entry| &entry.edits)
+                    .filter_map(Edit::sample),
+            )
+            .map(|sample| (sample.id, &sample.path))
+    }
+
     /// The revision of the last patch built by [`patch`](Self::patch). 0
     /// until the first one.
     pub fn revision(&self) -> u64 {
@@ -236,25 +253,54 @@ impl Document {
         id: SampleId,
         path: SamplePath,
     ) -> Result<Touched, CommandError> {
+        self.relink_sample_matching(id, None, path)
+    }
+
+    /// Like [`Self::relink_sample`], but changes only occurrences with this
+    /// exact original source path. Other historical source versions with
+    /// the same id keep their own paths. Refuses an unknown source identity
+    /// with nothing changed, including history and dirty state.
+    pub fn relink_sample_source(
+        &mut self,
+        id: SampleId,
+        source: &SamplePath,
+        path: SamplePath,
+    ) -> Result<Touched, CommandError> {
+        self.relink_sample_matching(id, Some(source), path)
+    }
+
+    fn relink_sample_matching(
+        &mut self,
+        id: SampleId,
+        source: Option<&SamplePath>,
+        path: SamplePath,
+    ) -> Result<Touched, CommandError> {
         if let Some(problem) = path.problem() {
             return Err(CommandError::invalid(format!(
                 "the sample path is not valid: {problem}"
             )));
         }
-        let stored = || self.entries.iter().flat_map(|entry| &entry.edits);
-        let held = stored().filter_map(Edit::sample);
-        let mut known = self.project.samples.iter().chain(held);
-        if !known.clone().any(|sample| sample.id == id) {
-            return Err(CommandError::not_found("sample", id));
-        }
-        if known.any(|sample| sample.id != id && sample.path == path) {
-            return Err(CommandError::invalid(
-                "another sample of the project already has that path",
-            ));
+        let matches = |known_id, known_path: &SamplePath| {
+            known_id == id && source.is_none_or(|source| source == known_path)
+        };
+        {
+            let mut known = self.sample_sources();
+            if !known.clone().any(|(id, path)| matches(id, path)) {
+                return Err(CommandError::not_found("sample", id));
+            }
+            if known.any(|(known_id, known_path)| known_id != id && *known_path == path) {
+                return Err(CommandError::invalid(
+                    "another sample of the project already has that path",
+                ));
+            }
         }
 
         let mut touched = Touched::default();
-        if let Some(sample) = self.project.samples.iter_mut().find(|s| s.id == id)
+        if let Some(sample) = self
+            .project
+            .samples
+            .iter_mut()
+            .find(|s| matches(s.id, &s.path))
             && sample.path != path
         {
             sample.path = path.clone();
@@ -262,7 +308,9 @@ impl Document {
         }
         let edits = self.entries.iter_mut().flat_map(|entry| &mut entry.edits);
         for sample in edits.filter_map(|edit| edit.sample_mut(id)) {
-            sample.path = path.clone();
+            if matches(sample.id, &sample.path) {
+                sample.path = path.clone();
+            }
         }
         Ok(touched)
     }
@@ -356,5 +404,58 @@ impl Document {
         touched
             .patterns
             .retain(|id| self.project.pattern(*id).is_some());
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+
+    #[test]
+    fn sample_sources_and_exact_relink_keep_different_paths_for_one_id() {
+        let mut document = Document::new(Project::new("Sources"));
+        let old = SamplePath::Project("old.wav".into());
+        let current = SamplePath::Project("current.wav".into());
+        let moved = SamplePath::Project("moved.wav".into());
+        let id = SampleId(
+            document
+                .dispatch(
+                    Command::AddSample {
+                        name: "Source".into(),
+                        path: old.clone(),
+                    },
+                    None,
+                )
+                .unwrap()
+                .created[0],
+        );
+        // Model a newer source version without changing the stored older
+        // occurrence; the public helper must expose and match both paths.
+        document.project.samples.last_mut().unwrap().path = current.clone();
+        let identities: Vec<_> = document
+            .sample_sources()
+            .map(|(id, path)| (id, path.clone()))
+            .collect();
+        assert!(identities.contains(&(id, old.clone())));
+        assert!(identities.contains(&(id, current.clone())));
+        let history = document.history();
+        let dirty = document.is_dirty();
+        assert!(
+            document
+                .relink_sample_source(id, &old, moved.clone())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(document.project().sample(id).unwrap().path, current);
+        assert!(
+            document
+                .sample_sources()
+                .any(|source| source == (id, &moved))
+        );
+        assert_eq!(document.history(), history);
+        assert_eq!(document.is_dirty(), dirty);
+        // The existing whole-ID API continues to relink every version.
+        document.relink_sample(id, old.clone()).unwrap();
+        assert!(document.sample_sources().all(|source| source == (id, &old)));
     }
 }
