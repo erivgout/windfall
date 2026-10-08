@@ -38,6 +38,7 @@ struct Native {
     parameters: Vec<ParameterSpec>,
     host_values: BTreeMap<u32, f64>,
     uncertain: BTreeSet<u32>,
+    notes_uncertain: bool,
     sequence: Option<u64>,
     epoch: u64,
     processed_generation: u64,
@@ -155,7 +156,7 @@ impl Native {
         processor.set_transport(input.transport);
         let mut admitted = true;
         output.native_drops = 0;
-        if discontinuity || needs_parameters {
+        if discontinuity || needs_parameters || self.notes_uncertain {
             processor.reset();
             for (key, velocity) in input.notes.iter().enumerate() {
                 if *velocity > 0.0 {
@@ -230,6 +231,12 @@ impl Native {
             self.processed_generation = input.control_end;
             output.processed_generation = input.control_end;
             self.uncertain.clear();
+            self.notes_uncertain = false;
+        } else {
+            // Admission may have lost a note without changing parameters or
+            // sequence continuity. Recover the next whole held snapshot before
+            // acknowledging its generation, including desired releases.
+            self.notes_uncertain = true;
         }
         self.epoch = input.epoch;
         self.sequence = Some(sequence);
@@ -257,6 +264,13 @@ impl Native {
         if epoch == 0 || generation == 0 || (epoch != self.epoch && self.sequence.is_some()) {
             return Err(error("capture timeline ownership changed"));
         }
+        // Sequence continuity can be cleared by capture; DSP proof remains
+        // bound to the epoch of the last actual native block.
+        let processed = if epoch == self.epoch {
+            self.processed_generation
+        } else {
+            0
+        };
         if pending.len() != self.parameters.len()
             || pending.iter().zip(&self.parameters).any(|(value, spec)| {
                 value.id != spec.id
@@ -285,7 +299,7 @@ impl Native {
             let state = self.instance.save_state().map_err(error)?;
             state.content().map_err(error)?;
             let mut values = self.values();
-            if generation > self.processed_generation {
+            if generation > processed {
                 for (value, intent) in values.iter_mut().zip(pending) {
                     if self.host_values.get(&intent.id) != Some(&intent.value)
                         || self.uncertain.contains(&intent.id)
@@ -300,12 +314,12 @@ impl Native {
             {
                 return Err(error("native capture parameter values are malformed"));
             }
-            return Ok((state.into_bytes(), values, self.processed_generation, 0));
+            return Ok((state.into_bytes(), values, processed, 0));
         }
         self.deactivate()?;
         let result = (|| {
             self.instance.idle(&mut |_| {});
-            if generation > self.processed_generation {
+            if generation > processed {
                 for parameter in pending {
                     let value = Parameter {
                         id: parameter.id,
@@ -338,8 +352,8 @@ impl Native {
             Ok((
                 state.into_bytes(),
                 values,
-                self.processed_generation,
-                if generation > self.processed_generation {
+                processed,
+                if generation > processed {
                     generation
                 } else {
                     0
@@ -371,15 +385,10 @@ pub fn entry() -> bool {
             .ok_or_else(|| error("missing helper endpoint"))?
             .parse()
             .map_err(error)?;
-        let session: u64 = args
-            .next()
-            .ok_or_else(|| error("missing helper session"))?
-            .parse()
-            .map_err(error)?;
-        if !address.ip().is_loopback() || session == 0 || args.next().is_some() {
+        if !address.ip().is_loopback() || args.next().is_some() {
             return Err(error("invalid helper arguments"));
         }
-        run(address, session)
+        run(address)
     })();
     if result.is_err() {
         std::process::exit(70);
@@ -387,9 +396,10 @@ pub fn entry() -> bool {
     true
 }
 
-fn run(address: SocketAddr, session: u64) -> io::Result<()> {
+fn run(address: SocketAddr) -> io::Result<()> {
     let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
     socket.set_nodelay(true)?;
+    let session = super::auth::helper_hello(&mut socket)?;
     socket.set_nonblocking(true)?;
     let mut decoder = Decoder::default();
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -515,6 +525,7 @@ fn run(address: SocketAddr, session: u64) -> io::Result<()> {
             .map(|value| (value.id, value.value))
             .collect(),
         uncertain: BTreeSet::new(),
+        notes_uncertain: false,
         sequence: None,
         epoch: 1,
         processed_generation: 0,
@@ -601,6 +612,7 @@ fn run(address: SocketAddr, session: u64) -> io::Result<()> {
                 native.dirty = true;
             }
         });
+        native.region.owner_completed().map_err(error)?;
         if !worked {
             std::thread::sleep(Duration::from_micros(200));
         }

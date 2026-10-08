@@ -1,8 +1,8 @@
-//! Explicit version-one words. These offsets, not Rust object layouts, are the ABI.
+//! Explicit version-two words. These offsets, not Rust object layouts, are the ABI.
 
 use crate::{HostEvent, Transport};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const DEFAULT_BLOCK: usize = 256;
 pub const MAGIC: u32 = u32::from_le_bytes(*b"WFBR");
 pub const SLOT_COUNT: usize = 4;
@@ -12,6 +12,7 @@ pub const EVENT_CAPACITY: usize = ORDINARY_EVENTS + 129;
 pub const PARAM_CAPACITY: usize = 4096;
 pub const HEADER_WORDS: usize = 64;
 pub const HELPER_FAILURE: usize = 26;
+pub const OWNER_COMPLETIONS: usize = 27;
 pub const META_WORDS: usize = 64;
 pub const INPUT: usize = META_WORDS;
 pub const OUTPUT: usize = INPUT + MAX_BLOCK * 2;
@@ -153,7 +154,7 @@ impl Config {
         words[25] = PARAMETERS as u32;
         Ok(words)
     }
-    /// Accept only the exact v1 layout; never trust a peer-provided offset.
+    /// Accept only the exact v2 layout; never trust a peer-provided offset.
     pub fn from_header(words: &[u32], mapped_bytes: usize) -> Result<Self, ProtocolError> {
         if words.len() != HEADER_WORDS || mapped_bytes != REGION_BYTES {
             return Err(ProtocolError::Layout);
@@ -388,6 +389,17 @@ mod tests {
         assert!(Config::from_header(&header[..63], REGION_BYTES).is_err());
         assert_eq!(REGION_BYTES % 64, 0);
         assert_eq!(SLOT_WORDS * 4 % 64, 0);
+    }
+    #[test]
+    fn mapping_v1_never_downgrades_the_v2_completion_contract() {
+        let mut header = config().header().unwrap();
+        assert_eq!(header[1], 2);
+        assert_eq!(header[OWNER_COMPLETIONS], 0);
+        header[1] = 1;
+        assert_eq!(
+            Config::from_header(&header, REGION_BYTES),
+            Err(ProtocolError::Layout)
+        );
     }
     #[test]
     fn event_roundtrip_preserves_native_precision_and_rejects_unchecked_bytes() {

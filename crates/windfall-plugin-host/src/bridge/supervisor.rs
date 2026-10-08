@@ -60,6 +60,7 @@ pub struct Launch {
     pub offline: bool,
     pub startup_timeout: Duration,
     pub audio_timeout: Duration,
+    pub cancelled: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +94,7 @@ struct Inner {
     status: Arc<Mutex<Status>>,
     signals: Arc<Signals>,
     owner: Owner,
-    last_state: Mutex<Option<Captured>>,
+    last_state: Mutex<Option<(u64, Captured)>>,
 }
 impl Inner {
     fn stop(&self) {
@@ -142,7 +143,8 @@ impl Control {
             .last_state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()
+            .as_ref()
+            .map(|(_, captured)| captured.clone())
     }
     fn call(&self, body: Message, timeout: Duration) -> Result<Packet, String> {
         if self.0.signals.failed.load(Ordering::Acquire) {
@@ -221,12 +223,21 @@ impl Control {
             Message::Error { message } => return Err(message),
             _ => return Err("stale or unsupported native capture response".into()),
         };
-        *self
+        self.publish_state(packet.request, captured.clone());
+        Ok(captured)
+    }
+    fn publish_state(&self, request: u64, captured: Captured) {
+        let mut latest = self
             .0
             .last_state
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(captured.clone());
-        Ok(captured)
+            .unwrap_or_else(|error| error.into_inner());
+        if latest
+            .as_ref()
+            .is_none_or(|(previous, _)| request > *previous)
+        {
+            *latest = Some((request, captured));
+        }
     }
     pub fn editor(&self, open: bool) -> Result<(), String> {
         let packet = self.call(Message::Editor { open }, Duration::from_secs(2))?;
@@ -328,8 +339,7 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
                 .map_err(|error| error.to_string())?
                 .to_string(),
         )
-        .arg(identity.session.to_string())
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(windows)]
@@ -337,33 +347,34 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
+    let key = super::auth::Key::generate().map_err(|error| error.to_string())?;
+    let deadline = Instant::now()
+        .checked_add(options.startup_timeout)
+        .ok_or("invalid helper startup deadline")?;
     let mut process = Process(command.spawn().map_err(|error| error.to_string())?);
-    let deadline = Instant::now() + options.startup_timeout;
-    let mut socket = loop {
-        match listener.accept() {
-            Ok((socket, _)) => break socket,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(error) => return Err(error.to_string()),
-        }
-        if process
-            .0
-            .try_wait()
-            .map_err(|error| error.to_string())?
-            .is_some()
-        {
-            return Err("audio helper exited during startup".into());
-        }
-        if Instant::now() >= deadline {
-            return Err("audio helper startup timed out".into());
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    };
+    key.write_to_child(&mut process.0, identity.session)
+        .map_err(|error| error.to_string())?;
+    let mut socket = super::auth::accept(
+        &listener,
+        &mut process.0,
+        &key,
+        deadline,
+        options.cancelled.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
     socket
         .set_nodelay(true)
         .map_err(|error| error.to_string())?;
     socket
         .set_write_timeout(Some(options.startup_timeout))
         .map_err(|error| error.to_string())?;
+    if options
+        .cancelled
+        .as_deref()
+        .is_some_and(|flag| flag.load(Ordering::Acquire))
+    {
+        return Err("audio helper startup cancelled".into());
+    }
     let owner: Owner = identity.into();
     let mut load = Packet::new(
         1,
@@ -392,7 +403,10 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
         owner,
         1,
         deadline,
-        Cancellation::default(),
+        Cancellation {
+            request: options.cancelled.as_deref(),
+            retired: None,
+        },
     )?;
     let Message::Ready {
         native_latency,
@@ -520,7 +534,7 @@ fn supervise(
         audio_timeout,
     } = context;
     let mut request = 1u64;
-    let mut pending: Option<(u64, Instant)> = None;
+    let mut watchdog = OwnerWatchdog::default();
     loop {
         if signals.retired.load(Ordering::Acquire) {
             return Ok(());
@@ -582,20 +596,97 @@ fn supervise(
                 if let Some(error) = failed {
                     return Err(error);
                 }
-                pending = None;
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
-        if let Some(sequence) = region.pending_sequence() {
-            if pending.is_none_or(|(previous, _)| previous != sequence) {
-                pending = Some((sequence, Instant::now()));
-            }
-            if pending.is_some_and(|(_, started)| started.elapsed() >= audio_timeout) {
-                return Err("audio helper stalled; process terminated".into());
-            }
-        } else {
-            pending = None;
+        if watchdog.stalled(
+            region.owner_completions(),
+            region.pending_sequence().is_some(),
+            Instant::now(),
+            audio_timeout,
+        ) {
+            return Err("audio helper stalled; process terminated".into());
         }
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Once work arms the watchdog, slot turnover/seek cancellation cannot erase
+/// its age. Only actual native-owner completion releases that stall obligation.
+#[derive(Default)]
+struct OwnerWatchdog {
+    observed: u32,
+    started: Option<Instant>,
+}
+impl OwnerWatchdog {
+    fn stalled(&mut self, completions: u32, pending: bool, now: Instant, limit: Duration) -> bool {
+        if completions != self.observed {
+            self.observed = completions;
+            self.started = pending.then_some(now);
+        } else if self.started.is_none() && pending {
+            self.started = Some(now);
+        }
+        self.started
+            .is_some_and(|started| now.duration_since(started) >= limit)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Barrier;
+    #[test]
+    fn watchdog_arms_only_work_and_completion_disarms_each_obligation() {
+        let now = Instant::now();
+        let limit = Duration::from_millis(10);
+        let mut watchdog = OwnerWatchdog::default();
+        assert!(!watchdog.stalled(0, false, now, limit));
+        assert!(!watchdog.stalled(0, false, now + limit * 10, limit));
+        assert!(!watchdog.stalled(0, true, now + limit * 11, limit));
+        assert!(!watchdog.stalled(0, false, now + limit * 11 + limit / 2, limit));
+        assert!(watchdog.stalled(0, true, now + limit * 12, limit));
+        assert!(!watchdog.stalled(1, false, now + limit * 13, limit));
+        assert!(!watchdog.stalled(1, false, now + limit * 20, limit));
+        assert!(!watchdog.stalled(1, true, now + limit * 21, limit));
+        assert!(watchdog.stalled(1, false, now + limit * 22, limit));
+    }
+    #[test]
+    fn reversed_caller_publication_cannot_replace_a_newer_capture() {
+        let (jobs, _incoming) = mpsc::sync_channel(8);
+        let control = Control(Arc::new(Inner {
+            jobs,
+            worker: Mutex::new(None),
+            status: Arc::new(Mutex::new(Status::default())),
+            signals: Arc::new(Signals::default()),
+            owner: Owner {
+                session: 1,
+                token: 2,
+                revision: 3,
+                binding: 4,
+            },
+            last_state: Mutex::new(None),
+        }));
+        let captured = |value: f64| Captured {
+            state: crate::PluginState::native(&value.to_le_bytes()).into_bytes(),
+            parameters: vec![],
+            processed_generation: 1,
+            reconciled_generation: 0,
+            epoch: 1,
+        };
+        let old = captured(0.25);
+        let newer = captured(0.75);
+        let gate = Arc::new(Barrier::new(2));
+        let other = control.clone();
+        let other_gate = gate.clone();
+        let caller = std::thread::spawn(move || {
+            other_gate.wait(); // Caller A received request1, then pauses.
+            other_gate.wait(); // Caller B has published request2.
+            other.publish_state(1, old);
+        });
+        gate.wait();
+        control.publish_state(2, newer.clone());
+        gate.wait();
+        caller.join().unwrap();
+        assert_eq!(control.last_valid_state().unwrap().state, newer.state);
     }
 }

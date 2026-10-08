@@ -377,6 +377,18 @@ impl Region {
         (0..SLOT_COUNT)
             .any(|slot| self.state_value(slot) == DONE && self.sequence(slot, SEQUENCE) == sequence)
     }
+    /// Helper owner only, after a native process/control/idle call returned.
+    /// A liveness observation, never an acknowledgement of parameter/note DSP.
+    pub fn owner_completed(&self) -> Result<(), ProtocolError> {
+        let cell = &self.storage.words()[OWNER_COMPLETIONS];
+        let previous = u32::from_le(cell.load(Ordering::Relaxed));
+        let next = previous.checked_add(1).ok_or(ProtocolError::Sequence)?;
+        cell.store(next.to_le(), Ordering::Release);
+        Ok(())
+    }
+    pub fn owner_completions(&self) -> u32 {
+        u32::from_le(self.storage.words()[OWNER_COMPLETIONS].load(Ordering::Acquire))
+    }
     pub fn latch_helper_failure(&self) {
         self.storage.words()[HELPER_FAILURE].store(1, Ordering::Release);
     }
@@ -469,6 +481,15 @@ mod tests {
             },
         )
         .unwrap()
+    }
+    #[test]
+    fn native_owner_completion_fails_before_counter_wrap() {
+        let region = region();
+        region.storage.words()[OWNER_COMPLETIONS].store((u32::MAX - 1).to_le(), Ordering::Relaxed);
+        region.owner_completed().unwrap();
+        assert_eq!(region.owner_completions(), u32::MAX);
+        assert_eq!(region.owner_completed(), Err(ProtocolError::Sequence));
+        assert_eq!(region.owner_completions(), u32::MAX);
     }
     #[test]
     fn claimed_late_slot_is_not_reused_and_matching_output_roundtrips() {

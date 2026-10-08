@@ -37,6 +37,9 @@ pub(crate) enum Kind {
     Gain,
     /// Truthful stereo37-frame delay; original gain fixture stays undelayed.
     BridgeDelayed,
+    BridgeProcessHang,
+    BridgeIdleHang,
+    BridgeNoteProbe,
     /// Sine instrument that takes CLAP notes and reports latency.
     Sine,
     /// The same instrument with a note port that only speaks MIDI.
@@ -165,6 +168,24 @@ const SPECS: &[Spec] = &[
         id: c"org.windfall.test.bridge-delayed",
         name: c"Test Bridge Delayed Effect",
         features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeProcessHang,
+        id: c"org.windfall.test.bridge-process-hang",
+        name: c"Test Bridge Permanent Process Hang",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeIdleHang,
+        id: c"org.windfall.test.bridge-idle-hang",
+        name: c"Test Bridge Permanent Main Thread Hang",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeNoteProbe,
+        id: c"org.windfall.test.bridge-note-probe",
+        name: c"Test Bridge Held Key Probe",
+        features: INSTRUMENT,
     },
 ];
 

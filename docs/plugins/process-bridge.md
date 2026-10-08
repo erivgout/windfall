@@ -7,8 +7,8 @@ the bridge or native editor parity rows.
 The owner has since advanced its worktree baseline to `7f70315c` (including
 `19caf872`) at the parent's direction. The parent approved the proposed 2B
 schedule and host-library edit window; production runtime/manager/main and
-shared fixture hooks remain reserved while native control-ordering repairs are
-reviewed. The initial 512-frame default delay was a proposal; the evidence
+shared fixture classes 10+ have a narrow approved window; production routing
+remains reserved while bridge review repairs are independently accepted. The initial 512-frame default delay was a proposal; the evidence
 below now measures it with B=256 native helper fixtures, separately from B=64.
 The owner subsequently imported reviewed R4 `ec601edf` in local merge
 `02072c81`, using the parent's applied `ea145d93` composition to preserve the
@@ -30,7 +30,7 @@ This is crash containment, not a security sandbox. Native code can access the
 user's files and other processes with their permissions. Corrupt protocol data
 is rejected; isolation does not make an intentionally hostile plugin safe.
 
-## ABI version 1
+## ABI version 2
 
 Only 64-bit little-endian Windows is initially enabled. The mapping is a fixed
 size, page-aligned array of aligned 32-bit words. No Rust enum, pointer, slice,
@@ -42,7 +42,7 @@ data race. Slot state uses acquire/release operations on aligned lock-free
 32-bit atomics. This is an explicitly supported platform ABI, not a claim that
 Rust structs or atomics have a portable cross-process representation.
 
-The immutable header records magic/version, mapping/header/slot sizes, four
+The startup header records magic/version, mapping/header/slot sizes, four
 slots, block capacity 512, event capacity 1153 (1024 ordinary + 129 reserved
 releases), parameter capacity 4096, rate, selected block size, native latency,
 kind, session/token/revision/binding identity and all section offsets. Validate
@@ -56,7 +56,9 @@ stale or corrupt output rejects the completed block and increments telemetry.
 Each slot holds identity, sequence, transport, input/output audio, block-start
 held-note and current-parameter snapshots, and ordered events. Snapshots allow
 the helper to reconstruct current controls after skipped sequences without
-replaying released notes. Ordinary overflow rejects note-ons and retains the
+replaying released notes. Admission/drop uncertainty also persists across
+contiguous blocks: the next whole held snapshot must actually be reconciled
+before its generation can be acknowledged, even without a parameter change. Ordinary overflow rejects note-ons and retains the
 latest parameter for a later block; release admission has its own reserve.
 
 Document commit, host admission and native processing are separate generations.
@@ -119,14 +121,32 @@ into the desktop as an isolation fallback.
 Offline helpers are separate instances and owners. Offline processing may wait
 for the same sequence off realtime with a deadline and cancellation; output is
 still passed through the identical block adapter and aligned by the same
-latency. Streaming and offline scheduling differ. A failed export returns an
-error to the existing encoder staging owner; this module never publishes or
+latency. Streaming and offline scheduling differ. Waiting and success checks
+observe the shared native-failure latch directly, independently of the
+supervisor's later signal. Any offline error clears both supplied buffers so
+partial/fallback audio cannot be mistaken for successful export output. The
+staging owner must discard the complete artifact and flush the healthy delay
+pipeline before publication. A failed export returns an error to the existing encoder staging owner; this module never publishes or
 deletes output files, and never modifies the live plugin/document.
 
 ## Control and supervision
 
-A bounded length-prefixed control protocol over one private loopback TCP
+A bounded length-prefixed control protocol over an authenticated loopback TCP
 connection is separate from mapped audio (native stdout cannot corrupt it).
+Before any Load/path/state/mapping/owner metadata is sent, the supervisor
+creates a 32-byte BCryptGenRandom system-preferred key. A new private child
+stdin pipe carries that key plus the eight-byte expected session; neither key
+nor owner metadata is placed in CLI/environment/logs. The child sends a fixed
+40-byte Hello: WFAH magic (4), Hello version1 (4 LE), nonce (32). Malformed,
+wrong-version/key and stalled clients receive zero metadata and are closed.
+At most eight candidates are polled without blocking; a full stalled set
+releases its oldest candidate for a newcomer. Candidate age is 50 ms, and the
+whole startup retains deadline/cancellation/child-exit bounds. RNG, pipe or
+authentication failure fails closed and the child owner reaps on unwinding.
+This prevents an unrelated first loopback client from obtaining the launch
+payload; it is not a security sandbox or privileged-adversary defense.
+Hello version1 and control framing version1 are distinct from mapping ABI2;
+none has a downgrade path.
 The 24-byte little-endian frame prefix bounds metadata to 1 MiB and native
 state to the existing 256 MiB host limit. Partial reads retain framing state;
 there is one reader and no abandoned blocked reader thread per timeout.
@@ -136,9 +156,23 @@ container. Transport and automation use only the audio path. Control IO and
 native calls run away from audio. Native VST3 capture proves deactivation and
 captures/reprepares on the helper owner; refusal retains the exact adapter and
 returns an error. CLAP capture preserves its accepted active-state semantics.
-Retain the last validated successful state; a truncated/malformed/stale reply
-cannot replace it. Pending controls have finite deadlines; hung native work
+Retain the last validated successful state; cache publication is fenced by
+serialized request ID so an older caller cannot overwrite a newer capture.
+A truncated/malformed/stale reply cannot replace it. Retained DSP proof is
+bound to the actual processing epoch, even when VST3 capture clears sequence
+continuity; inactive reconciliation never relabels old DSP proof after reset. Pending controls have finite deadlines; hung native work
 ends by killing only that helper and waiting for its exit.
+
+Header word27 (byte108) is a bounded u32 native-owner completion counter.
+The helper publishes it with Release only after the synchronous native
+process/control and idle owner turn returns; the supervisor observes Acquire.
+It is liveness evidence only, never admission or DSP-generation proof. No-work
+idle/stopped sessions do not arm the watchdog. Outstanding work arms a fresh
+age; READY turnover and temporary empty gaps cannot reset it. Actual owner
+completion may disarm that obligation; new outstanding work then starts fresh.
+The helper exits before counter wrap; restart uses a new session/map. This
+bounds a helper lifetime to at most u32::MAX owner turns, independently of the
+64-bit audio sequence/generation limits.
 
 The supervisor detects death, startup/control timeouts and stalled published
 audio progress. All such failures latch that instance unavailable. No automatic
@@ -160,7 +194,7 @@ shared wiring; persisted wrapper options are outside this patch.
 ## Dependencies and verification
 
 Use existing serde/serde_json, rtrb and Windows bindings. The approved feature
-addition enables Memory/Security in existing `windows-sys` **0.61.2**, whose
+addition enables Memory/Security/Cryptography in existing `windows-sys` **0.61.2**, whose
 only locked package dependency is existing `windows-link` **0.2.1**. Both local
 registry manifests declare MIT OR Apache-2.0, compatible with the GPL project.
 The feature change adds no package, lockfile change, native library download or
@@ -194,16 +228,18 @@ parent's existing runtime/main/manager edit reservation.
 
 Current Windows headless evidence:
 
-- Fourteen bridge unit checks pass, including exact layout/identity/events,
+- Twenty bridge unit checks pass, including exact layout/identity/events,
   corrupt output, late helper-owned slot preservation, overflow snapshots,
   epoch rejection, no submission acknowledgement, continuous fallback ramps,
   counter exhaustion, transport-bound exhaustion without callback panic,
   bounded retry/cooldown/stale-attempt rejection and local-reference delay.
-- Ten real process checks pass: CLAP native crash, nonfinite samples and a
+- Seventeen process integration checks pass (one additional ignored test is an
+  explicitly invoked client subprocess role): CLAP native crash, nonfinite samples and a
   helper deadline exceeded by a slow native block are terminated/reaped while
   the parent stays alive with aligned dry fallback; VST3 processing errors and
-  nonfinite samples are likewise contained. These tests do not yet exercise a
-  permanent native hang or exit during capture.
+  nonfinite samples are likewise contained. Newly appended CLAP/VST3 permanent
+  native process hangs are terminated; a CLAP on_main_thread permanent hang is
+  killed while B=256/48k callbacks keep replacing expired READY slots.
 - Healthy CLAP/VST3 native state capture and in-process restore preserve real
   values; different instances use different helper PIDs and retiring one
   leaves the other healthy. Unsupported native editor requests return an
@@ -223,7 +259,7 @@ Current Windows headless evidence:
   preallocated 37-frame stereo delay. Healthy helper audio and delayed dry
   fallback after confirmed termination both begin at **165 frames for B=64**
   and **549 for B=256**, exactly matching the adapter's latency report. VST3
-  class 10 follows the unchanged original classes 0–9; scanner count is 11.
+  class 10 follows the unchanged original classes 0–9; scanner count is 13 (class11 permanent process hang, class12 held-key probe).
   Engine graph PDC/routing/dry-wet integration remains unverified until wiring.
 - Before any native DSP block, capture retains pending parameter intent without
   claiming DSP acknowledgement. CLAP stays active: its opaque state retains
@@ -231,15 +267,16 @@ Current Windows headless evidence:
   reconciles inactive state to 0.75 and reports a separate reconciliation
   generation. Both report DSP generation zero. Rejected capture metadata
   preserves the previous validated state and leaves a healthy helper alive.
-- Separate offline native helpers return cancellation/deadline errors without
-  changing the caller's unconsumed buffers. Explicit control-side termination
+- Separate offline native helpers return cancellation/deadline errors with
+  both supplied buffers cleared on error. Explicit control-side termination
   confirms exit while audio retains its mapping for allocation-free fallback,
   and an independent live helper stays healthy. Exit bookkeeping reports reaped
   only after confirmed process exit, with a bounded termination deadline.
 - A calibrated thread-local allocator guard records zero callback alloc,
   realloc and free calls through startup, full/late slots, parameter/note
   saturation, reset and latched failure with variable callbacks. One recorded
-  run of 320 calls measured maximum 73 microseconds and average 1 microsecond.
+  run of 320 calls measured maximum 73 microseconds and average 1 microsecond;
+  the final R1 run observed maximum 9 and average 1 microseconds.
   Maximum and average are separate wall-clock observations on a busy machine,
   not CPU utilization or a physical audio deadline claim.
 - Strict host Clippy with **all features and all targets**, and the appended
@@ -248,17 +285,84 @@ Current Windows headless evidence:
   separate event admission success, a matching successful nonempty native
   completion, and unchanged nonsaturated dropped counters taken immediately
   before/after native processing. Native input/output losses are separately
-  observable and retain desired controls; the parent is still accepting the
-  VST3 point-capacity prerequisite repair before production use.
+  observable and retain desired controls. R4 prerequisite source is accepted;
+  production use still awaits independent bridge-repair acceptance.
 - All sixteen existing realtime checks pass, including native CLAP/VST3
   allocator, note-release reserve and ownership regressions. The fixture was
   built separately and the test executable run directly to keep one Cargo
   process per owner.
 
 Pending: production factory/manager/helper mode and adopted document metadata,
-true hang/capture-exit/malformed-state/bad-latency fixture hooks (shared hooks
-reserved), save/undo/replacement/recording barriers, engine PDC/routing/export
+capture-exit/hang/malformed-state/bad-latency fixture hooks, save/undo/replacement/recording barriers, engine PDC/routing/export
 and stems, manager wiring for the tested retry budget, packaged installer discovery, licensed
 corpus, native editors and other OS execution. Existing state bytes are opaque:
 checked container/stream validity is enforced, but this does not prove an
 arbitrary plugin can restore every semantically malformed native payload.
+
+## ABI2 byte offsets and R1 repair evidence
+
+All integer fields below are little endian. Header length is 256 bytes, each
+slot 85,824 bytes, mapping 343,552 bytes. Slot i starts at 256 + i * 85,824.
+No shared Rust layout defines these offsets. Unlisted startup header words
+must be zero; attach rejects ABI1 or any size/offset/identity mismatch before
+native load. Latency negotiation updates byte44 before audio installation.
+
+| Header byte offset | Field |
+| --- | --- |
+| 0/4 | WFBR magic / mapping version2 |
+| 8/12/16/20 | mapping bytes / header words / slot words / slot count |
+| 24/28/32 | max block512 / events1153 / parameters4096 |
+| 36/40/44/48 | rate / block / negotiated native latency / role |
+| 52/56/60 | input / output / events section word offsets |
+| 64/72/80/88 | u64 session / token / revision / binding |
+| 96/100 | notes / parameters section word offsets |
+| 104/108 | helper failure latch / owner completion counter |
+
+| Slot byte offset | Field |
+| --- | --- |
+| 0 | CAS ownership state |
+| 4/12/20/28 | u64 input session / token / revision / binding |
+| 36/44/48/52/56/60 | u64 sequence / frames / event count / parameter count / incomplete flags / note channel |
+| 64 | transport40B: playing/numerator/denominator u32, tempo/beats/seconds f64, reserved u32 |
+| 112 | u64 input epoch |
+| 128/136/144/152 | u64 reply session / token / revision / binding |
+| 160/168/172/176/184 | u64 reply sequence / frames / status / epoch / DSP generation |
+| 192/200/208 | u64 control start / control end / u32 native drops |
+| 256/4352 | planar stereo input / output; each has 512 f32 samples per channel |
+| 8448 | 128 f32 held velocities on named channel0 |
+| 8960 | up to4096 parameters: u32 id + f64 value (12B each) |
+| 58112 | up to1153 events, six u32 words (24B each) |
+
+Event tags 1/2 are on/off: tag,time,key,channel,f32 velocity,zero. Tag3 is
+panic: tag,time,then zeros. Tag4 is parameter: tag,time,id,zero,f64 value.
+Control framing remains WFCB/version1: 4B magic,4B version,8B request,
+4B metadata length,4B state length, followed by checked JSON and WFPS bytes.
+
+The six source-review counterexamples were reproduced before repair:
+
+- Watchdog: real CLAP idle/main-thread hang at B64 and requested B256/48k
+  evaded the old timer during READY turnover; bounded RED, then GREEN reap.
+  Healthy no-work idle/reset and 120 variable callback turns stay alive without
+  fabricated DSP acknowledgement; temporary empty obligations/counter rollover
+  have deterministic unit coverage.
+- Notes: 1024 admitted key60 note-ons plus rejected key69 falsely acknowledged
+  the continuous next generation with native key-probe output zero (RED).
+  CLAP/VST3 now actually output one for key69 before matching COMPLETE ack,
+  and a later release actually returns the native marker to zero.
+- Offline: native shared failure/DONE with delayed supervisor flag returned Ok
+  (RED); now Err(Failed) with both buffers zero (GREEN).
+- Epoch: two real VST3 captures around reset without new DSP returned old
+  generation under epoch2 (RED); epoch2 now carries zero DSP proof (GREEN).
+- Cache: reversed cloned-caller publication overwrote request2 with request1
+  (barrier RED); monotonic request fencing preserves request2 (GREEN).
+- Authentication: restoring first-client acceptance made the real unrelated
+  client consume Load and reset the connection (compiled RED); private-key
+  Hello gates metadata (GREEN), including eight stalled first sockets and a
+  wrong Hello. Wrong intended-child key and startup cancellation fail closed
+  with bounded process reap. Crypto-failure propagation is implemented;
+  actual OS RNG failure is not artificially induced.
+
+Strict all-feature/all-target Clippy, fixture formatting and scanner counts
+are rerun for the source-only response commit. These tests remain headless
+Windows evidence; no production desktop activation, installed-package helper
+claim, licensed-corpus result, native editor parity or other-OS claim follows.

@@ -1,6 +1,11 @@
 //! Shared deterministic DSP for newly appended bridge fixtures.
 
 pub(crate) const DELAY: usize = 37;
+pub(crate) fn hang() -> ! {
+    loop {
+        std::thread::park();
+    }
+}
 
 pub(crate) struct DelayedEffect {
     samples: [[f32; 2]; DELAY],
