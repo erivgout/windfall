@@ -10,6 +10,216 @@ use crate::paths;
 use crate::samples::PEAK_BUCKETS;
 use crate::session::PROJECT_REPLACED;
 
+fn checked_import(
+    rig: &Rig,
+    path: &str,
+    token: windfall_ipc::LibraryFileToken,
+    destination: &str,
+) -> Result<windfall_project::DispatchResult, String> {
+    match destination {
+        "rack" => rig.session.browser_add_channel(path, None, token),
+        "playlist" => rig.session.browser_add_clip(
+            path,
+            crate::session::ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+            token,
+        ),
+        "replacement" => {
+            rig.session
+                .browser_replace_sample(rig.project().channels[0].id, path, token)
+        }
+        _ => panic!("unknown destination"),
+    }
+}
+
+#[test]
+fn checked_import_refuses_reusing_a_loaded_older_file_version_at_every_destination() {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+
+    for destination in ["rack", "playlist", "replacement"] {
+        let rig = Rig::new();
+        let samples = rig.folder.path().join("Samples");
+        fs::create_dir(&samples).unwrap();
+        let file = samples.join("tone.wav");
+        let write = |frames, level| {
+            write_wav(
+                &file,
+                &AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]),
+                WavSampleFormat::Float32,
+            )
+            .unwrap();
+        };
+        write(480, 0.25);
+        let path = paths::display(&file);
+        rig.session
+            .browser_add_root(&paths::display(&samples))
+            .unwrap();
+        let token = rig.session.library_file(&path).unwrap();
+        let first = rig
+            .session
+            .browser_add_channel(&path, None, token.clone())
+            .unwrap();
+        let sample = SampleId(first.created[0]);
+        let old = rig.session.state().pool.get(sample).unwrap().clone();
+        // Unchanged imports must deduplicate and undo as one normal edit.
+        rig.session.browser_add_channel(&path, None, token).unwrap();
+        assert_eq!(
+            rig.project()
+                .samples
+                .iter()
+                .filter(|s| s.id == sample)
+                .count(),
+            1
+        );
+        rig.session.undo().unwrap();
+        write(960, 0.75);
+        rig.session.library_refresh();
+        let token = rig.session.library_file(&path).unwrap();
+        assert_eq!(
+            rig.session
+                .browser_sample_info(&path, &token)
+                .unwrap()
+                .frames,
+            960
+        );
+        rig.session.browser_preview(&path, &token).unwrap();
+        let before = rig.session.document_snapshot();
+        let result = checked_import(&rig, &path, token, destination);
+        assert!(
+            result.is_err(),
+            "{destination} accepted new audio but retained {} old frames",
+            rig.session.state().pool.get(sample).unwrap().frames()
+        );
+        assert_eq!(rig.session.document_snapshot(), before);
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().samples(),
+            old.samples()
+        );
+        assert!(result.unwrap_err().contains("older or unverified version"));
+
+        // Saving does not persist an unundoable source replacement. Reopening
+        // deliberately reloads linked external audio from its current version.
+        let saved = rig
+            .session
+            .project_save(Some(&rig.file("Saved/song")))
+            .unwrap();
+        rig.session.project_open(&saved).unwrap();
+        assert_eq!(rig.session.state().pool.get(sample).unwrap().frames(), 960);
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().samples()[0],
+            0.75
+        );
+        let before = rig.project();
+        let token = rig.session.library_file(&path).unwrap();
+        checked_import(&rig, &path, token, destination).unwrap();
+        assert_eq!(rig.project().samples.len(), before.samples.len());
+        if destination == "playlist" {
+            let clip = rig.project().playlist.clips.last().unwrap().clone();
+            let ticks = (0.02 * before.settings.tempo_bpm * f64::from(windfall_core::PPQ) / 60.0)
+                .ceil() as u32;
+            assert_eq!(clip.length, ticks);
+        }
+        rig.session.undo().unwrap();
+        let mut current = rig.project();
+        current.next_id = before.next_id;
+        assert_eq!(current, before);
+        assert_eq!(rig.session.state().pool.get(sample).unwrap().frames(), 960);
+    }
+}
+
+#[test]
+fn checked_unchanged_imports_deduplicate_after_decoded_cache_eviction() {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    let rig = Rig::new();
+    let folder = rig.folder.path().join("Samples");
+    fs::create_dir(&folder).unwrap();
+    let file = folder.join("tone.wav");
+    let audio = AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 480]);
+    write_wav(&file, &audio, WavSampleFormat::Float32).unwrap();
+    rig.session
+        .browser_add_root(&paths::display(&folder))
+        .unwrap();
+    let path = paths::display(&file);
+    let first = rig
+        .session
+        .browser_add_channel(&path, None, rig.session.library_file(&path).unwrap())
+        .unwrap();
+    let sample = SampleId(first.created[0]);
+    let original = rig.session.state().pool.get(sample).unwrap().identity();
+    for i in 0..65 {
+        let other = folder.join(format!("{i}.wav"));
+        write_wav(&other, &audio, WavSampleFormat::Float32).unwrap();
+        rig.session.inner.cache.decode(&other).unwrap();
+    }
+    assert!(rig.session.inner.cache.peek(&file).is_none());
+    for destination in ["rack", "playlist", "replacement"] {
+        let before = rig.project();
+        checked_import(
+            &rig,
+            &path,
+            rig.session.library_file(&path).unwrap(),
+            destination,
+        )
+        .unwrap();
+        assert_eq!(rig.project().samples.len(), before.samples.len());
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().identity(),
+            original
+        );
+        rig.session.undo().unwrap();
+        let mut current = rig.project();
+        current.next_id = before.next_id;
+        assert_eq!(current, before);
+    }
+}
+
+#[test]
+fn checked_imports_keep_native_project_guards_across_new_and_open_at_every_destination() {
+    for change in ["New", "Open"] {
+        for destination in ["rack", "playlist", "replacement"] {
+            let rig = Rig::new();
+            let saved = rig
+                .session
+                .project_save(Some(&rig.file("Saved/song")))
+                .unwrap();
+            let path = factory_file("Drums/Kicks/Kick Punch.wav");
+            let token = rig.session.library_file(&path).unwrap();
+            let channel = rig.project().channels[0].id;
+            let hold = rig.session.hold("import:decoded");
+            let session = rig.session.clone();
+            let job = std::thread::spawn(move || match destination {
+                "rack" => session.browser_add_channel(&path, None, token),
+                "playlist" => session.browser_add_clip(
+                    &path,
+                    crate::session::ClipPlace {
+                        track: None,
+                        start: 0,
+                        mixer_track: None,
+                    },
+                    token,
+                ),
+                _ => session.browser_replace_sample(channel, &path, token),
+            });
+            hold.wait();
+            if change == "New" {
+                rig.session.project_new().unwrap();
+            } else {
+                rig.session.project_open(&saved).unwrap();
+            }
+            assert_eq!(rig.project().channels[0].id, channel);
+            let before = rig.session.document_snapshot();
+            drop(hold);
+            assert!(job.join().unwrap().is_err());
+            assert_eq!(rig.session.document_snapshot(), before);
+        }
+    }
+}
+
 #[test]
 fn library_results_audition_import_undo_and_metadata_restart_use_the_existing_loader() {
     let rig = Rig::new();
