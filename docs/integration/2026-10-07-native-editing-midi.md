@@ -524,3 +524,65 @@ wiring waits for acceptance. T1's new timeline/navigation Plan data is
 separate from the utility owner's newly approved `Plan::keep_leaving` fix for
 an unrelated-plan edit interrupting a live departure splice. No second owner
 is rewriting the reserved Rack/State/native runtime seams.
+
+## 2026-10-08 accepted import and stamp boundaries
+
+Independent runtime R5 is clean at `ec601edf` / root `ea145d93` by
+source tracing. Root fixed-source `7c7ed3ff` passed 106 host, eight engine
+plugin and 39 desktop native cases, including all four R4 capture roles,
+the default scanner fallback and the real CLAP archive/export round trip.
+The command then stopped on a strict Clippy test-initializer warning in
+bridge protocol tests. Root `7e0e3852` corrects that initializer without
+changing production behavior; the modified test and remaining strict checks
+passed on the next composition. The earlier command's exit 101 is retained
+as a failed check, not reported as a complete pass.
+
+Stamp `f39b90f8` is integrated as `cdd3b0c3`. Independent R4 found no
+actionable defects, independently passed 174 focused tests and checked
+actual delayed animation, scale changes and pre-IPC history cancellation
+in its isolated browser. Root independently passed 171 tests across eight
+stamp/history files, narrow lint and production TypeScript/Vite build.
+Physical WebGPU/native Tauri focus remains unverified.
+
+Sampler recovery `25ca8b03` and browser `8ff5a6bb` are integrated as
+`7ed8153d` and `8660fbe2`. One fresh composed review covered browser R4
+and sampler R3 together, closing the shared restored-source finding once,
+along with stale picker/reply and Windows alias provenance findings. It
+independently passed 19 bounded UI tests and inspected native assertions;
+it did not rerun the owner's native tests. Parent composition `8660fbe2`
+passed 84 focused native cases: 22 sampler preparation, 35 session library,
+nine sample-cache, seven native library, six import-format/recording,
+two recording and three clip-recording cases. An initial `import::` filter
+matched zero; the actual `import_formats` and `import_recording` modules
+were then run and all six passed. This correction is not a repeated pass.
+
+Root also passed 268 browser/import UI tests across 14 files, narrow lint,
+production TypeScript/Vite build, all-feature/all-target host Clippy,
+engine/desktop all-target Clippy, workspace and fixture formatting,
+WASM freshness and whitespace checks. The simulator remains 1,863,302
+bytes and the model/schema has not changed in these repairs. These are
+focused checks on top of the preceding 654-native/2,450-UI composition,
+not another complete workspace run.
+
+Independent N4 leaf R1 identified six source-level counterexamples in
+the fixed `7c7ed3ff` composition: READY turnover resetting watchdog age,
+lost note intent falsely acknowledged, offline success before supervisor
+failure publication, old DSP proof relabelled across capture epochs,
+concurrent capture cache order, and an unauthenticated first loopback
+client. They are assigned to the same bridge owner for compiled
+reproduction and repair. Desktop runtime/main/manager/factory activation
+remains closed. The separate `27dc8a4a` followup supplies truthful native
+37-frame delay fixtures and retry/cancellation hardening; it does not
+constitute acceptance of these six findings or graph PDC integration.
+
+Utility R3 `3073d220` and portable R3 `d9ac3da5` are delivered for new
+independent reviews. Utility includes the approved progress/owner fix for
+successive unrelated plans; portable includes actual bounded public ZIP
+reader and exact source-identity regressions. They remain unaccepted until
+review/composed checks. T1 reports actual navigation, bounded callback
+transitions and buffered/stream/stem region parity; PDC/tempo/tails/native
+WAV and shared-WASM UI coverage are still being completed before delivery.
+
+GitHub was rechecked: the repository is private, alpha assets retain their
+original names/sizes, and `artoomreinhart` still has the pending write
+invitation. No release, tag, asset replacement or new invitation was made.

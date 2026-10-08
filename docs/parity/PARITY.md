@@ -6,7 +6,7 @@
 > Notes may mention FL names for the same purpose. They are Image-Line's names and are never used as Windfall
 > names. `TBD` in the Windfall column means the Windfall name has not been chosen yet.
 
-As of 2026-10-07. Sources:
+As of 2026-10-08. Sources:
 
 - <https://www.image-line.com/fl-studio/compare-editions>
 - <https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/>
@@ -18,15 +18,15 @@ As of 2026-10-07. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 222 |
-| In progress | 50 |
+| Todo | 218 |
+| In progress | 54 |
 | Done | 68 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
-| Core features | 23 | 13 | 7 | 2 | 1 |
-| Main windows | 113 | 51 | 17 | 44 | 1 |
+| Core features | 23 | 12 | 8 | 2 | 1 |
+| Main windows | 113 | 48 | 20 | 44 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,7 +38,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 6 | 9 | 22 | 2 |
-| 2. Write a song | 99 | 45 | 20 | 34 | 0 |
+| 2. Write a song | 99 | 41 | 24 | 34 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
 | 5. The long tail | 129 | 122 | 7 | 0 | 0 |
@@ -64,7 +64,7 @@ As of 2026-10-07. Sources:
 | Mixer | Mixer | 2 | in-progress | Umbrella row; the basic mixer lands in phase 1 and routing, sends and effect slots in phase 2 (win-mixer-* rows). Tracks, routing, sends, effect slots, meters and delay compensation are in. Sidechain, track EQ and track presets are separate rows. |
 | Full Song Arrangement | Playlist | 2 | done | Pattern, audio and automation clips on the playlist, with song mode. |
 | Automation Clips | Automation clips | 2 | in-progress | Curves with bends and holds for volume, pan, sends, effect and instrument settings, effect mix and tempo. No LFO or step drawing modes yet. |
-| Time signature changes | Time signature changes | 2 | todo |  |
+| Time signature changes | Time signature changes | 2 | in-progress | T1 is implementing checked persisted song meter maps, shortened-bar conversions and MIDI/FLP song-map plumbing. Native tests are running; delivery, independent acceptance and per-pattern signatures remain required. See docs/IMPLEMENTATION-ROADMAP.md. |
 | MIDI Support | MIDI input | 3 | in-progress | Native MIDI input auditions one explicit channel with note-on/off, sustain, channel filtering and bounded queue cleanup. Note recording, controller mapping, timestamp/sample-clock alignment and physical hardware verification remain pending. See docs/MIDI-HARDWARE.md. |
 | MIDI Out | MIDI output | 3 | in-progress | Optional single-port live-note forwarding balances retriggers/releases and clears held hardware notes on route/device changes and panic. Pattern/playlist output, controller messages, clock and a dedicated MIDI-out channel remain pending; no physical output verification is claimed. See docs/MIDI-HARDWARE.md. |
 | VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and saved state are integrated. VST3 processor-return/capture foundation is tested, while production desktop additions await remaining lifecycle/event safeguards. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md. |
@@ -141,18 +141,18 @@ As of 2026-10-07. Sources:
 | Playlist: Slip edit tool | Slip edit | 2 | todo |  |
 | Playlist: Slice tool | Playlist slice tool | 2 | in-progress | One selected audio clip can be split at reviewed grid/transient markers into source-linked clips in one undo step, retaining trim/reverse/tape pitch/routing. Drawn-line slicing across clip types remains pending. See docs/SLICER.md. |
 | Playlist: Select tool | Playlist select tool | 2 | done |  |
-| Playlist: Zoom tool | Playlist zoom tool | 2 | todo |  |
+| Playlist: Zoom tool | Playlist zoom tool | 2 | in-progress | T1 is implementing dragged-region playlist zoom with logical coordinates and cancellation. Final delivery and shared-WASM UI acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md. |
 | Playlist: Playback tool | Playlist scrub tool | 2 | todo |  |
 | Playlist tracks (name, color, mute, solo, resize) | Playlist tracks | 2 | in-progress | Name, mute and reordering. No color, solo or per-track resize yet. |
 | Playlist: track grouping | Track groups | 2 | todo |  |
 | Playlist: instrument tracks and audio tracks | Linked tracks | 2 | todo |  |
-| Playlist: time markers | Time markers | 2 | todo |  |
+| Playlist: time markers | Time markers | 2 | in-progress | T1 has implemented named/loop/skip/pause marker commands and actual bounded native navigation in its isolated worktree. PDC, tempo, tails and composed UI/native acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md. |
 | Playlist: arrangements | Arrangements | 2 | todo |  |
 | Playlist: clip source menu and picker panel | Clip picker | 2 | done | Patterns, audio and automations can each be picked as the brush. |
 | Playlist: clip grouping | Clip groups | 2 | todo |  |
 | Playlist: make unique | Make unique | 2 | todo |  |
 | Playlist: snap | Playlist snap | 2 | done |  |
-| Playlist: timeline selection and loop region | Loop region | 2 | todo |  |
+| Playlist: timeline selection and loop region | Loop region | 2 | in-progress | T1 is implementing selected playback/loop/export ranges with native transport precedence and buffered/stream/stem parity. Final source delivery and independent/composed acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md. |
 | Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | in-progress | Fade in, fade out and gain handles. No automatic crossfades yet. |
 | Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Per-instance gain, pan, tape/spectral pitch, reverse, fades and independent playlist stretch are implemented. Native audio-editor normalization creates a unique derived WAV with undo; a direct non-destructive normalize property remains pending. See docs/AUDIO-EDITOR.md and docs/ARCHITECTURE.md. |
 | Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
@@ -379,7 +379,7 @@ As of 2026-10-07. Sources:
 | Plugin hosting: Audio Unit | AU hosting | 4 | todo | macOS only. |
 | Plugin hosting: VST2 | VST2 hosting | 4 | todo | unverified: licensing path. Not in the plan; Steinberg no longer issues VST2 SDK licenses, so this needs a decision and may become wont-do. |
 | Plugin manager (scan and verify) | Plugin scanner | 4 | in-progress | Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. Both formats can be added as rack instruments or mixer effects after native identity/role validation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md. |
-| Bridged plugins (separate process) | Out-of-process plugins | 4 | in-progress | An isolated T3 owner is implementing the N4 Windows audio/state process bridge with a versioned bounded ABI, nonblocking extra-block pipeline, latency-matched fallback, supervisor and native failure fixtures. Existing host wiring requires coordinated integration; no audio crash-containment or full-row completion claim is made. Native editors, packaged helper discovery, external plugins and other platforms remain required. See docs/IMPLEMENTATION-ROADMAP.md. |
+| Bridged plugins (separate process) | Out-of-process plugins | 4 | in-progress | Windows per-instance atomic mapping/helper/supervisor and a nonblocking measured 2B callback pipeline are under implementation. Fixed-source review found six watchdog, acknowledgement, offline-failure, capture-order and helper-authentication cases assigned for repair before desktop activation. Native delay fixtures, graph PDC, packaged discovery, editors, external plugins and other platforms remain required. See docs/plugins/process-bridge.md. |
 | Plugin wrapper options (smart disable, fixed-size buffers, threaded processing, scaling, detached window) | Plugin host options | 4 | todo |  |
 | FL Studio as a VST or AU plugin | Windfall as a plugin | 6 | todo | The plan lists this as 'possible later' and assigns no phase. |
 

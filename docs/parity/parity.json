@@ -4,7 +4,7 @@
     "https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/",
     "https://forum.image-line.com/viewtopic.php?p=2065297"
   ],
-  "as_of": "2026-10-07",
+  "as_of": "2026-10-08",
   "rows": [
     {
       "id": "core-lifetime-free-updates",
@@ -193,10 +193,10 @@
       "summary": "Lets the time signature change at chosen points on the timeline or inside a pattern.",
       "windfall_name": "Time signature changes",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "T1 is implementing checked persisted song meter maps, shortened-bar conversions and MIDI/FLP song-map plumbing. Native tests are running; delivery, independent acceptance and per-pattern signatures remain required. See docs/IMPLEMENTATION-ROADMAP.md."
     },
     {
       "id": "core-midi-support",
@@ -1057,10 +1057,10 @@
       "summary": "Zooms the view to a dragged region.",
       "windfall_name": "Playlist zoom tool",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "T1 is implementing dragged-region playlist zoom with logical coordinates and cancellation. Final delivery and shared-WASM UI acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md."
     },
     {
       "id": "win-playlist-playback",
@@ -1117,10 +1117,10 @@
       "summary": "Named points on the timeline that label sections and can loop, skip or pause playback.",
       "windfall_name": "Time markers",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "T1 has implemented named/loop/skip/pause marker commands and actual bounded native navigation in its isolated worktree. PDC, tempo, tails and composed UI/native acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md."
     },
     {
       "id": "win-playlist-arrangements",
@@ -1189,10 +1189,10 @@
       "summary": "A highlighted time range that sets the loop for playback and the range for export.",
       "windfall_name": "Loop region",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "T1 is implementing selected playback/loop/export ranges with native transport precedence and buffered/stream/stem parity. Final source delivery and independent/composed acceptance remain pending. See docs/IMPLEMENTATION-ROADMAP.md."
     },
     {
       "id": "win-playlist-audio-clip-fades",
@@ -3616,7 +3616,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "An isolated T3 owner is implementing the N4 Windows audio/state process bridge with a versioned bounded ABI, nonblocking extra-block pipeline, latency-matched fallback, supervisor and native failure fixtures. Existing host wiring requires coordinated integration; no audio crash-containment or full-row completion claim is made. Native editors, packaged helper discovery, external plugins and other platforms remain required. See docs/IMPLEMENTATION-ROADMAP.md."
+      "notes": "Windows per-instance atomic mapping/helper/supervisor and a nonblocking measured 2B callback pipeline are under implementation. Fixed-source review found six watchdog, acknowledgement, offline-failure, capture-order and helper-authentication cases assigned for repair before desktop activation. Native delay fixtures, graph PDC, packaged discovery, editors, external plugins and other platforms remain required. See docs/plugins/process-bridge.md."
     },
     {
       "id": "fmt-host-wrapper-options",
