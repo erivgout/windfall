@@ -166,6 +166,222 @@ fn saturated_clap_parameter_edit_retries_without_replacing_playback_or_allocatin
 }
 
 #[test]
+fn runtime_repair_saturated_controls_survive_capture_save_backup_zip_and_export() {
+    for action in [
+        "capture",
+        "save",
+        "backup",
+        "zip",
+        "export",
+        "unobserved-save",
+    ] {
+        let mut rig = Rig::new();
+        let (manager, path) = manager(&rig);
+        let binding = manager
+            .binding(
+                &path,
+                "org.windfall.test.sine",
+                PluginTarget::Instrument {
+                    channel: windfall_project::ChannelId(0),
+                },
+            )
+            .unwrap();
+        let added = rig
+            .session
+            .dispatch(Command::AddPluginInstrument { plugin: binding }, None)
+            .unwrap();
+        let channel = windfall_project::ChannelId(added.created[0]);
+        let target = PluginTarget::Instrument { channel };
+        rig.session
+            .dispatch(
+                Command::ToggleStep {
+                    pattern: rig.pattern(),
+                    channel,
+                    step: 0,
+                },
+                None,
+            )
+            .unwrap();
+        rig.session
+            .dispatch(
+                Command::SetPluginParam {
+                    target,
+                    id: 1,
+                    value: 0.5,
+                },
+                None,
+            )
+            .unwrap();
+        rig.run(256);
+        let saved = rig.file("pending.windfall");
+        rig.session.project_save(Some(&saved)).unwrap();
+        rig.run(256);
+        let token = manager.runtime.selected_token(target).unwrap();
+        let epoch = rig.session.controller().hardware_epoch();
+        for _ in 0..1024 {
+            assert!(
+                rig.session
+                    .controller()
+                    .hardware_note(epoch, channel, 64, 100)
+            );
+        }
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+            0
+        );
+        rig.session
+            .dispatch(
+                Command::SetPluginParam {
+                    target,
+                    id: 1,
+                    value: 0.75,
+                },
+                None,
+            )
+            .unwrap();
+        if action != "unobserved-save" {
+            assert_eq!(
+                crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+                0
+            );
+        }
+        let value = |project: &Project| {
+            project
+                .plugin(target)
+                .unwrap()
+                .parameters
+                .iter()
+                .find(|param| param.id == 1)
+                .unwrap()
+                .value
+        };
+        if action == "export" {
+            let options = ExportOptions {
+                path: rig.file("pending.wav"),
+                format: ExportFormat::Wav,
+                bit_depth: BitDepth::Float32,
+                sample_rate: SAMPLE_RATE,
+                mode: PlayMode::Pattern,
+                tail_secs: 0.0,
+                ..Default::default()
+            };
+            rig.session.export_audio(options.clone()).unwrap();
+            assert_eq!(rig.events.wait_for_export().error, None);
+            let first = windfall_codec::decode_file(&options.path).unwrap();
+            assert_eq!(manager.runtime.selected_token(target), Some(token));
+            rig.run(2048);
+            rig.events.take();
+            let mut reference = options;
+            reference.path = rig.file("settled.wav");
+            rig.session.export_audio(reference.clone()).unwrap();
+            assert_eq!(rig.events.wait_for_export().error, None);
+            let settled = windfall_codec::decode_file(&reference.path).unwrap();
+            assert_eq!(
+                first.samples(),
+                settled.samples(),
+                "export before draining must render committed intent"
+            );
+            continue;
+        }
+        let captured = match action {
+            "capture" => manager.runtime.capture(rig.project()).unwrap(),
+            "save" | "unobserved-save" => {
+                rig.session.project_save(Some(&saved)).unwrap();
+                windfall_project::file::load(Path::new(&saved)).unwrap()
+            }
+            "backup" => {
+                let path = rig
+                    .session
+                    .write_backup("2026-10-07_21-00-00")
+                    .unwrap()
+                    .unwrap();
+                windfall_project::file::load(&path).unwrap()
+            }
+            "zip" => {
+                let zip = rig.file("pending.zip");
+                rig.session.project_archive_save(&zip).unwrap();
+                assert_eq!(manager.runtime.selected_token(target), Some(token));
+                rig.session.project_archive_open(&zip).unwrap().project
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            value(&captured),
+            0.75,
+            "{action}: older native state overwrote committed intent"
+        );
+        if action != "zip" {
+            assert_eq!(manager.runtime.selected_token(target), Some(token));
+        }
+        let reopened = rig.file("reopened.windfall");
+        windfall_project::file::save(&captured, Path::new(&reopened)).unwrap();
+        rig.session.project_open(&reopened).unwrap();
+        rig.run(512);
+        assert_eq!(value(&rig.project()), 0.75);
+        assert_eq!(
+            value(&manager.runtime.capture(rig.project()).unwrap()),
+            0.75
+        );
+    }
+}
+
+#[test]
+fn runtime_repair_vst3_bundle_binary_changes_require_rescan() {
+    use std::io::Write;
+    let rig = Rig::new();
+    let bundle = rig.folder.path().join("Bundle.vst3");
+    let inner = bundle.join("Contents/x86_64-win/Bundle.vst3");
+    std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
+    std::fs::copy(library(), &inner).unwrap();
+    let scanner = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap()
+        .join("debug/windfall-desktop.exe");
+    let manager = crate::plugins::PluginManager::fixture(rig.folder.path(), &bundle, &scanner);
+    let entry = manager
+        .state()
+        .entries
+        .into_iter()
+        .find(|entry| entry.format == "vst3" && !entry.instrument)
+        .unwrap();
+    let binding = manager
+        .binding(
+            &entry.path,
+            &entry.id,
+            PluginTarget::Effect {
+                effect: EffectId(901),
+            },
+        )
+        .unwrap();
+    let directory = std::fs::metadata(&bundle).unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&inner)
+        .unwrap()
+        .write_all(b"changed binary overlay")
+        .unwrap();
+    let after = std::fs::metadata(&bundle).unwrap();
+    assert_eq!(directory.len(), after.len());
+    assert_eq!(directory.modified().unwrap(), after.modified().unwrap());
+    assert!(
+        manager
+            .runtime
+            .discover(binding.clone())
+            .unwrap_err()
+            .contains("changed"),
+        "the loaded binary must match the approved scan"
+    );
+    let rescanned = crate::plugins::PluginManager::fixture(
+        &rig.folder.path().join("rescanned"),
+        &bundle,
+        &scanner,
+    );
+    assert!(rescanned.runtime.discover(binding.clone()).is_ok());
+    std::fs::remove_file(&inner).unwrap();
+    assert!(rescanned.runtime.discover(binding).is_err());
+}
+
+#[test]
 fn production_vst3_catalog_enables_checked_roles_and_excludes_rejected_layouts() {
     let rig = Rig::new();
     let folder = rig.folder.path().join("vst3-scan");

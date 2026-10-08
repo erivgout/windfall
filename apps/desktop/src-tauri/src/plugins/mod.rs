@@ -43,7 +43,9 @@ impl PluginManager {
             .refresh(&files, &ProcessRunner::new(scanner), &mut |_| {})
             .unwrap();
         manager.update_entries();
-        manager.runtime.approve(&manager.state().entries);
+        manager
+            .runtime
+            .approve_catalog(&manager.catalog.lock().unwrap());
         manager
     }
     pub fn new(folder: &Path) -> Result<Arc<Self>, String> {
@@ -358,7 +360,12 @@ impl PluginManager {
                 })();
                 manager.update_entries();
                 if result.is_ok() {
-                    manager.runtime.approve(&manager.state().entries);
+                    manager.runtime.approve_catalog(
+                        &manager
+                            .catalog
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()),
+                    );
                 }
                 manager
                     .retry_requested

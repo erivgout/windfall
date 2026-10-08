@@ -30,13 +30,20 @@ impl Session {
                         crate::plugins::binding_identity(binding) == request.binding
                     })
         };
-        {
+        let desired = {
             let state = self.state();
             if !current(&state) {
                 return Ok(false);
             }
-        }
-        let Some(captured) = runtime.capture_pending(request.clone())? else {
+            state
+                .document
+                .project()
+                .plugin(target)
+                .expect("checked binding")
+                .parameters
+                .clone()
+        };
+        let Some(captured) = runtime.capture_pending(request.clone(), desired.clone())? else {
             return Ok(false);
         };
         let mut state = self.state();
@@ -48,20 +55,23 @@ impl Session {
             .project()
             .plugin(target)
             .expect("checked binding");
+        if binding.parameters != desired {
+            return Err("Plugin parameters changed during state capture; retrying".into());
+        }
         let mut commands: Vec<_> = captured
             .parameters
-            .into_iter()
+            .iter()
             .filter(|(id, _)| {
                 binding
                     .parameters
                     .iter()
                     .any(|param| param.id == *id && !param.read_only)
             })
-            .map(|(id, value)| Command::SetPluginParam { target, id, value })
+            .map(|&(id, value)| Command::SetPluginParam { target, id, value })
             .collect();
         commands.push(Command::SetPluginState {
             target,
-            state: captured.bytes,
+            state: captured.bytes.clone(),
         });
         let applied = state
             .document
@@ -74,6 +84,8 @@ impl Session {
             )
             .map_err(|error| error.to_string())?;
         self.publish(&mut state, &applied.touched);
+        drop(state);
+        runtime.acknowledge_capture(&request, &captured)?;
         Ok(captured.restart)
     }
     pub fn document_snapshot(&self) -> DocumentSnapshot {
@@ -246,6 +258,9 @@ impl Session {
             self.sync_samples(state);
         }
         if !touched.is_empty() {
+            if let Some(manager) = &*crate::sync::lock(&self.inner.plugins) {
+                manager.runtime.commit_parameters(state.document.project());
+            }
             state.edits += 1;
             if touched.channels {
                 self.controller().panic_hardware();

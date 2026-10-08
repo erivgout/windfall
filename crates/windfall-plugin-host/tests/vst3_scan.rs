@@ -6,6 +6,77 @@ use windfall_plugin_host::scan::FailureKind;
 use windfall_plugin_host::{PluginFormat, PluginHost, PluginKind, scan_file};
 
 #[test]
+fn runtime_repair_bundle_catalog_keeps_scanned_binary_identity_until_refresh() {
+    use windfall_plugin_host::{paths, scan::PluginCatalog};
+    let folder = common::scratch().join("bundle-cache");
+    let bundle = folder.join("Bundle.vst3");
+    let (architecture, binary_name) = if cfg!(all(windows, target_arch = "aarch64")) {
+        ("arm64-win", "Bundle.vst3")
+    } else if cfg!(all(windows, target_arch = "x86")) {
+        ("x86-win", "Bundle.vst3")
+    } else if cfg!(windows) {
+        ("x86_64-win", "Bundle.vst3")
+    } else if cfg!(target_arch = "aarch64") {
+        ("aarch64-linux", "Bundle.so")
+    } else {
+        ("x86_64-linux", "Bundle.so")
+    };
+    let binary = bundle.join("Contents").join(architecture).join(binary_name);
+    std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+    std::fs::copy(common::test_plugins(), &binary).unwrap();
+    let files = paths::find_plugins(std::slice::from_ref(&folder));
+    let runner = common::scanner(Duration::from_secs(20));
+    let mut catalog = PluginCatalog::new();
+    assert_eq!(
+        catalog
+            .refresh(&files, &runner, &mut |_| {})
+            .unwrap()
+            .scanned,
+        1
+    );
+    let approved = catalog.identity(&bundle).unwrap().clone();
+    assert_eq!(approved.binary, std::fs::canonicalize(&binary).unwrap());
+    let cache = folder.join("catalog.json");
+    catalog.save(&cache).unwrap();
+    let mut catalog = PluginCatalog::load(&cache);
+    assert_eq!(catalog.identity(&bundle), Some(&approved));
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&binary)
+        .unwrap()
+        .write_all(b"changed binary overlay")
+        .unwrap();
+    assert_ne!(paths::plugin_file_identity(&bundle).unwrap(), approved);
+    assert_eq!(
+        catalog.identity(&bundle),
+        Some(&approved),
+        "approval must retain the scanned stamp"
+    );
+    assert_eq!(
+        catalog
+            .refresh(&files, &runner, &mut |_| {})
+            .unwrap()
+            .scanned,
+        1
+    );
+    assert_eq!(
+        catalog.identity(&bundle),
+        Some(&paths::plugin_file_identity(&bundle).unwrap())
+    );
+    std::fs::remove_file(binary).unwrap();
+    assert!(paths::plugin_file_identity(&bundle).is_err());
+    assert_eq!(
+        catalog
+            .refresh(&files, &runner, &mut |_| {})
+            .unwrap()
+            .removed,
+        1
+    );
+    assert!(catalog.identity(&bundle).is_none());
+}
+
+#[test]
 fn vst3_factory_metadata_and_initialized_buses_are_scanned_out_of_process() {
     let path = common::plugin_file("vst3", "fixture.vst3");
     let scan = scan_file(&common::scanner(Duration::from_secs(20)), &path).unwrap();

@@ -26,7 +26,8 @@ impl JobLifetime {
         matches!(self.phase.load(std::sync::atomic::Ordering::Acquire), 3 | 4)
     }
 }
-type Approved = Arc<Mutex<BTreeMap<(String, String), (u64, Option<std::time::SystemTime>)>>>;
+type Approved =
+    Arc<Mutex<BTreeMap<(String, String), windfall_plugin_host::paths::PluginFileIdentity>>>;
 type Selection =
     Arc<Mutex<std::collections::HashMap<PluginTarget, Arc<std::sync::atomic::AtomicU64>>>>;
 fn selected(selection: &Selection, target: PluginTarget) -> Option<u64> {
@@ -82,13 +83,160 @@ struct Instance {
     capture_sent: bool,
     restart: bool,
     notifications: Vec<PluginNotification>,
+    controls: ParameterControls,
 }
 struct OwnerCapture {
     state: PluginState,
+    parameters: Vec<(u32, f32)>,
     recovery_error: Option<String>,
+}
+struct CaptureIntent {
+    id: u32,
+    generation: u64,
+    document: u64,
+    value: f32,
+}
+
+/// One callback writer publishes desired values; only completed native
+/// processing or inactive owner reconciliation acknowledges their generation.
+/// Storage is allocated with the binding. Audio never spins or allocates.
+struct ParameterControl {
+    id: u32,
+    value: std::sync::atomic::AtomicU32,
+    generation: std::sync::atomic::AtomicU64,
+    applied: std::sync::atomic::AtomicU64,
+    document_value: std::sync::atomic::AtomicU32,
+    document_generation: std::sync::atomic::AtomicU64,
+    observed_document: std::sync::atomic::AtomicU64,
+    applied_document: std::sync::atomic::AtomicU64,
+}
+impl ParameterControl {
+    fn new(id: u32, value: f32) -> Self {
+        Self {
+            id,
+            value: std::sync::atomic::AtomicU32::new(value.to_bits()),
+            generation: std::sync::atomic::AtomicU64::new(2),
+            applied: std::sync::atomic::AtomicU64::new(2),
+            document_value: std::sync::atomic::AtomicU32::new(value.to_bits()),
+            document_generation: std::sync::atomic::AtomicU64::new(2),
+            observed_document: std::sync::atomic::AtomicU64::new(2),
+            applied_document: std::sync::atomic::AtomicU64::new(2),
+        }
+    }
+    fn publish(&self, value: f32) {
+        use std::sync::atomic::Ordering;
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.value.store(value.to_bits(), Ordering::Relaxed);
+        self.generation.fetch_add(1, Ordering::Release);
+        // The callback reads once, without waiting on a concurrent document
+        // publisher. Consuming its plan follows publication of its values.
+        let document = self.document_generation.load(Ordering::Acquire);
+        if document & 1 == 0
+            && self.document_value.load(Ordering::Relaxed) == value.to_bits()
+            && self.document_generation.load(Ordering::Acquire) == document
+        {
+            self.observed_document.store(document, Ordering::Release);
+        }
+    }
+    fn document(&self) -> (u64, f32) {
+        use std::sync::atomic::Ordering;
+        loop {
+            let generation = self.document_generation.load(Ordering::Acquire);
+            if generation & 1 != 0 {
+                continue;
+            }
+            let value = f32::from_bits(self.document_value.load(Ordering::Relaxed));
+            if self.document_generation.load(Ordering::Acquire) == generation {
+                return (generation, value);
+            }
+        }
+    }
+    fn commit(&self, value: f32) {
+        use std::sync::atomic::Ordering;
+        if self.document_value.load(Ordering::Relaxed) != value.to_bits() {
+            self.document_generation.fetch_add(1, Ordering::AcqRel);
+            self.document_value
+                .store(value.to_bits(), Ordering::Relaxed);
+            self.document_generation.fetch_add(1, Ordering::Release);
+        }
+    }
+    // Owner-side snapshot only. An odd generation means a callback is writing.
+    fn snapshot(&self) -> (u64, f32) {
+        use std::sync::atomic::Ordering;
+        loop {
+            let generation = self.generation.load(Ordering::Acquire);
+            if generation & 1 != 0 {
+                continue;
+            }
+            let value = f32::from_bits(self.value.load(Ordering::Relaxed));
+            if self.generation.load(Ordering::Acquire) == generation {
+                return (generation, value);
+            }
+        }
+    }
+    fn settled(&self, generation: u64) -> bool {
+        self.applied.load(std::sync::atomic::Ordering::Acquire) == generation
+    }
+}
+type ParameterControls = Arc<[ParameterControl]>;
+type ControlRegistry = Arc<Mutex<BTreeMap<u64, (PluginTarget, u64, ParameterControls)>>>;
+fn parameter_controls(binding: &PluginBinding) -> ParameterControls {
+    binding
+        .parameters
+        .iter()
+        .filter(|param| !param.read_only)
+        .map(|param| ParameterControl::new(param.id, param.value))
+        .collect()
 }
 
 impl Instance {
+    fn check_capture_document(
+        &self,
+        desired: &[windfall_project::PluginParameter],
+    ) -> Result<(), String> {
+        for control in self.controls.iter() {
+            let (document, value) = control.document();
+            if document > 2
+                && desired
+                    .iter()
+                    .find(|param| param.id == control.id)
+                    .is_none_or(|param| param.value != value)
+            {
+                return Err("Plugin parameters changed during state capture; save again".into());
+            }
+        }
+        Ok(())
+    }
+    fn capture_intents(&self, desired: &[windfall_project::PluginParameter]) -> Vec<CaptureIntent> {
+        self.controls
+            .iter()
+            .filter_map(|control| {
+                let (generation, value) = control.snapshot();
+                let wanted = desired
+                    .iter()
+                    .find(|param| param.id == control.id)
+                    .map_or(value, |param| param.value);
+                let (document, committed) = control.document();
+                let document_pending = control
+                    .applied_document
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    != document;
+                let explicit_snapshot = wanted != committed;
+                (!control.settled(generation) || document_pending || explicit_snapshot).then_some(
+                    CaptureIntent {
+                        id: control.id,
+                        generation,
+                        document,
+                        value: if document_pending || explicit_snapshot {
+                            wanted
+                        } else {
+                            value
+                        },
+                    },
+                )
+            })
+            .collect()
+    }
     fn retire(&mut self, adapter: Adapter) {
         // Even refusal tears down only after the returned audio half is
         // destroyed on this owner. It must never be queued for resume here.
@@ -164,19 +312,31 @@ impl Instance {
         &mut self,
         lifetime: &JobLifetime,
         rebuilding: bool,
+        desired: &[windfall_project::PluginParameter],
     ) -> Result<OwnerCapture, String> {
         if lifetime.cancelled() {
             return Err("Plugin capture was cancelled".into());
         }
+        self.check_capture_document(desired)?;
         if self.binding.format == "clap" {
-            return self
+            let state = self
                 .plugin
                 .save_state()
-                .map(|state| OwnerCapture {
-                    state,
-                    recovery_error: None,
-                })
-                .map_err(|error| error.to_string());
+                .map_err(|error| error.to_string())?;
+            let mut parameters = self.parameter_values();
+            self.check_capture_document(desired)?;
+            // CLAP state remains active. Unapplied controls accompany the
+            // opaque state and are restored after it on reopen/offline create.
+            for intent in self.capture_intents(desired) {
+                if let Some(param) = parameters.iter_mut().find(|param| param.0 == intent.id) {
+                    param.1 = intent.value;
+                }
+            }
+            return Ok(OwnerCapture {
+                state,
+                parameters,
+                recovery_error: None,
+            });
         }
         self.ownership.request();
         let deadline = std::time::Instant::now() + Duration::from_millis(500);
@@ -206,28 +366,63 @@ impl Instance {
                 "A failed plugin remains bypassed/silent; retry before capturing state".into(),
             );
         }
-        // Deactivation can leave controller edits, rescans and dirty flags.
-        // Service them while inactive, before serializing. They are included
-        // in this capture rather than scheduling an endless dirty-capture loop.
-        self.plugin.idle(&mut |notification| match notification {
-            PluginNotification::StateChanged => {
-                self.dirty = true;
-                self.dirty_serial = self.dirty_serial.saturating_add(1);
+        let captured = (|| {
+            self.check_capture_document(desired)?;
+            // Read after the returned boundary: callbacks may publish new controls
+            // while the owner waits, and their generations must not be acknowledged
+            // using a value read before that boundary.
+            let intents = self.capture_intents(desired);
+            let mut reconciled = Vec::with_capacity(intents.len());
+            for CaptureIntent {
+                id,
+                generation,
+                document,
+                value,
+            } in intents
+            {
+                // Lifecycle edits linearize after the queued controls returned by
+                // this boundary. They supersede both accepted and rejected points.
+                if self.plugin.deactivation_param_value(id).is_some() {
+                    let control = self
+                        .controls
+                        .iter()
+                        .find(|control| control.id == id)
+                        .expect("known control");
+                    reconciled.push((id, control.snapshot().0, document));
+                } else if self.plugin.set_param(id, f64::from(value)) {
+                    reconciled.push((id, generation, document));
+                } else {
+                    return Err("Plugin refused a pending parameter during state capture".into());
+                }
             }
-            PluginNotification::RestartRequested
-            | PluginNotification::ParamsRescanned
-            | PluginNotification::LatencyChanged { .. } => {
-                self.restart = true;
-                self.dirty = true;
-                self.dirty_serial = self.dirty_serial.saturating_add(1);
+            // Deactivation can leave controller edits, rescans and dirty flags.
+            // Service them while inactive, before serializing. They are included
+            // in this capture rather than scheduling an endless dirty-capture loop.
+            self.plugin.idle(&mut |notification| match notification {
+                PluginNotification::StateChanged => {
+                    self.dirty = true;
+                    self.dirty_serial = self.dirty_serial.saturating_add(1);
+                }
+                PluginNotification::RestartRequested
+                | PluginNotification::ParamsRescanned
+                | PluginNotification::LatencyChanged { .. } => {
+                    self.restart = true;
+                    self.dirty = true;
+                    self.dirty_serial = self.dirty_serial.saturating_add(1);
+                }
+                notification => self.notifications.push(notification),
+            });
+            if lifetime.cancelled() {
+                return Err("Plugin capture was cancelled".into());
             }
-            notification => self.notifications.push(notification),
-        });
-        let state = if lifetime.cancelled() {
-            Err("Plugin capture was cancelled".into())
-        } else {
-            self.plugin.save_state().map_err(|error| error.to_string())
-        };
+            let state = self
+                .plugin
+                .save_state()
+                .map_err(|error| error.to_string())?;
+            let parameters = self.parameter_values();
+            self.check_capture_document(desired)?;
+            Ok((state, parameters, reconciled))
+        })();
         // Even a failed save must give the sounding instance back when safe.
         let restore = self.restore();
         let recovery_error = match restore {
@@ -235,16 +430,38 @@ impl Instance {
             // A requested restart will install a new plan and its correct
             // latency buffers. Preserve proven inactive state for that plan;
             // never resume an adapter with changed metadata into the old slot.
-            Err(error) if rebuilding && self.restart && state.is_ok() => Some(error),
+            Err(error) if rebuilding && self.restart && captured.is_ok() => Some(error),
             Err(error) => return Err(error),
         };
         if lifetime.cancelled() {
             return Err("Plugin capture was cancelled".into());
         }
-        state.map(|state| OwnerCapture {
-            state,
-            recovery_error,
+        captured.map(|(state, parameters, reconciled)| {
+            for (id, generation, document) in reconciled {
+                let control = self
+                    .controls
+                    .iter()
+                    .find(|control| control.id == id)
+                    .expect("known control");
+                control
+                    .applied
+                    .store(generation, std::sync::atomic::Ordering::Release);
+                control
+                    .applied_document
+                    .fetch_max(document, std::sync::atomic::Ordering::Release);
+            }
+            OwnerCapture {
+                state,
+                parameters,
+                recovery_error,
+            }
         })
+    }
+    fn parameter_values(&mut self) -> Vec<(u32, f32)> {
+        let ids: Vec<_> = self.plugin.params().iter().map(|param| param.id).collect();
+        ids.into_iter()
+            .filter_map(|id| self.plugin.param_value(id).map(|value| (id, value as f32)))
+            .collect()
     }
 }
 pub(crate) fn binding_identity(binding: &PluginBinding) -> u64 {
@@ -262,6 +479,7 @@ struct Owner {
     instances: BTreeMap<u64, Instance>,
     next: u64,
     approved: Approved,
+    controls: ControlRegistry,
 }
 
 /// Control-side handle; synchronous requests are never made by audio processing.
@@ -271,6 +489,7 @@ pub struct Runtime {
     jobs: mpsc::Sender<Job>,
     errors: Arc<Mutex<Vec<(PluginTarget, String)>>>,
     approved: Approved,
+    controls: ControlRegistry,
     updates: Arc<Mutex<mpsc::Receiver<PendingUpdate>>>,
     revision: Arc<std::sync::atomic::AtomicU64>,
     next_revision: Arc<std::sync::atomic::AtomicU64>,
@@ -291,6 +510,8 @@ impl Runtime {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let approved: Approved = Default::default();
         let owner_approved = approved.clone();
+        let controls: ControlRegistry = Default::default();
+        let owner_controls = controls.clone();
         let (updates, update_receiver) = mpsc::sync_channel(4096);
         let revision = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let owner_revision = revision.clone();
@@ -305,6 +526,7 @@ impl Runtime {
                     instances: BTreeMap::new(),
                     next: 0,
                     approved: owner_approved,
+                    controls: owner_controls,
                 };
                 let mut gestures = std::collections::HashMap::new();
                 let mut gesture = 1_u64 << 63;
@@ -425,6 +647,7 @@ impl Runtime {
             jobs,
             errors,
             approved,
+            controls,
             updates: Arc::new(Mutex::new(update_receiver)),
             revision,
             next_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -432,18 +655,61 @@ impl Runtime {
             rendering: false,
         })
     }
-    pub fn approve(&self, entries: &[windfall_ipc::PluginEntry]) {
+    pub fn approve_catalog(&self, catalog: &windfall_plugin_host::scan::PluginCatalog) {
+        let mut approved = self
+            .approved
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        approved.clear();
+        for (path, plugin) in catalog.plugins() {
+            if let Some(identity) = catalog.identity(path) {
+                approved.insert(
+                    (
+                        path.to_string_lossy().into_owned(),
+                        plugin.descriptor.id.clone(),
+                    ),
+                    identity.clone(),
+                );
+            }
+        }
+    }
+    /// Control-only metadata publication before an engine plan is queued.
+    /// It neither calls nor waits for the native owner, including during capture.
+    pub(crate) fn commit_parameters(&self, project: &Project) {
+        let controls = self
+            .controls
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for (token, (target, identity, values)) in controls.iter() {
+            if selected(&self.selection, *target) == Some(*token)
+                && let Some(binding) = project
+                    .plugin(*target)
+                    .filter(|binding| binding_identity(binding) == *identity)
+            {
+                for control in values.iter() {
+                    if let Some(param) = binding
+                        .parameters
+                        .iter()
+                        .find(|param| param.id == control.id)
+                    {
+                        control.commit(param.value);
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn approve(&self, entries: &[windfall_ipc::PluginEntry]) {
         let mut approved = self
             .approved
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         approved.clear();
         for entry in entries.iter().filter(|entry| entry.usable) {
-            if let Ok(metadata) = std::fs::metadata(&entry.path) {
-                approved.insert(
-                    (entry.path.clone(), entry.id.clone()),
-                    (metadata.len(), metadata.modified().ok()),
-                );
+            if let Ok(identity) =
+                windfall_plugin_host::paths::plugin_file_identity(std::path::Path::new(&entry.path))
+            {
+                approved.insert((entry.path.clone(), entry.id.clone()), identity);
             }
         }
     }
@@ -608,9 +874,9 @@ impl Runtime {
         {
             return Err("Plugin path does not match its declared format".into());
         }
-        let stamp = std::fs::metadata(&binding.path)
-            .map(|metadata| (metadata.len(), metadata.modified().ok()))
-            .map_err(|error| error.to_string())?;
+        let stamp =
+            windfall_plugin_host::paths::plugin_file_identity(std::path::Path::new(&binding.path))
+                .map_err(|error| error.to_string())?;
         if owner
             .approved
             .lock()
@@ -706,8 +972,8 @@ impl Runtime {
                     && record.binding.format == binding.format
                     && record.binding.state == binding.state
                 {
-                    let state = match record.capture(lifetime, false) {
-                        Ok(captured) => captured.state.into_bytes(),
+                    let captured = match record.capture(lifetime, false, &binding.parameters) {
+                        Ok(captured) => captured,
                         Err(error) => {
                             let mut errors =
                                 errors.lock().unwrap_or_else(|error| error.into_inner());
@@ -723,10 +989,12 @@ impl Runtime {
                             "Plugin ownership changed during state capture; save again".into()
                         );
                     }
-                    binding.state = state;
+                    binding.state = captured.state.into_bytes();
                     for param in &mut binding.parameters {
-                        if let Some(value) = record.plugin.param_value(param.id) {
-                            param.value = value as f32;
+                        if let Some((_, value)) =
+                            captured.parameters.iter().find(|value| value.0 == param.id)
+                        {
+                            param.value = *value;
                         }
                     }
                     errors
@@ -745,6 +1013,7 @@ impl Runtime {
     pub(crate) fn capture_pending(
         &self,
         request: PendingUpdate,
+        desired: Vec<windfall_project::PluginParameter>,
     ) -> Result<Option<CapturedState>, String> {
         let Update::Capture { target, serial } = request.update else {
             return Err("Not a native state request".into());
@@ -767,52 +1036,42 @@ impl Runtime {
                 }) else {
                     return Ok(None);
                 };
-                let captured = record.capture(lifetime, true)?;
+                let captured = record.capture(lifetime, true, &desired)?;
                 if let Some(error) = captured.recovery_error {
                     let mut errors = errors.lock().unwrap_or_else(|error| error.into_inner());
                     errors.retain(|(before, _)| *before != target);
                     errors.push((target, error));
                 }
                 let state = captured.state.into_bytes();
-                let ids: Vec<_> = record
-                    .plugin
-                    .params()
-                    .iter()
-                    .filter(|param| !param.read_only)
-                    .map(|param| param.id)
-                    .collect();
-                let params = ids
-                    .into_iter()
-                    .filter_map(|id| {
-                        record
-                            .plugin
-                            .param_value(id)
-                            .map(|value| (id, value as f32))
-                    })
-                    .collect();
                 let restart = record.restart;
                 Ok(Some(CapturedState {
                     bytes: state,
-                    parameters: params,
+                    parameters: captured.parameters,
                     restart,
                     serial: record.dirty_serial,
                 }))
             })?;
-        if let Some(captured) = &captured {
-            let serial = captured.serial;
-            let token = request.token;
-            self.call(move |owner| {
-                if let Some(record) = owner.instances.get_mut(&token) {
-                    record.capture_sent = false;
-                    if record.dirty_serial == serial {
-                        record.dirty = false;
-                        record.restart = false;
-                    }
-                }
-                Ok(())
-            })?;
-        }
         Ok(captured)
+    }
+    /// Only acknowledge after the session has accepted the captured edit.
+    /// A concurrent parameter commit must leave its dirty ticket retryable.
+    pub(crate) fn acknowledge_capture(
+        &self,
+        request: &PendingUpdate,
+        captured: &CapturedState,
+    ) -> Result<(), String> {
+        let serial = captured.serial;
+        let token = request.token;
+        self.call(move |owner| {
+            if let Some(record) = owner.instances.get_mut(&token) {
+                record.capture_sent = false;
+                if record.dirty_serial == serial {
+                    record.dirty = false;
+                    record.restart = false;
+                }
+            }
+            Ok(())
+        })
     }
     pub fn editor_binding(
         &self,
@@ -904,6 +1163,7 @@ struct Audio {
     jobs: mpsc::Sender<Job>,
     /// Allocated from the binding on control; callbacks only replace values.
     pending_params: Box<[(u32, Option<f32>)]>,
+    controls: ParameterControls,
     held: [f32; 128],
     replayed: [f32; 128],
     reconcile_notes: bool,
@@ -916,6 +1176,7 @@ impl Audio {
         let Self {
             ownership,
             pending_params,
+            controls,
             held,
             replayed,
             reconcile_notes,
@@ -964,7 +1225,15 @@ impl Audio {
         if let Some(tempo) = tempo {
             processor.set_tempo(f64::from(*tempo));
         }
-        for (id, value) in pending_params {
+        for ((id, value), control) in pending_params.iter_mut().zip(controls.iter()) {
+            debug_assert_eq!(*id, control.id);
+            if control.settled(
+                control
+                    .generation
+                    .load(std::sync::atomic::Ordering::Acquire),
+            ) {
+                *value = None;
+            }
             if let Some(pending) = *value
                 && processor.set_param(0, *id, f64::from(pending))
             {
@@ -995,6 +1264,11 @@ impl Drop for Audio {
             let token = self.token;
             let job: Job = Box::new(move |owner| {
                 if let Some(mut record) = owner.instances.remove(&token) {
+                    owner
+                        .controls
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .remove(&token);
                     record.plugin.close_editor();
                     if let Some(adapter) = ownership.retire() {
                         record.retire(adapter);
@@ -1062,10 +1336,35 @@ impl HostedEffect for Audio {
             }
             None => {}
         }
+        if !left.is_empty()
+            && !right.is_empty()
+            && self.adapter().is_some_and(|adapter| !adapter.failed())
+        {
+            for ((id, pending), control) in self.pending_params.iter().zip(self.controls.iter()) {
+                debug_assert_eq!(*id, control.id);
+                if pending.is_none() {
+                    control.applied.store(
+                        control
+                            .generation
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        std::sync::atomic::Ordering::Release,
+                    );
+                    control.applied_document.fetch_max(
+                        control
+                            .observed_document
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        std::sync::atomic::Ordering::Release,
+                    );
+                }
+            }
+        }
     }
     fn set_param(&mut self, id: u32, value: f32) {
         if !value.is_finite() {
             return;
+        }
+        if let Some(control) = self.controls.iter().find(|control| control.id == id) {
+            control.publish(value);
         }
         let accepted = match self.adapter_mut() {
             Some(Adapter::Effect(adapter)) => {
@@ -1206,6 +1505,17 @@ impl PluginFactory for Runtime {
                     .filter(|param| !param.read_only)
                     .map(|param| (param.id, None))
                     .collect();
+                let controls = parameter_controls(&binding);
+                if playback {
+                    owner
+                        .controls
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .insert(
+                            token,
+                            (target, binding_identity(&binding), controls.clone()),
+                        );
+                }
                 owner.instances.insert(
                     token,
                     Instance {
@@ -1219,6 +1529,7 @@ impl PluginFactory for Runtime {
                         rate,
                         block,
                         instrument: false,
+                        controls: controls.clone(),
                         latency,
                         tail,
                         returned: None,
@@ -1239,6 +1550,7 @@ impl PluginFactory for Runtime {
                     token,
                     jobs,
                     pending_params,
+                    controls,
                     held: [0.0; 128],
                     replayed: [0.0; 128],
                     reconcile_notes: false,
@@ -1258,6 +1570,7 @@ impl PluginFactory for Runtime {
                 token: 0,
                 jobs: self.jobs.clone(),
                 pending_params: Box::new([]),
+                controls: Arc::new([]),
                 held: [0.0; 128],
                 replayed: [0.0; 128],
                 reconcile_notes: false,
@@ -1303,6 +1616,17 @@ impl PluginFactory for Runtime {
                     .filter(|param| !param.read_only)
                     .map(|param| (param.id, None))
                     .collect();
+                let controls = parameter_controls(&binding);
+                if playback {
+                    owner
+                        .controls
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .insert(
+                            token,
+                            (target, binding_identity(&binding), controls.clone()),
+                        );
+                }
                 owner.instances.insert(
                     token,
                     Instance {
@@ -1316,6 +1640,7 @@ impl PluginFactory for Runtime {
                         rate,
                         block,
                         instrument: true,
+                        controls: controls.clone(),
                         latency,
                         tail,
                         returned: None,
@@ -1336,6 +1661,7 @@ impl PluginFactory for Runtime {
                     token,
                     jobs,
                     pending_params,
+                    controls,
                     held: [0.0; 128],
                     replayed: [0.0; 128],
                     reconcile_notes: false,
@@ -1355,6 +1681,7 @@ impl PluginFactory for Runtime {
                 token: 0,
                 jobs: self.jobs.clone(),
                 pending_params: Box::new([]),
+                controls: Arc::new([]),
                 held: [0.0; 128],
                 replayed: [0.0; 128],
                 reconcile_notes: false,
