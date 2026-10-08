@@ -320,10 +320,10 @@ pub struct ExportOptions {
     pub region: Option<windfall_project::TickRange>,
     /// Optional selected-export source guard, checked before snapshot preparation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub region_generation: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+    #[ts(optional, type = "number")]
     pub region_revision: Option<u64>,
     /// Absolute path of the file to write. With `stems` no file of this
     /// name is written: for `Song.flac` the files are `Song - Mix.flac`,

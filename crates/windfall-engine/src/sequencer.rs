@@ -812,10 +812,10 @@ impl Sequencer {
             return false;
         }
         let tick = self.raw_song_tick(plan, now);
-        if let Some(range) = region {
-            if tick < f64::from(range.start) || tick >= f64::from(range.end) {
-                return self.seek(f64::from(range.start), plan, now);
-            }
+        if let Some(range) = region
+            && (tick < f64::from(range.start) || tick >= f64::from(range.end))
+        {
+            return self.seek(f64::from(range.start), plan, now);
         }
         false
     }
