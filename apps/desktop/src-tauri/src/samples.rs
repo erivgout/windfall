@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -26,12 +27,42 @@ const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_INFOS: usize = 512;
 
 /// One version of one file: a file that is written again is a new entry.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 struct FileKey {
     path: PathBuf,
     identity: u64,
     modified: Option<SystemTime>,
     len: u64,
+}
+
+impl PartialEq for FileKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.identity == other.identity
+            && self.modified == other.modified
+            && self.len == other.len
+            && paths::same(&self.path, &other.path)
+    }
+}
+impl Eq for FileKey {}
+
+impl Hash for FileKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Match the shell's Windows ASCII case comparison without lossy
+        // Unicode conversion. Other platforms retain Path's case semantics.
+        #[cfg(windows)]
+        {
+            let bytes = self.path.as_os_str().as_encoded_bytes();
+            bytes.len().hash(state);
+            for byte in bytes {
+                byte.to_ascii_lowercase().hash(state);
+            }
+        }
+        #[cfg(not(windows))]
+        self.path.hash(state);
+        self.identity.hash(state);
+        self.modified.hash(state);
+        self.len.hash(state);
+    }
 }
 
 impl FileKey {
@@ -94,7 +125,8 @@ impl Inner {
         self.sources.retain(|identity, _| identity.is_live());
         self.sources.insert(buffer.identity(), key.clone());
         // An older version of the file is of no use once it has changed.
-        self.decoded.retain(|(held, _)| held.path != key.path);
+        self.decoded
+            .retain(|(held, _)| !paths::same(&held.path, &key.path));
         self.decoded.push((key, buffer));
         let bytes = |entries: &[(FileKey, AudioBuffer)]| -> usize {
             entries
@@ -166,7 +198,12 @@ impl SampleCache {
     pub fn info(&self, path: &Path) -> Result<SampleInfo, String> {
         let key = FileKey::of(path)?;
         if let Some(info) = lock(&self.inner).infos.get(&key) {
-            return Ok(info.clone());
+            let mut info = info.clone();
+            // The waveform is shared by aliases; facts still describe the
+            // spelling the caller selected (including a case-only rename).
+            info.path = paths::display(path);
+            info.name = paths::stem(path);
+            return Ok(info);
         }
         let buffer = self.decode(path)?;
         let info = SampleInfo {
@@ -200,6 +237,101 @@ mod tests {
     fn write_tone(path: &Path, frames: usize, level: f32) {
         let buffer = AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]);
         write_wav(path, &buffer, WavSampleFormat::Float32).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn case_alias_reuses_cached_audio_and_reports_the_requested_info_path() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("Tone.wav");
+        let alias = folder.path().join("tOnE.WAV");
+        write_tone(&file, 100, 0.25);
+        let cache = SampleCache::new();
+        let first = cache.decode(&file).unwrap();
+        cache.info(&file).unwrap();
+        let second = cache.decode(&alias).unwrap();
+        assert_eq!(
+            first.identity(),
+            second.identity(),
+            "unchanged Windows alias should reuse cached audio"
+        );
+        let info = cache.info(&alias).unwrap();
+        assert_eq!(info.path, paths::display(&alias));
+        assert_eq!(info.name, paths::stem(&alias));
+        assert_eq!(cache.inner.lock().unwrap().decoded.len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn case_alias_live_provenance_survives_rename_and_cache_eviction() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("Tone.wav");
+        let alias = folder.path().join("tOnE.WAV");
+        write_tone(&file, 100, 0.25);
+        let cache = SampleCache::new();
+        let first = cache.decode(&file).unwrap();
+        fs::rename(&file, &alias).unwrap();
+        for i in 0..=MAX_FILES {
+            let other = folder.path().join(format!("evict-{i}.wav"));
+            write_tone(&other, 8, 0.1);
+            cache.decode(&other).unwrap();
+        }
+        assert!(cache.peek(&file).is_none());
+        let second = cache.decode(&alias).unwrap();
+        assert_ne!(first.identity(), second.identity());
+        assert!(
+            cache.same_file_version(&first, &second),
+            "case-only rename must retain live source provenance after eviction"
+        );
+        write_tone(&alias, 200, 0.75);
+        let changed = cache.decode(&alias).unwrap();
+        assert!(!cache.same_file_version(&first, &changed));
+        assert_eq!(changed.samples()[0], 0.75);
+    }
+
+    #[test]
+    fn case_alias_versions_require_identity_size_time_and_platform_paths() {
+        use std::hash::{Hash, Hasher};
+        let original = FileKey {
+            path: PathBuf::from("C:/Samples/Tone.wav"),
+            identity: 42,
+            modified: Some(SystemTime::UNIX_EPOCH),
+            len: 100,
+        };
+        let alias = FileKey {
+            path: PathBuf::from("c:/samples/tone.wav"),
+            ..original.clone()
+        };
+        assert_eq!(original == alias, cfg!(windows));
+        if cfg!(windows) {
+            let hash = |key: &FileKey| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                key.hash(&mut hasher);
+                hasher.finish()
+            };
+            assert_eq!(hash(&original), hash(&alias));
+        }
+        assert_ne!(
+            original,
+            FileKey {
+                identity: 43,
+                ..alias.clone()
+            }
+        );
+        assert_ne!(
+            original,
+            FileKey {
+                len: 101,
+                ..alias.clone()
+            }
+        );
+        assert_ne!(
+            original,
+            FileKey {
+                modified: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+                ..alias
+            }
+        );
     }
 
     #[test]
