@@ -186,6 +186,18 @@ const SYNTH_SOUND_ACTIONS = SYNTH_PRESETS.filter(
  * belong to the rack: they work while it has the keyboard.
  */
 export const CHANNEL_RACK_ACTIONS: Action[] = [
+  ...NOTE_VIEW_ACTIONS,
+  {
+    id: OPEN_NOTE_PREVIEW_ACTION,
+    title: "Open in piano roll",
+    section: "Channels",
+    scope: "channelRack",
+    keywords: "row note preview thumbnail edit notes",
+    standsFor: () => "view.pianoRoll",
+    enabled: (state) => selectedNotePreviewLane(state) !== null,
+    whyDisabled: () => "Select a channel in a pattern",
+    run: () => runAction("view.pianoRoll"),
+  },
   {
     id: "channelRack.graph",
     title: "Step graph editor",
