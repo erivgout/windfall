@@ -6,6 +6,7 @@ import { songTick } from "./ops"
 import { usePlaylistStore } from "./store"
 import {
   beginTimelineRequest,
+  finishTimelinePlay,
   publishPlaybackRegion,
   timelineRequestError,
   editTimeline,
@@ -21,7 +22,7 @@ const hasRange = (state: AppState) =>
 export async function playTimelineSelection(loopSong: boolean) {
   const range = timeline().selection
   if (!range) return
-  const operation = beginTimelineRequest()
+  const operation = beginTimelineRequest(true)
   const guard = await publishPlaybackRegion({ ...range }, operation)
   if (!guard || !operation.current()) return
   try {
@@ -32,6 +33,7 @@ export async function playTimelineSelection(loopSong: boolean) {
     usePlaylistStore.getState().setCursorTick(range.start)
     await backend.transportPlay(guard)
     if (!operation.current()) return
+    finishTimelinePlay(operation)
   } catch (error) {
     timelineRequestError(operation, error)
   }
@@ -118,7 +120,8 @@ export const TIMELINE_ACTIONS: Action[] = [
     title: "Clear song time selection",
     section: "Playlist",
     enabled: (state) =>
-      inPlaylist(state) && (!!timeline().selection || timeline().active),
+      inPlaylist(state) &&
+      (!!timeline().selection || timeline().active || !timeline().hydrated),
     run: clearTimelineSelection,
   },
 ]

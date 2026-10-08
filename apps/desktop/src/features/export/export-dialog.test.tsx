@@ -84,10 +84,10 @@ describe("pressing Export", () => {
   it("keeps legacy whole-song export unless the region option is explicitly checked", async () => {
     const user = userEvent.setup()
     const exported = vi.spyOn(backend, "exportAudio")
-    const sourceQuery = vi.spyOn(backend, "timelineState")
     await act(async () => {
       await selectTimelineRegion({ start: 17, end: 839 })
     })
+    const sourceQuery = vi.spyOn(backend, "timelineState")
     await user.click(screen.getByRole("combobox", { name: "Render" }))
     await user.click(
       await screen.findByRole("option", { name: "The whole song" })

@@ -13,6 +13,358 @@ use windfall_ipc::{
 use windfall_project::{Command, TickRange, TrackId};
 
 struct Capture;
+
+fn play_owner(rig: &Rig) -> u64 {
+    let _state = rig.session.state();
+    rig.session
+        .inner
+        .timeline_play_request
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn seed_selection(rig: &Rig) -> TimelinePlaybackState {
+    rig.session
+        .add_audio_clip_from_file(
+            &factory_file("Bass/Bass Sub.wav"),
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let source = rig.session.timeline_state();
+    let arm = rig
+        .session
+        .timeline_region_request(
+            Some(TickRange {
+                start: 17,
+                end: 839,
+            }),
+            source.generation,
+            source.revision,
+            Some(10),
+            None,
+        )
+        .unwrap();
+    rig.session
+        .timeline_transport_set(
+            TransportPatch {
+                mode: Some(PlayMode::Song),
+                loop_song: Some(false),
+                ..Default::default()
+            },
+            arm,
+        )
+        .unwrap();
+    rig.session.timeline_transport_seek(17.0, arm).unwrap();
+    arm
+}
+
+#[test]
+fn timeline_cancel_before_play_commit_refuses_old_play_and_permits_later_valid_play() {
+    let mut rig = Rig::new();
+    let arm = seed_selection(&rig);
+    rig.session
+        .timeline_region_request(None, arm.generation, arm.revision, Some(11), Some(arm))
+        .unwrap();
+    assert!(rig.session.timeline_transport_play(arm).is_err());
+    assert!(!rig.session.transport_state().playing);
+    assert_eq!(play_owner(&rig), 0);
+    let newer = rig
+        .session
+        .timeline_region_request(
+            Some(TickRange {
+                start: 91,
+                end: 210,
+            }),
+            arm.generation,
+            arm.revision,
+            Some(12),
+            None,
+        )
+        .unwrap();
+    rig.session.timeline_transport_seek(91.0, newer).unwrap();
+    assert!(rig.session.timeline_transport_play(newer).unwrap().playing);
+    assert_eq!(play_owner(&rig), 12);
+    assert!(rms(&rig.run(600)) > 1e-5);
+    // A late stale cancellation cannot remove the newer region or its Play.
+    assert!(
+        rig.session
+            .timeline_region_request(None, arm.generation, arm.revision, Some(11), Some(arm))
+            .is_err()
+    );
+    assert_eq!(rig.session.timeline_state(), newer);
+    assert!(rig.session.transport_state().playing);
+    assert_eq!(play_owner(&rig), 12);
+}
+
+#[test]
+fn timeline_cancellation_does_not_stop_superseding_ordinary_transport_or_settled_play() {
+    for ordinary in 0..5 {
+        let mut rig = Rig::new();
+        let arm = seed_selection(&rig);
+        rig.session.timeline_transport_play(arm).unwrap();
+        assert_eq!(play_owner(&rig), arm.request);
+        match ordinary {
+            0 => {
+                rig.session.transport_play().unwrap();
+            }
+            1 => {
+                rig.session.transport_seek(99.0);
+            }
+            2 => {
+                rig.session
+                    .transport_set(TransportPatch {
+                        loop_song: Some(true),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            3 => {
+                rig.session.transport_stop();
+                assert_eq!(play_owner(&rig), 0);
+                rig.session.transport_play().unwrap();
+            }
+            _ => {} // Clear after settled selected Play carries no cancellation.
+        }
+        let normal = rig.session.transport_state();
+        let tick = rig.session.controller().frame().tick;
+        assert!(normal.playing);
+        if ordinary < 4 {
+            assert_eq!(play_owner(&rig), 0);
+        }
+        rig.session
+            .timeline_region_request(
+                None,
+                arm.generation,
+                arm.revision,
+                Some(11),
+                (ordinary < 4).then_some(arm),
+            )
+            .unwrap();
+        assert_eq!(rig.session.transport_state(), normal);
+        assert_eq!(rig.session.controller().frame().tick, tick);
+        assert_eq!(rig.session.timeline_state().region, None);
+        assert!(rms(&rig.run(600)) > 1e-5);
+    }
+}
+
+#[test]
+fn timeline_cancel_refusals_preserve_owner_and_full_canonical_state_until_fresh_retry() {
+    let rig = Rig::new();
+    let arm = seed_selection(&rig);
+    rig.session.timeline_transport_play(arm).unwrap();
+    let transport = rig.session.transport_state();
+    let tick = rig.session.controller().frame().tick;
+    let document = rig.session.document_snapshot();
+    assert!(
+        rig.session
+            .transport_set(TransportPatch {
+                pattern: Some(windfall_project::PatternId(u32::MAX)),
+                ..Default::default()
+            })
+            .is_err()
+    );
+    for (range, request, cancel) in [
+        (None, arm.request, arm),
+        (Some(TickRange { start: 3, end: 3 }), arm.request + 1, arm),
+        (
+            None,
+            arm.request + 1,
+            TimelinePlaybackState {
+                request: super::super::timeline::MAX_TIMELINE_REQUEST + 1,
+                ..arm
+            },
+        ),
+    ] {
+        assert!(
+            rig.session
+                .timeline_region_request(
+                    range,
+                    arm.generation,
+                    arm.revision,
+                    Some(request),
+                    Some(cancel)
+                )
+                .is_err()
+        );
+        assert_eq!(rig.session.timeline_state(), arm);
+        assert_eq!(rig.session.transport_state(), transport);
+        assert_eq!(rig.session.controller().frame().tick, tick);
+        assert_eq!(play_owner(&rig), arm.request);
+    }
+    rig.session
+        .recording_start_with(
+            RecordingSource {
+                host: "Fake".into(),
+                device: "Fake".into(),
+                left: 0,
+                right: None,
+            },
+            960,
+            None,
+            capture,
+        )
+        .unwrap();
+    assert!(
+        rig.session
+            .timeline_region_request(None, arm.generation, arm.revision, Some(11), Some(arm))
+            .is_err()
+    );
+    assert!(
+        rig.session
+            .transport_set(TransportPatch {
+                loop_song: Some(true),
+                ..Default::default()
+            })
+            .is_err()
+    );
+    rig.session.transport_seek(111.0); // recording refusal remains a legacy no-op
+    assert_eq!(rig.session.timeline_state(), arm);
+    assert_eq!(rig.session.transport_state(), transport);
+    assert_eq!(rig.session.controller().frame().tick, tick);
+    assert_eq!(play_owner(&rig), arm.request);
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.project, document.project);
+    assert_eq!(after.revision, document.revision);
+    assert_eq!(after.history, document.history);
+    assert_eq!(after.dirty, document.dirty);
+    rig.session.recording_cancel();
+    rig.session
+        .dispatch(Command::AddPattern { name: None }, None)
+        .unwrap();
+    assert!(
+        rig.session
+            .timeline_region_request(None, arm.generation, arm.revision, Some(11), Some(arm))
+            .is_err()
+    );
+    assert_eq!(play_owner(&rig), arm.request);
+    assert_eq!(rig.session.transport_state(), transport);
+    let fresh = rig.session.timeline_state();
+    assert_eq!(fresh.region, arm.region);
+    assert_eq!(fresh.request, arm.request);
+    let edited = rig.session.document_snapshot();
+    rig.session
+        .timeline_region_request(
+            None,
+            fresh.generation,
+            fresh.revision,
+            Some(11),
+            Some(TimelinePlaybackState {
+                revision: fresh.revision,
+                ..arm
+            }),
+        )
+        .unwrap();
+    assert!(!rig.session.transport_state().playing);
+    assert_eq!(rig.session.timeline_state().region, None);
+    assert_eq!(play_owner(&rig), 0);
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.project, edited.project);
+    assert_eq!(after.revision, edited.revision);
+    assert_eq!(after.history, edited.history);
+    assert_eq!(after.dirty, edited.dirty);
+}
+
+#[test]
+fn timeline_failed_ordinary_play_preserves_owner_after_natural_region_stop() {
+    let mut rig = Rig::new();
+    let arm = seed_selection(&rig);
+    rig.session.timeline_transport_play(arm).unwrap();
+    rig.run(25_000); // the processor naturally reaches selected end 839
+    assert!(!rig.session.transport_state().playing);
+    assert_eq!(play_owner(&rig), arm.request);
+    let clips = rig
+        .project()
+        .playlist
+        .clips
+        .iter()
+        .map(|clip| clip.id)
+        .collect();
+    rig.session
+        .dispatch(Command::RemoveClips { clips }, None)
+        .unwrap();
+    let canonical = rig.session.timeline_state();
+    let tick = rig.session.controller().frame().tick;
+    let document = rig.session.document_snapshot();
+    assert!(rig.session.transport_play().is_err());
+    assert_eq!(rig.session.timeline_state(), canonical);
+    assert_eq!(rig.session.controller().frame().tick, tick);
+    assert_eq!(play_owner(&rig), arm.request);
+    assert!(!rig.session.transport_state().playing);
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.project, document.project);
+    assert_eq!(after.revision, document.revision);
+    assert_eq!(after.history, document.history);
+    assert_eq!(after.dirty, document.dirty);
+}
+
+#[test]
+fn timeline_cancelled_pending_play_committed_during_clear_query_stops_its_audio() {
+    let mut rig = Rig::new();
+    rig.session
+        .add_audio_clip_from_file(
+            &factory_file("Bass/Bass Sub.wav"),
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let source = rig.session.timeline_state();
+    let arm = rig
+        .session
+        .timeline_region_request(
+            Some(TickRange {
+                start: 17,
+                end: 839,
+            }),
+            source.generation,
+            source.revision,
+            Some(10),
+            None,
+        )
+        .unwrap();
+    rig.session
+        .timeline_transport_set(
+            TransportPatch {
+                mode: Some(PlayMode::Song),
+                loop_song: Some(false),
+                ..Default::default()
+            },
+            arm,
+        )
+        .unwrap();
+    rig.session.timeline_transport_seek(17.0, arm).unwrap();
+    let document = rig.session.document_snapshot();
+    // The source query waits off State. The cancelled Play may still commit
+    // before the newer ordered clear reaches the native decision.
+    let (queried, wait_query) = mpsc::channel();
+    let (release, wait_release) = mpsc::channel();
+    let session = rig.session.clone();
+    let clear = std::thread::spawn(move || {
+        let state = session.timeline_state();
+        queried.send(()).unwrap();
+        wait_release.recv().unwrap();
+        session.timeline_region_request(None, state.generation, state.revision, Some(11), Some(arm))
+    });
+    wait_query.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(rig.session.timeline_transport_play(arm).unwrap().playing);
+    assert!(rms(&rig.run(600)) > 1e-5);
+    release.send(()).unwrap();
+    clear.join().unwrap().unwrap();
+    assert!(!rig.session.transport_state().playing);
+    assert_eq!(rig.session.timeline_state().region, None);
+    rig.run(2000); // drain the existing note/audio interrupt fade
+    assert!(rms(&rig.run(600)) < 1e-7);
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.project, document.project);
+    assert_eq!(after.revision, document.revision);
+    assert_eq!(after.history, document.history);
+    assert_eq!(after.dirty, document.dirty);
+}
 impl CaptureHandle for Capture {
     fn frames(&self) -> u64 {
         480
@@ -78,14 +430,14 @@ fn timeline_request_ordering_and_safe_limit_refuse_old_arm_clear_without_mutatio
     });
     let arm = rig
         .session
-        .timeline_region_request(region, source.generation, source.revision, Some(10))
+        .timeline_region_request(region, source.generation, source.revision, Some(10), None)
         .unwrap();
     rig.session
-        .timeline_region_request(None, source.generation, source.revision, Some(12))
+        .timeline_region_request(None, source.generation, source.revision, Some(12), None)
         .unwrap();
     assert!(
         rig.session
-            .timeline_region_request(region, source.generation, source.revision, Some(11))
+            .timeline_region_request(region, source.generation, source.revision, Some(11), None)
             .is_err()
     );
     refuse_transport(&rig, arm);
@@ -99,11 +451,12 @@ fn timeline_request_ordering_and_safe_limit_refuse_old_arm_clear_without_mutatio
             source.generation,
             source.revision,
             Some(14),
+            None,
         )
         .unwrap();
     assert!(
         rig.session
-            .timeline_region_request(None, source.generation, source.revision, Some(13))
+            .timeline_region_request(None, source.generation, source.revision, Some(13), None)
             .is_err()
     );
     assert_eq!(rig.session.timeline_state(), rearm);
@@ -131,7 +484,13 @@ fn timeline_request_ordering_and_safe_limit_refuse_old_arm_clear_without_mutatio
     rig.session.transport_stop();
     let max = super::super::timeline::MAX_TIMELINE_REQUEST;
     rig.session
-        .timeline_region_request(None, source.generation, source.revision, Some(max - 1))
+        .timeline_region_request(
+            None,
+            source.generation,
+            source.revision,
+            Some(max - 1),
+            None,
+        )
         .unwrap();
     assert_eq!(
         rig.session
@@ -143,7 +502,13 @@ fn timeline_request_ordering_and_safe_limit_refuse_old_arm_clear_without_mutatio
     let exhausted = rig.session.timeline_state();
     assert!(
         rig.session
-            .timeline_region_request(region, source.generation, source.revision, Some(max + 1))
+            .timeline_region_request(
+                region,
+                source.generation,
+                source.revision,
+                Some(max + 1),
+                None
+            )
             .is_err()
     );
     assert!(
@@ -221,7 +586,8 @@ fn timeline_transport_guards_refuse_edited_new_open_and_recording_sources_before
                 None,
                 source.generation,
                 source.revision,
-                Some(timeline.request + 1)
+                Some(timeline.request + 1),
+                None,
             )
             .is_err()
     );

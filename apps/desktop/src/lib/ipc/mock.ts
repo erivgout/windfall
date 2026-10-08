@@ -268,6 +268,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let timelineDocument = doc
   let timelineGeneration = 1
   let timelineRequest = 0
+  let timelinePlayRequest = 0
   function timelineState() {
     if (timelineDocument !== doc) {
       timelineDocument = doc
@@ -665,7 +666,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     },
 
     timelineState: () => ipc(timelineState),
-    timelineRegion: (region, generation, revision, request) =>
+    timelineRegion: (region, generation, revision, request, cancel) =>
       ipc(() => {
         const current = timelineState()
         if (generation !== current.generation || revision !== current.revision)
@@ -678,6 +679,26 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
           throw new Error(
             "The timeline request is stale or exceeds the exact request limit."
           )
+        if (cancel) {
+          if (!Number.isSafeInteger(cancel.request) || cancel.request <= 0)
+            throw new Error(
+              "The cancelled timeline request exceeds the exact request limit."
+            )
+          if (
+            cancel.generation === current.generation &&
+            cancel.revision === current.revision &&
+            cancel.request === current.request &&
+            cancel.request === timelinePlayRequest &&
+            cancel.region &&
+            current.region &&
+            cancel.region.start === current.region.start &&
+            cancel.region.end === current.region.end
+          ) {
+            transport.stop()
+            timelinePlayRequest = 0
+            emitTransport()
+          }
+        }
         transport.setRegion(region, doc.project())
         timelineRequest = request
         return timelineState()
@@ -851,10 +872,12 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       ipc(() => {
         checkTimelineGuard(guard)
         startPlayback()
+        timelinePlayRequest = guard?.request ?? 0
         return emitTransport()
       }),
     transportStop: () =>
       ipc(() => {
+        timelinePlayRequest = 0
         transport.stop()
         return emitTransport()
       }),
@@ -862,11 +885,13 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       ipc(() => {
         if (transport.state.playing) transport.stop()
         else startPlayback()
+        timelinePlayRequest = 0
         return emitTransport()
       }),
     transportSeek: (tick, guard) =>
       ipc(() => {
         checkTimelineGuard(guard)
+        if (!guard) timelinePlayRequest = 0
         transport.seek(tick, doc.project())
       }),
     transportSet: (patch, guard) =>
@@ -880,6 +905,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         ) {
           throw new Error(`pattern ${patch.pattern} does not exist`)
         }
+        if (!guard) timelinePlayRequest = 0
         transport.set(patch, doc.project())
         return emitTransport()
       }),
