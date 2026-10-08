@@ -57,8 +57,11 @@
 //!
 //! # Moving a plugin to another process
 //!
-//! The risk table in `WINDFALL_PLAN.md` promises that. The seam for it is
-//! in place, and nothing yet sits on the far side.
+//! [`bridge`] provides an opt-in Windows audio/state helper transport. Its
+//! standalone process tests cover crash/deadline containment and native state;
+//! production desktop activation and native bridge editors remain incomplete.
+//! In-process instances created by the APIs above keep their existing crash
+//! and hang limitations. A separate helper is not a security sandbox.
 //!
 //! Each format implements two crate-private traits: one for the main-thread
 //! half and one, `ProcessorBackend`, for the audio thread. A backend for a
@@ -68,7 +71,9 @@
 //! - **Audio**: one block of at most `max_block` frames per channel. The
 //!   helper maps a shared memory region sized at activation. The audio
 //!   thread publishes the input there and reads the previous completed
-//!   block without waiting. The pipeline adds one block of latency. A
+//!   block without waiting. The fixed adapter adds two internal blocks of
+//!   latency (collection plus one helper scheduling interval), independently
+//!   of irregular callback sizes, in addition to declared native latency. A
 //!   helper that misses the deadline yields silence/bypass and a failure
 //!   flag; a synchronous wait would violate the engine's no-blocking rule.
 //! - **Events**: [`HostEvent`] going in and [`PluginEvent`] coming out are
@@ -81,6 +86,7 @@
 //! What stays hard is accounting for the pipeline latency and plugin
 //! editors that expect to share a thread with their host window.
 
+pub mod bridge;
 pub mod containment;
 pub mod gui;
 pub mod ownership;

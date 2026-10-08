@@ -1,0 +1,466 @@
+//! Explicit version-one words. These offsets, not Rust object layouts, are the ABI.
+
+use crate::{HostEvent, Transport};
+
+pub const VERSION: u32 = 1;
+pub const DEFAULT_BLOCK: usize = 256;
+pub const MAGIC: u32 = u32::from_le_bytes(*b"WFBR");
+pub const SLOT_COUNT: usize = 4;
+pub const MAX_BLOCK: usize = 512;
+pub const ORDINARY_EVENTS: usize = 1024;
+pub const EVENT_CAPACITY: usize = ORDINARY_EVENTS + 129;
+pub const PARAM_CAPACITY: usize = 4096;
+pub const HEADER_WORDS: usize = 64;
+pub const HELPER_FAILURE: usize = 26;
+pub const META_WORDS: usize = 64;
+pub const INPUT: usize = META_WORDS;
+pub const OUTPUT: usize = INPUT + MAX_BLOCK * 2;
+pub const NOTES: usize = OUTPUT + MAX_BLOCK * 2;
+pub const PARAMETERS: usize = NOTES + 128;
+pub const EVENTS: usize = PARAMETERS + PARAM_CAPACITY * 3;
+pub const EVENT_WORDS: usize = 6;
+pub const SLOT_WORDS: usize = (EVENTS + EVENT_CAPACITY * EVENT_WORDS).next_multiple_of(16);
+pub const REGION_WORDS: usize = HEADER_WORDS + SLOT_COUNT * SLOT_WORDS;
+pub const REGION_BYTES: usize = REGION_WORDS * 4;
+pub const STATE: usize = 0;
+pub const IDENTITY: usize = 1;
+pub const SEQUENCE: usize = 9;
+pub const FRAMES: usize = 11;
+pub const EVENT_COUNT: usize = 12;
+pub const PARAM_COUNT: usize = 13;
+pub const FLAGS: usize = 14;
+pub const NOTE_CHANNEL: usize = 15;
+pub const TRANSPORT: usize = 16;
+pub const EPOCH: usize = 28;
+pub const CONTROL_START: usize = 48;
+pub const CONTROL_END: usize = 50;
+pub const REPLY_IDENTITY: usize = 32;
+pub const REPLY_SEQUENCE: usize = 40;
+pub const REPLY_FRAMES: usize = 42;
+pub const REPLY_STATUS: usize = 43;
+pub const REPLY_EPOCH: usize = 44;
+pub const PROCESSED_GENERATION: usize = 46;
+pub const NATIVE_DROPS: usize = 52;
+pub const EMPTY: u32 = 0;
+pub const HOST_WRITE: u32 = 1;
+pub const READY: u32 = 2;
+pub const HELPER_WRITE: u32 = 3;
+pub const DONE: u32 = 4;
+pub const HOST_READ: u32 = 5;
+pub const OUTPUT_OK: u32 = 0;
+pub const OUTPUT_FAILED: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Identity {
+    pub session: u64,
+    pub token: u64,
+    pub revision: u64,
+    pub binding: u64,
+}
+
+impl Identity {
+    pub fn valid(self) -> bool {
+        self.session != 0 && self.token != 0
+    }
+    pub fn encode(self) -> [u32; 8] {
+        let values = [self.session, self.token, self.revision, self.binding];
+        std::array::from_fn(|index| (values[index / 2] >> (32 * (index % 2))) as u32)
+    }
+    pub fn decode(words: [u32; 8]) -> Result<Self, ProtocolError> {
+        let value = Self {
+            session: pair(words[0], words[1]),
+            token: pair(words[2], words[3]),
+            revision: pair(words[4], words[5]),
+            binding: pair(words[6], words[7]),
+        };
+        if !value.valid() {
+            return Err(ProtocolError::Identity);
+        }
+        Ok(value)
+    }
+}
+
+pub const fn pair(low: u32, high: u32) -> u64 {
+    u64::from_le_bytes([
+        low as u8,
+        (low >> 8) as u8,
+        (low >> 16) as u8,
+        (low >> 24) as u8,
+        high as u8,
+        (high >> 8) as u8,
+        (high >> 16) as u8,
+        (high >> 24) as u8,
+    ])
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Effect,
+    Instrument,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Config {
+    pub identity: Identity,
+    pub sample_rate: u32,
+    pub block: usize,
+    pub native_latency: usize,
+    pub kind: Kind,
+}
+
+impl Config {
+    pub fn validate(self) -> Result<Self, ProtocolError> {
+        if !self.identity.valid() {
+            return Err(ProtocolError::Identity);
+        }
+        if !(8_000..=384_000).contains(&self.sample_rate)
+            || !(1..=MAX_BLOCK).contains(&self.block)
+            || self
+                .native_latency
+                .checked_add(self.block * 2)
+                .is_none_or(|latency| latency > self.sample_rate as usize)
+        {
+            return Err(ProtocolError::Configuration);
+        }
+        Ok(self)
+    }
+    pub fn latency(self) -> usize {
+        self.native_latency + self.block * 2
+    }
+    pub fn header(self) -> Result<[u32; HEADER_WORDS], ProtocolError> {
+        self.validate()?;
+        let mut words = [0; HEADER_WORDS];
+        words[..16].copy_from_slice(&[
+            MAGIC,
+            VERSION,
+            REGION_BYTES as u32,
+            HEADER_WORDS as u32,
+            SLOT_WORDS as u32,
+            SLOT_COUNT as u32,
+            MAX_BLOCK as u32,
+            EVENT_CAPACITY as u32,
+            PARAM_CAPACITY as u32,
+            self.sample_rate,
+            self.block as u32,
+            self.native_latency as u32,
+            u32::from(self.kind == Kind::Instrument),
+            INPUT as u32,
+            OUTPUT as u32,
+            EVENTS as u32,
+        ]);
+        words[16..24].copy_from_slice(&self.identity.encode());
+        words[24] = NOTES as u32;
+        words[25] = PARAMETERS as u32;
+        Ok(words)
+    }
+    /// Accept only the exact v1 layout; never trust a peer-provided offset.
+    pub fn from_header(words: &[u32], mapped_bytes: usize) -> Result<Self, ProtocolError> {
+        if words.len() != HEADER_WORDS || mapped_bytes != REGION_BYTES {
+            return Err(ProtocolError::Layout);
+        }
+        let kind = match words[12] {
+            0 => Kind::Effect,
+            1 => Kind::Instrument,
+            _ => return Err(ProtocolError::Configuration),
+        };
+        let config = Self {
+            identity: Identity::decode(
+                words[16..24]
+                    .try_into()
+                    .map_err(|_| ProtocolError::Layout)?,
+            )?,
+            sample_rate: words[9],
+            block: words[10] as usize,
+            native_latency: words[11] as usize,
+            kind,
+        }
+        .validate()?;
+        if words != config.header()? {
+            return Err(ProtocolError::Layout);
+        }
+        Ok(config)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolError {
+    Layout,
+    Identity,
+    Configuration,
+    Event,
+    Transport,
+    Parameter,
+    Audio,
+    Sequence,
+}
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "invalid bridge {:?}", self)
+    }
+}
+impl std::error::Error for ProtocolError {}
+
+pub fn encode_event(event: HostEvent, frames: usize) -> Result<[u32; EVENT_WORDS], ProtocolError> {
+    if event.time() as usize >= frames || !event.valid() {
+        return Err(ProtocolError::Event);
+    }
+    let mut words = [0; EVENT_WORDS];
+    words[1] = event.time();
+    match event {
+        HostEvent::NoteOn {
+            key,
+            channel,
+            velocity,
+            ..
+        }
+        | HostEvent::NoteOff {
+            key,
+            channel,
+            velocity,
+            ..
+        } => {
+            words[0] = if matches!(event, HostEvent::NoteOn { .. }) {
+                1
+            } else {
+                2
+            };
+            words[2] = u32::from(key);
+            words[3] = u32::from(channel);
+            words[4] = velocity.to_bits();
+        }
+        HostEvent::AllNotesOff { .. } => words[0] = 3,
+        HostEvent::Param { id, value, .. } => {
+            words[0] = 4;
+            words[2] = id;
+            words[4] = value.to_bits() as u32;
+            words[5] = (value.to_bits() >> 32) as u32;
+        }
+    }
+    Ok(words)
+}
+
+pub fn decode_event(words: [u32; EVENT_WORDS], frames: usize) -> Result<HostEvent, ProtocolError> {
+    let event = match words[0] {
+        1 | 2 if words[2] <= 127 && words[3] <= 15 && words[5] == 0 => {
+            let time = words[1];
+            let key = words[2] as u8;
+            let channel = words[3] as u8;
+            let velocity = f32::from_bits(words[4]);
+            if words[0] == 1 {
+                HostEvent::NoteOn {
+                    time,
+                    key,
+                    channel,
+                    velocity,
+                }
+            } else {
+                HostEvent::NoteOff {
+                    time,
+                    key,
+                    channel,
+                    velocity,
+                }
+            }
+        }
+        3 if words[2..].iter().all(|word| *word == 0) => HostEvent::AllNotesOff { time: words[1] },
+        4 if words[3] == 0 => HostEvent::Param {
+            time: words[1],
+            id: words[2],
+            value: f64::from_bits(pair(words[4], words[5])),
+        },
+        _ => return Err(ProtocolError::Event),
+    };
+    encode_event(event, frames)?;
+    Ok(event)
+}
+
+pub fn encode_transport(transport: Transport) -> Result<[u32; 10], ProtocolError> {
+    if !transport.tempo_bpm.is_finite()
+        || !(1.0..=1_000.0).contains(&transport.tempo_bpm)
+        || !transport.position_beats.is_finite()
+        || !transport.position_seconds.is_finite()
+        || transport.position_beats.abs() > 1.0e9
+        || transport.position_seconds.abs() > 1.0e9
+        || !(1..=64).contains(&transport.numerator)
+        || !(1..=64).contains(&transport.denominator)
+        || !transport.denominator.is_power_of_two()
+    {
+        return Err(ProtocolError::Transport);
+    }
+    let mut words = [0; 10];
+    words[0] = u32::from(transport.playing);
+    words[1] = u32::from(transport.numerator);
+    words[2] = u32::from(transport.denominator);
+    for (index, value) in [
+        transport.tempo_bpm,
+        transport.position_beats,
+        transport.position_seconds,
+    ]
+    .iter()
+    .enumerate()
+    {
+        words[4 + index * 2] = value.to_bits() as u32;
+        words[5 + index * 2] = (value.to_bits() >> 32) as u32;
+    }
+    Ok(words)
+}
+
+pub fn decode_transport(words: [u32; 10]) -> Result<Transport, ProtocolError> {
+    if words[0] > 1 || words[1] > u16::MAX as u32 || words[2] > u16::MAX as u32 || words[3] != 0 {
+        return Err(ProtocolError::Transport);
+    }
+    let transport = Transport {
+        playing: words[0] == 1,
+        numerator: words[1] as u16,
+        denominator: words[2] as u16,
+        tempo_bpm: f64::from_bits(pair(words[4], words[5])),
+        position_beats: f64::from_bits(pair(words[6], words[7])),
+        position_seconds: f64::from_bits(pair(words[8], words[9])),
+    };
+    encode_transport(transport)?;
+    Ok(transport)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Parameter {
+    pub id: u32,
+    pub value: f64,
+}
+impl Parameter {
+    pub fn encode(self) -> Result<[u32; 3], ProtocolError> {
+        if self.id == u32::MAX || !self.value.is_finite() {
+            return Err(ProtocolError::Parameter);
+        }
+        Ok([
+            self.id,
+            self.value.to_bits() as u32,
+            (self.value.to_bits() >> 32) as u32,
+        ])
+    }
+    pub fn decode(words: [u32; 3]) -> Result<Self, ProtocolError> {
+        let parameter = Self {
+            id: words[0],
+            value: f64::from_bits(pair(words[1], words[2])),
+        };
+        parameter.encode()?;
+        Ok(parameter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn config() -> Config {
+        Config {
+            identity: Identity {
+                session: 1,
+                token: u64::MAX,
+                revision: 7,
+                binding: 99,
+            },
+            sample_rate: 48_000,
+            block: 256,
+            native_latency: 32,
+            kind: Kind::Effect,
+        }
+    }
+    #[test]
+    fn every_header_word_and_mapping_length_is_checked() {
+        let config = config();
+        let header = config.header().unwrap();
+        assert_eq!(Config::from_header(&header, REGION_BYTES), Ok(config));
+        for index in 0..HEADER_WORDS {
+            // Configuration/identity words legitimately vary; all layout/reserved words are exact.
+            if (9..=12).contains(&index) || (16..24).contains(&index) {
+                continue;
+            }
+            let mut corrupt = header;
+            corrupt[index] ^= 1;
+            assert!(
+                Config::from_header(&corrupt, REGION_BYTES).is_err(),
+                "word {index}"
+            );
+        }
+        for length in [0, REGION_BYTES - 1, REGION_BYTES + 1, usize::MAX] {
+            assert!(Config::from_header(&header, length).is_err());
+        }
+        assert!(Config::from_header(&header[..63], REGION_BYTES).is_err());
+        assert_eq!(REGION_BYTES % 64, 0);
+        assert_eq!(SLOT_WORDS * 4 % 64, 0);
+    }
+    #[test]
+    fn event_roundtrip_preserves_native_precision_and_rejects_unchecked_bytes() {
+        let events = [
+            HostEvent::NoteOn {
+                time: 1,
+                key: 127,
+                channel: 15,
+                velocity: 0.75,
+            },
+            HostEvent::NoteOff {
+                time: 2,
+                key: 0,
+                channel: 0,
+                velocity: 0.0,
+            },
+            HostEvent::AllNotesOff { time: 3 },
+            HostEvent::Param {
+                time: 4,
+                id: 999,
+                value: -123.123_456_789,
+            },
+        ];
+        for event in events {
+            let encoded = encode_event(event, 7).unwrap();
+            assert_eq!(decode_event(encoded, 7), Ok(event));
+            assert!(decode_event(encoded, event.time() as usize).is_err());
+        }
+        for words in [
+            [99, 0, 0, 0, 0, 0],
+            [1, 0, 128, 0, 0, 0],
+            [1, 0, 0, 16, 0, 0],
+            [1, 0, 0, 0, f32::NAN.to_bits(), 0],
+            [3, 0, 1, 0, 0, 0],
+            [4, 0, u32::MAX, 0, 0, 0],
+            [4, 0, 1, 0, 0, (f64::INFINITY.to_bits() >> 32) as u32],
+        ] {
+            assert!(decode_event(words, 64).is_err());
+        }
+    }
+    #[test]
+    fn transport_and_latency_are_bounded() {
+        let mut transport = Transport::default();
+        transport.playing = true;
+        transport.position_beats = -3.5;
+        assert_eq!(
+            decode_transport(encode_transport(transport).unwrap()),
+            Ok(transport)
+        );
+        transport.denominator = 3;
+        assert!(encode_transport(transport).is_err());
+        transport.denominator = 4;
+        transport.position_seconds = f64::INFINITY;
+        assert!(encode_transport(transport).is_err());
+        for block in [0, MAX_BLOCK + 1, usize::MAX] {
+            assert!(Config { block, ..config() }.validate().is_err());
+        }
+        assert!(
+            Config {
+                native_latency: 48_000,
+                ..config()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Config {
+                native_latency: usize::MAX,
+                ..config()
+            }
+            .validate()
+            .is_err()
+        );
+        assert_eq!(config().latency(), 544);
+    }
+}
