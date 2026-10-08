@@ -1,4 +1,4 @@
-# Sampler N1 repair round R1
+# Sampler N1 repairs
 
 The independent review pinned `68a30a6195532b7efe9bc4bbf406507bca46fa3b`.
 Repairs start from parent `186652c6f91463a629feadd9bf2641f54f958956` and integrate
@@ -46,7 +46,8 @@ lock order. Build the batch and predicted source ID under those same guards.
 The helper dispatches only a cloned document and snapshots generation, edits,
 replacement tickets, the **original** source map and pending-loading IDs.
 Candidate source overlays do not participate in comparison with the original
-live map. A musical no-op ignores all overlays. A changed overlay for an original
+live map. A musical no-op ignores overlays except for the guarded settled-source
+assignment recovery described in R2 below. A changed overlay for an original
 pending-loading ID is refused. Cache resolution skips all original loading IDs,
 including unrelated sampler assets.
 
@@ -64,8 +65,8 @@ pending-load/provenance and project-directory guards. Call
 generation/edit/replacement/original-source/pending-load snapshots, dispatches
 once and publishes exact handles. A changed command marks attached candidates
 loaded and clears failed; it preserves other jobs' pending-loading state. A
-no-op neither attaches overlays nor changes musical history. Successful no-op
-bank repair is still published.
+no-op changes no musical history. Successful no-op bank repair is still published;
+only verified settled absent assignments can additionally attach a decoded source.
 
 Normal sample document edits use the same ticket taken before dropping their
 initial locks, avoiding a second snapshot in a newly opened document. Sampler
@@ -122,6 +123,78 @@ Publication compatibility checks passed **80 native tests** across document,
 playlist, recording, editor/slicer, save/open and export. The final local logs
 are `target/n1-r1-final-{sampler,clippy,fmt,native-compatibility}.log` and
 `target/n1-r1-engine-{sampler,source-map}.log`. None are committed.
+
+## R2: settled missing source recovery on identical assignment
+
+The composed review at `6538722c` closed all four original R1 reproductions and
+reported 22 sampler tests plus the 51-case import barrier passing. It identified
+one additional shared helper/import P2, independently confirmed by browser R3:
+restoring a missing file and replacing its channel with that same path produces
+no musical edit, so the helper discarded its decoded source and playback stayed
+missing. This is one finding shared by the two ownership boundaries.
+
+The sampler repair starts from parent `9b3001f4`, merged as `ab320d1e` into this
+worktree. Scanner `101c096e`, the composed exact-handle/pending-load/clip/budget
+repairs, native runtime acknowledgement and portable-save changes are retained.
+The only implementation change is in `session/sampler_processing.rs`; neither
+`library.rs`, generic prepared publication, source-loader code, project schema
+nor generated outputs are changed.
+
+The helper signatures remain unchanged. For a musical no-op, a decoded overlay
+can enter the private prepared pool only when all of these conditions hold:
+
+- The command explicitly assigns that sample with `SetChannelSample`, directly
+  or within a batch, and the candidate channel's final assignment matches it.
+- The source is registered in the candidate document.
+- The original source pool does not contain it, including an empty held buffer.
+- No original pending decoder owns that source ID.
+
+Source preparation/compilation still runs off State and uses the same strict
+retained-bank ledger. The ticket records eligible recovery IDs separately from
+the original source map. Final commit first revalidates generation, edits,
+replacement tickets, exact original source map and loading set under the caller's
+recording exclusion. It then attaches only those exact prepared handles, marks
+them loaded and clears their failed flags before publishing the prepared plan.
+It never performs generic cache synchronization for a no-op. Live document
+dispatch remains skipped, so revision, dirty state, open gesture, undo/redo,
+musical settings and the edit counter remain unchanged.
+
+Already-held sources retain their identities. AddSample-only registration,
+settings Apply, unrelated assignments and pending-source no-ops do not gain a
+general source-attachment capability. Other pending loads retain ownership. An
+over-budget preparation returns an error before attachment or publication; old
+source/failure/history/plan/export state and audible voices remain intact.
+Filesystem identity, root, recording, path-alias, provenance and folder checks
+remain browser-owned at both ordinary and checked import routes.
+
+The compiled helper RED at the merged parent returned success but failed at
+`settled missing source was not recovered`. Its log is
+`target/n1-r2-settled-source-red.log`. The browser owner separately reported all
+six real ordinary/checked tape/spectral/budget recovery RED cases at `6538722c`;
+those route tests are owned and run in the browser worktree.
+
+The helper GREEN and all **22 owned sampler/session tests** pass with
+`CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=1`, the existing cached `target/n1-native`
+and isolated temporary TypeScript exports. Four added tests cover tape and
+spectral recovery with exact decoded identity, unchanged snapshot and a real redo
+branch, supported keys, nonzero runtime and float WAV parity; retained 256 KiB
+budget refusal with unchanged failure/source/history/export and continuing old
+voice output; registration/settings/unassigned-overlay and held-empty exclusion;
+and an actual pending-decoder barrier retaining its original source. Existing
+R1 no-op Apply, original source-map guards and pending-load follow-ups also pass.
+Strict desktop all-target Clippy (`-D warnings`) and workspace formatting pass.
+Local logs are `target/n1-r2-{settled-source-green,sampler-tests,clippy,fmt}.log`.
+
+Four narrow engine guards also passed: exact source-map/empty-allocation
+identity, first-note/range-edge/cut/steal/reload/eviction/retirement allocator
+counts, retained old-voice bank retirement, and supported/unsupported range plus
+bit-identical export. Callback allocations, reallocations and frees remain zero.
+Their logs are `target/n1-r2-engine-{identity,callback,retirement,range}.log`.
+
+Final closure of the new shared P2 requires the browser owner to integrate the
+tested source-only helper commit and run both actual ordinary/checked recovery
+routes against it. No protocol, schema or artifact regeneration is required for
+this helper-only repair. No full UI/workspace loop is rerun for this change.
 
 No DSP algorithm, prepared range policy, callback allocation path, tape geometry,
 plugin runtime/provider, archive format, MIDI panic policy or generated bindings
