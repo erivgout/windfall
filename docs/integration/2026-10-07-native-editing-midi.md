@@ -504,3 +504,23 @@ The local logs are `windfall-root-imports-combined-native.log` and
 `windfall-root-imports-native-resume.log`. The root Rust freeze is released for
 the next tested source delivery. The private GitHub main and alpha remain
 unchanged while the critical picker/source and capture repairs are completed.
+
+Runtime R4 `ec601edf` was cherry-picked as `ea145d93`, preserving the scanner
+fallback and the narrow pre-dedup adoption hook. Its owner passed 87 host,
+38 desktop and eight engine plugin cases, including all four real capture
+roles and truthful native point failure/recovery. Independent round five is
+reviewing the fixed repair. The N4 leaf `a5fdc398` was cherry-picked as
+`7c7ed3ff`: atomic mapping/slots, callback adapter, control/helper/supervisor and
+standalone audio-helper foundation. Its owner passed eleven units, eight real
+process cases and sixteen preceding realtime cases. Desktop activation,
+manager controls, production helper discovery and native editor parity remain
+pending. Independent timing/ownership review and parent combined R4/bridge
+checks are running at this fixed composition.
+
+The R4 owner closed its shared fixture window. N4 may add distinct class-10+
+and CLAP bridge fixtures after adopting the repaired point/drop API; existing
+classes zero through nine remain intact. Production runtime/main/factory
+wiring waits for acceptance. T1's new timeline/navigation Plan data is
+separate from the utility owner's newly approved `Plan::keep_leaving` fix for
+an unrelated-plan edit interrupting a live departure splice. No second owner
+is rewriting the reserved Rack/State/native runtime seams.
