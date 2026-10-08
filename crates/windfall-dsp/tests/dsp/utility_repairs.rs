@@ -9,6 +9,64 @@ fn matrix(left_delay_ms: f32, right_delay_ms: f32) -> EffectParams {
     })
 }
 
+#[test]
+fn r3_short_history_zero_to_delay_retains_unity_until_the_target_is_ready() {
+    let mut slot = EffectSlot::new(AnyEffect::new(&matrix(0.0, 0.0)));
+    slot.prepare(48_000.0, 137);
+    slot.process(&mut [1.0; 64], &mut [1.0; 64]);
+    slot.set_params(&matrix(50.0, 50.0));
+    let (mut left, mut right) = (vec![1.0; 3000], vec![1.0; 3000]);
+    run_slot(&mut slot, &mut left, &mut right, &[1, 7, 137]);
+    let minimum = left
+        .iter()
+        .chain(&right)
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        left.iter().chain(&right).all(|sample| *sample == 1.0),
+        "short-history unity minimum {minimum}"
+    );
+    assert_eq!(slot.latency_samples(), 2400);
+}
+
+#[test]
+fn r3_waiting_edits_coalesce_and_finish_after_reset_at_every_slot_policy() {
+    for blocks in [&[3000][..], &[1, 7, 137][..]] {
+        for (mix, enabled) in [(0.0, true), (0.5, true), (1.0, true), (1.0, false)] {
+            let mut slot = EffectSlot::new(AnyEffect::new(&matrix(0.0, 0.0)));
+            for prepare in [true, false, true] {
+                slot.set_params(&matrix(0.0, 0.0));
+                slot.set_mix(mix);
+                slot.set_enabled(enabled);
+                if prepare {
+                    slot.prepare(48_000.0, 137);
+                } else {
+                    slot.reset();
+                }
+                slot.process(&mut [1.0; 64], &mut [1.0; 64]);
+                slot.set_params(&matrix(5.0, 5.0));
+                let (mut l, mut r) = (vec![1.0; 3000], vec![1.0; 3000]);
+                run_slot(&mut slot, &mut l[..100], &mut r[..100], blocks);
+                slot.set_params(&matrix(50.0, 50.0));
+                assert_eq!(slot.tail_samples(), 2400);
+                assert_eq!(slot.gap_samples(), 2400);
+                run_slot(&mut slot, &mut l[100..], &mut r[100..], blocks);
+                assert!(l.iter().chain(&r).all(|sample| *sample == 1.0));
+                // A new impulse must use the latest requested tap, not the
+                // old audible transfer retained during the filling wait.
+                l.fill(0.0);
+                r.fill(0.0);
+                l[0] = 2.0;
+                r[0] = 2.0;
+                run_slot(&mut slot, &mut l, &mut r, blocks);
+                assert_eq!(l[2400], 2.0);
+                assert_eq!(r[2400], 2.0);
+                assert!(l[2401..].iter().chain(&r[2401..]).all(|s| *s == 0.0));
+            }
+        }
+    }
+}
+
 fn run_slot(slot: &mut EffectSlot, left: &mut [f32], right: &mut [f32], blocks: &[usize]) {
     let mut offset = 0;
     for size in blocks.iter().copied().cycle() {

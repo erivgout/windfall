@@ -8,6 +8,10 @@
 //! [`PlanState`](crate::state::PlanState) sized to match.
 
 use std::collections::HashSet;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 
 use windfall_core::{AudioBuffer, PPQ, TICKS_PER_STEP};
 use windfall_project::{
@@ -184,7 +188,25 @@ pub(crate) struct PlanTrack {
     pub instruments: Vec<usize>,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// Only progress is shared: this never grants access to a plugin owner.
+/// Unheard prepared slots need no departing definition; heard ones stay
+/// until their actual rack splice completes. References retire with plans.
+#[derive(Debug, Default)]
+pub(crate) struct EffectLife(AtomicU8);
+
+impl EffectLife {
+    pub fn heard(&self) -> bool {
+        self.0.load(Ordering::Acquire) == 1
+    }
+    pub fn hear(&self) {
+        self.0.store(1, Ordering::Release);
+    }
+    pub fn finish(&self) {
+        self.0.store(2, Ordering::Release);
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PlanEffect {
     pub id: EffectId,
     /// Every value inside its range.
@@ -195,6 +217,7 @@ pub(crate) struct PlanEffect {
     /// chain for as long as it takes to fade out. See
     /// [`Plan::keep_leaving`].
     pub leaving: bool,
+    pub life: Arc<EffectLife>,
 }
 
 #[derive(Debug)]
@@ -259,19 +282,49 @@ impl Plan {
         compile(&Project::new(""), &SamplePool::new())
     }
 
-    /// Keeps what `previous` played and this plan does not for one more
-    /// plan, so that it can fade out instead of stopping dead.
+    /// Keeps what `previous` played until its actual rack splice finishes,
+    /// so intervening plans cannot stop a departing effect dead.
     ///
     /// An effect that left the project stays in its track's chain, marked
     /// as leaving, right after the effect it followed. An instrument
     /// channel that left the project is listed after the project's own
     /// channels, on the track it played into or on the master if that
-    /// track is gone, at the gain and pan it had. What is already leaving
-    /// in `previous` is not kept again, so a leaver lasts exactly one plan.
+    /// track is gone, at the gain and pan it had. Effect progress is shared
+    /// with the rack: unheard speculative slots and completed departures
+    /// are excluded here, and their storage retires on the control side.
+    /// Instrument channels retain their existing one-plan departure policy.
     ///
     /// A track that is gone takes its effects with it at once: there is
     /// nowhere left for them to be heard.
     pub fn keep_leaving(&mut self, previous: &Plan) {
+        let same_factory = match (&self.plugin_factory, &previous.plugin_factory) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        // Progress follows a retained identity across track moves as well.
+        // A restored departing id gets a fresh marker and owner preparation.
+        for effect in self.tracks.iter_mut().flat_map(|track| &mut track.effects) {
+            let Some(before) = previous.effect_ids.get(effect.id.0) else {
+                continue;
+            };
+            let (track, place) = previous.effect_places[before];
+            let before = &previous.tracks[track].effects[place];
+            let key = windfall_project::PluginTarget::Effect { effect: effect.id };
+            let owner = |bindings: &[windfall_project::PluginBinding]| {
+                bindings
+                    .iter()
+                    .find(|binding| binding.target == key)
+                    .map(crate::plugins::identity)
+            };
+            let native = owner(&self.plugins);
+            if effect.params.kind() == before.params.kind()
+                && native == owner(&previous.plugins)
+                && (native.is_none() || same_factory)
+            {
+                effect.life = before.life.clone();
+            }
+        }
         for track in &mut self.tracks {
             let Some(before) = previous.track_ids.get(track.id.0) else {
                 continue;
@@ -280,17 +333,14 @@ impl Plan {
             // ahead of it and is still in this chain.
             let mut at = 0;
             for effect in &previous.tracks[before].effects {
-                if effect.leaving {
-                    continue;
-                }
                 if let Some(kept) = track.effects.iter().position(|e| e.id == effect.id) {
                     at = at.max(kept + 1);
-                } else if self.effect_ids.get(effect.id.0).is_none() {
+                } else if self.effect_ids.get(effect.id.0).is_none() && effect.life.heard() {
                     track.effects.insert(
                         at,
                         PlanEffect {
                             leaving: true,
-                            ..*effect
+                            ..effect.clone()
                         },
                     );
                     at += 1;
@@ -837,6 +887,7 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
                         1.0
                     },
                     leaving: false,
+                    life: Arc::new(EffectLife::default()),
                 })
                 .collect();
             PlanTrack {

@@ -344,6 +344,8 @@ fn last_sound(block: &[[f32; 2]], silence: f32) -> (Option<usize>, Option<usize>
 /// what is missing.
 pub(crate) struct Ledger {
     plugins: HashMap<windfall_project::PluginTarget, (u64, usize)>,
+    /// Latency metadata only, excluded from active native-owner reuse.
+    departing_plugins: HashMap<windfall_project::PluginTarget, (u64, usize)>,
     pub sample_rate: u32,
     effects: HashMap<EffectId, EffectKind>,
     instruments: HashMap<ChannelId, InstrumentKind>,
@@ -376,6 +378,7 @@ impl Layout {
         plan: &Plan,
         sample_rate: u32,
         plugins: &HashMap<windfall_project::PluginTarget, (u64, usize)>,
+        known_plugins: &HashMap<windfall_project::PluginTarget, (u64, usize)>,
     ) -> Self {
         let rate = sample_rate as f32;
         // No path is compensated for more than a second of latency. Past
@@ -404,6 +407,7 @@ impl Layout {
                         },
                         delay: latency,
                         maximum: latency,
+                        readiness: latency,
                         matrix: false,
                     }];
                 }
@@ -419,18 +423,22 @@ impl Layout {
             let (latency, longest) = chain.fold((0, 0), |(latency, longest), effect| {
                 let key = windfall_project::PluginTarget::Effect { effect: effect.id };
                 if effect.leaving {
-                    if effect.params.kind() == EffectKind::StereoMatrix
-                        && !plugins.contains_key(&key)
-                    {
-                        let maximum = effect.params.kind().max_latency_samples(rate);
+                    let native = plugins.get(&key).or_else(|| known_plugins.get(&key));
+                    let maximum = native.map_or_else(
+                        || effect.params.kind().max_latency_samples(rate),
+                        |record| record.1,
+                    );
+                    if maximum > 0 {
                         path.push(DelayStage {
                             key,
                             delay: 0,
                             maximum,
-                            matrix: true,
+                            readiness: 0,
+                            matrix: native.is_none()
+                                && effect.params.kind() == EffectKind::StereoMatrix,
                         });
-                        // Retain this zero-target stage until the engine's
-                        // outer removal splice has drained through the route.
+                        // Every departing delayed processor keeps its stage
+                        // until the outer removal splice drains through the route.
                         return (latency, longest + maximum);
                     }
                     return (latency, longest);
@@ -441,6 +449,7 @@ impl Layout {
                             key,
                             delay: record.1,
                             maximum: record.1,
+                            readiness: record.1,
                             matrix: false,
                         });
                     }
@@ -453,6 +462,12 @@ impl Layout {
                         key,
                         delay,
                         maximum,
+                        readiness: match effect.params {
+                            windfall_project::EffectParams::StereoMatrix(params) => {
+                                params.delay_readiness_samples(rate)
+                            }
+                            _ => delay,
+                        },
                         matrix: effect.params.kind() == EffectKind::StereoMatrix,
                     });
                 }
@@ -585,9 +600,24 @@ impl PlanState {
             .filter(|held| held.sample_rate == sample_rate)
             .map_or(&empty, |held| &held.plugins);
         let (mut prepared, plugins) = crate::plugins::prepare(plan, sample_rate, known_plugins);
-        let layout = Layout::of(plan, sample_rate, &plugins);
+        let departing_plugins = plan
+            .tracks
+            .iter()
+            .flat_map(|track| &track.effects)
+            .filter(|effect| effect.leaving)
+            .filter_map(|effect| {
+                let key = windfall_project::PluginTarget::Effect { effect: effect.id };
+                let record = known_plugins.get(&key).or_else(|| {
+                    held.filter(|held| held.sample_rate == sample_rate)
+                        .and_then(|held| held.departing_plugins.get(&key))
+                })?;
+                Some((key, *record))
+            })
+            .collect();
+        let layout = Layout::of(plan, sample_rate, &plugins, &departing_plugins);
         let mut ledger = Ledger {
             plugins,
+            departing_plugins,
             sample_rate,
             effects: HashMap::new(),
             instruments: HashMap::new(),
@@ -709,6 +739,7 @@ impl PlanState {
                             key: target,
                             delay: behind,
                             maximum: behind,
+                            readiness: behind,
                             matrix: false,
                         }],
                         layout.arrival[channel.track].saturating_sub(behind),
@@ -964,14 +995,41 @@ impl PlanState {
                 let new = seat.is_some();
                 if !new {
                     let held = old_plan.effect_ids.get(effect.id.0);
-                    let (old_track, old_place) = match held {
-                        Some(held) => old_plan.effect_places[held],
-                        None => continue,
-                    };
+                    let (old_track, old_place) =
+                        match held {
+                            Some(held) => old_plan.effect_places[held],
+                            None if effect.leaving => {
+                                let held = old_plan.tracks.iter().enumerate().find_map(
+                                    |(track, entry)| {
+                                        entry
+                                            .effects
+                                            .iter()
+                                            .position(|before| {
+                                                before.id == effect.id
+                                                    && before.leaving
+                                                    && std::sync::Arc::ptr_eq(
+                                                        &before.life,
+                                                        &effect.life,
+                                                    )
+                                            })
+                                            .map(|place| (track, place))
+                                    },
+                                );
+                                let Some(held) = held else {
+                                    effect.life.finish();
+                                    continue;
+                                };
+                                held
+                            }
+                            None => continue,
+                        };
                     *seat = old.chains[old_track][old_place]
                         .take_if(|unit| unit.kind() == effect.params.kind());
                 }
                 let Some(unit) = seat else {
+                    if effect.leaving {
+                        effect.life.finish();
+                    }
                     continue;
                 };
                 if !new {

@@ -66,10 +66,13 @@ mute gains, and polarity gains ramp in signal space over exactly 5 ms.
 Changes before the first processed sample, and reset, take their target
 settings immediately. Delay changes crossfade between whole-sample taps
 over the existing 5 ms latency-transition interval, without pitching the
-signal. Rapid retargeting preserves the currently audible tap mixture and
-starts another 5 ms fade to the latest target. The final target is fully
-applied 5 ms after the last edit; intermediate requested taps are retained
-at their audible weights, without queuing settings. Prepared storage holds
+signal. Rapid retargeting preserves the currently audible tap mixture.
+One latest pending target waits until both channel histories are ready;
+increasing that target extends readiness. Once ready, it starts a 5 ms fade
+from the audible mixture to the latest target. The final target is fully
+applied 5 ms after the last request is ready; audible intermediate taps
+retain their weights while an unapplied pending request is coalesced.
+Prepared storage holds
 at most one contribution per whole-sample delay in the 0–50 ms range.
 The slot's dry signal uses the same transition. Engine compensation mirrors
 eligible reference routes as ordered shared-delay stages, so a downstream
@@ -113,8 +116,10 @@ changes of reference route retain scalar compensation: settled alignment
 is preserved, but exact transient phase cancellation is not guaranteed.
 The same limit applies to topology changes during an active tap fade.
 [UTILITY-REPAIRS.md](UTILITY-REPAIRS.md) specifies these boundaries and the
-prepared storage/CPU costs. Matrix tap targets settle after 5 ms; their
-effect at a route's output also includes downstream delay.
+prepared storage/CPU costs. Matrix tap targets settle 5 ms after the latest
+pending target has enough history in both channels. Increasing a pending
+target extends that wait; its effect at a route's output also includes
+downstream delay.
 
 Drive distortion reports **32 samples of linear-phase group delay** and
 64 samples of finite FIR tail/gap at every rate. Its impulse can have

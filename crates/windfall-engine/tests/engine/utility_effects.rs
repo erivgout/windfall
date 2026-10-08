@@ -31,6 +31,645 @@ fn configured(kind: EffectKind) -> EffectParams {
     }
 }
 
+fn guarded_run(
+    processor: &mut windfall_engine::Processor,
+    frames: usize,
+    block: usize,
+) -> Vec<f32> {
+    let mut audio = vec![0.0; frames * 2];
+    for out in audio.chunks_mut(block * 2) {
+        assert_eq!(
+            crate::realtime::allocator_calls(|| processor.process(out)),
+            0
+        );
+    }
+    audio
+}
+
+#[test]
+fn utility_effects_r3_departing_settled_limiter_keeps_its_compensation_splice() {
+    let mut rig = Rig::new();
+    let (first, second) = (rig.track(), rig.track());
+    let tone = sine(RATE, 500.0, 0.25);
+    let up = rig.channel_on(tone.clone(), first);
+    let down = rig.channel_on(crate::support::inverted(&tone), second);
+    for channel in [up, down] {
+        rig.channel_mut(channel).volume = 0.5;
+        rig.steps(channel, &[0]);
+    }
+    rig.effect(first, matrix(1.0, 1.0));
+    let limiter = rig.effect(first, idle_limiter(1.0));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    assert!(peak(&run(&mut processor, 4092, 137)) < 1e-6);
+    rig.remove_effect(limiter);
+    controller.set_project(&rig.project, &rig.pool);
+    let audio = run(&mut processor, 1000, 29);
+    assert!(
+        peak(&audio) < 1e-6,
+        "departing limiter residual {}, first {}",
+        peak(&audio),
+        audio[0]
+    );
+    assert_eq!(controller.latency_frames(), 48);
+}
+
+#[derive(Debug, Default)]
+struct R3PluginStats {
+    creates: std::sync::atomic::AtomicUsize,
+    processes: std::sync::atomic::AtomicUsize,
+    drops: std::sync::atomic::AtomicUsize,
+}
+#[derive(Debug, Default)]
+struct R3DelayFactory(std::sync::Arc<R3PluginStats>, std::sync::atomic::AtomicU64);
+
+impl windfall_engine::plugins::PluginFactory for R3DelayFactory {
+    fn revision(&self) -> u64 {
+        self.1.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn effect(
+        &self,
+        _: &windfall_project::PluginBinding,
+        _: u32,
+        _: usize,
+    ) -> Result<Box<dyn windfall_engine::plugins::HostedEffect>, String> {
+        self.0
+            .creates
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(Box::new(R3HostedDelay {
+            ring: [[0.0; 2]; 32],
+            write: 0,
+            stats: self.0.clone(),
+        }))
+    }
+    fn instrument(
+        &self,
+        _: &windfall_project::PluginBinding,
+        _: u32,
+        _: usize,
+    ) -> Result<Box<dyn windfall_engine::plugins::HostedInstrument>, String> {
+        Err("effect fixture".into())
+    }
+}
+
+struct R3HostedDelay {
+    ring: [[f32; 2]; 32],
+    write: usize,
+    stats: std::sync::Arc<R3PluginStats>,
+}
+impl Drop for R3HostedDelay {
+    fn drop(&mut self) {
+        self.stats
+            .drops
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+impl windfall_engine::plugins::HostedEffect for R3HostedDelay {
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.stats
+            .processes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        for (left, right) in left.iter_mut().zip(right) {
+            let old = self.ring[self.write];
+            self.ring[self.write] = [*left, *right];
+            self.write = (self.write + 1) % 32;
+            [*left, *right] = old;
+        }
+    }
+    fn set_param(&mut self, _: u32, _: f32) {}
+    fn set_tempo(&mut self, _: f32) {}
+    fn latency(&self) -> usize {
+        32
+    }
+    fn tail(&self) -> usize {
+        32
+    }
+}
+
+#[test]
+fn utility_effects_r3_fixed_stage_removal_before_and_after_matrices_is_allocation_free() {
+    for hosted in [false, true] {
+        for place in 0..=2 {
+            for enabled in [true, false] {
+                let mut rig = Rig::new();
+                let (first, second) = (rig.track(), rig.track());
+                let unused = rig.track();
+                let tone = sine(RATE, 500.0, 1.0);
+                let up = rig.channel_on(tone.clone(), first);
+                let down = rig.channel_on(crate::support::inverted(&tone), second);
+                for channel in [up, down] {
+                    rig.channel_mut(channel).volume = 0.5;
+                    rig.steps(channel, &[0]);
+                }
+                rig.effect(first, matrix(1.0, 1.0));
+                rig.effect(first, matrix(1.0, 1.0));
+                let fixed = rig.effect(
+                    first,
+                    if hosted {
+                        EffectKind::Balance.default_params()
+                    } else {
+                        idle_limiter(1.0)
+                    },
+                );
+                rig.effect_mut(fixed).enabled = enabled;
+                let slot = rig.remove_effect(fixed);
+                rig.track_mut(first).effects.insert(place, slot);
+                let factory = std::sync::Arc::new(R3DelayFactory::default());
+                if hosted {
+                    rig.project.plugins.push(windfall_project::PluginBinding {
+                        target: windfall_project::PluginTarget::Effect { effect: fixed },
+                        format: "clap".into(),
+                        path: "r3-prepared-delay.clap".into(),
+                        id: "r3-delay".into(),
+                        name: "Prepared delay".into(),
+                        state: vec![],
+                        parameters: vec![],
+                    });
+                    rig.pool.set_plugin_factory(factory.clone());
+                }
+                let (mut processor, controller) = rig.processor(RATE);
+                controller.play();
+                assert!(peak(&run(&mut processor, 4092, 137)) < 1e-6);
+                rig.remove_effect(fixed);
+                // Remove the binding too: the retiring stage's native latency
+                // must come from the held ledger, not the new project.
+                rig.project.plugins.retain(|binding| {
+                    binding.target != windfall_project::PluginTarget::Effect { effect: fixed }
+                });
+                controller.set_project(&rig.project, &rig.pool);
+                assert_eq!(controller.latency_frames(), 96);
+                let mut out = [0.0; 137 * 2];
+                let mut residual = 0.0_f32;
+                let mut remaining = 80;
+                for block in [1, 7, 137].into_iter().cycle() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let count = remaining.min(block);
+                    let out = &mut out[..count * 2];
+                    assert_eq!(
+                        crate::realtime::allocator_calls(|| processor.process(out)),
+                        0
+                    );
+                    residual = residual.max(peak(out));
+                    remaining -= count;
+                }
+                // An intervening plan must neither restart the outer splice
+                // nor forget the removed plugin's latency while it is audible.
+                for edit in 0..40 {
+                    rig.track_mut(unused).volume = if edit % 2 == 0 { 0.75 } else { 0.5 };
+                    controller.set_project(&rig.project, &rig.pool);
+                    assert_eq!(
+                        crate::realtime::allocator_calls(|| processor.process(&mut out[..2])),
+                        0
+                    );
+                    residual = residual.max(peak(&out[..2]));
+                    controller.frame();
+                }
+                for _ in 0..8 {
+                    assert_eq!(
+                        crate::realtime::allocator_calls(|| processor.process(&mut out)),
+                        0
+                    );
+                    residual = residual.max(peak(&out));
+                }
+                assert!(
+                    residual < 1e-6,
+                    "fixed removal residual {residual}, hosted {hosted}, place {place}, enabled {enabled}"
+                );
+                controller.frame();
+                controller.set_project(&rig.project, &rig.pool);
+                assert_eq!(
+                    crate::realtime::allocator_calls(|| processor.process(&mut out)),
+                    0
+                );
+                assert!(peak(&out) < 1e-6);
+                controller.frame();
+                if hosted {
+                    assert_eq!(
+                        factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
+                        1,
+                        "the completed native departure must retire on the control side"
+                    );
+                    let processes = factory
+                        .0
+                        .processes
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    controller.set_project(&rig.project, &rig.pool);
+                    assert_eq!(
+                        crate::realtime::allocator_calls(|| processor.process(&mut out)),
+                        0
+                    );
+                    controller.frame();
+                    assert_eq!(
+                        factory
+                            .0
+                            .processes
+                            .load(std::sync::atomic::Ordering::Relaxed),
+                        processes
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn utility_effects_r3_an_intervening_plan_preserves_the_departing_splices_actual_duration() {
+    let mut rig = Rig::new();
+    let (first, unused) = (rig.track(), rig.track());
+    let channel = rig.channel_on(sine(RATE, 500.0, 1.0), first);
+    rig.channel_mut(channel).volume = 0.5;
+    rig.steps(channel, &[0]);
+    rig.effect(first, matrix(1.0, 1.0));
+    let fixed = rig.effect(first, idle_limiter(1.0));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    rig.remove_effect(fixed);
+    controller.set_project(&rig.project, &rig.pool);
+    let mut audio = guarded_run(&mut processor, 80, 7);
+    for edit in 0..40 {
+        rig.track_mut(unused).volume = if edit % 2 == 0 { 0.75 } else { 0.5 };
+        controller.set_project(&rig.project, &rig.pool);
+        audio.extend(guarded_run(&mut processor, 1, 1));
+        controller.frame();
+    }
+    audio.extend(guarded_run(&mut processor, 1000, 29));
+    let step = left(&audio)
+        .windows(2)
+        .map(|p| (p[1] - p[0]).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        step < 0.04,
+        "intervening plan cut the departing splice: step {step}"
+    );
+}
+
+#[test]
+fn utility_effects_r3_unheard_speculative_native_slots_retire_without_activation() {
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(level(RATE, 1.0, 1.0), first);
+    rig.steps(channel, &[0]);
+    let factory = std::sync::Arc::new(R3DelayFactory::default());
+    rig.pool.set_plugin_factory(factory.clone());
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    for _ in 0..40 {
+        let plugin = rig.effect(first, EffectKind::Balance.default_params());
+        rig.project.plugins.push(windfall_project::PluginBinding {
+            target: windfall_project::PluginTarget::Effect { effect: plugin },
+            format: "clap".into(),
+            path: "r3-speculative-delay.clap".into(),
+            id: "r3-delay".into(),
+            name: "Prepared delay".into(),
+            state: vec![],
+            parameters: vec![],
+        });
+        controller.set_project(&rig.project, &rig.pool);
+        rig.remove_effect(plugin);
+        rig.project.plugins.clear();
+        // Both plans are queued before a callback. The prepared native owner
+        // has never contributed to audio and must not become a departing one.
+        controller.set_project(&rig.project, &rig.pool);
+        assert!(guarded_run(&mut processor, 7, 7).iter().all(|s| *s == 1.0));
+        controller.frame();
+        assert_eq!(controller.latency_frames(), 0);
+    }
+    assert_eq!(
+        factory
+            .0
+            .processes
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
+        40
+    );
+    assert_eq!(
+        factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
+        40
+    );
+}
+
+#[test]
+fn utility_effects_r3_restored_native_id_uses_a_new_active_owner_not_a_retiring_one() {
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(level(RATE, 1.0, 1.0), first);
+    rig.steps(channel, &[0]);
+    let plugin = rig.effect(first, EffectKind::Balance.default_params());
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = windfall_project::PluginBinding {
+        target: windfall_project::PluginTarget::Effect { effect: plugin },
+        format: "clap".into(),
+        path: "r3-restored-delay.clap".into(),
+        id: "r3-delay".into(),
+        name: "Prepared delay".into(),
+        state: vec![],
+        parameters: vec![],
+    };
+    rig.project.plugins.push(binding.clone());
+    let factory = std::sync::Arc::new(R3DelayFactory::default());
+    rig.pool.set_plugin_factory(factory.clone());
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    let slot = rig.remove_effect(plugin);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(guarded_run(&mut processor, 80, 7).iter().all(|s| *s == 1.0));
+    rig.track_mut(first).effects.insert(0, slot);
+    rig.project.plugins.push(binding);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 1000, 29)
+            .iter()
+            .all(|s| *s == 1.0)
+    );
+    controller.frame();
+    assert_eq!(
+        factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+    assert_eq!(
+        factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(controller.latency_frames(), 80);
+}
+
+#[test]
+fn utility_effects_r3_prepared_native_revision_cannot_be_activated_as_a_departing_owner() {
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(level(RATE, 1.0, 1.0), first);
+    rig.steps(channel, &[0]);
+    let plugin = rig.effect(first, EffectKind::Balance.default_params());
+    rig.project.plugins.push(windfall_project::PluginBinding {
+        target: windfall_project::PluginTarget::Effect { effect: plugin },
+        format: "clap".into(),
+        path: "r3-revised-delay.clap".into(),
+        id: "r3-delay".into(),
+        name: "Prepared delay".into(),
+        state: vec![],
+        parameters: vec![],
+    });
+    let factory = std::sync::Arc::new(R3DelayFactory::default());
+    rig.pool.set_plugin_factory(factory.clone());
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    let processes = factory
+        .0
+        .processes
+        .load(std::sync::atomic::Ordering::Relaxed);
+    factory.1.store(1, std::sync::atomic::Ordering::Relaxed);
+    controller.set_project(&rig.project, &rig.pool);
+    rig.remove_effect(plugin);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 1000, 7)
+            .iter()
+            .all(|s| *s == 1.0)
+    );
+    controller.frame();
+    assert_eq!(
+        factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+    assert_eq!(
+        factory
+            .0
+            .processes
+            .load(std::sync::atomic::Ordering::Relaxed),
+        processes
+    );
+    controller.set_project(&rig.project, &rig.pool);
+    guarded_run(&mut processor, 7, 7);
+    controller.frame();
+    assert_eq!(
+        factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+}
+
+#[test]
+fn utility_effects_r3_moved_matrix_departure_keeps_progress_through_factory_changes() {
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(sine(RATE, 500.0, 1.0), first);
+    rig.channel_mut(channel).volume = 0.5;
+    rig.steps(channel, &[0]);
+    let id = rig.effect(first, matrix(1.0, 1.0));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    let slot = rig.remove_effect(id);
+    rig.track_mut(TrackId::MASTER).effects.push(slot);
+    controller.set_project(&rig.project, &rig.pool);
+    let mut audio = guarded_run(&mut processor, 1000, 29);
+    rig.pool
+        .set_plugin_factory(std::sync::Arc::new(R3DelayFactory::default()));
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 1, 1));
+    rig.remove_effect(id);
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 1000, 29));
+    let maximum = left(&audio)
+        .windows(2)
+        .map(|p| (p[1] - p[0]).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(maximum < 0.04, "moved departure interrupted: {maximum}");
+}
+
+#[test]
+fn utility_effects_r3_reference_change_preserves_constant_unity() {
+    let mut rig = Rig::new();
+    let tracks = [rig.track(), rig.track(), rig.track()];
+    for track in tracks {
+        let channel = rig.channel_on(level(RATE, 1.0, 1.0), track);
+        rig.steps(channel, &[0]);
+    }
+    rig.effect(tracks[0], matrix(1.0, 1.0));
+    let b = rig.effect(tracks[1], matrix(0.0, 0.0));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 4092, 137);
+    rig.effect_mut(b).params = matrix(2.0, 2.0);
+    controller.set_project(&rig.project, &rig.pool);
+    let audio = run(&mut processor, 1000, 29);
+    let minimum = audio.iter().copied().fold(f32::INFINITY, f32::min);
+    assert!(
+        audio.iter().all(|sample| *sample == 3.0),
+        "reference-switch unity minimum {minimum}"
+    );
+    assert_eq!(controller.latency_frames(), 96);
+}
+
+#[test]
+fn utility_effects_r3_short_history_edits_keep_wet_dry_and_pdc_synchronized() {
+    for block in [1, 7, 137] {
+        for (mix, enabled) in [(1.0, true), (0.5, true), (0.0, true), (1.0, false)] {
+            let mut rig = Rig::new();
+            let (first, second) = (rig.track(), rig.track());
+            let tone = sine(RATE, 173.0, 1.0);
+            let up = rig.channel_on(tone.clone(), first);
+            let down = rig.channel_on(crate::support::inverted(&tone), second);
+            rig.steps(up, &[0]);
+            rig.steps(down, &[0]);
+            let id = rig.effect(first, matrix(0.0, 0.0));
+            rig.effect_mut(id).mix = mix;
+            rig.effect_mut(id).enabled = enabled;
+            let (mut processor, controller) = rig.processor(RATE);
+            for reset in [false, true] {
+                if reset {
+                    controller.stop();
+                    run(&mut processor, 3000, block);
+                    rig.effect_mut(id).params = matrix(0.0, 0.0);
+                    controller.set_project(&rig.project, &rig.pool);
+                    controller.seek(0.0);
+                }
+                controller.play();
+                let mut audio = guarded_run(&mut processor, 64, block);
+                for (ms, frames) in [(5.0, 100), (50.0, 3000), (2.0, 500)] {
+                    rig.effect_mut(id).params = matrix(ms, ms);
+                    controller.set_project(&rig.project, &rig.pool);
+                    audio.extend(guarded_run(&mut processor, frames, block));
+                }
+                assert!(
+                    peak(&audio) < 1e-6,
+                    "short-history PDC {}, block {block}, mix {mix}, enabled {enabled}, reset {reset}",
+                    peak(&audio)
+                );
+            }
+            rig.track_mut(second).muted = true;
+            controller.set_project(&rig.project, &rig.pool);
+            assert!(peak(&run(&mut processor, 1000, block)) > 0.4);
+        }
+    }
+}
+
+#[test]
+fn utility_effects_r3_repeated_reference_switches_keep_retained_input_unity() {
+    for primed in [64, 4092] {
+        let mut rig = Rig::new();
+        let tracks = [rig.track(), rig.track(), rig.track()];
+        for track in tracks {
+            let channel = rig.channel_on(level(RATE, 1.0, 1.0), track);
+            rig.steps(channel, &[0]);
+        }
+        let a = rig.effect(tracks[0], matrix(0.0, 0.0));
+        let b = rig.effect(tracks[1], matrix(0.0, 0.0));
+        let (mut processor, controller) = rig.processor(RATE);
+        controller.play();
+        run(&mut processor, primed, 137);
+        for (id, ms, frames, block) in [
+            (a, 1.0, 100, 7),
+            (b, 2.0, 17, 1),
+            (a, 5.0, 37, 7),
+            (b, 50.0, 29, 1),
+            (a, 0.0, 61, 7),
+            (b, 3.0, 3000, 137),
+            (a, 4.0, 1000, 29),
+        ] {
+            rig.effect_mut(id).params = matrix(ms, ms);
+            controller.set_project(&rig.project, &rig.pool);
+            let mut out = [0.0; 137 * 2];
+            let mut remaining = frames;
+            while remaining > 0 {
+                let count = remaining.min(block);
+                let out = &mut out[..count * 2];
+                assert_eq!(
+                    crate::realtime::allocator_calls(|| processor.process(out)),
+                    0
+                );
+                let minimum = out.iter().copied().fold(f32::INFINITY, f32::min);
+                assert!(
+                    out.iter().all(|sample| (*sample - 3.0).abs() < 1e-6),
+                    "reference unity {minimum}, primed {primed}, target {ms}"
+                );
+                remaining -= count;
+            }
+            controller.frame();
+        }
+    }
+}
+
+#[test]
+fn utility_effects_r3_source_and_matrix_route_changes_do_not_expose_empty_history() {
+    let mut rig = Rig::new();
+    let (first, plain, bus) = (rig.track(), rig.track(), rig.track());
+    let up = rig.channel_on(level(RATE, 1.0, 1.0), first);
+    let direct = rig.channel_on(level(RATE, 1.0, 1.0), plain);
+    rig.steps(up, &[0]);
+    rig.steps(direct, &[0]);
+    let a = rig.effect(first, matrix(0.0, 0.0));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    run(&mut processor, 64, 7);
+    rig.effect_mut(a).params = matrix(50.0, 50.0);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(run(&mut processor, 100, 7).iter().all(|s| *s == 2.0));
+    let added = rig.channel_on(level(RATE, 1.0, 1.0), bus);
+    rig.steps(added, &[0]);
+    let b = rig.effect(bus, matrix(0.0, 50.0));
+    controller.set_project(&rig.project, &rig.pool);
+    // A newly added sampler starts at its next pattern trigger. Seek/replay
+    // starts the added source. Prime constant audio after the transport fade:
+    // earlier silence in the real source is legitimate delayed input, whereas
+    // empty history in a newly constructed compensation stage is not.
+    controller.stop();
+    run(&mut processor, 3000, 137);
+    rig.effect_mut(a).params = matrix(0.0, 0.0);
+    rig.effect_mut(b).params = matrix(0.0, 0.0);
+    controller.set_project(&rig.project, &rig.pool);
+    controller.seek(0.0);
+    controller.play();
+    let initial = guarded_run(&mut processor, 4092, 7);
+    assert!(initial[6000..].iter().all(|s| *s == 3.0));
+    rig.effect_mut(b).params = matrix(50.0, 50.0);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 100, 7)
+            .iter()
+            .all(|s| *s == 3.0)
+    );
+    let extra = rig.effect(bus, matrix(1.0, 1.0));
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 100, 7)
+            .iter()
+            .all(|s| (*s - 3.0).abs() < 1e-6)
+    );
+    let moved = rig.remove_effect(extra);
+    rig.track_mut(first).effects.push(moved);
+    rig.channel_mut(direct).mixer_track = bus;
+    controller.set_project(&rig.project, &rig.pool);
+    let audio = guarded_run(&mut processor, 3000, 137);
+    assert!(
+        audio.iter().all(|s| (*s - 3.0).abs() < 1e-6),
+        "moved source/matrix unity minimum {}",
+        audio.iter().copied().fold(f32::INFINITY, f32::min)
+    );
+    rig.remove_effect(extra);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 1000, 29)
+            .iter()
+            .all(|s| (*s - 3.0).abs() < 1e-6)
+    );
+    rig.project.channels.retain(|channel| channel.id != added);
+    controller.set_project(&rig.project, &rig.pool);
+    let audio = guarded_run(&mut processor, 3500, 137);
+    assert!(audio.iter().all(|s| (2.0 - 1e-6..=3.0 + 1e-6).contains(s)));
+    assert!(audio[6000..].iter().all(|s| (*s - 2.0).abs() < 1e-6));
+}
+
 #[test]
 fn utility_effects_r2_live_asymmetric_insertion_primes_both_outputs() {
     for block in [1, 137, 511] {

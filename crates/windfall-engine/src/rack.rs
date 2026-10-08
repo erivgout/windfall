@@ -11,7 +11,7 @@ use windfall_dsp::{AnyEffect, AnyInstrument, EffectSlot, GainReductionMeter};
 use windfall_project::{EffectKind, EffectParams, InstrumentKind, InstrumentParams, TrackId};
 
 use crate::mixer::{Frame, MAX_BLOCK};
-use crate::plan::PlanEffect;
+use crate::plan::{EffectLife, PlanEffect};
 use crate::sequencer::Clock;
 
 /// MIDI keys an instrument can be asked to play.
@@ -89,6 +89,9 @@ pub(crate) struct EffectUnit {
     /// The track whose chain the effect was last part of.
     pub track: TrackId,
     sample_rate: f32,
+    life: std::sync::Arc<EffectLife>,
+    /// This particular prepared owner has actually had an audible splice.
+    heard: bool,
 }
 
 impl EffectUnit {
@@ -120,6 +123,8 @@ impl EffectUnit {
             splice_elapsed: 0,
             track,
             sample_rate: sample_rate as f32,
+            life: effect.life.clone(),
+            heard: false,
         };
         (unit, meter)
     }
@@ -178,6 +183,8 @@ impl EffectUnit {
             {
                 let ready = u32::try_from(self.slot.effect().warm_up_samples()).unwrap_or(u32::MAX);
                 *wait = (*wait).max(ready.saturating_sub(self.splice_elapsed));
+                let transition = self.slot.effect().latency_transition_samples_remaining();
+                *wait = (*wait).max(u32::try_from(transition).unwrap_or(u32::MAX));
             }
         }
         if effect.enabled != self.enabled {
@@ -268,6 +275,13 @@ impl EffectUnit {
 
     /// Starts fading the effect out over `frames` frames.
     pub fn fade_out(&mut self, frames: u32) {
+        if matches!(self.splice, Splice::Gone | Splice::Out(_)) {
+            return;
+        }
+        if !self.heard {
+            self.drop_out();
+            return;
+        }
         self.splice_frames = frames.max(1);
         self.splice = Splice::Out(self.splice_frames);
     }
@@ -275,6 +289,7 @@ impl EffectUnit {
     /// Takes the effect out of the signal at once.
     pub fn drop_out(&mut self) {
         self.splice = Splice::Gone;
+        self.life.finish();
     }
 
     /// Samples the effect can go on sounding for after its input stops.
@@ -311,6 +326,8 @@ impl EffectUnit {
     ) {
         match self.splice {
             Splice::Steady => {
+                self.heard = true;
+                self.life.hear();
                 self.process_slot(left, right);
                 return;
             }
@@ -330,9 +347,16 @@ impl EffectUnit {
                 break;
             }
             let wet = self.splice.next(length);
+            if wet > 0.0 {
+                self.heard = true;
+                self.life.hear();
+            }
             self.splice_elapsed = self.splice_elapsed.saturating_add(1);
             left[index] = dry_left[index] + (left[index] - dry_left[index]) * wet;
             right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
+        }
+        if self.splice == Splice::Gone {
+            self.life.finish();
         }
     }
 
@@ -724,6 +748,11 @@ struct CompensationLine {
     fade: TapCrossfade,
     /// Frames to go before that fade starts.
     wait: u32,
+    /// Recent input frames actually retained in this ring.
+    valid: usize,
+    /// Latest unapplied tap edit, coalesced while its input history fills.
+    pending: Option<(usize, u32, bool)>,
+    readiness: usize,
 }
 
 impl CompensationLine {
@@ -738,6 +767,9 @@ impl CompensationLine {
             delay: delay.min(length - 1),
             fade: TapCrossfade::new(length - 1, delay),
             wait: 0,
+            valid: 0,
+            pending: None,
+            readiness: 0,
         }
     }
 
@@ -749,13 +781,38 @@ impl CompensationLine {
     /// Moves to a new delay: after `wait` more frames at the old one, a
     /// crossfade of `fade_frames` frames.
     pub fn retarget(&mut self, delay: usize, fade_frames: u32, wait: u32) {
+        self.retarget_ready(delay, fade_frames, wait, delay.min(self.capacity()), false);
+    }
+
+    fn retarget_ready(
+        &mut self,
+        delay: usize,
+        fade_frames: u32,
+        wait: u32,
+        readiness: usize,
+        joining: bool,
+    ) {
         let delay = delay.min(self.capacity());
+        self.readiness = readiness;
         if delay == self.delay {
             return;
         }
         self.delay = delay;
-        self.fade.retarget(delay, fade_frames.max(1));
+        self.pending = Some((delay, fade_frames.max(1), joining));
         self.wait = wait;
+        self.begin_ready();
+    }
+
+    fn begin_ready(&mut self) {
+        if self.valid >= self.readiness
+            && let Some((delay, frames, joining)) = self.pending.take()
+        {
+            if joining {
+                self.fade.retarget_joining(delay, frames);
+            } else {
+                self.fade.retarget(delay, frames);
+            }
+        }
     }
 
     /// Sets the delay at once.
@@ -763,6 +820,8 @@ impl CompensationLine {
         self.delay = delay.min(self.capacity());
         self.fade.snap(self.delay);
         self.wait = 0;
+        self.pending = None;
+        self.readiness = 0;
     }
 
     /// Carries on from another line: its recent past, as much as fits, and
@@ -776,16 +835,38 @@ impl CompensationLine {
         self.delay = other.delay.min(self.capacity());
         self.fade.take_history(&other.fade);
         self.wait = other.wait;
+        self.valid = other.valid.min(self.capacity());
+        self.pending = other.pending;
+        self.readiness = other.readiness;
     }
 
     fn take_input_history(&mut self, other: &Self, prefix: usize) {
-        for back in 1..=self.ring.len().min(other.ring.len().saturating_sub(prefix)) {
+        self.valid = self.capacity().min(other.valid.saturating_sub(prefix));
+        for back in 1..=self.valid {
             self.ring[self.write.wrapping_sub(back) & self.mask] =
                 other.ring[other.write.wrapping_sub(back + prefix) & other.mask];
         }
     }
 
+    /// Reconstruct a newly introduced stage's input from the preceding
+    /// stage's retained input and current tap mixture. The coefficients are
+    /// a bounded snapshot; reference changes do not promise phase inversion.
+    fn take_output_history(&mut self, other: &Self) {
+        self.valid = self
+            .capacity()
+            .min(other.valid.saturating_sub(other.fade.longest_delay()));
+        for back in 1..=self.valid {
+            let frame = std::array::from_fn(|side| {
+                other.fade.read(|delay| {
+                    other.ring[other.write.wrapping_sub(back + delay) & other.mask][side]
+                })
+            });
+            self.ring[self.write.wrapping_sub(back) & self.mask] = frame;
+        }
+    }
+
     fn advance(&mut self) {
+        self.valid = (self.valid + 1).min(self.capacity());
         if self.wait > 0 {
             self.wait -= 1;
         } else {
@@ -797,6 +878,7 @@ impl CompensationLine {
     /// Delays a block in place.
     pub fn process(&mut self, block: &mut [Frame]) {
         for frame in block {
+            self.begin_ready();
             self.ring[self.write] = *frame;
             let out = std::array::from_fn(|side| {
                 self.fade
@@ -815,6 +897,7 @@ pub(crate) struct DelayStage {
     pub key: windfall_project::PluginTarget,
     pub delay: usize,
     pub maximum: usize,
+    pub readiness: usize,
     pub matrix: bool,
 }
 
@@ -877,19 +960,13 @@ impl Compensation {
     ) {
         self.retarget(delay, fade_frames, wait);
         for (stage, spec) in self.stages.iter_mut().zip(path) {
-            if spec.delay != stage.line.delay {
-                if spec.matrix {
-                    stage.line.retarget(spec.delay, fade_frames, wait);
-                } else {
-                    // The limiter replaces the destination of its active fade.
-                    stage.line.delay = spec.delay.min(stage.line.capacity());
-                    stage
-                        .line
-                        .fade
-                        .retarget_joining(stage.line.delay, fade_frames);
-                    stage.line.wait = wait;
-                }
-            }
+            stage.line.retarget_ready(
+                spec.delay,
+                fade_frames,
+                wait,
+                if spec.matrix { spec.readiness } else { 0 },
+                !spec.matrix,
+            );
             stage.spec = *spec;
         }
     }
@@ -917,7 +994,9 @@ impl Compensation {
             && other.line.fade.remaining() == 0
             && fixed == other.line.delay;
         let mut prefix = 0;
-        for stage in &mut self.stages {
+        for index in 0..self.stages.len() {
+            let (prefix_stages, rest) = self.stages.split_at_mut(index);
+            let stage = &mut rest[0];
             if let Some(before) = other
                 .stages
                 .iter()
@@ -929,6 +1008,23 @@ impl Compensation {
                 if !stage.spec.matrix {
                     stage.line.snap(stage.spec.delay);
                     prefix += stage.spec.delay;
+                }
+            } else if let Some(previous) = prefix_stages.last() {
+                stage.line.take_output_history(&previous.line);
+            } else {
+                // A change from one staged reference to another also has
+                // usable raw history. Preserve the previous aggregate tap
+                // while starting the first replacement stage's transition.
+                stage.line.take_history(&other.line);
+                if stage.line.fade.longest_delay() > stage.line.valid {
+                    // Aggregate metadata can be ahead of a queued matrix
+                    // edit. Never adopt a tap with unavailable raw history.
+                    let audible = other
+                        .stages
+                        .iter()
+                        .map(|stage| stage.line.fade.longest_delay())
+                        .sum::<usize>();
+                    stage.line.snap(audible.min(stage.line.valid));
                 }
             }
         }
