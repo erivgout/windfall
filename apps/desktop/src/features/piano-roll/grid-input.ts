@@ -88,6 +88,7 @@ export function attachGridInput(
   // change under a still pointer is never taken for a drag.
   const frame = createPointerFrame((event) => view.localPoint(event))
   let last: PointerInput | null = null
+  let pointerInside = false
   let pressed: PointerInput | null = null
   let travelled = false
   let pan: { x: number; y: number } | null = null
@@ -134,6 +135,7 @@ export function attachGridInput(
       else editor.cancel()
     }
     frame.release()
+    if (!pointerInside) editor.pointerLeave()
     if (element.hasPointerCapture(event.pointerId)) {
       element.releasePointerCapture(event.pointerId)
     }
@@ -141,6 +143,7 @@ export function attachGridInput(
 
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === "touch") return
+    pointerInside = true
     stampCanceledByRightClick = event.button === 2 && editor.stampState !== null
     session.focusGrid()
     if (event.button === 1) {
@@ -170,12 +173,23 @@ export function attachGridInput(
   }
 
   const onPointerMove = (event: PointerEvent) => {
+    // Captured moves still target the canvas after the pointer goes outside it.
+    const point = view.localPoint(event)
+    pointerInside =
+      point.x >= 0 &&
+      point.x < view.viewport.width &&
+      point.y >= 0 &&
+      point.y < view.viewport.height
     if (pan) {
       view.panBy(pan.x - event.clientX, pan.y - event.clientY)
       pan = { x: event.clientX, y: event.clientY }
       return
     }
     last = toInput(frame, event)
+    if (!pointerInside && !frame.held) {
+      editor.pointerLeave()
+      return
+    }
     if (
       pressed &&
       Math.hypot(last.x - pressed.x, last.y - pressed.y) > SCROLL_AFTER_PX
@@ -189,6 +203,7 @@ export function attachGridInput(
   const onPointerCancel = (event: PointerEvent) => endGesture(event, false)
 
   const onPointerLeave = () => {
+    pointerInside = false
     editor.pointerLeave()
   }
 
@@ -215,12 +230,12 @@ export function attachGridInput(
       time: true,
       rows: true,
     })
-    if (last) editor.pointerMove(last)
+    if (last && (pointerInside || frame.held)) editor.pointerMove(last)
   }
 
   // Ctrl and Shift change what a drag does, also while the mouse is still.
   const onModifier = (event: KeyboardEvent) => {
-    if (!last || !editor.busy) return
+    if (!last || !editor.busy || (!pointerInside && !frame.held)) return
     if (!["Control", "Shift", "Alt", "Meta"].includes(event.key)) return
     last = {
       ...last,
@@ -234,12 +249,14 @@ export function attachGridInput(
   const onBlur = () => {
     stopAutoScroll()
     pan = null
+    pointerInside = false
     frame.release()
     editor.cancel()
   }
 
   element.addEventListener("pointerdown", onPointerDown)
   element.addEventListener("pointermove", onPointerMove)
+  element.addEventListener("pointerenter", onPointerMove)
   element.addEventListener("pointerup", onPointerUp)
   element.addEventListener("pointercancel", onPointerCancel)
   element.addEventListener("pointerleave", onPointerLeave)
@@ -256,6 +273,7 @@ export function attachGridInput(
     stopCursor()
     element.removeEventListener("pointerdown", onPointerDown)
     element.removeEventListener("pointermove", onPointerMove)
+    element.removeEventListener("pointerenter", onPointerMove)
     element.removeEventListener("pointerup", onPointerUp)
     element.removeEventListener("pointercancel", onPointerCancel)
     element.removeEventListener("pointerleave", onPointerLeave)
