@@ -498,7 +498,7 @@ impl Session {
         })
     }
 
-    /// Checked path deduplication may reuse only the version the project plays.
+    /// Checked path deduplication may reuse only a settled source version.
     /// Runs before dispatch, after recording -> library -> State guards; this
     /// cache comparison reads in-memory provenance and never touches the disk.
     fn check_loaded_import(
@@ -508,6 +508,15 @@ impl Session {
         buffer: &AudioBuffer,
         file: &Path,
     ) -> Result<(), String> {
+        // A reload/redo can already hold decoded audio off-lock even when the
+        // pool is empty. Do not install a newer import which that outstanding
+        // load could overwrite. Check and dispatch share the same State lock.
+        if state.loading.contains(&sample) {
+            return Err(format!(
+                "The project sample \"{}\" is still loading. Wait for loading to finish and try the import again.",
+                paths::name(file)
+            ));
+        }
         if let Some(held) = state.pool.get(sample)
             && !self.inner.cache.same_file_version(held, buffer)
         {

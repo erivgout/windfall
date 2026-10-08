@@ -3,6 +3,7 @@ import { backend } from "@/lib/ipc"
 
 import { useLibraryStore } from "./library-store"
 import { useBrowserStore, type Selection } from "./store"
+import { isUnder } from "./tree-model"
 
 const STALE =
   "This library selection is out of date. Refresh the library and select the file again."
@@ -50,10 +51,20 @@ export function acceptFile(
   request: FileRequest,
   token: LibraryFileToken
 ): LibraryFileToken {
+  // library_file picks the first configured containing root. A nested tree
+  // row can belong to another root of the same file; preserve that row's
+  // captured epoch/root while using the backend's canonical checked token.
+  const roots = useBrowserStore.getState().roots
+  const contains = (rootPath: string) =>
+    roots.some(
+      (root) => root.path === rootPath && isUnder(request.path, rootPath)
+    )
   if (
     !fileRequestCurrent(request) ||
     token.path !== request.path ||
-    (request.rootPath !== undefined && token.rootPath !== request.rootPath)
+    (request.rootPath !== undefined &&
+      token.rootPath !== request.rootPath &&
+      !(contains(request.rootPath) && contains(token.rootPath)))
   )
     throw new Error(STALE)
   if (

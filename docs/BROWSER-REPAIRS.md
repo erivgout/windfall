@@ -1,8 +1,10 @@
 # Browser-library repair evidence
 
-Base: `4b0d509db734e6b0a8e7ec5312f04867f8bdb4d5`. Branch: `gpt/t3-browser-repairs`. Implementation worktree: `C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-browser-repairs`.
+Original base: `4b0d509db734e6b0a8e7ec5312f04867f8bdb4d5`. Branch: `gpt/t3-browser-repairs`. Implementation worktree: `C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-browser-repairs`.
 
 This repair addresses the three findings reviewed at `433234e0947160d630e888ebc3470525a4c8e41f`. The recursive index, shared query language, favorites/tags and existing audition/import workflows remain in place. Parent project-store/flow, piano, artifact and parity work is excluded.
+
+The second repair round starts from parent `bde3fd77dacdd9c1d4c92cf3a77e5c4d1d1eab55`, fast-forwarded in this same worktree. That parent already contains first repair `d90db39e4cf3aa8615145a9b496f790f08efd6be`. The evidence below retains the first round, then records the three additional findings reviewed at the parent commit. No parent-owned store/flow or sampler preparation files are changed by this round.
 
 ## Reproductions before the corresponding fixes
 
@@ -34,6 +36,26 @@ Native commands, run sequentially from the worktree with the resource environmen
 
 All 31 focused native tests passed. `rustfmt --edition 2024 --check` on the four changed Rust files and `git diff --check` passed. The TypeScript lint invocation was `pnpm exec eslint src/features/browser/commands.ts src/features/browser/file-token.ts src/features/browser/library-store.ts src/features/browser/store.ts src/features/browser/preview.ts src/features/browser/tree-view.tsx src/features/browser/library-controls.tsx src/features/browser/repairs.test.tsx src/features/playlist/audio/ops.ts`; `pnpm exec prettier --check` on those same files passed.
 
+## Second-round reproductions and repairs
+
+Before production changes, `pnpm exec vitest run src/features/browser/repairs.test.tsx --maxWorkers=2 --silent` failed five new regressions while all 19 first-round regressions passed. Two rendered `ChannelRackPanel` and fired its actual rack-scroll drop handler with a checked browser token. The real backend mutated/emitted first, its successful reply was held, then real New/Open replaced the document with one containing the same created channel ID (15). Releasing the old reply left the project intact but selected the replacement project's unrelated channel. The New case begins with the real New template and recreates the same ID through the real backend; Open reloads the saved project. The demo project's different ID allocation and a closed nested-root row were corrected in test setup before recording this RED evidence.
+
+The other three RED cases configured `/factory/Drums/Kicks` inside `/factory`, held `librarySearch`, expanded the nested-root tree row and selected `Kick 02.wav`. The real fixture backend returned the canonical `/factory` token, matching native first-containing-root lookup. All three imports were incorrectly refused. After repair, those same rendered cases verify audition, ready waveform/facts, token attachment and rack/playlist/replacement import while search remains pending.
+
+`cargo test -p windfall-desktop --lib import_refuses_pending -- --nocapture` ran six native regressions before the loading guard. All six failed with the destination-specific message `accepted Some(960) frames before pending reload/redo installed 480 older frames`. Three created a genuinely missing linked WAV, waited for failure, restored 480 frames and held `samples_reload()` at `samples:decoded`. Three first imported 480 frames, undid the import, evicted its decoded-cache entry with 65 real WAV decodes and held the real redo loader at the same barrier. Every case then rewrote the source to 960 frames, refreshed/reselected, confirmed native facts saw 960 frames, imported, released the old loader and measured the pool returning to 480 frames. No synthetic loading/pool mutations are used. Parent-source recompilation took 5m26s; the six RED tests ran in 0.16s.
+
+Checked imports now refuse reuse while `State.loading` contains that sample ID, before either dispatch path mutates the document. This check and dispatch share the State lock, after recording exclusion and the library guard. It covers both explicit missing-source reload and background redo. Decoding and filesystem checks remain off State/audio locks. The outstanding load is allowed to finish normally; version mismatch refusal still applies afterward. No loaded audio is silently superseded.
+
+Token acceptance now permits different captured/canonical roots only when both are still configured and both contain the exact same file. The selection's immutable root/epoch is retained. Six rendered regressions hold canonical lookup through refresh or nested-root removal/re-addition before each import destination; late tokens neither mutate the project nor attach to the expired selection. Seven focused token tests also reject unconfigured/sibling roots, wrong files and expired epochs. The rack's `addChannelFromFile` captures project generation before IPC and checks it before reply patch handling or selection.
+
+## Second-round focused verification
+
+UI command: `pnpm exec vitest run src/features/browser src/features/channel-rack/rack.test.tsx src/lib/ipc/library.test.ts src/features/playlist/audio/audio-clips.test.ts src/features/playlist/audio/audio-ui.test.tsx --maxWorkers=2` — 13 files, 256 tests passed. This preserves the existing browser, rack drop/replacement/undo and playlist workflows and includes all first/second-round UI regressions. `pnpm exec tsc -b` passed. ESLint and Prettier passed on `src/features/browser/file-token.ts`, `file-token.test.ts`, `repairs.test.tsx` and `src/features/channel-rack/channel-ops.ts`.
+
+`cargo test -p windfall-desktop --lib session::tests::library -- --nocapture` — 18 passed, 0 failed. Recompilation after the guard took 28.53s; the tests ran in 0.24s. The six reload/redo cases prove refusal preserves the exact pre-import document snapshot, including history and playlist geometry, while the original pending 480-frame source finishes normally. Each then saves/reopens to explicitly load 960 frames, imports the unchanged current version without adding duplicate samples and undoes the edit. The 12 earlier native browser regressions also remain green.
+
+`cargo clippy -p windfall-desktop --lib --tests -- -D warnings` — passed with no warnings in 1m42s. The existing isolated Cargo/TS export directories and single-job environment below were reused; Cargo commands ran sequentially. `rustfmt --edition 2024 --check apps/desktop/src-tauri/src/session/library.rs apps/desktop/src-tauri/src/session/tests/library.rs` and `git diff --check` passed. No cancelled or unfinished check is counted as a pass.
+
 Native checks use `CARGO_BUILD_JOBS=1`, `CARGO_TARGET_DIR=<worktree>/target/browser-repairs` and `TS_RS_EXPORT_DIR=<worktree>/target/browser-repairs-ts`. This work's Cargo commands use one process at a time. VS 2022 BuildTools 14.44.35207 and Windows SDK 10.0.26100.0 supply the compiler, include and library paths; the newer VS install lacks desktop x64 libraries. Initial environment attempts failed at the linker before any native test ran; the final commands use the complete installed toolchain.
 
 ## Limits and integration
@@ -43,3 +65,5 @@ Headless native tests verify actual temporary files, session/document/pool behav
 The browser fixture mock cannot model real disk-version replacement. That reproduction belongs to the native session/cache tests. Identity remains a filesystem stamp, not a content hash: an in-place write preserving the tracked identity, size and timestamps remains a known limitation.
 
 Generated TypeScript/WASM artifacts, parity status and integration documentation remain the parent's responsibility. No push, PR or release is part of this work.
+
+Second-round checks are at the integrated `bde3fd77` source plus these repairs. They do not include the parent's later sampler/plugin/archive integrations or regenerated artifacts. The parent must combine and validate that later source; this round changes only browser token handling, the rack file-import reply guard, the checked-import loading guard, focused tests and these two browser documents.
