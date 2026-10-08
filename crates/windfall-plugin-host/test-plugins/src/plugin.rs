@@ -402,7 +402,8 @@ unsafe extern "C" fn process(
             | Kind::BridgeBadLatency
             | Kind::BridgeEventFlood
             | Kind::BridgeIgnoredStreamError
-            | Kind::BridgeStateBoundary => process_bridge_delayed(plugin, audio, block),
+            | Kind::BridgeStateBoundary
+            | Kind::BridgeControlledProcessError => process_bridge_delayed(plugin, audio, block),
             Kind::BridgeNoteProbe => process_bridge_note_probe(audio, block),
             Kind::BridgeProcessHang => crate::bridge_behaviors::hang(),
             Kind::Sine | Kind::MidiSine => process_sine(plugin, audio, block),
@@ -455,6 +456,11 @@ unsafe fn process_bridge_delayed(
             }
         }
         let at = frame as usize;
+        if plugin.kind == Kind::BridgeControlledProcessError
+            && !crate::bridge_behaviors::controlled_process_ok(plugin.value(slot::GAIN))
+        {
+            return CLAP_PROCESS_ERROR;
+        }
         let input = unsafe { [*channels[0].add(at), *channels[1].add(at)] };
         let output = audio
             .bridge_delay

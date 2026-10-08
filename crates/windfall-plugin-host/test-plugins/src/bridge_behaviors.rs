@@ -3,6 +3,9 @@
 pub(crate) const DELAY: usize = 37;
 /// Native cap exercised with valid8KiB stream chunks, never persisted assets.
 pub(crate) const STATE_LIMIT: usize = 256 << 20;
+pub(crate) fn controlled_process_ok(gain: f64) -> bool {
+    gain < 0.75
+}
 pub(crate) fn hang() -> ! {
     loop {
         std::thread::park();
