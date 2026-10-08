@@ -1,6 +1,7 @@
 //! Headless tests of the session: no window, no audio device. The engine is
 //! a [`Processor`] the tests run by hand.
 
+mod analysis_jobs;
 mod archive;
 mod audio_editor;
 mod beat;

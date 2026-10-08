@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
+windfall-analysis.workspace = true
 windfall-core.workspace = true
 windfall-project.workspace = true
 windfall-archive.workspace = true

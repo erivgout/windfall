@@ -1,3 +1,4 @@
+import { registerAnalysisActions } from "@/features/analysis/actions"
 import { registerBrowserActions } from "@/features/browser/actions"
 import { registerChannelRackActions } from "@/features/channel-rack/actions"
 import { registerMixerActions } from "@/features/mixer/actions"
@@ -19,6 +20,7 @@ export function registerAllActions(): () => void {
     registerMixerActions(),
     registerPianoRollActions(),
     registerPlaylistActions(),
+    registerAnalysisActions(),
   ]
   return () => {
     for (const stop of stops) stop()

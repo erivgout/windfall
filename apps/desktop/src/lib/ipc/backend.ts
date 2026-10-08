@@ -32,6 +32,7 @@ import type {
   MidiImportPreview,
   MidiExportOptions,
 } from "@/bindings"
+import type { AnalysisBackend } from "@/features/analysis/types"
 
 export type Unsubscribe = () => void
 

@@ -5008,6 +5008,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-log",
  "tempfile",
+ "windfall-analysis",
  "windfall-archive",
  "windfall-codec",
  "windfall-core",

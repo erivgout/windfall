@@ -57,6 +57,7 @@
 //! lock held and then touches the document or the sample pool compares it
 //! first and gives up if another document has taken its place.
 
+mod analysis_jobs;
 mod archive;
 mod audio;
 mod audio_editor;
@@ -332,6 +333,7 @@ impl Session {
             )
             .collect();
         let library = crate::library::Library::new(settings.library_file(), roots);
+        let analysis = analysis_jobs::Service::new(settings.recordings_dir().join("Analysis"));
 
         let project = default_project();
         let decoded = samples::decode_all(&cache, &project, None, &factory_dir);
