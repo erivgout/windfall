@@ -281,7 +281,11 @@ export function registerAnalysisActions(): () => void {
       state.state.active,
     ]),
     useProjectStore.subscribe(() => registry.invalidate()),
-    onProjectReplaced(() => registry.invalidate()),
+    onProjectReplaced(() => {
+      panel = null
+      closeAnalysis()
+      registry.invalidate()
+    }),
   ]
   return () => {
     for (const stop of stops) stop()

@@ -483,8 +483,9 @@ junction retargeted after the actual hash/identity check reached Apply; and an
 immediate native-forget refusal omitted the job ID and left no recovery controls
 after remount. These defects are distinct from the open P1 composition gate.
 
-The analysis-owned `SourceFile` now pins ordinary absolute local-drive namespace
-components from root to leaf. Each directory is opened without following its
+The fixed `9243f20f` analysis-owned `SourceFile` pins ordinary filesystem
+components from root to leaf; the separate App R2 DOS namespace gap remains open.
+Each directory is opened without following its
 reparse target, with real read/list access, backup semantics and READ-only sharing;
 attributes-only handles were experimentally insufficient and are not used.
 Handle-derived attributes reject reparse components before source admission or
@@ -556,6 +557,32 @@ only the approved workspace path reference. Parent still owns generated bindings
 fresh composed integration and independent review. No T1/root sources were
 imported, and closed editor/history/cache/project/engine implementations were
 left unchanged.
+
+### App R2 UI project-replacement repair
+
+The App R2 project-replacement trigger was executed against the real frontend
+project replacement and registered Analysis entry. The old dialog retained its
+captured generation/clip/source and reopened after inspector remount (RED).
+The owned UI repair clears the dialog target and releases the old panel lifetime,
+including its subscriptions and action context. A late submit retires through
+the bounded recovery table without restoring source or Apply authority. Cleanup
+refusal remains visible with its job ID and retry controls after replacement and
+remount. The eight process-local recovery slots and native admission policy are
+unchanged. Eleven panel tests and the appropriate registry/palette/menu/keymap
+batch previously passed (104 checks across nine files). Fresh checkpoint
+verification passed 118 tests across nine Analysis/action/palette component
+files, `tsc -b`, scoped ESLint and Prettier. Native IPC is mocked in these
+frontend checks; they exercise real frontend replacement and registry lifetimes,
+not actual native Apply or engine installation.
+
+This corrective source increment contains only the dialog/panel lifetime repair,
+its frontend regressions and this contract update. The separate remappable-drive
+namespace finding remains unresolved: production `SourceFile` stays exactly
+`9243f20f` at caps 65/1105, and the actual old-policy Session alias-remap regression
+remains RED. Native diagnostic/prototype files are excluded from this UI
+increment. Production algorithms remain unavailable. The P1 engine readiness
+API is being repaired and composed separately; no native-preparation or full M1
+closure follows from these frontend checks.
 
 ## Dependency license evidence
 

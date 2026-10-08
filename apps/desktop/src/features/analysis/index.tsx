@@ -102,13 +102,35 @@ export function AnalysisPanel({
       setStale(true)
       sequence.current += 1
     }
-    const offProject = onProjectReplaced(invalidate)
+    let retired = false
+    let offProject = () => {}
+    let offSelection = () => {}
+    let offSource = () => {}
+    let offHistory = () => {}
+    const retireLifetime = () => {
+      if (retired) return
+      retired = true
+      active.current = false
+      aliveContext.current = () => false
+      sequence.current += 1
+      offProject()
+      offSelection()
+      offSource()
+      offHistory()
+      const id = retained.current
+      retained.current = null
+      if (id) void retireTrackedJob(id)
+    }
+    offProject = onProjectReplaced(() => {
+      invalidate()
+      retireLifetime()
+    })
     const recheck = () => {
       if (!captured?.current()) invalidate()
     }
-    const offSelection = usePlaylistStore.subscribe(recheck)
-    const offSource = useProjectStore.subscribe(recheck)
-    const offHistory = onHistoryNavigation(invalidate)
+    offSelection = usePlaylistStore.subscribe(recheck)
+    offSource = useProjectStore.subscribe(recheck)
+    offHistory = onHistoryNavigation(invalidate)
     if (!captured) invalidate()
     void backend
       .analysisCapability()
@@ -118,15 +140,7 @@ export function AnalysisPanel({
       .catch((e: unknown) => {
         if (aliveContext.current()) setError(errorMessage(e))
       })
-    return () => {
-      active.current = false
-      sequence.current += 1
-      offProject()
-      offSelection()
-      offSource()
-      offHistory()
-      if (retained.current) void retireTrackedJob(retained.current)
-    }
+    return retireLifetime
   }, [clip, capture])
 
   useEffect(() => {
@@ -194,8 +208,9 @@ export function AnalysisPanel({
     }
   }
   const model = capability?.models[modelIndex]
-  useLayoutEffect(() =>
-    bindAnalysisPanel({
+  useLayoutEffect(() => {
+    if (!active.current) return
+    return bindAnalysisPanel({
       clip,
       current: () => aliveContext.current(),
       stale,
@@ -319,7 +334,7 @@ export function AnalysisPanel({
         )
       },
     })
-  )
+  })
   return (
     <div className="flex flex-col gap-3 text-sm">
       <RecoveryControls />

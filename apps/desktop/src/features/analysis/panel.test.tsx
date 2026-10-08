@@ -5,7 +5,7 @@ import type { MockBackend } from "@/lib/ipc/mock"
 import { useProjectStore } from "@/lib/store/project"
 import { usePlaylistStore } from "@/features/playlist/store"
 import { disabledReason, getAppState, registry, runAction } from "@/lib/actions"
-import { registerAnalysisActions } from "./actions"
+import { registerAnalysisActions, useAnalysisDialog } from "./actions"
 import { reserveRecovery, useAnalysisRecovery } from "./recovery"
 import { useRecordingStore } from "@/features/transport/recording-store"
 import { CommandPalette } from "@/features/palette/command-palette"
@@ -129,6 +129,67 @@ async function nativePanel() {
   return view
 }
 describe("analysis app controls", () => {
+  it("drops the old dialog capture on actual project replacement and keeps cleanup recovery across inspector remount", async () => {
+    vi.spyOn(backend, "analysisCapability").mockResolvedValue({
+      native: true,
+      available: true,
+      reason: null,
+      models: [model],
+    })
+    vi.spyOn(backend, "analysisSubmit").mockResolvedValue(job)
+    vi.spyOn(backend, "analysisCancel").mockResolvedValue({
+      ...job,
+      status: "cancelled",
+    })
+    vi.spyOn(backend, "analysisStatus").mockResolvedValue({
+      ...job,
+      status: "cancelled",
+    })
+    vi.spyOn(backend, "analysisForget").mockRejectedValue(
+      new Error("owned cleanup refused")
+    )
+    const inspector = render(<AnalysisButton />)
+    await act(() => runAction("analysis.open"))
+    await screen.findByRole("dialog", { name: "Native analysis" })
+    await screen.findByRole("option", { name: /test-only-copy/ })
+    fireEvent.change(screen.getByLabelText("End frame exclusive"), {
+      target: { value: "100" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Submit analysis" }))
+    await screen.findByText(/Job 9007199254740993: ready/)
+    const captured = useAnalysisDialog.getState().target
+    expect(captured).not.toBeNull()
+    await act(() => backend.projectNew())
+    await selectClip()
+    inspector.unmount()
+    render(<AnalysisButton />)
+    expect(useAnalysisDialog.getState().target).toBeNull()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(
+      disabledReason(registry.get("analysis.open")!, getAppState())
+    ).toBeUndefined()
+    await waitFor(() =>
+      expect(backend.analysisForget).toHaveBeenCalledWith(job.job)
+    )
+    expect(useAnalysisRecovery.getState().jobs).toHaveLength(1)
+    await act(() => runAction("analysis.open"))
+    expect(useAnalysisDialog.getState().target?.generation).not.toBe(
+      captured?.generation
+    )
+    expect(
+      await screen.findByText(/Retained job 9007199254740993/)
+    ).toBeVisible()
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Analysis job 9007199254740993 remains retained: Owned cleanup refused"
+    )
+    expect(
+      screen.getByRole("button", { name: "Retry retained job cleanup" })
+    ).toBeEnabled()
+    expect(
+      screen.queryByRole("button", { name: "Apply reviewed outputs" })
+    ).toBeNull()
+    expect(backend.analysisSubmit).toHaveBeenCalledTimes(1)
+  })
   it("opens the canonical selected source through keymap and palette", async () => {
     const user = userEvent.setup()
     render(
@@ -153,6 +214,63 @@ describe("analysis app controls", () => {
     expect(
       await screen.findByRole("dialog", { name: "Native analysis" })
     ).toBeVisible()
+  })
+  it("retires a late submit from a replaced dialog without restoring its source lifetime", async () => {
+    let finish!: (next: AnalysisJob) => void
+    vi.spyOn(backend, "analysisCapability").mockResolvedValue({
+      native: true,
+      available: true,
+      reason: null,
+      models: [model],
+    })
+    vi.spyOn(backend, "analysisSubmit").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    vi.spyOn(backend, "analysisCancel").mockResolvedValue({
+      ...job,
+      status: "cancelled",
+    })
+    vi.spyOn(backend, "analysisStatus").mockResolvedValue({
+      ...job,
+      status: "cancelled",
+    })
+    vi.spyOn(backend, "analysisForget").mockRejectedValue(
+      new Error("owned cleanup refused")
+    )
+    render(<AnalysisButton />)
+    await act(() => runAction("analysis.open"))
+    await screen.findByRole("option", { name: /test-only-copy/ })
+    fireEvent.change(screen.getByLabelText("End frame exclusive"), {
+      target: { value: "100" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Submit analysis" }))
+    expect(useAnalysisRecovery.getState().pending).toBe(1)
+    await act(() => backend.projectNew())
+    await selectClip()
+    const replaced = useProjectStore.getState()
+    expect(useAnalysisDialog.getState().target).toBeNull()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    await act(async () => finish(job))
+    await waitFor(() =>
+      expect(backend.analysisForget).toHaveBeenCalledWith(job.job)
+    )
+    expect(useProjectStore.getState()).toBe(replaced)
+    expect(useAnalysisRecovery.getState().pending).toBe(0)
+    expect(useAnalysisRecovery.getState().jobs).toHaveLength(1)
+    await act(() => runAction("analysis.open"))
+    expect(
+      await screen.findByText(/Retained job 9007199254740993/)
+    ).toBeVisible()
+    expect(screen.queryByText(/Job 9007199254740993: ready/)).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Apply reviewed outputs" })
+    ).toBeNull()
+    expect(
+      disabledReason(registry.get("analysis.apply")!, getAppState())
+    ).toContain("Review")
   })
   it("invalidates registry enablement for input, recording, busy work and source edits", async () => {
     let finish!: (job: AnalysisJob) => void
