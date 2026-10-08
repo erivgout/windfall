@@ -116,6 +116,7 @@
 //! through its output or sends, or lies on the way from a soloed track to
 //! the master. Channel solo and track solo do not affect each other.
 
+pub mod analyzers;
 mod automation;
 mod clip_processing;
 mod clips;
