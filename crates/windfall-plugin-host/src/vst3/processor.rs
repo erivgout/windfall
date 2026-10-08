@@ -22,6 +22,26 @@ struct Ports {
     buses: Vec<AudioBusBuffers>,
     main: Option<usize>,
 }
+
+fn process_context(
+    transport: &Transport,
+    sample_rate: f64,
+    steady_time: u64,
+) -> Result<ProcessContext, ProcessFailed> {
+    let (bar_start, _) = transport.bar_position().ok_or(ProcessFailed)?;
+    // SAFETY: ProcessContext is POD, only flagged fields are consumed.
+    let mut context: ProcessContext = unsafe { std::mem::zeroed() };
+    context.state = 512 | 1024 | 2048 | 8192 | 131072 | if transport.playing { 2 } else { 0 };
+    context.sampleRate = sample_rate;
+    context.projectTimeSamples = (transport.position_seconds * sample_rate) as i64;
+    context.continousTimeSamples = steady_time.min(i64::MAX as u64) as i64;
+    context.projectTimeMusic = transport.position_beats;
+    context.tempo = transport.tempo_bpm;
+    context.timeSigNumerator = transport.numerator.into();
+    context.timeSigDenominator = transport.denominator.into();
+    context.barPositionMusic = bar_start;
+    Ok(context)
+}
 impl Ports {
     fn new(ports: &[AudioPort], max_block: usize) -> Self {
         let mut buffers: Vec<Vec<Vec<f32>>> = ports
@@ -308,6 +328,7 @@ impl ProcessorBackend for VstProcessor {
         steady_time: u64,
         out: &mut dyn FnMut(PluginEvent),
     ) -> Result<BlockResult, ProcessFailed> {
+        let mut context = process_context(transport, self.sample_rate, steady_time)?;
         let _guard = AudioCall::enter();
         // SAFETY: processor has one exclusive audio owner, lifecycle calls
         // occur here rather than on the concurrent controller/main thread.
@@ -418,18 +439,6 @@ impl ProcessorBackend for VstProcessor {
                 (left, right)
             }
         };
-        // SAFETY: ProcessContext is POD, only flagged fields are consumed.
-        let mut context: ProcessContext = unsafe { std::mem::zeroed() };
-        context.state = 512 | 1024 | 2048 | 8192 | 131072 | if transport.playing { 2 } else { 0 };
-        context.sampleRate = self.sample_rate;
-        context.projectTimeSamples = (transport.position_seconds * self.sample_rate) as i64;
-        context.continousTimeSamples = steady_time.min(i64::MAX as u64) as i64;
-        context.projectTimeMusic = transport.position_beats;
-        context.tempo = transport.tempo_bpm;
-        context.timeSigNumerator = transport.numerator.into();
-        context.timeSigDenominator = transport.denominator.into();
-        let bar = f64::from(transport.numerator) * 4.0 / f64::from(transport.denominator.max(1));
-        context.barPositionMusic = (transport.position_beats / bar).floor() * bar;
         let mut data = ProcessData {
             processMode: 0,
             symbolicSampleSize: 0,
@@ -483,5 +492,99 @@ impl ProcessorBackend for VstProcessor {
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::*;
+    use crate::MeterAnchor;
+
+    #[test]
+    fn native_bar_fields_follow_shortened_song_bars() {
+        let origin = 4001.0 / 960.0;
+        for (beats, bar_start) in [
+            (origin, origin),
+            (origin + 3.499, origin),
+            (origin + 3.5, origin + 3.5),
+            (origin + 7.125, origin + 7.0),
+        ] {
+            let context = process_context(
+                &Transport {
+                    playing: true,
+                    tempo_bpm: 137.0,
+                    position_beats: beats,
+                    position_seconds: 9.25,
+                    numerator: 7,
+                    denominator: 8,
+                    meter_anchor: Some(MeterAnchor {
+                        bar_origin_beats: origin,
+                        bar_origin_index: 2,
+                    }),
+                },
+                48_000.0,
+                123,
+            )
+            .unwrap_or_else(|_| panic!("valid transport"));
+            assert_eq!(context.barPositionMusic, bar_start);
+            assert_eq!(context.projectTimeMusic, beats);
+            assert_eq!(context.projectTimeSamples, 444_000);
+            assert_eq!(context.continousTimeSamples, 123);
+            assert_eq!(context.sampleRate, 48_000.0);
+            assert_eq!(context.tempo, 137.0);
+            assert_eq!(context.timeSigNumerator, 7);
+            assert_eq!(context.timeSigDenominator, 8);
+            assert_eq!(context.state, 512 | 1024 | 2048 | 8192 | 131072 | 2);
+        }
+    }
+
+    #[test]
+    fn native_scalar_pattern_transport_retains_beat_zero_origin() {
+        let context = process_context(
+            &Transport {
+                position_beats: 8.125,
+                ..Transport::default()
+            },
+            48_000.0,
+            u64::MAX,
+        )
+        .unwrap_or_else(|_| panic!("valid scalar transport"));
+        assert_eq!(context.barPositionMusic, 8.0);
+        assert_eq!(context.continousTimeSamples, i64::MAX);
+        assert_eq!(context.state & 2, 0);
+    }
+
+    #[test]
+    fn invalid_anchor_refuses_native_transport_before_processing() {
+        for anchor in [
+            MeterAnchor {
+                bar_origin_beats: f64::INFINITY,
+                bar_origin_index: 0,
+            },
+            MeterAnchor {
+                bar_origin_beats: -1.0,
+                bar_origin_index: 0,
+            },
+            MeterAnchor {
+                bar_origin_beats: 1.0,
+                bar_origin_index: 0,
+            },
+            MeterAnchor {
+                bar_origin_beats: 0.0,
+                bar_origin_index: u32::MAX,
+            },
+        ] {
+            assert!(
+                process_context(
+                    &Transport {
+                        meter_anchor: Some(anchor),
+                        ..Transport::default()
+                    },
+                    48_000.0,
+                    0
+                )
+                .is_err()
+            );
+        }
     }
 }

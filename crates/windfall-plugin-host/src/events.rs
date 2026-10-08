@@ -87,6 +87,13 @@ pub enum PluginEvent {
     NoteEnd { key: u8, channel: u8 },
 }
 
+/// A song meter segment's first downbeat and zero-based bar index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeterAnchor {
+    pub bar_origin_beats: f64,
+    pub bar_origin_index: u32,
+}
+
 /// Where the song is at the first frame of a block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transport {
@@ -99,6 +106,8 @@ pub struct Transport {
     /// The time signature, as in 4/4.
     pub numerator: u16,
     pub denominator: u16,
+    /// `None` retains the scalar signature's origin at beat zero.
+    pub meter_anchor: Option<MeterAnchor>,
 }
 
 impl Default for Transport {
@@ -110,11 +119,40 @@ impl Default for Transport {
             position_seconds: 0.0,
             numerator: 4,
             denominator: 4,
+            meter_anchor: None,
         }
     }
 }
 
 impl Transport {
+    /// Derives the native bar downbeat and zero-based index without changing
+    /// the absolute beat/seconds clock. Invalid anchors or native index
+    /// overflow refuse transport instead of silently reverting to beat zero.
+    pub fn bar_position(&self) -> Option<(f64, i32)> {
+        if !self.position_beats.is_finite() || self.numerator == 0 || self.denominator == 0 {
+            return None;
+        }
+        let (origin, index) = match self.meter_anchor {
+            Some(anchor)
+                if anchor.bar_origin_beats.is_finite()
+                    && anchor.bar_origin_beats >= 0.0
+                    && self.position_beats >= anchor.bar_origin_beats
+                    && anchor.bar_origin_index <= i32::MAX as u32 =>
+            {
+                (anchor.bar_origin_beats, f64::from(anchor.bar_origin_index))
+            }
+            Some(_) => return None,
+            None => (0.0, 0.0),
+        };
+        let width = f64::from(self.numerator) * 4.0 / f64::from(self.denominator);
+        let relative_bar = ((self.position_beats - origin) / width).floor();
+        let bar = index + relative_bar;
+        if !bar.is_finite() || bar < f64::from(i32::MIN) || bar > f64::from(i32::MAX) {
+            return None;
+        }
+        Some((origin + relative_bar * width, bar as i32))
+    }
+
     /// Moves the position on by `frames` at `sample_rate`, if the song is
     /// playing. The processor does this after every block, so a host that
     /// sets the position once gets a running clock.
@@ -124,5 +162,59 @@ impl Transport {
             self.position_seconds += seconds;
             self.position_beats += seconds * self.tempo_bpm / 60.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::*;
+
+    #[test]
+    fn checked_bar_bounds_and_advance_preserve_the_segment_anchor() {
+        let anchor = MeterAnchor {
+            bar_origin_beats: 4.0,
+            bar_origin_index: 1,
+        };
+        let mut transport = Transport {
+            playing: true,
+            position_beats: 4.0,
+            position_seconds: 2.0,
+            numerator: 7,
+            denominator: 8,
+            meter_anchor: Some(anchor),
+            ..Transport::default()
+        };
+        assert_eq!(transport.bar_position(), Some((4.0, 1)));
+        transport.advance(84_000, 48_000.0);
+        assert_eq!(transport.position_beats, 7.5);
+        assert_eq!(transport.position_seconds, 3.75);
+        assert_eq!(transport.meter_anchor, Some(anchor));
+        assert_eq!(transport.bar_position(), Some((7.5, 2)));
+        transport.playing = false;
+        let stopped = transport;
+        transport.advance(48_000, 48_000.0);
+        assert_eq!(transport, stopped);
+
+        transport.meter_anchor = Some(MeterAnchor {
+            bar_origin_index: i32::MAX as u32,
+            ..anchor
+        });
+        transport.position_beats = 4.0;
+        assert_eq!(transport.bar_position(), Some((4.0, i32::MAX)));
+        transport.position_beats = 7.5;
+        assert_eq!(transport.bar_position(), None);
+        transport.meter_anchor = None;
+        transport.position_beats = -0.25;
+        assert_eq!(transport.bar_position(), Some((-3.5, -1)));
+        for position in [f64::NAN, f64::INFINITY, f64::MAX] {
+            transport.position_beats = position;
+            assert_eq!(transport.bar_position(), None);
+        }
+        transport.position_beats = 0.0;
+        transport.denominator = 0;
+        assert_eq!(transport.bar_position(), None);
+        transport.denominator = 4;
+        transport.numerator = 0;
+        assert_eq!(transport.bar_position(), None);
     }
 }

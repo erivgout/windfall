@@ -108,7 +108,7 @@ pub use descriptor::{
     PluginKind, PluginLayout,
 };
 pub use error::{DeactivationError, PluginError};
-pub use events::{HostEvent, PluginEvent, Transport};
+pub use events::{HostEvent, MeterAnchor, PluginEvent, Transport};
 pub use gui::{EditorError, EditorInfo, EditorOptions};
 pub use host::{LogLevel, PluginHost, PluginModule};
 pub use instance::{PluginInstance, PluginNotification};
