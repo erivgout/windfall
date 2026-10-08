@@ -26,9 +26,9 @@ The Windows app hosts CLAP and VST3 instruments and effects with a plugin manage
 
 Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.
 
-Native file actions include portable ZIP projects with project, plugin-state and audio assets, plus collision-safe numbered project publication. Bounded archive-parser, final numbered destination, concurrent carried-audio publication and exact history-source repairs are integrated; independent review and combined native checks remain in progress. See `docs/PORTABLE-PROJECTS.md` and `docs/PORTABLE-REPAIRS.md`.
+Native file actions include portable ZIP projects with project, plugin-state and audio assets, plus collision-safe numbered project publication. Independent review and combined native checks passed for bounded archive validation, final numbered destinations, concurrent carried-audio publication and exact history-source preservation. Historical references to external files still require those original files. See `docs/PORTABLE-PROJECTS.md` and `docs/PORTABLE-REPAIRS.md`.
 
-Settings provides persisted 75–200% application scaling with shared canvas and input coordinates. Combined checks and independent review remain in progress; native third-party editor scaling remains unfinished. See `docs/UI-SCALING.md`.
+Settings provides persisted 75–200% application scaling with shared canvas and input coordinates. Independent browser review and composed UI checks passed, including small-window browser scrolling and capped piano canvas alignment. Native third-party editor scaling remains unfinished. See `docs/UI-SCALING.md`.
 
 ## Run it
 
@@ -51,25 +51,25 @@ To work on the interface without building the engine, `pnpm dev` runs it in a br
 
 ## Layout
 
-| Path | What it is |
-|---|---|
-| `crates/windfall-core` | Audio buffer and unit helpers shared by everything |
-| `crates/windfall-project` | Project model, edit commands, undo history, `.windfall` file format |
-| `crates/windfall-archive` | Portable ZIP schema, bounded validation and staged audio extraction |
-| `crates/windfall-engine` | Realtime audio engine and offline renderer |
-| `crates/windfall-flp` | Reads FL Studio projects and converts musical structure with an import report |
-| `crates/windfall-codec` | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV, FLAC, OGG and MP3 |
-| `crates/windfall-midi` | Reads and writes MIDI files; project import plans and playlist export |
-| `crates/windfall-dsp` | Effects and synth DSP |
-| `crates/windfall-plugin-host` | CLAP/VST3 audio hosting, isolated scanning and Windows native editors |
-| `crates/windfall-stretch` | Pure Rust streaming/offline time-stretch, pitch-shift and loop tempo helpers |
-| `crates/windfall-ipc` | Types the engine, shell and interface exchange |
-| `crates/windfall-factory` | Generates the factory sounds |
-| `crates/windfall-sim` | The project document compiled to WebAssembly, which the simulated backend runs |
-| `content/factory` | Factory sounds, CC0 |
-| `apps/desktop` | The app: `src-tauri` is the shell, `src` is the interface |
+| Path                                | What it is                                                                                                |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `crates/windfall-core`              | Audio buffer and unit helpers shared by everything                                                        |
+| `crates/windfall-project`           | Project model, edit commands, undo history, `.windfall` file format                                       |
+| `crates/windfall-archive`           | Portable ZIP schema, bounded validation and staged audio extraction                                       |
+| `crates/windfall-engine`            | Realtime audio engine and offline renderer                                                                |
+| `crates/windfall-flp`               | Reads FL Studio projects and converts musical structure with an import report                             |
+| `crates/windfall-codec`             | Reads WAV, AIFF, FLAC, MP3 and OGG; writes WAV, FLAC, OGG and MP3                                         |
+| `crates/windfall-midi`              | Reads and writes MIDI files; project import plans and playlist export                                     |
+| `crates/windfall-dsp`               | Effects and synth DSP                                                                                     |
+| `crates/windfall-plugin-host`       | CLAP/VST3 audio hosting, isolated scanning and Windows native editors                                     |
+| `crates/windfall-stretch`           | Pure Rust streaming/offline time-stretch, pitch-shift and loop tempo helpers                              |
+| `crates/windfall-ipc`               | Types the engine, shell and interface exchange                                                            |
+| `crates/windfall-factory`           | Generates the factory sounds                                                                              |
+| `crates/windfall-sim`               | The project document compiled to WebAssembly, which the simulated backend runs                            |
+| `content/factory`                   | Factory sounds, CC0                                                                                       |
+| `apps/desktop`                      | The app: `src-tauri` is the shell, `src` is the interface                                                 |
 | `apps/desktop/src/components/audio` | Knob, fader, meter, step grid and other audio controls, MIT licensed and installable as a shadcn registry |
-| `docs` | Architecture, parity matrix, performance measurements |
+| `docs`                              | Architecture, parity matrix, performance measurements                                                     |
 
 `docs/ARCHITECTURE.md` explains how the parts talk to each other.
 

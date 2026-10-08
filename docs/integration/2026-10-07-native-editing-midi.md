@@ -586,3 +586,74 @@ WAV and shared-WASM UI coverage are still being completed before delivery.
 GitHub was rechecked: the repository is private, alpha assets retain their
 original names/sizes, and `artoomreinhart` still has the pending write
 invitation. No release, tag, asset replacement or new invitation was made.
+
+## 2026-10-08 portable and scaling acceptance; active feature deliveries
+
+Portable R3 `d9ac3da5` is integrated as `6a6b72c4`. Independent R4 passed
+81 attributable scoped native tests and found no actionable defects in the
+exact original source classifier, concurrent publication or bounded ZIP
+local/central validation. The same-ID/different-path history guarantee is
+tested through legal Document contract fixtures; no production command that
+creates that shape is claimed. Historical external sources still require
+their original files.
+
+Scaling repair `9418404a` is integrated as `4c8af7b2`. Independent R2 passed
+117 tests and checked actual capped Canvas2D alignment and twelve viewport/
+scale combinations. Root passed 208 composed UI tests, narrow lint and the
+production TypeScript/Vite build with the stamp and picker repairs present.
+These checks cover browser scrolling and logical canvas coordinates; native
+third-party editors, physical WebGPU and other operating systems remain open.
+
+Root fixed-source `015da36c` passed **311 unique native tests**: 152 DSP,
+72 engine, seven project, 21 archive and 59 desktop cases. Three existing DSP
+timing/demo tests remained ignored. The desktop cases include the actual
+CLAP portable archive round trip and all four R4 capture roles. One new
+project source test missed by the initial filter was subsequently run through
+the attributable cached binary and passed. Logs are
+`windfall-root-portable-utility-native.log` and
+`windfall-root-portable-identity-completion.log` in the local temporary
+directory. Strict all-target Clippy for DSP/project/archive/engine/desktop,
+workspace formatting, independent comparison of 170 generated bindings,
+WASM freshness, parity and whitespace checks passed.
+
+The simulator was rebuilt from this source. Its binary remains byte-identical
+at 1,863,302 bytes, SHA-256
+`ae07e308eea6a7123310d243d60ec885cb09dc42b564f331786726a79342e53a`;
+only the checked source-input hash changed. This is a focused composed check,
+not a new complete workspace or complete UI run.
+
+Utility `1e0fa525` and `3073d220` are integrated as `b6f6cd74` and
+`015da36c`. Their preceding regression cases pass, but independent R4 found
+a remaining same-ID restore during an unfinished departure splice. The
+owner reproduced both limiter and hosted-effect tone discontinuities and
+is repairing serial outgoing/active ownership, predecessor readiness and
+generation-specific compensation. Parameters and automation must reach
+only the active owner. This utility delivery remains unaccepted until that
+incremental repair, a fresh review and composed checks pass.
+
+T1 has source checkpoints `3ba8b13c` and `401939d4` for checked timeline
+model/conversion and engine/session behavior. Its final UI checks and source
+commit are pending. Selected-export guards use the canonical backend
+generation and protocol revision; a frontend replacement epoch only rejects
+late replies. Its 177 bindings and simulator are validation artifacts in the
+owner worktree, not yet root artifacts or an accepted delivery.
+
+E1's isolated DSP checkpoints `f0ad5e44` and `796a62f9` supply a resonant
+lowpass, seven-mode filter and bass shelf. The owner passed 13 debug tests
+and 14 release tests including headless CPU measurements, with zero guarded
+callback allocations. Fixed-checkpoint independent review is running.
+Registry, project persistence, automation, engine/export and UI integration
+remain pending; all three parity rows remain incomplete. Shared registry
+windows stay closed until the utility and timeline owners finish.
+
+N4's six leaf findings remain under the same owner. Compiled reproductions
+and repairs now cover offline mapped failure, capture epoch proof, capture
+publication order, helper authentication and note-only overflow. The real
+CLAP idle-owner hang was also reproduced during continued READY turnover.
+The approved mapping ABI 2 owner-completion counter supplies watchdog
+liveness only, never DSP acknowledgement. Private stdin authentication sends
+no metadata to unrelated loopback clients. Final fixed-source checks and a
+fresh independent review are still required before desktop activation.
+
+No new parity row is marked complete. GitHub publication remains pending
+these remaining repair gates; the existing private alpha is unchanged.
