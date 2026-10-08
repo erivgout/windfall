@@ -1,0 +1,22 @@
+[package]
+name = "windfall-analysis"
+description = "Bounded native analysis jobs, model imports and reviewed audio assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+windfall-core.workspace = true
+windfall-codec.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+# Already locked; MIT OR Apache-2.0, default std only. See ANALYSIS-JOBS.md.
+sha2 = "=0.10.9"
+# Already locked; MIT OR Apache-2.0. Atomic no-clobber files/private directories.
+tempfile = "=3.27.0"
+
+[lints]
+workspace = true
