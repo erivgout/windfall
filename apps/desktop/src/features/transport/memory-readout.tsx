@@ -48,7 +48,7 @@ export function MemoryReadout() {
   return (
     <span
       className="flex items-baseline gap-1"
-      aria-label={`Host RAM: ${bytes === null ? "unavailable" : value}`}
+      aria-label={`Host RAM: ${bytes === null ? "unavailable" : value}; resident memory of the desktop host, excluding webviews and plugin helpers`}
       title="Desktop host resident memory; excludes webviews and plugin helpers"
       {...hint}
     >

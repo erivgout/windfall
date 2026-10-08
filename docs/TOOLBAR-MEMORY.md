@@ -65,3 +65,15 @@ backend response; browser preview does not prove native desktop IPC execution.
 
 macOS and Linux native queries await their platform CI execution. Physical
 device performance and aggregate child-process accounting are not claimed.
+
+## Independent source review
+
+The Standards review of source `0e81f508` against `125d709c` reported zero
+findings. The separate Spec review found one P2: the accessible label said
+only Host RAM and the value, although this contract promised the accounting
+scope there too. The follow-up adds resident desktop-host meaning and the
+webview/helper exclusions to every accessible label. An exact accessible-name
+assertion and all 11 memory lifecycle tests pass after that correction;
+TypeScript and scoped ESLint pass. Native accounting, IPC, units and polling
+are unchanged. Both initial reviews were read-only source audits, not executed
+platform tests.

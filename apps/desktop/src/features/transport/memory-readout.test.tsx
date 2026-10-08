@@ -29,12 +29,15 @@ async function flush() {
 it("shows honest browser unavailability beside the existing CPU readout", async () => {
   render(<PerformanceReadout />)
   await flush()
-  expect(screen.getByLabelText("Host RAM: unavailable")).toHaveTextContent(
+  expect(screen.getByLabelText(/^Host RAM: unavailable;/)).toHaveTextContent(
     "RAM—"
   )
   expect(screen.getByText("CPU")).toBeVisible()
   expect(screen.getByText("0%")).toBeVisible()
-  expect(screen.getByLabelText("Host RAM: unavailable")).toHaveAttribute(
+  expect(screen.getByLabelText(/^Host RAM: unavailable;/)).toHaveAccessibleName(
+    "Host RAM: unavailable; resident memory of the desktop host, excluding webviews and plugin helpers"
+  )
+  expect(screen.getByLabelText(/^Host RAM: unavailable;/)).toHaveAttribute(
     "title",
     "Desktop host resident memory; excludes webviews and plugin helpers"
   )
@@ -48,13 +51,13 @@ it("updates native resident bytes in binary units once each completed poll", asy
     .mockResolvedValue(0)
   render(<MemoryReadout />)
   await flush()
-  expect(screen.getByLabelText("Host RAM: 256 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 256 MiB;/)).toBeVisible()
   await act(() => vi.advanceTimersByTimeAsync(999))
   expect(query).toHaveBeenCalledTimes(1)
   await act(() => vi.advanceTimersByTimeAsync(1))
-  expect(screen.getByLabelText("Host RAM: 1.5 GiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 1\.5 GiB;/)).toBeVisible()
   await act(() => vi.advanceTimersByTimeAsync(1000))
-  expect(screen.getByLabelText("Host RAM: 0 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 0 MiB;/)).toBeVisible()
 })
 
 it("does not queue another request while the current native query is pending", async () => {
@@ -67,7 +70,7 @@ it("does not queue another request while the current native query is pending", a
   await act(() => vi.advanceTimersByTimeAsync(5000))
   expect(query).toHaveBeenCalledTimes(1)
   await act(async () => complete(64 * 1024 * 1024))
-  expect(screen.getByLabelText("Host RAM: 64 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 64 MiB;/)).toBeVisible()
   await act(() => vi.advanceTimersByTimeAsync(999))
   expect(query).toHaveBeenCalledTimes(1)
   await act(() => vi.advanceTimersByTimeAsync(1))
@@ -81,11 +84,11 @@ it("clears stale values after query failure and recovers on the next poll", asyn
     .mockResolvedValue(48 * 1024 * 1024)
   render(<MemoryReadout />)
   await flush()
-  expect(screen.getByLabelText("Host RAM: 32 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 32 MiB;/)).toBeVisible()
   await act(() => vi.advanceTimersByTimeAsync(1000))
-  expect(screen.getByLabelText("Host RAM: unavailable")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: unavailable;/)).toBeVisible()
   await act(() => vi.advanceTimersByTimeAsync(1000))
-  expect(screen.getByLabelText("Host RAM: 48 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 48 MiB;/)).toBeVisible()
 })
 
 it.each([NaN, Infinity, -1, 0.5, Number.MAX_SAFE_INTEGER + 1])(
@@ -94,7 +97,7 @@ it.each([NaN, Infinity, -1, 0.5, Number.MAX_SAFE_INTEGER + 1])(
     vi.spyOn(backend, "processMemory").mockResolvedValue(value)
     render(<MemoryReadout />)
     await flush()
-    expect(screen.getByLabelText("Host RAM: unavailable")).toBeVisible()
+    expect(screen.getByLabelText(/^Host RAM: unavailable;/)).toBeVisible()
   }
 )
 
@@ -129,9 +132,9 @@ it("ignores the retired Strict Mode effect's late value and timer", async () => 
   )
   await flush()
   expect(query).toHaveBeenCalledTimes(2)
-  expect(screen.getByLabelText("Host RAM: 96 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 96 MiB;/)).toBeVisible()
   await act(async () => complete(8 * 1024 * 1024))
-  expect(screen.getByLabelText("Host RAM: 96 MiB")).toBeVisible()
+  expect(screen.getByLabelText(/^Host RAM: 96 MiB;/)).toBeVisible()
   await act(() => vi.advanceTimersByTimeAsync(1000))
   expect(query).toHaveBeenCalledTimes(3)
 })
