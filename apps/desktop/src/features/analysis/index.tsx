@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { ActionButton } from "@/components/action-button"
 import { Input } from "@/components/ui/input"
 import {
   Dialog,
@@ -7,42 +7,47 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import { backend, errorMessage } from "@/lib/ipc"
-import { receivePatch } from "@/lib/store/project"
-import { getProjectGeneration, onProjectReplaced } from "@/lib/store/replaced"
+import {
+  onHistoryNavigation,
+  receivePatch,
+  useProjectStore,
+} from "@/lib/store/project"
+import { onProjectReplaced } from "@/lib/store/replaced"
 import { usePlaylistStore } from "@/features/playlist/store"
 import { parseManifest } from "./manifest"
-import { retireJob } from "./retire"
 import {
-  validRange,
+  recoveryFailure,
+  removeRecoveryJob,
+  reserveRecovery,
+  retireTrackedJob,
+  updateRecoveryJob,
+  useAnalysisRecovery,
+} from "./recovery"
+import {
+  bindAnalysisPanel,
+  captureAnalysisClip,
+  closeAnalysis,
+  useAnalysisDialog,
+  type AnalysisCommand,
+} from "./actions"
+import {
   type AnalysisCapability,
   type AnalysisJob,
   type AnalysisReview,
 } from "./types"
 
-export function AnalysisButton({
-  clip,
-  disabled = false,
-}: {
-  clip: number | null
-  disabled?: boolean
-}) {
-  const [open, setOpen] = useState(false)
+export function AnalysisButton() {
+  const target = useAnalysisDialog((state) => state.target)
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger
-        render={
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled || clip === null}
-          />
-        }
-      >
-        Analysis
-      </DialogTrigger>
+    <Dialog
+      open={target !== null}
+      onOpenChange={(open) => {
+        if (!open) closeAnalysis()
+      }}
+    >
+      <ActionButton action="analysis.open" size="sm" variant="outline" />
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Native analysis</DialogTitle>
@@ -51,13 +56,25 @@ export function AnalysisButton({
             applied output files remain available to history and saved projects.
           </DialogDescription>
         </DialogHeader>
-        {open && clip !== null && <AnalysisPanel key={clip} clip={clip} />}
+        {target && (
+          <AnalysisPanel
+            key={`${target.generation}/${target.id}`}
+            clip={target.id}
+            capture={target}
+          />
+        )}
       </DialogContent>
     </Dialog>
   )
 }
 
-export function AnalysisPanel({ clip }: { clip: number }) {
+export function AnalysisPanel({
+  clip,
+  capture,
+}: {
+  clip: number
+  capture?: ReturnType<typeof captureAnalysisClip>
+}) {
   const [capability, setCapability] = useState<AnalysisCapability | null>(null)
   const [job, setJob] = useState<AnalysisJob | null>(null)
   const [review, setReview] = useState<AnalysisReview | null>(null)
@@ -74,23 +91,25 @@ export function AnalysisPanel({ clip }: { clip: number }) {
   const retained = useRef<string | null>(null)
   const sequence = useRef(0)
   const aliveContext = useRef<() => boolean>(() => false)
+  const working = useRef(false)
 
   useEffect(() => {
     active.current = true
-    const generation = getProjectGeneration()
-    const selection = usePlaylistStore.getState().selection
+    const captured = capture ?? captureAnalysisClip(clip)
     aliveContext.current = () =>
-      active.current &&
-      generation === getProjectGeneration() &&
-      selection === usePlaylistStore.getState().selection
+      active.current && captured !== null && captured.current()
     const invalidate = () => {
       setStale(true)
       sequence.current += 1
     }
     const offProject = onProjectReplaced(invalidate)
-    const offSelection = usePlaylistStore.subscribe((state) => {
-      if (state.selection !== selection) invalidate()
-    })
+    const recheck = () => {
+      if (!captured?.current()) invalidate()
+    }
+    const offSelection = usePlaylistStore.subscribe(recheck)
+    const offSource = useProjectStore.subscribe(recheck)
+    const offHistory = onHistoryNavigation(invalidate)
+    if (!captured) invalidate()
     void backend
       .analysisCapability()
       .then((value) => {
@@ -104,12 +123,11 @@ export function AnalysisPanel({ clip }: { clip: number }) {
       sequence.current += 1
       offProject()
       offSelection()
-      if (retained.current)
-        void retireJob(backend, retained.current).catch((e: unknown) =>
-          console.error(errorMessage(e))
-        )
+      offSource()
+      offHistory()
+      if (retained.current) void retireTrackedJob(retained.current)
     }
-  }, [clip])
+  }, [clip, capture])
 
   useEffect(() => {
     if (
@@ -140,30 +158,171 @@ export function AnalysisPanel({ clip }: { clip: number }) {
       clearTimeout(timer)
     }
   }, [job, stale])
+  useEffect(() => {
+    if (job) updateRecoveryJob(job)
+  }, [job])
 
-  async function action(work: () => Promise<void>) {
-    if (busy || stale || !aliveContext.current()) return
+  async function action(work: () => Promise<void>, retirement = false) {
+    if (
+      working.current ||
+      !active.current ||
+      (!retirement && (stale || !aliveContext.current()))
+    )
+      return
     if (sequence.current >= Number.MAX_SAFE_INTEGER) {
       setError("Reopen this panel before continuing.")
       return
     }
     const request = ++sequence.current
+    working.current = true
     setBusy(true)
     setError(null)
     try {
       await work()
     } catch (e) {
-      if (aliveContext.current() && request === sequence.current)
-        setError(errorMessage(e))
+      const message =
+        retirement && job ? recoveryFailure(job.job, e) : errorMessage(e)
+      if (
+        active.current &&
+        (retirement || aliveContext.current()) &&
+        request === sequence.current
+      )
+        setError(message)
     } finally {
-      if (active.current && request === sequence.current) setBusy(false)
+      working.current = false
+      if (active.current) setBusy(false)
     }
   }
   const model = capability?.models[modelIndex]
-  const terminal =
-    job && ["cancelled", "failed", "consumed"].includes(job.status)
+  useLayoutEffect(() =>
+    bindAnalysisPanel({
+      clip,
+      current: () => aliveContext.current(),
+      stale,
+      busy,
+      capability,
+      job,
+      review,
+      modelIndex,
+      start,
+      end,
+      manifest,
+      localPath,
+      replace,
+      execute: async (command: AnalysisCommand) => {
+        if (command === "cancelPreparation") {
+          try {
+            await backend.analysisCancelPreparation()
+          } catch (e) {
+            if (active.current) setError(errorMessage(e))
+          }
+          return
+        }
+        await action(
+          async () => {
+            switch (command) {
+              case "chooseModel": {
+                const path = await backend.pickAnalysisModel()
+                if (path && aliveContext.current()) setLocalPath(path)
+                break
+              }
+              case "importModel": {
+                await backend.analysisModelImport(
+                  localPath,
+                  parseManifest(manifest)
+                )
+                const next = await backend.analysisCapability()
+                if (aliveContext.current()) setCapability(next)
+                break
+              }
+              case "submit": {
+                if (!model) return
+                const finish = reserveRecovery()
+                let next: AnalysisJob
+                try {
+                  next = await backend.analysisSubmit({
+                    clip,
+                    modelId: model.id,
+                    modelVersion: model.version,
+                    modelRevision: model.revision,
+                    startFrame: start,
+                    endFrame: end,
+                  })
+                  finish(next)
+                } catch (error) {
+                  finish(null)
+                  throw error
+                }
+                if (!aliveContext.current()) {
+                  await retireTrackedJob(next.job)
+                  return
+                }
+                retained.current = next.job
+                setJob(next)
+                break
+              }
+              case "cancel": {
+                if (!job) return
+                const next = await backend.analysisCancel(job.job)
+                if (active.current && retained.current === next.job) {
+                  setReview(null)
+                  setJob(next)
+                }
+                break
+              }
+              case "review": {
+                if (!job) return
+                const next = await backend.analysisReview(job.ticket)
+                if (aliveContext.current() && retained.current === next.job.job)
+                  setReview(next)
+                break
+              }
+              case "retryCleanup": {
+                if (!job) return
+                await backend.analysisRetryCleanup(job.job)
+                const next = await backend.analysisStatus(job.job)
+                if (active.current && retained.current === next.job)
+                  setJob(next)
+                break
+              }
+              case "forget": {
+                if (!job) return
+                await backend.analysisForget(job.job)
+                removeRecoveryJob(job.job)
+                retained.current = null
+                if (active.current) {
+                  setJob(null)
+                  setReview(null)
+                }
+                break
+              }
+              case "apply": {
+                if (!review) return
+                const result = await backend.analysisApply({
+                  ticket: review.job.ticket,
+                  request: review.job.request,
+                  replaceOriginal: replace,
+                })
+                if (!aliveContext.current()) return
+                receivePatch(result.patch)
+                setReview(null)
+                const next = await backend.analysisStatus(review.job.job)
+                if (active.current && retained.current === next.job)
+                  setJob(next)
+                break
+              }
+            }
+          },
+          command === "cancel" ||
+            command === "retryCleanup" ||
+            command === "forget"
+        )
+      },
+    })
+  )
   return (
     <div className="flex flex-col gap-3 text-sm">
+      <RecoveryControls />
       {!capability && <p>Checking native availability…</p>}
       {capability && !capability.available && (
         <p role="status">
@@ -192,17 +351,7 @@ export function AnalysisPanel({ clip }: { clip: number }) {
           onChange={(e) => setLocalPath(e.target.value)}
           maxLength={2048}
         />
-        <Button
-          variant="outline"
-          onClick={() =>
-            void action(async () => {
-              const path = await backend.pickAnalysisModel()
-              if (path && aliveContext.current()) setLocalPath(path)
-            })
-          }
-        >
-          Choose local model
-        </Button>
+        <ActionButton action="analysis.chooseModel" variant="outline" />
         <textarea
           aria-label="Pinned model manifest JSON"
           maxLength={16384}
@@ -210,21 +359,7 @@ export function AnalysisPanel({ clip }: { clip: number }) {
           onChange={(e) => setManifest(e.target.value)}
           className="min-h-24 rounded border p-2 font-mono text-xs"
         />
-        <Button
-          disabled={!manifest || !localPath}
-          onClick={() =>
-            void action(async () => {
-              await backend.analysisModelImport(
-                localPath,
-                parseManifest(manifest)
-              )
-              const next = await backend.analysisCapability()
-              if (aliveContext.current()) setCapability(next)
-            })
-          }
-        >
-          Verify and import local model
-        </Button>
+        <ActionButton action="analysis.importModel" />
       </fieldset>
       <fieldset
         disabled={busy || stale || !capability?.available || job !== null}
@@ -260,30 +395,7 @@ export function AnalysisPanel({ clip }: { clip: number }) {
           onChange={(e) => setEnd(e.target.value)}
           maxLength={20}
         />
-        <Button
-          disabled={!model || !validRange(start, end)}
-          onClick={() =>
-            void action(async () => {
-              if (!model) return
-              const next = await backend.analysisSubmit({
-                clip,
-                modelId: model.id,
-                modelVersion: model.version,
-                modelRevision: model.revision,
-                startFrame: start,
-                endFrame: end,
-              })
-              if (!aliveContext.current()) {
-                await retireJob(backend, next.job)
-                return
-              }
-              retained.current = next.job
-              setJob(next)
-            })
-          }
-        >
-          Submit analysis
-        </Button>
+        <ActionButton action="analysis.submit" />
       </fieldset>
       {job && (
         <div className="flex flex-col gap-2">
@@ -292,59 +404,10 @@ export function AnalysisPanel({ clip }: { clip: number }) {
             {job.maximumWork}
           </p>
           {job.failure && <p role="alert">{job.failure}</p>}
-          <Button
-            disabled={busy || !!terminal}
-            onClick={() =>
-              void action(async () => {
-                const next = await backend.analysisCancel(job.job)
-                if (aliveContext.current()) {
-                  setReview(null)
-                  setJob(next)
-                }
-              })
-            }
-          >
-            Cancel job
-          </Button>
-          <Button
-            disabled={busy || job.status !== "ready" || stale}
-            onClick={() =>
-              void action(async () => {
-                const next = await backend.analysisReview(job.ticket)
-                if (aliveContext.current() && retained.current === next.job.job)
-                  setReview(next)
-              })
-            }
-          >
-            Review outputs
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              void action(async () => {
-                await backend.analysisRetryCleanup(job.job)
-                const next = await backend.analysisStatus(job.job)
-                if (aliveContext.current()) setJob(next)
-              })
-            }
-          >
-            Retry owned cleanup
-          </Button>
-          <Button
-            disabled={busy || !terminal}
-            onClick={() =>
-              void action(async () => {
-                await backend.analysisForget(job.job)
-                retained.current = null
-                if (aliveContext.current()) {
-                  setJob(null)
-                  setReview(null)
-                }
-              })
-            }
-          >
-            Forget retired job
-          </Button>
+          <ActionButton action="analysis.cancel" />
+          <ActionButton action="analysis.review" />
+          <ActionButton action="analysis.retryCleanup" />
+          <ActionButton action="analysis.forget" />
         </div>
       )}
       {review && (
@@ -381,38 +444,50 @@ export function AnalysisPanel({ clip }: { clip: number }) {
             />{" "}
             Replace original clip (complete range only)
           </label>
-          <Button
-            disabled={busy || stale || job?.status !== "ready"}
-            onClick={() =>
-              void action(async () => {
-                const result = await backend.analysisApply({
-                  ticket: review.job.ticket,
-                  request: review.job.request,
-                  replaceOriginal: replace,
-                })
-                if (!aliveContext.current()) return
-                receivePatch(result.patch)
-                setReview(null)
-                setJob(await backend.analysisStatus(review.job.job))
-              })
-            }
-          >
-            Apply reviewed outputs
-          </Button>
+          <ActionButton action="analysis.apply" />
         </div>
       )}
       {busy && (
-        <Button
-          variant="outline"
-          onClick={() =>
-            void backend
-              .analysisCancelPreparation()
-              .catch((e: unknown) => setError(errorMessage(e)))
-          }
-        >
-          Cancel active analysis preparation
-        </Button>
+        <ActionButton action="analysis.cancelPreparation" variant="outline" />
       )}
+    </div>
+  )
+}
+
+function RecoveryControls() {
+  const jobs = useAnalysisRecovery((state) => state.jobs)
+  const selected = useAnalysisRecovery((state) => state.selected)
+  const dismissed = jobs.filter((item) => item.dismissed)
+  if (dismissed.length === 0) return null
+  const current = dismissed.find((item) => item.job.job === selected)
+  return (
+    <div className="flex flex-col gap-2">
+      <p>
+        Retained analysis jobs require explicit cleanup. These controls cannot
+        apply outputs to the current clip.
+      </p>
+      <select
+        aria-label="Retained analysis job"
+        value={selected ?? ""}
+        onChange={(event) =>
+          useAnalysisRecovery.setState({ selected: event.target.value })
+        }
+      >
+        {dismissed.map((item) => (
+          <option key={item.job.job} value={item.job.job}>
+            {item.job.job} · {item.job.status}
+          </option>
+        ))}
+      </select>
+      {current && (
+        <p>
+          Retained job {current.job.job}: {current.job.status}
+        </p>
+      )}
+      {current?.error && <p role="alert">{current.error}</p>}
+      <ActionButton action="analysis.recoveryCancel" />
+      <ActionButton action="analysis.recoveryRetry" />
+      <ActionButton action="analysis.recoveryForget" />
     </div>
   )
 }

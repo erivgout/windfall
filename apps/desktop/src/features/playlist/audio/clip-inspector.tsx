@@ -415,7 +415,7 @@ function Strip() {
         className={cn("contents", idle && "invisible")}
       >
         <SliceControls clips={clips} />
-        <AnalysisButton clip={clips.length === 1 ? clips[0].id : null} />
+        <AnalysisButton />
         <AudioEditorButton
           clip={clips[0]?.id ?? null}
           disabled={clips.length !== 1}

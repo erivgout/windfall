@@ -405,7 +405,7 @@ Apply verifies the review submit request and current pinned manifest, rehashes
 the actual source off State and retains its file-version authority. It snapshots
 the current Document/pool/load intent using the existing Session snapshot seam;
 candidate dispatch, claim, publication, strict output decode/checksum/cache-PCM
-comparison, complete candidate pool/commands and fallible controller preparation
+comparison, complete candidate pool/commands and fallible Plan/SamplerPool preparation
 then run off State. Published output handles are acquired before decoding and
 held through commit. Windows tests demonstrate that writes and deletes of both
 original and output files are refused throughout the final preparation window.
@@ -425,6 +425,18 @@ Session commits; existing Document and controller publication are not claimed
 to be allocation-free. Snapshot metadata copies and application-owned project
 history/pools are not an OS heap budget or a sandbox for a future runtime.
 
+**Unresolved P1 composition gate:** `Controller::prepare_project` prepares the
+Plan and sampler pool off State. The inherited final `publish_prepared` path can
+still call `Controller::set_plan -> PlanState::build -> factory.effect/instrument`
+under the final State/Controller guards, after Document dispatch. These checks
+do not establish complete native engine preparation off locks or guaranteed
+installation. The dedicated P1 owner must supply a genuinely ready, fallible
+engine token and authoritative binding/provider/stream readiness. Analysis will
+adopt that token at its off-State candidate preparation slot, check readiness
+before actual Document dispatch, and install without a factory-build fallback
+at the final publication slot. No reserved Controller/State/edit code is changed
+by the analysis R1 repairs.
+
 Complete-range replacement removes the original clip and creates derived
 samples/clips in one undo entry. Partial ranges only add clips, at the nearest
 timeline tick to their rendered frame origin, with duration rounded up to ticks;
@@ -443,9 +455,72 @@ pinned model selection, exact frame endpoints, progress/status, cancellation,
 cleanup retry/forget, source/model/output hashes and author/license provenance,
 review and explicit apply. Project replacement/selection changes invalidate the
 panel; late replies do not install a patch. Unmount and late-submit retirement
-use at most 600 control polls over 120 seconds, never a static job map or direct
-filesystem deletion. A cleanup refusal preserves native quota/evidence and
-reports the retained job identity instead of removing files.
+use at most 600 control polls over 120 seconds, without direct filesystem
+deletion. A typed process-local recovery table reserves capacity before submit
+and retains at most eight job records plus pending reservations combined. No IDs
+are persisted. Every retirement refusal includes its job ID; refused cleanup
+remains visible across dismissal, selection and project replacement. Recovery
+can cancel/retry/forget a retained job, and never restores review/apply authority.
+The global palette offers selection of the next retained job and cleanup even
+when the inspector is not mounted. Slots release only after native forget.
+
+`features/analysis/actions.ts` defines the canonical Analysis entry and commands,
+registered by the existing startup action lifecycle. Panel controls use
+`ActionButton` metadata/execution. One mounted panel context retains the captured
+generation/revision/selection/clip/source identity and exact job/ticket/request;
+native guards remain authoritative for content and installation. Context, range,
+manifest/model, busy, recording, review, recovery and selection changes invalidate
+registry state. Disabled reasons distinguish browser/native algorithm absence,
+recording, stale source, active work and bounded recovery admission. The typed
+terminal predicate is shared by button eligibility and retirement.
+
+### App R1 repair evidence and Windows namespace policy
+
+The fixed `e3cdbb3f` app R1 reviews found registry bypass, junction retargeting and
+lost cleanup recovery after dismissal. Compiled RED checks reproduced all three:
+the original panel exposed zero Analysis registry entries; a real Windows
+junction retargeted after the actual hash/identity check reached Apply; and an
+immediate native-forget refusal omitted the job ID and left no recovery controls
+after remount. These defects are distinct from the open P1 composition gate.
+
+The analysis-owned `SourceFile` now pins ordinary absolute local-drive namespace
+components from root to leaf. Each directory is opened without following its
+reparse target, with real read/list access, backup semantics and READ-only sharing;
+attributes-only handles were experimentally insufficient and are not used.
+Handle-derived attributes reject reparse components before source admission or
+apply publication. Acquired ancestors and the read-only final file remain held
+through the final guarded checks, then retire outside those guards. The output
+decode/hash handles use the same namespace policy. Unsupported UNC/device paths,
+relative/noncanonical paths, paths over 1024 `OsStr` bytes, and paths needing more
+than 64 parent-directory handles fail closed with `analysis:sourceNamespace`.
+No leaf-only fallback occurs. Required ancestor read/list permission may refuse
+a source that ordinary file traversal could otherwise read. At most 17 guarded
+files (one source and sixteen outputs) retain 1105 namespace/leaf handles during
+one serialized apply preparation. Existing reparse paths are conservatively
+unsupported. Non-Windows external-filesystem transaction limits remain unchanged.
+
+The native junction GREEN path refuses the preexisting reparse source at capture
+before output publication. A separate actual final-preparation pause proves an
+ordinary parent cannot be renamed or opened for reparse mutation while namespace
+authority is held, and that it can be renamed after handles retire. Existing
+source/output no-write/no-delete, competitor bytes, immutable source, history,
+quota and zero-allocation foundation-seam tests remain in the native inventory.
+Frontend checks exercise the real registry/palette/menu/keymap and panel lifetime;
+mocked native IPC demonstrates UI behavior only, never real Session atomicity or
+successful production inference.
+
+Owner-executed R1 GREEN checks: 16 actual Session tests, one native namespace
+limit test and three existing slicer regressions passed (20 desktop checks,
+0.57 seconds); all 11 analysis IPC checks passed (0.01 seconds). The 14 owned
+frontend checks plus 27 adjacent startup/menu/palette/action-component checks
+passed (41 checks). TypeScript, scoped ESLint/Prettier, strict analysis/IPC/desktop
+all-target Clippy, owned Rust formatting and diff checks passed. The original
+one- and sixteen-output quota and `(0, 0)` allocation/free measurements are
+unchanged. The initial attributes-only namespace guard failed a compiled
+directory-write-authority test; using real read/list access made that test GREEN.
+No Cargo/dependency/lock/foundation/codec/IPC/backend/Controller changes occur in
+this repair increment. The earlier execution counts below describe the frozen
+`e3cdb` checkpoint rather than these additional repair checks.
 
 Fourteen registered real Session tests cover actual one-batch commit/undo/redo/
 save/reopen/portable archive, complete/partial range placement, exact same-size/

@@ -724,6 +724,154 @@ const MODEL: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../../crates/windfall-analysis/tests/fixtures/lifecycle-cpu-v1.model"
 ));
+
+#[cfg(windows)]
+fn junction(link: &std::path::Path, target: &std::path::Path) {
+    let result = std::process::Command::new("cmd.exe")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn analysis_ordinary_parent_namespace_cannot_be_replaced_during_final_preparation() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let rig = Rig::new();
+    let (_, source, original) = fixture(&rig);
+    let parent = rig.folder.path().join("ordinary");
+    let moved = rig.folder.path().join("renamed");
+    std::fs::create_dir(&parent).unwrap();
+    let path = parent.join("original.wav");
+    std::fs::rename(source, &path).unwrap();
+    let result = rig
+        .session
+        .add_audio_clip_from_file(
+            &crate::paths::display(&path),
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let job = ready(&rig, ClipId(*result.created.last().unwrap()));
+    let hold = rig.session.hold("analysis:prepared");
+    let r = apply(&job, false);
+    let worker = rig.session.background(move |s| s.analysis_apply(r));
+    hold.wait();
+    assert!(
+        std::fs::rename(&parent, &moved).is_err(),
+        "parent rename lost namespace authority"
+    );
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(0x0200_0000 | 0x0020_0000)
+            .open(&parent)
+            .is_err(),
+        "reparse mutation obtained directory write authority"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    hold.release();
+    worker.join().unwrap().unwrap();
+    // Acquired namespace handles are actually released after the final guards.
+    std::fs::rename(&parent, &moved).unwrap();
+    assert_eq!(std::fs::read(moved.join("original.wav")).unwrap(), original);
+}
+
+#[cfg(windows)]
+#[test]
+fn analysis_junction_retarget_after_hash_cannot_install_a_changed_source_namespace() {
+    let rig = Rig::new();
+    let (_, source, original) = fixture(&rig);
+    let first = rig.folder.path().join("first");
+    let second = rig.folder.path().join("second");
+    let alias = rig.folder.path().join("alias");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    std::fs::rename(&source, first.join("original.wav")).unwrap();
+    windfall_codec::write_wav(
+        second.join("original.wav"),
+        &AudioBuffer::from_interleaved(48_000, 2, vec![0.75; 200]),
+        windfall_codec::WavSampleFormat::Float32,
+    )
+    .unwrap();
+    junction(&alias, &first);
+    let source = crate::paths::display(&alias.join("original.wav"));
+    let result = rig
+        .session
+        .add_audio_clip_from_file(
+            &source,
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let clip = ClipId(*result.created.last().unwrap());
+    let before = rig.session.document_snapshot();
+    let submitted = rig.session.analysis_submit(request(clip));
+    // A conservative guard may refuse the existing reparse namespace at capture.
+    // A guard that accepts it must retain that namespace through final commit.
+    let job = match submitted {
+        Err(reason) => {
+            assert!(reason.contains("analysis:sourceNamespace"), "{reason}");
+            assert_eq!(rig.session.document_snapshot(), before);
+            assert_eq!(
+                rig.session
+                    .inner
+                    .analysis
+                    .test_manager()
+                    .usage()
+                    .published_files,
+                0
+            );
+            assert_eq!(std::fs::read(first.join("original.wav")).unwrap(), original);
+            return;
+        }
+        Ok(job) => job,
+    };
+    rig.session
+        .inner
+        .analysis
+        .test_manager()
+        .wait(native::JobId(job.job.parse().unwrap()))
+        .unwrap();
+    let identity = crate::library::file_identity(std::path::Path::new(&source)).unwrap();
+    let metadata = std::fs::metadata(&source).unwrap();
+    let hold = rig.session.hold("analysis:prepared");
+    let r = apply(&job, false);
+    let worker = rig.session.background(move |s| s.analysis_apply(r));
+    hold.wait(); // actual hash/identity check completed; source file remains open
+    assert_eq!(
+        crate::library::file_identity(std::path::Path::new(&source)).unwrap(),
+        identity
+    );
+    assert_eq!(std::fs::metadata(&source).unwrap().len(), metadata.len());
+    assert_eq!(
+        std::fs::metadata(&source).unwrap().modified().unwrap(),
+        metadata.modified().unwrap()
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    std::fs::remove_dir(&alias).unwrap();
+    junction(&alias, &second);
+    assert_ne!(std::fs::read(&source).unwrap(), original);
+    hold.release();
+    assert!(
+        worker.join().unwrap().is_err(),
+        "retargeted junction was applied"
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+}
 fn model() -> AnalysisModel {
     AnalysisModel {
         id: "test-only-lifecycle-copy".into(),

@@ -4,7 +4,13 @@ import { startTestApp } from "@/test/harness"
 import type { MockBackend } from "@/lib/ipc/mock"
 import { useProjectStore } from "@/lib/store/project"
 import { usePlaylistStore } from "@/features/playlist/store"
-import { AnalysisPanel } from "./index"
+import { disabledReason, getAppState, registry, runAction } from "@/lib/actions"
+import { registerAnalysisActions } from "./actions"
+import { reserveRecovery, useAnalysisRecovery } from "./recovery"
+import { useRecordingStore } from "@/features/transport/recording-store"
+import { CommandPalette } from "@/features/palette/command-palette"
+import userEvent from "@testing-library/user-event"
+import { AnalysisButton, AnalysisPanel } from "./index"
 import type { AnalysisJob, AnalysisModel, AnalysisReview } from "./types"
 
 const model: AnalysisModel = {
@@ -65,11 +71,36 @@ const review: AnalysisReview = {
 }
 let backend: MockBackend
 let stop: () => void
+let unregister: () => void
+let clip: number
 beforeEach(async () => {
+  useAnalysisRecovery.setState(useAnalysisRecovery.getInitialState(), true)
+  useRecordingStore.setState(useRecordingStore.getInitialState(), true)
   ;({ backend, stop } = await startTestApp())
+  unregister = registerAnalysisActions()
+  await selectClip()
 })
-afterEach(() => stop())
+afterEach(() => {
+  unregister()
+  stop()
+})
+async function selectClip() {
+  const result = await backend.addAudioClipFromFile(
+    "/factory/Loops/Drum loop 128.wav",
+    { start: 0 }
+  )
+  const id = result.created.at(-1)
+  if (id === undefined) throw new Error("Fixture did not create an audio clip")
+  clip = id
+  usePlaylistStore.getState().select([clip])
+}
 async function nativePanel() {
+  if (
+    !useProjectStore
+      .getState()
+      .project.playlist.clips.some((item) => item.id === clip)
+  )
+    await selectClip()
   vi.spyOn(backend, "analysisCapability").mockResolvedValue({
     native: true,
     available: true,
@@ -85,7 +116,7 @@ async function nativePanel() {
     status: "cancelled",
   })
   vi.spyOn(backend, "analysisForget").mockResolvedValue()
-  const view = render(<AnalysisPanel clip={42} />)
+  const view = render(<AnalysisPanel clip={clip} />)
   await waitFor(() =>
     expect(
       screen.getByRole("button", { name: "Submit analysis" })
@@ -98,9 +129,186 @@ async function nativePanel() {
   return view
 }
 describe("analysis app controls", () => {
+  it("opens the canonical selected source through keymap and palette", async () => {
+    const user = userEvent.setup()
+    render(
+      <>
+        <AnalysisButton />
+        <CommandPalette />
+      </>
+    )
+    await user.keyboard("{Control>}{Shift>}a{/Shift}{/Control}")
+    expect(
+      await screen.findByRole("dialog", { name: "Native analysis" })
+    ).toBeVisible()
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "No inference runs in the browser"
+    )
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    await user.keyboard("{Control>}k{/Control}")
+    const input = await screen.findByRole("combobox")
+    await user.type(input, "analysis")
+    await user.click(screen.getByRole("option", { name: /^Analysis/ }))
+    expect(
+      await screen.findByRole("dialog", { name: "Native analysis" })
+    ).toBeVisible()
+  })
+  it("invalidates registry enablement for input, recording, busy work and source edits", async () => {
+    let finish!: (job: AnalysisJob) => void
+    const submit = vi.spyOn(backend, "analysisSubmit").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    await nativePanel()
+    const command = registry.get("analysis.submit")!
+    expect(disabledReason(command, getAppState())).toBeUndefined()
+    const version = registry.stateVersion()
+    act(() =>
+      useRecordingStore.setState((state) => ({
+        state: { ...state.state, active: true },
+      }))
+    )
+    expect(registry.stateVersion()).toBeGreaterThan(version)
+    expect(
+      screen.getByRole("button", { name: "Submit analysis" })
+    ).toBeDisabled()
+    expect(disabledReason(command, getAppState())).toContain("Finish recording")
+    await runAction(command.id)
+    expect(submit).not.toHaveBeenCalled()
+    act(() =>
+      useRecordingStore.setState((state) => ({
+        state: { ...state.state, active: false },
+      }))
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Submit analysis" }))
+    expect(disabledReason(command, getAppState())).toBe(
+      "Analysis operation in progress"
+    )
+    expect(
+      screen.getByRole("button", { name: "Cancel active analysis preparation" })
+    ).toBeEnabled()
+    await act(async () => finish(job))
+    await act(() =>
+      backend.dispatch({
+        type: "updateAudioClips",
+        updates: [{ id: clip, patch: { gain: 0.5 } }],
+      })
+    )
+    expect(
+      screen.getByRole("button", { name: "Review outputs" })
+    ).toBeDisabled()
+    expect(
+      disabledReason(registry.get("analysis.review")!, getAppState())
+    ).toContain("source changed")
+    expect(screen.getByRole("button", { name: "Cancel job" })).toBeEnabled()
+    fireEvent.click(screen.getByRole("button", { name: "Cancel job" }))
+    await screen.findByText(/Job 9007199254740993: cancelled/)
+  })
+  it("bounds retained and in-flight UI recovery before submitting", async () => {
+    await nativePanel()
+    let reservations: ReturnType<typeof reserveRecovery>[] = []
+    act(() => {
+      reservations = Array.from({ length: 8 }, () => reserveRecovery())
+    })
+    expect(
+      screen.getByRole("button", { name: "Submit analysis" })
+    ).toBeDisabled()
+    expect(() => reserveRecovery()).toThrow("limit 8")
+    expect(useAnalysisRecovery.getState().pending).toBe(8)
+    act(() =>
+      reservations.forEach((finish, index) =>
+        finish({ ...job, job: String(index + 1) })
+      )
+    )
+    expect(useAnalysisRecovery.getState().jobs).toHaveLength(8)
+    expect(useAnalysisRecovery.getState().pending).toBe(0)
+    expect(
+      screen.getByRole("button", { name: "Submit analysis" })
+    ).toBeDisabled()
+  })
+  it("keeps refused cleanup recoverable after dismissal, selection and actual project replacement", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    vi.spyOn(backend, "analysisSubmit").mockResolvedValue(job)
+    const view = await nativePanel()
+    vi.mocked(backend.analysisForget).mockRejectedValue(
+      new Error("owned cleanup refused")
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Submit analysis" }))
+    await screen.findByText(/Job 9007199254740993: ready/)
+    view.unmount()
+    await waitFor(() =>
+      expect(backend.analysisForget).toHaveBeenCalledWith(job.job)
+    )
+    await selectClip()
+    const reopened = render(<AnalysisPanel clip={clip} />)
+    expect(
+      await screen.findByText(/Retained job 9007199254740993/)
+    ).toBeVisible()
+    reopened.unmount()
+    await backend.projectNew()
+    await selectClip()
+    render(<AnalysisPanel clip={clip} />)
+    expect(
+      await screen.findByText(/Retained job 9007199254740993/)
+    ).toBeVisible()
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Analysis job 9007199254740993 remains retained: Owned cleanup refused"
+    )
+    expect(
+      screen.getByRole("button", { name: "Retry retained job cleanup" })
+    ).toBeEnabled()
+    expect(
+      screen.queryByRole("button", { name: "Apply reviewed outputs" })
+    ).toBeNull()
+    vi.spyOn(backend, "analysisRetryCleanup").mockResolvedValue()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry retained job cleanup" })
+    )
+    await waitFor(() =>
+      expect(backend.analysisRetryCleanup).toHaveBeenCalledWith(job.job)
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Forget retained job" })
+      ).toBeEnabled()
+    )
+    vi.mocked(backend.analysisForget).mockResolvedValue()
+    fireEvent.click(screen.getByRole("button", { name: "Forget retained job" }))
+    await waitFor(() =>
+      expect(screen.queryByText(/Retained job 9007199254740993/)).toBeNull()
+    )
+    expect(useAnalysisRecovery.getState().jobs).toHaveLength(0)
+  })
+  it("exposes every Analysis command through the canonical registry", () => {
+    render(<AnalysisPanel clip={clip} />)
+    expect(
+      registry
+        .list()
+        .filter((action) => action.section === "Analysis")
+        .map((action) => action.id)
+    ).toEqual([
+      "analysis.open",
+      "analysis.chooseModel",
+      "analysis.importModel",
+      "analysis.submit",
+      "analysis.cancel",
+      "analysis.review",
+      "analysis.retryCleanup",
+      "analysis.forget",
+      "analysis.apply",
+      "analysis.cancelPreparation",
+      "analysis.recoveryCancel",
+      "analysis.recoveryRetry",
+      "analysis.recoveryForget",
+      "analysis.recoveryNext",
+    ])
+  })
   it("shows honest browser unavailability and preserves document/history", async () => {
     const before = useProjectStore.getState()
-    render(<AnalysisPanel clip={42} />)
+    render(<AnalysisPanel clip={clip} />)
     expect(await screen.findByRole("status")).toHaveTextContent(
       "No inference runs in the browser"
     )
@@ -123,7 +331,7 @@ describe("analysis app controls", () => {
     const view = await nativePanel()
     fireEvent.click(screen.getByRole("button", { name: "Submit analysis" }))
     expect(submit).toHaveBeenCalledWith({
-      clip: 42,
+      clip,
       modelId: model.id,
       modelVersion: "1",
       modelRevision: "1",
@@ -154,7 +362,10 @@ describe("analysis app controls", () => {
   })
   it("shows provenance and ignores a late apply patch after actual project replacement", async () => {
     vi.spyOn(backend, "analysisSubmit").mockResolvedValue(job)
-    vi.spyOn(backend, "analysisReview").mockResolvedValue(review)
+    vi.spyOn(backend, "analysisReview").mockImplementation(async () => ({
+      ...review,
+      clip,
+    }))
     const result = await backend.addAudioClipFromFile(
       "/factory/Loops/Drum loop 128.wav",
       { start: 0 }

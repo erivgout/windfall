@@ -3,12 +3,32 @@ import { invoke } from "@tauri-apps/api/core"
 import { createTauriBackend } from "@/lib/ipc/tauri"
 import { decimal, validRange } from "./types"
 import { unavailableAnalysis } from "./unavailable"
+import { retireJob } from "./retire"
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: vi.fn() }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }))
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }))
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }))
 
 describe("analysis native protocol", () => {
+  it("reports the exact retained job identity on immediate cleanup refusal", async () => {
+    const api = unavailableAnalysis()
+    vi.spyOn(api, "analysisStatus").mockResolvedValue({
+      job: "9007199254740993",
+      ticket: "2",
+      request: "3",
+      sequence: "4",
+      status: "cancelled",
+      completedWork: "0",
+      maximumWork: "1",
+      failure: null,
+    })
+    vi.spyOn(api, "analysisForget").mockRejectedValue(
+      new Error("owned temporary deletion refused")
+    )
+    await expect(retireJob(api, "9007199254740993")).rejects.toThrow(
+      "Analysis job 9007199254740993 remains retained: Owned temporary deletion refused"
+    )
+  })
   it("preserves exact decimal identifiers and forwards refusals without successful fallback", async () => {
     const native = createTauriBackend()
     vi.mocked(invoke).mockResolvedValue(null)

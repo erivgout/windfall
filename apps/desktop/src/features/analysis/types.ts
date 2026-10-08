@@ -44,6 +44,9 @@ export type AnalysisStatus =
   | "failed"
   | "ready"
   | "consumed"
+export function isTerminalStatus(status: AnalysisStatus): boolean {
+  return status === "cancelled" || status === "failed" || status === "consumed"
+}
 export type AnalysisJob = {
   job: string
   ticket: string

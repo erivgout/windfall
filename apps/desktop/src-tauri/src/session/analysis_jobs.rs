@@ -2,9 +2,9 @@
 //! Gate -> recording -> State is the capture/apply order. IO, hashes, decoding,
 //! model/worker waits and retirement always run outside recording/State guards.
 use super::{Session, State};
+mod source_namespace;
 use crate::sync::lock;
 use std::collections::BTreeMap;
-use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -363,21 +363,15 @@ impl Binding {
                 .is_some_and(|audio| audio.identity() == self.stamp.source_identity)
     }
 }
-// Windows holds read-only/no-write/no-delete authority throughout the final
-// guarded check. Other platforms retain exact immutable loaded-source guards;
+// Windows retains root-to-leaf ordinary namespace and file authority throughout
+// the final guarded check. Reparse paths fail closed before publication.
+// Other platforms retain exact immutable loaded-source guards;
 // external filesystem writes after the off-State recheck are not interprocess
 // transactions there, and are explicitly outside the saved document mutation.
-fn source_file(path: &Path) -> Result<File, String> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        options.share_mode(1);
-    }
-    options.open(path).map_err(|e| error("io", e))
+fn source_file(path: &Path) -> Result<source_namespace::SourceFile, String> {
+    source_namespace::open(path)
 }
-fn file_bytes(file: &mut File, work: &mut native::Work) -> Result<Vec<u8>, String> {
+fn file_bytes(file: &mut impl Read, work: &mut native::Work) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     let mut chunk = [0; 16384];
     loop {
