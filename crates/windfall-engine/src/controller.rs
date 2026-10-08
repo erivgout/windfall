@@ -868,7 +868,8 @@ mod tests {
     fn r6_detached_precompiled_adoption(cancel: bool, revise_before_attach: bool) {
         let (mut project, pool, stats) = r6_fixture(cancel);
         let controller = Controller::new();
-        let prepared = Controller::prepare_project(&project, &pool);
+        let prepared = Controller::prepare_project(&project, &pool)
+            .expect("the detached fixture prepares successfully");
         stats.revision.store(1, Ordering::Relaxed);
         controller.set_prepared_project(&project, prepared);
         if revise_before_attach {
@@ -919,8 +920,11 @@ mod tests {
         for block in [7, 137, 1] {
             let before = stats.processes[0].load(Ordering::Relaxed);
             if block == 137 {
-                controller
-                    .set_prepared_project(&project, Controller::prepare_project(&project, &pool));
+                controller.set_prepared_project(
+                    &project,
+                    Controller::prepare_project(&project, &pool)
+                        .expect("the detached fixture prepares successfully"),
+                );
             } else {
                 controller.set_project(&project, &pool);
             }
@@ -998,7 +1002,11 @@ mod tests {
         assert!(resumed.iter().all(|sample| sample.abs() < 1e-6));
         assert_eq!(stats.prepared_revision[2].load(Ordering::Relaxed), 3);
         let before = stats.processes[2].load(Ordering::Relaxed);
-        controller.set_prepared_project(&project, Controller::prepare_project(&project, &pool));
+        controller.set_prepared_project(
+            &project,
+            Controller::prepare_project(&project, &pool)
+                .expect("the detached fixture prepares successfully"),
+        );
         let adopted = r6_audio(&mut processor, 1000, 1);
         assert!(adopted.iter().all(|sample| sample.abs() < 1e-6));
         assert!(stats.processes[2].load(Ordering::Relaxed) > before);
