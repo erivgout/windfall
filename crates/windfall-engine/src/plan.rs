@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicU8, AtomicU64, Ordering},
 };
 
 use windfall_core::{AudioBuffer, PPQ, TICKS_PER_STEP};
@@ -189,18 +189,31 @@ pub(crate) struct PlanTrack {
 /// Only progress is shared: this never grants access to a plugin owner.
 /// Unheard prepared slots need no departing definition; heard ones stay
 /// until their actual rack splice completes. References retire with plans.
-#[derive(Debug, Default)]
-pub(crate) struct EffectLife(AtomicU8);
+#[derive(Debug)]
+pub(crate) struct EffectLife {
+    progress: AtomicU8,
+    pub generation: u64,
+}
+
+impl Default for EffectLife {
+    fn default() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self {
+            progress: AtomicU8::new(0),
+            generation: NEXT.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
 
 impl EffectLife {
     pub fn heard(&self) -> bool {
-        self.0.load(Ordering::Acquire) == 1
+        self.progress.load(Ordering::Acquire) == 1
     }
     pub fn hear(&self) {
-        self.0.store(1, Ordering::Release);
+        self.progress.store(1, Ordering::Release);
     }
     pub fn finish(&self) {
-        self.0.store(2, Ordering::Release);
+        self.progress.store(2, Ordering::Release);
     }
 }
 
@@ -216,6 +229,9 @@ pub(crate) struct PlanEffect {
     /// [`Plan::keep_leaving`].
     pub leaving: bool,
     pub life: Arc<EffectLife>,
+    /// A restored id waits for this audible departure before its fresh
+    /// owner joins. Progress only; never a native-owner handle or lineage.
+    pub after: Option<Arc<EffectLife>>,
 }
 
 #[derive(Debug)]
@@ -321,6 +337,7 @@ impl Plan {
                 && (native.is_none() || same_factory)
             {
                 effect.life = before.life.clone();
+                effect.after = before.after.as_ref().filter(|life| life.heard()).cloned();
             }
         }
         for track in &mut self.tracks {
@@ -331,13 +348,27 @@ impl Plan {
             // ahead of it and is still in this chain.
             let mut at = 0;
             for effect in &previous.tracks[before].effects {
-                if let Some(kept) = track.effects.iter().position(|e| e.id == effect.id) {
-                    at = at.max(kept + 1);
+                if let Some(kept) = track
+                    .effects
+                    .iter()
+                    .position(|e| !e.leaving && e.id == effect.id)
+                {
+                    if effect.leaving && effect.life.heard() {
+                        // The restored id owns a fresh unit. Keep the heard
+                        // outgoing transfer ahead of it until its existing
+                        // splice finishes; repeated restores never restart it.
+                        track.effects[kept].after = Some(effect.life.clone());
+                        track.effects.insert(kept, effect.clone());
+                        at = at.max(kept + 2);
+                    } else {
+                        at = at.max(kept + 1);
+                    }
                 } else if self.effect_ids.get(effect.id.0).is_none() && effect.life.heard() {
                     track.effects.insert(
                         at,
                         PlanEffect {
                             leaving: true,
+                            after: None,
                             ..effect.clone()
                         },
                     );
@@ -859,6 +890,7 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
                     },
                     leaving: false,
                     life: Arc::new(EffectLife::default()),
+                    after: None,
                 })
                 .collect();
             PlanTrack {
@@ -1022,6 +1054,76 @@ mod tests {
     fn mixer_gains(tracks: Vec<MixerTrack>) -> Vec<f32> {
         let (tracks, _) = compile_mixer(&Mixer { tracks });
         tracks.iter().map(|track| track.gain).collect()
+    }
+
+    #[test]
+    fn repeated_restores_keep_one_outgoing_generation_and_one_active_slot_per_id() {
+        let mut project = Project::new("bounded restores");
+        let slots: Vec<_> = (0..MAX_EFFECT_SLOTS)
+            .map(|index| windfall_project::EffectSlot {
+                id: EffectId(index as u32 + 1),
+                params: windfall_project::EffectKind::StereoMatrix.default_params(),
+                enabled: true,
+                mix: 1.0,
+            })
+            .collect();
+        project.mixer.tracks[0].effects = slots.clone();
+        let pool = SamplePool::new();
+        let mut previous = compile(&project, &pool);
+        let generations: Vec<_> = previous.tracks[0]
+            .effects
+            .iter()
+            .map(|effect| {
+                effect.life.hear();
+                effect.life.generation
+            })
+            .collect();
+        for _ in 0..1000 {
+            project.mixer.tracks[0].effects.clear();
+            let mut removed = compile(&project, &pool);
+            removed.keep_leaving(&previous);
+            assert_eq!(removed.tracks[0].effects.len(), MAX_EFFECT_SLOTS);
+            assert!(
+                removed.tracks[0]
+                    .effects
+                    .iter()
+                    .all(|effect| effect.leaving && effect.after.is_none())
+            );
+            project.mixer.tracks[0].effects = slots.clone();
+            let mut restored = compile(&project, &pool);
+            restored.keep_leaving(&removed);
+            assert_eq!(restored.tracks[0].effects.len(), 2 * MAX_EFFECT_SLOTS);
+            for (index, pair) in restored.tracks[0]
+                .effects
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .enumerate()
+            {
+                assert!(pair[0].leaving && !pair[1].leaving);
+                assert_eq!(pair[0].life.generation, generations[index]);
+                assert!(Arc::ptr_eq(pair[1].after.as_ref().unwrap(), &pair[0].life));
+                let active = restored.effect_ids.get(pair[1].id.0).unwrap();
+                assert_eq!(restored.effect_places[active], (0, index * 2 + 1));
+            }
+            previous = restored;
+        }
+        for effect in previous.tracks[0]
+            .effects
+            .iter()
+            .filter(|effect| effect.leaving)
+        {
+            effect.life.finish();
+        }
+        let mut settled = compile(&project, &pool);
+        settled.keep_leaving(&previous);
+        assert_eq!(settled.tracks[0].effects.len(), MAX_EFFECT_SLOTS);
+        assert!(
+            settled.tracks[0]
+                .effects
+                .iter()
+                .all(|effect| !effect.leaving && effect.after.is_none())
+        );
     }
 
     #[test]
