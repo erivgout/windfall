@@ -36,7 +36,7 @@ export default function BrowserPanel() {
     <ContextActions items={BROWSER_MENU}>
       <div
         data-slot="browser-panel"
-        className="@container/browser flex h-full min-h-0 flex-col"
+        className="@container/browser flex h-full min-h-0 flex-col overflow-auto *:min-w-54"
         {...scope}
       >
         <BrowserHeader />
@@ -44,7 +44,14 @@ export default function BrowserPanel() {
         <Button variant="ghost" size="sm" onClick={() => openPluginManager()}>
           Browse plugins
         </Button>
-        <TreeView />
+        {/* Keep usable controls and a virtual window when zoom or a small panel
+            makes them larger than the panel. The outer panel scrolls both axes. */}
+        <div
+          data-slot="browser-tree-window"
+          className="flex min-h-32 flex-1 shrink-0 flex-col"
+        >
+          <TreeView />
+        </div>
         <LibraryMetadataEditor />
         <PreviewPane />
       </div>

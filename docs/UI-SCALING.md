@@ -60,7 +60,14 @@ audio display canvases. It sanitizes logical dimensions, caps each edge at
 8192 device pixels and each backing store at 16,777,216 pixels, including
 rounding and exact observer boxes. Extremely large canvases lower density
 instead of allocating an unbounded surface. All layers use the same policy
-and pass their actual density to their painters/renderers. ResizeObserver
+and pass their actual density to their painters/renderers.
+Each canvas's cap is independent: a short ruler can retain a higher density
+than a tall grid. Ruler/value painters derive `deviceTransform` from the shared
+logical viewport with their own `LayerSize.dpr`, never the grid's device
+transform. Logical alignment is retained within device-pixel snapping tolerance.
+The layer tracks logical size and density as well as backing dimensions, so
+an observer resize that leaves capped pixel dimensions unchanged still paints.
+ResizeObserver
 device boxes are accepted only when consistent with the effective density;
 otherwise logical size × density wins, using the existing fractional-DPR
 tolerance. Scale events, window resize and DPR media-query changes update
@@ -156,6 +163,94 @@ repeated successfully. Incorrect preview locators and before-unload prompts
 from isolated test edits were corrected/resolved before continuing. Browser
 drag trajectories are covered by the DOM input tests; the preview tool's
 locator-only drag API was not used to claim physical pointer-drag evidence.
+
+## R1 boundary repairs
+
+The independent review of `f418da57be12c4f9dd1f9f6971e431c2624c6b14`
+found two P2 boundaries. Both are repaired in this follow-up; the full parity
+row remains pending for native editor scaling and external verification.
+
+The browser owner acknowledged the `browser/index.tsx` reservation before
+edits. Only that feature file and a new feature layout test change. The virtual
+tree gets a nonshrinking 128-logical-pixel minimum window. Direct content
+sections get a 216-logical-pixel minimum width, and the outer panel scrolls
+both axes. Large panels keep the tree's existing flexible fill behavior;
+small panels can scroll to search, footer, metadata and preview controls.
+The tree's virtualization/scroller, library control limits, import/store/cache
+logic, search and preview implementations are untouched.
+
+Ordinary own-tab Settings clicks reproduced a **zero-height tree** before the
+repair at both 1920×1080 and 800×600, 200%, DPR 2. After repair, the final
+Settings-driven matrix measured the following `browser-scroll.clientHeight`
+values in logical pixels with Kick 02 selected and metadata visible:
+
+| Viewport | 75% | 100% | 125% | 200% |
+| --- | ---: | ---: | ---: | ---: |
+| 1920×1080 | 845 | 484 | 218 | 128 |
+| 800×600 | 139 | 128 | 128 | 128 |
+| 640×480 | 128 | 128 | 128 | 128 |
+
+Both overflow axes report `auto`. Search retains at least 100 logical pixels
+of input width in this matrix. Narrow panels display part of the wider content
+at a time; horizontal scrolling exposes the remainder. At 640×480/200%, actual
+click/type/save interactions reached Tags and saved the fixture tag `scaled-r1`.
+Keyboard Tab from the tree reached the Add folder footer. Scrolling both axes
+reached the preview's Add to playlist button, whose visible intersection passed
+the browser's `elementFromPoint` pointer test. At 800×600/200%, ordinary clicks
+opened Drums/Kicks, selected Kick 02, reached Save tags and played its preview;
+facts showed 0.55 s, 44.1 kHz and Mono. These checks did not invoke musical
+import actions. Restore 100% and selecting 200% again worked; navigation reload
+retained 200% and a 128-pixel tree. Project revision stayed 0, dirty stayed false,
+and history retained zero entries/cursor throughout the preference checks.
+
+`layer-scaling.test.tsx` mounts the actual Ruler and ValueLane on a real
+TimeGridView/session with WASM document commands. Recorded painter calls
+reproduced the erroneous marker at logical X **217.285** for the 4000×2000
+grid and **153.809** for the 5000×5000 grid, versus tick 3840's expected X
+**307.2**. Before repair, an observer-only width change 5000→5001 also failed
+to repaint a capped ruler whose backing dimensions remained equal.
+
+The eight layer tests now pass: square/nonsquare caps at 200% and DPR
+2/1.25/1.5, 125%/DPR 2, and uncapped 100%/DPR 1; actual rendered grid-note,
+ruler-end and value-cap positions agree with logical hits. Presses on the
+rendered value bar reach velocity 1 and 0 through the real update command.
+Dragging the rendered ruler marker changes pattern length from 16 to 32 steps
+and redraws it at logical X 614.4. Tests cover a bordered grid container,
+observer-only equal-backing resize, resize back to an uncapped view, application
+scale/DPR changes and fractional scrolling. They retain the 8192-edge/16M-pixel
+bounds. Layout and 2D rasterization are test doubles here: recorded real painter
+calls establish the source rendering/input contract, not hardware raster pixels.
+
+`layout-scaling.test.tsx` mounts the actual browser at 75/100/125/200%, checks
+the minimum-window/overflow DOM contract, then searches/selects a sample and
+saves metadata through real controls, with unchanged project/history identity.
+It does not claim jsdom has measured layout. Actual pixel-height and overflow
+evidence comes from the T3 preview above, in the same isolated port-5211 tab,
+HeadlessChrome 154.0.8037.92 / Windows NT 10.0 / DPR 2 on 2026-10-08 UTC.
+
+The focused regression run passed **11 files / 131 tests**. After the narrow
+horizontal-overflow improvement, the browser layout/tree/preview rerun passed
+**3 files / 50 tests**. Both runs used two workers maximum. Typecheck, ESLint,
+production build, changed-source formatting and `git diff --check` passed;
+the existing Vite large-chunk advisory remains. No full suite, Cargo build,
+native build or artifact regeneration was run.
+
+```powershell
+pnpm test src/features/browser/layout-scaling.test.tsx src/features/browser/browser-tree.test.tsx src/features/browser/browser-preview.test.tsx src/features/browser/library.test.tsx src/features/piano-roll/layer-scaling.test.tsx src/lib/ui-scale.test.tsx src/lib/canvas/scaling.test.ts src/lib/canvas/scaling-input.test.ts src/lib/canvas/time-grid-view.test.ts src/lib/canvas/renderer-parity.test.ts src/lib/canvas/renderer-webgl2.test.ts --maxWorkers=2
+pnpm test src/features/browser/layout-scaling.test.tsx src/features/browser/browser-tree.test.tsx src/features/browser/browser-preview.test.tsx --maxWorkers=2
+pnpm typecheck
+pnpm lint
+pnpm build
+git diff --check
+```
+
+The protected stamp editor/grid-input files are unchanged in this follow-up.
+The independent stamp-cancellation findings remain separately owned. Native
+third-party window content scaling still requires the runtime owner's API work.
+The physical/native-window, detached-window, WebGPU and scale-specific
+performance limits below remain. This round did not add ordinary preview
+playlist/automation editing or freehand-lasso evidence; their existing focused
+DOM/WASM checks must not be described as physical interaction proof.
 
 ## Integration boundaries and pending verification
 
