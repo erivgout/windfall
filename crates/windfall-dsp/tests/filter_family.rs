@@ -246,6 +246,169 @@ fn independent_impulse_references_cover_every_mode_and_filter_path() {
     }
 }
 
+fn check_sweep<E: Effect>(
+    mut effect: E,
+    mut left_reference: Reference,
+    mut right_reference: Reference,
+) {
+    let rate = 48_000.0;
+    let count = 48_000;
+    let mut phase = 0.0;
+    let mut left: Vec<f32> = (0..count)
+        .map(|n| {
+            let hz = 20.0 * (20_000.0_f64 / 20.0).powf(n as f64 / (count - 1) as f64);
+            phase += TAU * hz / rate;
+            phase.sin() as f32 * 0.01
+        })
+        .collect();
+    let mut right = noise(0x79251, count);
+    let expected_l: Vec<f64> = left
+        .iter()
+        .map(|&sample| left_reference.tick(sample))
+        .collect();
+    let expected_r: Vec<f64> = right
+        .iter()
+        .map(|&sample| right_reference.tick(sample))
+        .collect();
+    effect.process(&mut left, &mut right);
+    for (actual, expected) in left
+        .iter()
+        .zip(&expected_l)
+        .chain(right.iter().zip(&expected_r))
+    {
+        assert!(
+            (f64::from(*actual) - expected).abs() < 0.000_05,
+            "sweep/reference {actual}/{expected}"
+        );
+    }
+}
+
+#[test]
+fn logarithmic_sweeps_and_independent_stereo_noise_match_reference_histories() {
+    for mode in Mode::ALL {
+        let params = SelectableFilterParams {
+            mode,
+            frequency_hz: 1_000.0,
+            q: 4.0,
+            gain_db: 12.0,
+        };
+        let reference = response(mode, 1_000.0, 4.0, 12.0, 48_000.0);
+        check_sweep(
+            prepared::<SelectableFilter>(params, 48_000.0),
+            reference,
+            reference,
+        );
+    }
+    let reference = response(Mode::Lowpass, 1_000.0, 10.0, 0.0, 48_000.0);
+    check_sweep(
+        prepared::<FastLowpass>(
+            FastLowpassParams {
+                cutoff_hz: 1_000.0,
+                q: 10.0,
+            },
+            48_000.0,
+        ),
+        reference,
+        reference,
+    );
+    let reference = bass_response(150.0, 18.0, 48_000.0);
+    check_sweep(
+        prepared::<BassShelf>(
+            BassShelfParams {
+                frequency_hz: 150.0,
+                gain_db: 18.0,
+            },
+            48_000.0,
+        ),
+        reference,
+        reference,
+    );
+}
+
+fn tail_check<E: Effect>(mut effect: E) {
+    let (mut left, mut right) = ([1.0], [-0.5]);
+    effect.process(&mut left, &mut right);
+    let frames = effect.tail_samples();
+    assert!(frames > 0 && frames < 25_000_000, "tail {frames}");
+    let mut loudest = 0.0_f32;
+    let mut n = 0;
+    while n < frames + 512 {
+        let count = 127.min(frames + 512 - n);
+        let (mut l, mut r) = ([0.0; 127], [0.0; 127]);
+        effect.process(&mut l[..count], &mut r[..count]);
+        for i in 0..count {
+            assert!(l[i].is_finite() && r[i].is_finite());
+            if n + i >= frames {
+                loudest = loudest.max(l[i].abs()).max(r[i].abs());
+            }
+        }
+        n += count;
+    }
+    assert!(loudest < 1.0e-18, "residual after reported tail {loudest}");
+}
+
+#[test]
+fn reported_tails_cover_low_cutoff_high_resonance_and_nyquist_histories() {
+    for rate in [1.0_f32, 48_000.0, 384_000.0] {
+        for hz in [20.0, 20_000.0] {
+            tail_check(prepared::<FastLowpass>(
+                FastLowpassParams {
+                    cutoff_hz: hz,
+                    q: 10.0,
+                },
+                rate,
+            ));
+        }
+        for mode in [Mode::Lowpass, Mode::Peak, Mode::LowShelf, Mode::HighShelf] {
+            tail_check(prepared::<SelectableFilter>(
+                SelectableFilterParams {
+                    mode,
+                    frequency_hz: 20.0,
+                    q: 10.0,
+                    gain_db: 18.0,
+                },
+                rate,
+            ));
+        }
+        tail_check(prepared::<BassShelf>(
+            BassShelfParams {
+                frequency_hz: 40.0,
+                gain_db: 18.0,
+            },
+            rate,
+        ));
+    }
+}
+
+#[test]
+fn shelf_and_peak_zero_gain_settle_to_exact_unity_after_active_history() {
+    for mode in [Mode::LowShelf, Mode::Peak, Mode::HighShelf] {
+        let mut effect = prepared::<SelectableFilter>(
+            SelectableFilterParams {
+                mode,
+                frequency_hz: 20.0,
+                q: 10.0,
+                gain_db: 18.0,
+            },
+            48_000.0,
+        );
+        let (mut l, mut r) = (noise(11, 2000), noise(18, 2000));
+        effect.process(&mut l, &mut r);
+        effect.set_params(&SelectableFilterParams {
+            mode,
+            frequency_hz: 20_000.0,
+            q: 0.5,
+            gain_db: 0.0,
+        });
+        let input_l = noise(43, 2000);
+        let input_r = noise(17, 2000);
+        let (mut l, mut r) = (input_l.clone(), input_r.clone());
+        effect.process(&mut l, &mut r);
+        assert_eq!(l[239..], input_l[239..]);
+        assert_eq!(r[239..], input_r[239..]);
+    }
+}
+
 fn dft(samples: &[f32], hz: f64, rate: f64) -> f64 {
     let (mut real, mut imag) = (0.0, 0.0);
     for (n, &sample) in samples.iter().enumerate() {
@@ -804,11 +967,12 @@ fn benchmark<E: Effect + Default>(label: &str, params: E::Params, automate: bool
     }
     let elapsed = start.elapsed().as_secs_f64();
     println!(
-        "{label} automation={automate}: {:.2} M stereo frames/s, {:.3} us/128 block, {:.3}% single-core walltime at 48k; sizes {} bytes",
+        "{label} automation={automate}: {:.2} M stereo frames/s, {:.3} us/128 block, {:.3}% single-core walltime at 48k; size {} bytes; tail {} frames",
         iterations as f64 * 128.0 / elapsed / 1e6,
         elapsed * 1e6 / iterations as f64,
         elapsed / (iterations as f64 * 128.0 / 48_000.0) * 100.0,
-        std::mem::size_of::<E>()
+        std::mem::size_of::<E>(),
+        effect.tail_samples()
     );
 }
 
