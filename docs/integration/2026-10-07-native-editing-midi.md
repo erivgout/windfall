@@ -317,3 +317,31 @@ and both published release assets are unchanged. The `artoomreinhart` write
 invitation remains pending. Authenticated Git access through the existing GitHub
 CLI credential helper confirms remote main remains `c37ae0b9`; no source push or
 new release was made by this verification.
+
+The combined UI suite after sampler/artifact integration passed **2,347 tests
+across 154 files**, then passed ESLint and the production TypeScript/Vite build.
+Native workspace validation and independent fresh-binding comparison remain
+live. Independent stamp review closed the initial cancellation/preview cases
+but browser-reproduced pending-choice right-click and rejected-press pointer
+capture defects; the existing stamp owner is repairing both. Sampler review
+traced four P2 transaction gaps: imported source commit before preparation
+failure, no-op Apply discarding runtime recovery, history publication attaching
+different cached audio, and a one-directional clip source guard missing new
+attachments. Sampler and browser owners share the preparation helper/import
+seam with explicit file ownership; no completed sampler claim is made.
+
+Archive repair `d42c810e`, browser follow-up `24b241ff` and selected-note rhythm
+tools `959ed0c0` have clean source-only deliveries. The archive worker passed 52
+focused tests; browser passed 256 UI and 18 native tests; rhythm passed 21 native
+and 121 UI/real-WASM tests. Each also records relevant static/build checks in its
+feature document. These are worker results, not parent combined acceptance.
+Archive round two and rhythm round one independent reviews have started at
+those fixed commits. Root Rust source remains frozen until the current native
+job completes, so these deliveries are not yet merged here.
+
+A separate T3 owner is implementing persisted whole-application scaling through
+the common canvas/control coordinate contract. The parity requirement also
+includes native plugin windows, which remain required host work under the
+runtime owner's separate ownership. The row is in progress; no application-only
+completion substitute is recorded. Totals are 64 done, 50 in progress, 226 todo
+and two won't-do rows, retaining all 342 requirements.

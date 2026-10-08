@@ -11,8 +11,9 @@ Apply submits one shared Rust `TransformNotes` command through the ordinary
 document/engine dispatch path. All note changes and any necessary pattern
 extension are one undo entry. A transformation that changes nothing adds no
 history entry and preserves redo and dirty state. Existing notes retain their
-IDs; newly chopped segments receive fresh IDs and join the selection. Undo
-prunes missing selected IDs; redo does not automatically reselect those IDs.
+IDs as each tool describes; newly created pieces/hits receive fresh IDs and
+join the selection. Undo prunes missing selected IDs; redo does not automatically
+reselect those IDs.
 
 ## Tools and defaults
 
@@ -22,6 +23,10 @@ prunes missing selected IDs; redo does not automatically reselect those IDs.
 | Legato | End each selected onset/chord at the next distinct selected onset, extending or trimming lengths. The last selected chord keeps its lengths. |
 | Staccato | Multiply lengths by 50%, rounding to whole ticks, with a minimum of one tick. UI range 1–100%. |
 | Chop | Split on absolute pattern grid boundaries, defaulting to snap/240 ticks. Retain partial first/last segments and all pitch, velocity and pan values. The first piece keeps the original ID. |
+| Custom Chop | Repeat user-authored boundaries from Origin with optional per-step gate/velocity accents. Keep partial edges. |
+| Arpeggiate | Rewrite exact-onset chords into repeated ascending, descending or alternating hits, with rate/gate/octave/duration controls. |
+| Flam | Add a close grace hit explicitly before or after each original, with interval and relative velocity controls. |
+| Rhythm reshaper | Remove, add or shift selected notes in a repeating onset-cell phase, with origin/grid/period/offset controls. |
 | Glue | Union touching/overlapping selected notes only when pitch, velocity and pan are identical. Keep the earliest start's ID, breaking equal-start ties by lower ID. Incompatible or unselected notes remain separate. |
 | Strum | Group exactly simultaneous selected onsets, sort low-to-high pitch then ID, delay each successive note by 30 ticks, and reduce velocity by 5 percentage points per note. High-to-low reverses pitch order and retains the ID tie-break. Lengths are preserved. |
 | Flip time | Reflect starts/ends within the selection's earliest start and latest end. Lengths, keys, velocities and pans are preserved. |
@@ -33,6 +38,10 @@ Time uses 960 ticks per quarter note. All grids are integer tick counts from
 1 to 245,760. MIDI keys are 0–127, velocities 0–1, and pan −1–1. Transpose is
 an integer from −127 to 127 semitones. Strum spacing is 0–245,760 ticks and
 velocity step is −100–100 percentage points per note.
+
+See [PIANO-RHYTHM](PIANO-RHYTHM.md) for the exact rhythmic policies, examples,
+field validation, ID rules, edge behavior and repeat-Apply semantics of the four
+rhythm workflows. They use the same atomic selected-note command and guards.
 
 ## Original grooves and rounding
 
@@ -85,9 +94,11 @@ Implemented and checked within the assigned selected-note scope:
 `win-piano-articulate` has working legato/staccato length tools; its broader
 portamento phrasing remains dependent on the separate slide/portamento note
 model and engine feature. Keep that broader row in progress if portamento is
-required. Chop supports a uniform grid rather than user-authored slicing
-patterns. Scale levels affects velocity only. There is no scale/chord mapper,
-randomization, arpeggiator or preset import/export in this workflow.
+required. Chop now also supports bounded user-authored slicing patterns;
+Arpeggiate, Flam and Rhythm reshaper are described in PIANO-RHYTHM. Scale levels
+affects velocity only. Randomization and preset import/export remain outside
+this workflow. The separately reviewed scale/stamp workflow is described in
+[PIANO-SCALES](PIANO-SCALES.md).
 
 The parent owns parity matrix/README updates and shared generated artifacts.
 After merging, regenerate TypeScript with `scripts/gen-bindings.sh` and WASM

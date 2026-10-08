@@ -18,8 +18,8 @@ As of 2026-10-07. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 227 |
-| In progress | 49 |
+| Todo | 226 |
+| In progress | 50 |
 | Done | 64 |
 | Won't do | 2 |
 
@@ -32,12 +32,12 @@ As of 2026-10-07. Sources:
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 16 | 6 | 14 | 0 |
-| Workflow, MIDI and settings | 39 | 29 | 5 | 5 | 0 |
+| Workflow, MIDI and settings | 39 | 28 | 6 | 5 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 7 | 8 | 22 | 2 |
+| 1. Make a beat | 39 | 6 | 9 | 22 | 2 |
 | 2. Write a song | 99 | 48 | 21 | 30 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
@@ -107,7 +107,7 @@ As of 2026-10-07. Sources:
 | Piano roll: Select tool | Piano roll select tool | 2 | done |  |
 | Piano roll: Zoom tool | Piano roll zoom tool | 2 | todo |  |
 | Piano roll: Playback (scrub) tool | Piano roll scrub tool | 2 | todo |  |
-| Piano roll: Chord stamp | Chord stamp | 2 | in-progress | One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Combined focused tests, lint and build pass. Independent review reproduced pending-menu cancellation and outside-grid modifier-preview bugs; repairs are in progress. See docs/PIANO-SCALES.md. |
+| Piano roll: Chord stamp | Chord stamp | 2 | in-progress | One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Delayed blur/tool/Escape cancellation and idle outside-grid preview repairs passed combined tests and review. Review found pending-choice right-click and rejected-press pointer-capture cases; further repairs are in progress. See docs/PIANO-SCALES.md and docs/PIANO-STAMP-REPAIRS.md. |
 | Piano roll: preview keyboard and key labels | Preview keyboard | 2 | done |  |
 | Piano roll: event editor lane and note properties | Note property lane | 2 | in-progress | Velocity and pan lanes. Other note properties are not in the model yet. |
 | Piano roll: slide and portamento notes | Slide notes | 2 | todo |  |
@@ -393,7 +393,7 @@ As of 2026-10-07. Sources:
 | Metronome | Metronome | 1 | todo |  |
 | Typing keyboard to piano keyboard | Typing keyboard | 1 | todo |  |
 | Themes | Light and dark themes | 1 | done | Light and dark themes. |
-| Interface scaling | Interface scaling | 1 | todo |  |
+| Interface scaling | Interface scaling | 1 | in-progress | Whole-application scaling with persisted preferences and coherent canvas/control coordinates is being implemented in an isolated T3 task. Native third-party editor content scaling remains a required plugin-host integration; application-only browser checks will not complete this row. |
 | Hint bar | Hints | 1 | done |  |
 | Output meter and CPU/memory panels | Status meters | 1 | in-progress | Master meter and engine load. No memory readout. |
 | Undo and edit history | Undo history | 2 | done | The plan calls for linear undo with a visible history list. |

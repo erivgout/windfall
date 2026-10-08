@@ -652,7 +652,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Combined focused tests, lint and build pass. Independent review reproduced pending-menu cancellation and outside-grid modifier-preview bugs; repairs are in progress. See docs/PIANO-SCALES.md."
+      "notes": "One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Delayed blur/tool/Escape cancellation and idle outside-grid preview repairs passed combined tests and review. Review found pending-choice right-click and rejected-press pointer-capture cases; further repairs are in progress. See docs/PIANO-SCALES.md and docs/PIANO-STAMP-REPAIRS.md."
     },
     {
       "id": "win-piano-keyboard",
@@ -3721,10 +3721,10 @@
       "summary": "Scales the interface and plugin windows for high-resolution displays.",
       "windfall_name": "Interface scaling",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Whole-application scaling with persisted preferences and coherent canvas/control coordinates is being implemented in an isolated T3 task. Native third-party editor content scaling remains a required plugin-host integration; application-only browser checks will not complete this row."
     },
     {
       "id": "wf-hint-bar",

@@ -1,6 +1,6 @@
 import { create } from "zustand"
 
-import type { Note, NoteEdge, NoteTransform } from "@/bindings"
+import type { ChopStep, Note, NoteEdge, NoteTransform } from "@/bindings"
 import { useProjectStore } from "@/lib/store/project"
 import { onProjectReplaced } from "@/lib/store/replaced"
 
@@ -35,6 +35,30 @@ export const NOTE_TOOLS: {
     label: "Chop",
     description:
       "Split at grid lines from pattern tick zero. Keep any partial first and last pieces.",
+  },
+  {
+    value: "chopPattern",
+    label: "Custom Chop",
+    description:
+      "Split on your repeating tick boundaries, keeping partial edges. Each step can change gate and velocity.",
+  },
+  {
+    value: "arpeggiate",
+    label: "Arpeggiate",
+    description:
+      "Rewrite each exact-onset chord as repeated pitch-ordered hits. Every hit keeps its source voice's velocity and pan.",
+  },
+  {
+    value: "flam",
+    label: "Flam",
+    description:
+      "Add one short grace hit before or after every selected note. Original notes keep all their properties.",
+  },
+  {
+    value: "rhythmReshape",
+    label: "Rhythm reshaper",
+    description:
+      "Remove, copy or shift notes in a chosen repeating onset cell. Other selected cells and unselected notes stay put.",
   },
   {
     value: "glue",
@@ -72,6 +96,46 @@ export const NOTE_TOOLS: {
       "Multiply selected velocities. Results stay between zero and full velocity.",
   },
 ]
+
+/** Parse controls only; Rust owns every rhythmic calculation and output check. */
+export function parseChopSteps(
+  text: string,
+  period: number
+): ChopStep[] | null {
+  if (
+    text.length > 4096 ||
+    !Number.isInteger(period) ||
+    period < 1 ||
+    period > 245760
+  )
+    return null
+  const tokens = text.split(",")
+  if (tokens.length < 1 || tokens.length > 64) return null
+  const steps: ChopStep[] = []
+  for (const token of tokens) {
+    const fields = token.trim().split(":")
+    if (fields.length > 3 || fields.some((part) => part.trim() === ""))
+      return null
+    const tick = Number(fields[0])
+    const gate = fields[1] === undefined ? 1 : Number(fields[1]) / 100
+    const velocity = fields[2] === undefined ? 1 : Number(fields[2]) / 100
+    if (
+      !Number.isInteger(tick) ||
+      tick < 0 ||
+      tick >= period ||
+      !Number.isFinite(gate) ||
+      gate <= 0 ||
+      gate > 1 ||
+      !Number.isFinite(velocity) ||
+      velocity < 0 ||
+      velocity > 4 ||
+      (steps.length === 0 ? tick !== 0 : tick <= steps[steps.length - 1].tick)
+    )
+      return null
+    steps.push({ tick, gate, velocity })
+  }
+  return steps
+}
 
 export type ToolRequest = {
   tool: NoteTool

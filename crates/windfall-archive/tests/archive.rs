@@ -353,3 +353,31 @@ fn schema_missing_members_external_paths_crc_and_truncation_fail_closed() {
     fs::write(&source, damaged).unwrap();
     assert!(archive::extract(&source, &managed, Limits::default(), &mut keep_going).is_err());
 }
+
+#[test]
+fn ordinary_archive_comment_round_trips_through_the_validated_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let project = Project::new("Commented archive");
+    let json = file::to_json(&project).unwrap();
+    let mut bytes = zip(&[
+        (
+            "manifest.json",
+            br#"{"schema":1,"project":"project.windfall","audio":[]}"#,
+        ),
+        ("project.windfall", json.as_bytes()),
+    ]);
+    let comment = b"ordinary UTF-8 archive comment";
+    let end = bytes.len() - 22;
+    bytes[end + 20..end + 22].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(comment);
+    let source = root.path().join("commented.zip");
+    fs::write(&source, bytes).unwrap();
+    let extracted = archive::extract(
+        &source,
+        &root.path().join("managed"),
+        Limits::default(),
+        &mut keep_going,
+    )
+    .unwrap();
+    assert_eq!(extracted.project, project);
+}

@@ -1,4 +1,4 @@
-use super::{Rig, still_running};
+use super::{Rig, rms, still_running};
 use std::fs;
 use windfall_project::{Command, SettingsPatch, file};
 fn rename(rig: &Rig, name: &str) {
@@ -106,8 +106,17 @@ fn independent_saving_owners_race_atomic_publication_without_overwrite() {
         .map(|_| {
             let (project, base, barrier) = (project.clone(), base.clone(), barrier.clone());
             std::thread::spawn(move || {
-                barrier.wait();
-                crate::session::versions::write(&project, &played, &base).unwrap()
+                let (path, written, prepared_path) =
+                    crate::session::versions::write(&project, &played, &base, |_, target| {
+                        if target.file_name().unwrap() == "Same (001).windfall" {
+                            barrier.wait();
+                        }
+                        Ok(target.to_path_buf())
+                    })
+                    .unwrap();
+                assert_eq!(path, prepared_path);
+                assert_eq!(written, project);
+                path
             })
         })
         .collect();
@@ -179,4 +188,116 @@ fn unsaved_base_failed_write_and_carry_samples_use_ordinary_workflow() {
     );
     rig.session.project_open(&saved).unwrap();
     assert!(rig.has_audio(rig.project().samples.last().unwrap().id));
+}
+
+#[test]
+fn backup_shaped_numbered_destination_carries_relinks_and_reopens_audio() {
+    for concurrent_edit in [false, true] {
+        let rig = Rig::new();
+        let home = rig
+            .session
+            .project_save(Some(&rig.file("home/Song")))
+            .unwrap();
+        let source = rig.file("home/sounds/tone.wav");
+        fs::create_dir_all(std::path::Path::new(&source).parent().unwrap()).unwrap();
+        windfall_codec::write_wav(
+            &source,
+            &windfall_core::AudioBuffer::from_interleaved(48000, 2, vec![0.2; 960]),
+            windfall_codec::WavSampleFormat::Float32,
+        )
+        .unwrap();
+        let added = rig.session.add_channel_from_file(&source, None).unwrap();
+        let sample = windfall_project::SampleId(added.created[0]);
+        rig.session
+            .dispatch(
+                Command::ToggleStep {
+                    pattern: rig.pattern(),
+                    channel: windfall_project::ChannelId(added.created[1]),
+                    step: 0,
+                },
+                None,
+            )
+            .unwrap();
+        let audio = rig.session.state().pool.get(sample).unwrap().clone();
+        rig.session.project_save(None).unwrap();
+        let old = fs::read(&home).unwrap();
+        rename(&rig, "Backup source");
+        let backup = rig
+            .session
+            .write_backup("2026-10-06 18-12-00")
+            .unwrap()
+            .unwrap();
+        let old_backup = fs::read(&backup).unwrap();
+        rig.session
+            .project_open(&crate::paths::display(&backup))
+            .unwrap();
+        rename(&rig, "Captured");
+        let base = rig.file("away/Backup/Song 2026-10-06 18-13-05.windfall");
+        fs::create_dir_all(std::path::Path::new(&base).parent().unwrap()).unwrap();
+        fs::write(&base, b"old backup").unwrap();
+        let occupied = rig.file("away/Backup/Song 2026-10-06 18-13-05 (001).windfall");
+        fs::write(&occupied, b"older version").unwrap();
+        // Exercise relinking too: the final destination holds another sound.
+        let collision = rig.file("away/Backup/sounds/tone.wav");
+        fs::create_dir_all(std::path::Path::new(&collision).parent().unwrap()).unwrap();
+        fs::write(&collision, b"another sound").unwrap();
+        let held = rig.session.hold("save:write");
+        let work = rig
+            .session
+            .background(move |s| s.project_save_new_version(Some(&base)));
+        held.wait();
+        if concurrent_edit {
+            rename(&rig, "Concurrent");
+        }
+        let history = rig.session.document_snapshot().history;
+        held.release();
+        let saved = work.join().unwrap().unwrap();
+        assert!(saved.ends_with("Song 2026-10-06 18-13-05 (002).windfall"));
+        let final_root = file::sample_dir(std::path::Path::new(&saved)).unwrap();
+        assert_eq!(rig.session.state().sample_dir.as_ref(), Some(&final_root));
+        assert_eq!(final_root, rig.folder.path().join("away/Backup"));
+        let written = file::load(&saved).unwrap();
+        let expected_path = windfall_project::SamplePath::Project("sounds/tone (2).wav".into());
+        assert_eq!(written.sample(sample).unwrap().path, expected_path);
+        assert_eq!(rig.project().sample(sample).unwrap().path, expected_path);
+        assert_eq!(
+            fs::read(final_root.join("sounds/tone (2).wav")).unwrap(),
+            fs::read(&source).unwrap()
+        );
+        assert_eq!(fs::read(&home).unwrap(), old);
+        assert_eq!(fs::read(&backup).unwrap(), old_backup);
+        assert_eq!(fs::read(&occupied).unwrap(), b"older version");
+        assert_eq!(
+            fs::read(rig.file("away/Backup/Song 2026-10-06 18-13-05.windfall")).unwrap(),
+            b"old backup"
+        );
+        assert_eq!(fs::read(&collision).unwrap(), b"another sound");
+        let snapshot = rig.session.document_snapshot();
+        assert_eq!(snapshot.history, history);
+        assert_eq!(snapshot.dirty, concurrent_edit);
+        assert_eq!(written.settings.name, "Captured");
+        assert_eq!(
+            snapshot.project.settings.name,
+            if concurrent_edit {
+                "Concurrent"
+            } else {
+                "Captured"
+            }
+        );
+        assert!(rig.has_audio(sample));
+        assert!(rig.session.undo().is_some());
+        assert!(rig.session.redo().is_some());
+        assert_eq!(rig.project().sample(sample).unwrap().path, expected_path);
+        fs::remove_file(&source).unwrap();
+        let mut rig = rig.restart();
+        rig.session.project_open(&saved).unwrap();
+        assert!(rig.has_audio(sample));
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().samples(),
+            audio.samples()
+        );
+        assert_eq!(rig.session.state().sample_dir.as_ref(), Some(&final_root));
+        rig.session.transport_play().unwrap();
+        assert!(rms(&rig.run(4800)) > 0.0, "the reopened sampler must play");
+    }
 }

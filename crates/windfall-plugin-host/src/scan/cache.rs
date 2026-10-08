@@ -10,25 +10,23 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::{FileScan, ScanFailure, ScanRunner, ScannedPlugin, ScannerUnavailable, scan_file};
 use crate::descriptor::PluginFormat;
-use crate::paths::{PluginFile, stamped_file};
+use crate::paths::{PluginFile, PluginFileIdentity, plugin_file_identity};
 
 /// Raised when the stored shape changes. A file with another number is
 /// thrown away and everything is scanned again.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Entry {
     path: String,
-    /// The file's modification time in milliseconds since 1970.
-    modified_ms: u64,
-    size: u64,
+    identity: PluginFileIdentity,
     scan: FileScan,
 }
 
@@ -70,13 +68,8 @@ fn key(path: &Path) -> String {
 }
 
 /// The size and date that tell whether a plugin file has changed.
-fn stamp(path: &Path) -> Option<(u64, u64)> {
-    let metadata = std::fs::metadata(stamped_file(path)).ok()?;
-    let modified = metadata.modified().ok()?;
-    let since_epoch = modified
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO);
-    Some((since_epoch.as_millis() as u64, metadata.len()))
+fn stamp(path: &Path) -> Option<PluginFileIdentity> {
+    plugin_file_identity(path).ok()
 }
 
 impl PluginCatalog {
@@ -132,7 +125,7 @@ impl PluginCatalog {
         summary.removed = before - self.files.len();
 
         for file in files {
-            let Some((modified_ms, size)) = stamp(&file.path) else {
+            let Some(identity) = stamp(&file.path) else {
                 if self.files.remove(&key(&file.path)).is_some() {
                     summary.removed += 1;
                 }
@@ -142,7 +135,7 @@ impl PluginCatalog {
             let fresh = self
                 .files
                 .get(&path)
-                .is_some_and(|entry| entry.modified_ms == modified_ms && entry.size == size);
+                .is_some_and(|entry| entry.identity == identity);
             if fresh {
                 summary.reused += 1;
                 continue;
@@ -153,8 +146,7 @@ impl PluginCatalog {
                 path.clone(),
                 Entry {
                     path,
-                    modified_ms,
-                    size,
+                    identity,
                     scan,
                 },
             );
@@ -168,6 +160,11 @@ impl PluginCatalog {
         self.files
             .values()
             .map(|entry| (Path::new(&entry.path), &entry.scan))
+    }
+    /// The binary identity verified by this scan, rather than new metadata
+    /// read after scanning. Loading must still compare it with the current file.
+    pub fn identity(&self, path: &Path) -> Option<&PluginFileIdentity> {
+        self.files.get(&key(path)).map(|entry| &entry.identity)
     }
 
     /// The plugins that can be used, with the file each is in.

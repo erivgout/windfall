@@ -317,6 +317,58 @@ fn vst3_reset_and_saturated_release_keep_every_admitted_note_off() {
 }
 
 #[test]
+fn runtime_repair_vst3_ordinary_and_reserved_panics_release_all_channels() {
+    let path = common::plugin_file("vst3-panic-expansion", "fixture.vst3");
+    let module = windfall_plugin_host::PluginHost::windfall()
+        .load(&path)
+        .unwrap();
+    let mut instance = module.create(&module.descriptors()[2].id).unwrap();
+    let mut instrument = instance.prepare_instrument(RATE as f32, 64).unwrap();
+    let mut left = [0.0; 64];
+    let mut right = left;
+    for first in [0, 8] {
+        for channel in first..first + 8 {
+            for key in 0..128 {
+                assert!(instrument.processor().push_event(HostEvent::NoteOn {
+                    time: 0,
+                    key,
+                    channel,
+                    velocity: 1.0
+                }));
+            }
+        }
+        instrument.process(&mut left, &mut right);
+    }
+    assert!(left.iter().any(|value| value.abs() > 0.01));
+    let calls = allocator_calls(|| {
+        assert!(instrument.processor().all_notes_off(0));
+        for index in 0..windfall_plugin_host::EVENT_CAPACITY - 1 {
+            assert!(instrument.processor().push_event(HostEvent::NoteOn {
+                time: 0,
+                key: (index % 128) as u8,
+                channel: (index / 128) as u8,
+                velocity: 1.0
+            }));
+        }
+        assert!(instrument.all_notes_off());
+        instrument.process(&mut left, &mut right);
+        assert!(instrument.all_notes_off());
+        instrument.process(&mut left, &mut right);
+    });
+    assert_eq!(calls, 0);
+    assert_eq!(
+        instrument.health().dropped_events,
+        0,
+        "every admitted translated release must fit"
+    );
+    assert!(
+        left.iter().all(|value| *value == 0.0),
+        "native polyphonic notes survived both panics"
+    );
+    instance.release_instrument(instrument).unwrap();
+}
+
+#[test]
 fn vst3_effect_and_instrument_callbacks_allocate_and_free_nothing() {
     for index in [0, 2, 3] {
         let path = common::plugin_file("vst3", "fixture.vst3");

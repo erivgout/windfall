@@ -7,20 +7,18 @@ use std::path::{Path, PathBuf};
 use windfall_project::{Project, ProjectSession, file};
 
 const ATTEMPTS: u32 = 10_000;
-pub(super) fn write(
+/// Prepare each candidate before writing it, so relative audio uses the root
+/// of the filename actually published. A publication race retries from the
+/// captured project, returning only the successful candidate's preparation.
+pub(super) fn write<T>(
     project: &Project,
     session: &ProjectSession,
     base: &Path,
-) -> Result<PathBuf, String> {
+    mut prepare: impl FnMut(&mut Project, &Path) -> Result<T, String>,
+) -> Result<(PathBuf, Project, T), String> {
     project.check()?;
-    let json = file::to_json_with(project, Some(session)).map_err(|e| e.to_string())?;
     let parent = base.parent().ok_or("The project has no folder.")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    staged
-        .write_all(json.as_bytes())
-        .map_err(|e| e.to_string())?;
-    staged.as_file().sync_all().map_err(|e| e.to_string())?;
     let stem = base
         .file_stem()
         .and_then(|s| s.to_str())
@@ -32,13 +30,28 @@ pub(super) fn write(
             .filter(|n| *n <= 999_999)
             .ok_or("The project version number limit was reached.")?;
         let target = parent.join(format!("{stem} ({number:03}).windfall"));
+        // This avoids repeating slow preparation for already occupied names.
+        // persist_noclobber remains authoritative if a competitor arrives later.
+        if fs::symlink_metadata(&target).is_ok() {
+            continue;
+        }
+        let mut written = project.clone();
+        let prepared = prepare(&mut written, &target)?;
+        written.check()?;
+        let json = file::to_json_with(&written, Some(session)).map_err(|e| e.to_string())?;
+        let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+        staged
+            .write_all(json.as_bytes())
+            .map_err(|e| e.to_string())?;
+        staged.as_file().sync_all().map_err(|e| e.to_string())?;
         match staged.persist_noclobber(&target) {
-            Ok(_) => return Ok(target),
+            Ok(_) => return Ok((target, written, prepared)),
             Err(error)
                 if error.error.kind() == io::ErrorKind::AlreadyExists
                     || fs::symlink_metadata(&target).is_ok() =>
             {
-                staged = error.file
+                // The failed candidate's staging and preparation are dropped.
+                // Carrying is idempotent when the next candidate shares its root.
             }
             Err(error) => return Err(format!("Could not save the new version: {}", error.error)),
         }

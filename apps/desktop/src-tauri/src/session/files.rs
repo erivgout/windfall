@@ -234,7 +234,7 @@ impl Session {
         // never land on top of a newer one.
         let saving = lock(&self.inner.save);
         drop(self.recording_idle()?);
-        let (mut project, played, mut target, previous_dir, edits, generation, plugin_revision) = {
+        let (mut project, played, target, previous_dir, edits, generation, plugin_revision) = {
             let state = self.state();
             let target = match chosen {
                 Some(target) => target,
@@ -254,22 +254,28 @@ impl Session {
         self.pause("save:write");
         project = self.capture_plugins(project, plugin_revision)?;
 
-        // Where the file will look for its own samples when it is opened.
-        let target_dir = file::sample_dir(&target);
-        let moved = match (&previous_dir, &target_dir) {
-            (Some(from), Some(to)) => !paths::same(from, to),
-            (None, None) => false,
-            _ => true,
+        let prepare = |project: &mut Project, target: &Path| -> Result<_, String> {
+            // Where this exact filename will look for its samples on reopen.
+            // Adding a version suffix can change backup recognition.
+            let target_dir = file::sample_dir(target);
+            let moved = match (&previous_dir, &target_dir) {
+                (Some(from), Some(to)) => !paths::same(from, to),
+                (None, None) => false,
+                _ => true,
+            };
+            let renamed = match (&previous_dir, &target_dir) {
+                (Some(from), Some(to)) if moved => carry_samples(project, from, to)?,
+                _ => Vec::new(),
+            };
+            Ok((target_dir, moved, renamed))
         };
-        let mut renamed = match (&previous_dir, &target_dir) {
-            (Some(from), Some(to)) if moved => carry_samples(&mut project, from, to)?,
-            _ => Vec::new(),
-        };
-        if numbered {
-            target = super::versions::write(&project, &played, &target)?;
+        let (target, project, (target_dir, moved, mut renamed)) = if numbered {
+            super::versions::write(&project, &played, &target, prepare)?
         } else {
+            let prepared = prepare(&mut project, &target)?;
             file::save_with(&project, Some(&played), &target).map_err(sentence)?;
-        }
+            (target, project, prepared)
+        };
 
         let retry_samples = {
             let mut state = self.state();
