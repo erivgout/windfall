@@ -8,7 +8,7 @@ use windfall_ipc::{LibraryFileToken, LibraryMetadata, LibraryResults, LibrarySea
 use windfall_project::file::sample_path_for;
 use windfall_project::{
     ChannelId, ClipContent, ClipInit, Command, DispatchResult, MAX_MIXER_TRACKS, MAX_SONG_TICKS,
-    PlaylistTrackId, Project, SampleId, TrackId,
+    PlaylistTrackId, Project, SampleId, SamplePath, TrackId,
 };
 
 use super::samples::locate;
@@ -277,8 +277,7 @@ impl Session {
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
-        let _recording = self.recording_idle()?;
-        self.attach_audio_clip_import(import, place)
+        self.attach_audio_clip_import(import, place, false)
     }
     pub(super) fn attach_audio_clip_from_file(
         &self,
@@ -286,7 +285,8 @@ impl Session {
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
-        self.attach_audio_clip_import(import, place)
+        // recording_stop already owns recording exclusion through attachment.
+        self.attach_audio_clip_import(import, place, true)
     }
 
     pub fn browser_add_clip(
@@ -296,62 +296,33 @@ impl Session {
         token: LibraryFileToken,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_browser(path, token)?;
-        let _recording = self.recording_idle()?;
-        self.attach_audio_clip_import(import, place)
+        self.attach_audio_clip_import(import, place, false)
     }
     fn attach_audio_clip_import(
         &self,
         import: Import,
         place: ClipPlace,
+        recording_owned: bool,
     ) -> Result<DispatchResult, String> {
-        let Import {
-            browser,
-            file,
-            buffer,
-            generation,
-        } = import;
-        let _library = browser
-            .as_ref()
-            .map(|t| self.inner.library.guard(t))
-            .transpose()?;
-        let mut state = self.state();
-        if state.generation != generation {
-            return Err(format!(
-                "\"{}\" was not added, because another project was opened while it was loading.",
-                paths::name(&file)
+        let name = paths::stem(&import.file);
+        self.dispatch_import(import, recording_owned, |state, path, sample, buffer| {
+            let project = state.document.project();
+            let next_id = if project.sample(sample).is_some() {
+                project.next_id
+            } else {
+                project.next_id.saturating_add(1)
+            };
+            let mut commands = vec![Command::AddSample {
+                name: name.clone(),
+                path,
+            }];
+            commands.extend(audio_clip_commands(
+                project, sample, buffer, &name, place, next_id,
             ));
-        }
-        let sample_path = sample_path_for(&file, state.project_dir(), &self.inner.factory_dir);
-        let project = state.document.project();
-        let held = project.samples.iter().find(|held| held.path == sample_path);
-        let name = paths::stem(&file);
-        let (sample, next_id) = match held {
-            Some(held) => (held.id, project.next_id),
-            None => (SampleId(project.next_id), project.next_id.saturating_add(1)),
-        };
-        if browser.is_some() {
-            self.check_loaded_import(&state, sample, &buffer, &file)?;
-        }
-        let mut commands = vec![Command::AddSample {
-            name: name.clone(),
-            path: sample_path,
-        }];
-        commands.extend(audio_clip_commands(
-            project, sample, &buffer, &name, place, next_id,
-        ));
-        let batch = Command::Batch {
-            label: Some("Add audio clip".to_owned()),
-            commands,
-        };
-        let applied = state
-            .document
-            .dispatch(batch, None)
-            .map_err(|error| error.to_string())?;
-
-        hold_sample(&mut state, sample, buffer);
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish(&mut state, &applied.touched),
+            Command::Batch {
+                label: Some("Add audio clip".to_owned()),
+                commands,
+            }
         })
     }
 
@@ -444,61 +415,106 @@ impl Session {
         label: &str,
         then: impl FnOnce(SampleId) -> Command,
     ) -> Result<DispatchResult, String> {
-        let _recording = self.recording_idle()?;
-        let Import {
-            browser,
-            file,
-            buffer,
-            generation,
-        } = import;
-        let _library = browser
-            .as_ref()
-            .map(|t| self.inner.library.guard(t))
-            .transpose()?;
-        let file = file.as_path();
-        let mut state = self.state();
-        if state.generation != generation {
-            return Err(format!(
-                "\"{}\" was not added, because another project was opened while it was loading.",
-                paths::name(file)
-            ));
-        }
-        let sample_path = sample_path_for(file, state.project_dir(), &self.inner.factory_dir);
-        let project = state.document.project();
-        // A batch cannot pass an id from one command to the next, so the id
-        // the sample will get is worked out first: the one it already has,
-        // or the next the project hands out.
-        let sample = project
-            .samples
-            .iter()
-            .find(|held| held.path == sample_path)
-            .map_or(SampleId(project.next_id), |held| held.id);
-        if browser.is_some() {
-            self.check_loaded_import(&state, sample, &buffer, file)?;
-        }
-        let batch = Command::Batch {
+        let name = paths::stem(&import.file);
+        self.dispatch_import(import, false, |_, path, sample, _| Command::Batch {
             label: Some(label.to_owned()),
-            commands: vec![
-                Command::AddSample {
-                    name: paths::stem(file),
-                    path: sample_path,
-                },
-                then(sample),
-            ],
-        };
-        let applied = state
-            .document
-            .dispatch(batch, None)
-            .map_err(|error| error.to_string())?;
-
-        hold_sample(&mut state, sample, buffer);
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish(&mut state, &applied.touched),
+            commands: vec![Command::AddSample { name, path }, then(sample)],
         })
     }
 
-    /// Checked path deduplication may reuse only a settled source version.
+    /// File routes share one candidate-source preparation/commit contract.
+    /// No source, history or audible plan changes until preparation succeeds.
+    fn dispatch_import(
+        &self,
+        import: Import,
+        recording_owned: bool,
+        build: impl FnOnce(&State, SamplePath, SampleId, &AudioBuffer) -> Command,
+    ) -> Result<DispatchResult, String> {
+        let (ticket, sample, directory) = {
+            let _recording = (!recording_owned)
+                .then(|| self.recording_idle())
+                .transpose()?;
+            let _library = import
+                .browser
+                .as_ref()
+                .map(|token| self.inner.library.guard(token))
+                .transpose()?;
+            let state = self.state();
+            self.check_import_generation(&state, &import)?;
+            let project = state.document.project();
+            // Saving can make an External path eligible for Project storage.
+            // Keep the original asset/path when it resolves to this same file;
+            // otherwise AddSample would create a duplicate after save/reopen.
+            // locate/paths::same are lexical and do not touch the filesystem.
+            let held = project.samples.iter().find(|held| {
+                locate(held, state.project_dir(), &self.inner.factory_dir)
+                    .is_ok_and(|file| paths::same(&file, &import.file))
+            });
+            let (path, sample) = match held {
+                Some(held) => (held.path.clone(), held.id),
+                None => (
+                    sample_path_for(&import.file, state.project_dir(), &self.inner.factory_dir),
+                    SampleId(project.next_id),
+                ),
+            };
+            self.check_loaded_import(&state, sample, &import.buffer, &import.file)?;
+            // Reuse the exact held source, even after a separate same-version
+            // decode. Clip geometry and prepared banks use what will play.
+            let source = state.pool.get(sample).unwrap_or(&import.buffer);
+            let command = build(&state, path, sample, source);
+            let ticket =
+                self.sample_edit_ticket(&state, command, None, vec![(sample, source.clone())])?;
+            (ticket, sample, state.project_dir().map(Path::to_path_buf))
+        };
+        let prepared = ticket.prepare()?;
+        #[cfg(test)]
+        self.pause("import:prepared");
+        // Preparation may be slow. Repeat disk/root checks off State/audio
+        // locks, then recheck the in-memory guards at the atomic commit.
+        if let Some(token) = &import.browser {
+            self.inner
+                .library
+                .check_file(token, &paths::display(&import.file))?;
+        } else {
+            let current = self.inner.cache.decode(&import.file)?;
+            if !self.inner.cache.same_file_version(&import.buffer, &current) {
+                return Err(
+                    "The source file changed while audio was being prepared. Try the import again."
+                        .into(),
+                );
+            }
+        }
+        let _recording = (!recording_owned)
+            .then(|| self.recording_idle())
+            .transpose()?;
+        let _library = import
+            .browser
+            .as_ref()
+            .map(|token| self.inner.library.guard(token))
+            .transpose()?;
+        let mut state = self.state();
+        self.check_import_generation(&state, &import)?;
+        if state.project_dir() != directory.as_deref() {
+            return Err(
+                "The project folder changed while audio was being prepared. Try the import again."
+                    .into(),
+            );
+        }
+        self.check_loaded_import(&state, sample, &import.buffer, &import.file)?;
+        prepared.commit(&mut state)
+    }
+
+    fn check_import_generation(&self, state: &State, import: &Import) -> Result<(), String> {
+        if state.generation != import.generation {
+            return Err(format!(
+                "\"{}\" was not added, because another project was opened while it was loading.",
+                paths::name(&import.file)
+            ));
+        }
+        Ok(())
+    }
+
+    /// File path deduplication may reuse only a settled source version.
     /// Runs before dispatch, after recording -> library -> State guards; this
     /// cache comparison reads in-memory provenance and never touches the disk.
     fn check_loaded_import(
@@ -610,13 +626,4 @@ fn audio_clip_commands(
         }],
     });
     commands
-}
-
-/// Puts audio that is already decoded into the pool, so the edit that needs
-/// it plays at once instead of waiting for the file to be read again.
-fn hold_sample(state: &mut State, sample: SampleId, buffer: AudioBuffer) {
-    if state.document.project().sample(sample).is_some() && state.loaded.insert(sample) {
-        state.pool.insert(sample, buffer);
-        state.failed.remove(&sample);
-    }
 }
