@@ -1,6 +1,14 @@
 import { useEffect, type ReactNode } from "react"
 
 import type { AudioSettings, EngineStatus } from "@/bindings"
+import { Button } from "@/components/ui/button"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
+import { UI_SCALES, supportsUiScale } from "@/lib/ui-scale"
 import {
   Dialog,
   DialogContent,
@@ -210,6 +218,9 @@ const THEMES: Option<Theme>[] = [
 function AppearanceSection() {
   const theme = useUiStore((state) => state.theme)
   const setTheme = useUiStore((state) => state.setTheme)
+  const uiScale = useUiStore((state) => state.uiScale)
+  const setUiScale = useUiStore((state) => state.setUiScale)
+  const scalable = supportsUiScale()
   return (
     <Section title="Appearance">
       <Row label="Theme">
@@ -220,6 +231,26 @@ function AppearanceSection() {
           onChange={setTheme}
         />
       </Row>
+      <FieldGroup>
+        <Field>
+          <FieldLabel>Interface scale</FieldLabel>
+          <Choice
+            label="Interface scale"
+            value={scalable ? uiScale : 100}
+            disabled={!scalable}
+            options={UI_SCALES.map((value) => ({ value, label: `${value}%` }))}
+            onChange={setUiScale}
+          />
+          <FieldDescription>
+            {scalable
+              ? "Scales panels, controls, menus and plugin parameter editors. Native plugin windows are not scaled yet."
+              : "This webview does not support interface scaling. The interface uses 100%."}
+          </FieldDescription>
+          <Button variant="outline" size="sm" onClick={() => setUiScale(100)}>
+            Restore 100%
+          </Button>
+        </Field>
+      </FieldGroup>
     </Section>
   )
 }

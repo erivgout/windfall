@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
 import { clamp } from "@/lib/units"
@@ -123,7 +124,9 @@ export function Scrollbar({
   const along = (event: React.PointerEvent) => {
     const bounds = trackRef.current?.getBoundingClientRect()
     if (!bounds) return 0
-    return horizontal ? event.clientX - bounds.left : event.clientY - bounds.top
+    return horizontal
+      ? logicalDelta(event.clientX - bounds.left)
+      : logicalDelta(event.clientY - bounds.top)
   }
 
   return (

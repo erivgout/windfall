@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import {
   useEffect,
   useRef,
@@ -119,7 +120,11 @@ export function RackGrid() {
 
   function gapAt(event: DragEvent): number {
     const top = rows.current?.getBoundingClientRect().top ?? 0
-    return clamp(Math.round((event.clientY - top) / ROW_HEIGHT), 0, ids.length)
+    return clamp(
+      Math.round(logicalDelta(event.clientY - top) / ROW_HEIGHT),
+      0,
+      ids.length
+    )
   }
 
   /** Where the thing being dragged would land, or null when nowhere. */

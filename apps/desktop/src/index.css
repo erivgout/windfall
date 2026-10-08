@@ -265,3 +265,53 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Fixed portals use logical viewport limits under application zoom. */
+html[data-ui-scale]:not([data-ui-scale="100"]) [data-slot="dialog-content"],
+html[data-ui-scale]:not([data-ui-scale="100"])
+  [data-slot="alert-dialog-content"] {
+  width: min(100%, calc(var(--wf-viewport-width, 100vw) - 2rem));
+  max-height: calc(var(--wf-viewport-height, 100vh) - 2rem);
+  top: 50%;
+  translate: -50% -50%;
+  overflow: auto;
+}
+
+/* Dense window chrome remains reachable when zoom leaves little room. */
+html[data-view="app"]:not([data-ui-scale="100"])
+  #root
+  :is(header, [role="toolbar"]) {
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+/* Floating UI reports visual client coordinates. Keep its positioning shell
+   unzoomed; magnify only the content inside it. */
+html[data-ui-scale]:not([data-ui-scale="100"]) [data-slot="scaled-portal"] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  zoom: calc(1 / var(--wf-ui-scale));
+}
+html[data-ui-scale]:not([data-ui-scale="100"]) [data-slot$="-positioner"] {
+  pointer-events: auto;
+}
+html[data-ui-scale]:not([data-ui-scale="100"])
+  [data-slot$="-positioner"]
+  > [data-slot$="-content"] {
+  zoom: var(--wf-ui-scale);
+  --wf-anchor-width: calc(var(--anchor-width) / var(--wf-ui-scale));
+  max-height: calc(
+    var(--available-height, var(--wf-viewport-height)) / var(--wf-ui-scale)
+  );
+  max-width: calc(var(--available-width, 100vw) / var(--wf-ui-scale));
+}
+
+html[data-ui-scale]:not([data-ui-scale="100"]) [data-slot="command-list"] {
+  max-height: min(24rem, calc(var(--wf-viewport-height, 100vh) - 5rem));
+}
+
+html[data-ui-scale="100"] [data-slot="scaled-portal"] {
+  display: contents;
+}

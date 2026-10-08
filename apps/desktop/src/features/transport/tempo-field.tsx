@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import {
   useLayoutEffect,
   useRef,
@@ -113,7 +114,7 @@ export function TempoField() {
   function onPointerMove(event: PointerEvent<HTMLDivElement>) {
     const current = drag.current
     if (!current) return
-    const distance = current.startY - event.clientY
+    const distance = logicalDelta(current.startY - event.clientY)
     if (!current.moved) {
       if (Math.abs(distance) < DRAG_THRESHOLD_PX) return
       current.moved = true

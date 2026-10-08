@@ -1,3 +1,4 @@
+import { logicalWheel } from "@/lib/ui-scale"
 import { useSyncExternalStore } from "react"
 
 import {
@@ -86,11 +87,9 @@ export function wheelInput(
   event: WheelEvent,
   point: { x: number; y: number }
 ): WheelInput {
-  const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1
   return {
     ...point,
-    deltaX: event.deltaX * scale,
-    deltaY: event.deltaY * scale,
+    ...logicalWheel(event),
     mod: event.ctrlKey || event.metaKey,
     shift: event.shiftKey,
     alt: event.altKey,

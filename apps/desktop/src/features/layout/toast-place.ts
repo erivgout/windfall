@@ -1,3 +1,4 @@
+import { logicalDelta, uiScaleFactor } from "@/lib/ui-scale"
 import { useEffect, useState } from "react"
 
 import { useEffectsUi } from "@/features/mixer/effects-ui"
@@ -20,7 +21,7 @@ const GAP = 6
  * sit. A panel puts that attribute on what toasts must not cover.
  */
 export function toastInset(): number {
-  const row = window.innerHeight - STATUS_BAR - GAP
+  const row = window.innerHeight - (STATUS_BAR + GAP) * uiScaleFactor()
   let inset = 0
   for (const element of document.querySelectorAll("[data-toast-clear]")) {
     const box = element.getBoundingClientRect()
@@ -30,7 +31,7 @@ export function toastInset(): number {
     if (box.right < window.innerWidth - 2 * GAP) continue
     inset = Math.max(inset, window.innerWidth - box.left)
   }
-  return inset
+  return logicalDelta(inset)
 }
 
 /**
@@ -43,6 +44,7 @@ export function useToastOffset(): { bottom: number; right: number } {
   const mixer = useUiStore((state) => state.panels.mixer)
   const overlay = useUiStore((state) => state.centerOverlay)
   const layouts = useUiStore((state) => state.layouts)
+  const uiScale = useUiStore((state) => state.uiScale)
   const inspector = useEffectsUi((state) => state.inspectorOpen)
 
   useEffect(() => {
@@ -57,7 +59,7 @@ export function useToastOffset(): { bottom: number; right: number } {
       cancelAnimationFrame(frame)
       window.removeEventListener("resize", onResize)
     }
-  }, [mixer, overlay, layouts, inspector])
+  }, [mixer, overlay, layouts, inspector, uiScale])
 
   return { bottom: STATUS_BAR + GAP, right: inset + GAP }
 }

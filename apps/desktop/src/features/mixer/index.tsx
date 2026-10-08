@@ -1,3 +1,4 @@
+import { logicalWheel } from "@/lib/ui-scale"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useEffect, useRef, useState, type WheelEvent } from "react"
@@ -166,7 +167,10 @@ export default function MixerPanel() {
     if (!event.currentTarget.contains(target)) return
     const list = target.closest("ul")
     if (list && list.scrollHeight > list.clientHeight) return
-    event.currentTarget.scrollLeft += event.deltaY
+    event.currentTarget.scrollLeft += logicalWheel(event, {
+      line: 1,
+      page: 1,
+    }).deltaY
   }
 
   return (
