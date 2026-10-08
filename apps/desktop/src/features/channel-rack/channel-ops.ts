@@ -323,18 +323,22 @@ export async function initInstrument(id: ChannelId): Promise<void> {
 
 /** Asks for an audio file and adds a channel that plays it. */
 export async function addChannelFromPickedFile(): Promise<void> {
+  const generation = getProjectGeneration()
   const path = await attempt(backend.pickAudioFile(), "Could not choose a file")
-  if (path === null) return
+  if (path === null || generation !== getProjectGeneration()) return
   await addChannelFromFile(path)
-  useUiStore.getState().showCenterTab("channelRack")
+  if (generation === getProjectGeneration())
+    useUiStore.getState().showCenterTab("channelRack")
 }
 
 /** Asks for an audio file and makes the channel play it instead. */
 export async function replaceSampleFromPickedFile(
   id: ChannelId
 ): Promise<void> {
+  const generation = getProjectGeneration()
   const path = await attempt(backend.pickAudioFile(), "Could not choose a file")
-  if (path !== null) await replaceSampleFromFile(id, path)
+  if (path !== null && generation === getProjectGeneration())
+    await replaceSampleFromFile(id, path)
 }
 
 export async function replaceSampleFromFile(
@@ -342,13 +346,15 @@ export async function replaceSampleFromFile(
   path: string,
   browser?: LibraryFileToken
 ): Promise<void> {
+  const generation = getProjectGeneration()
   const result = await attempt(
     browser
       ? backend.setChannelSampleFromFile(id, path, browser)
       : backend.setChannelSampleFromFile(id, path),
     "Could not change the sample"
   )
-  if (result) receivePatch(result.patch)
+  if (result && generation === getProjectGeneration())
+    receivePatch(result.patch)
 }
 
 /** Points the channel at a sample that is already in the project. */

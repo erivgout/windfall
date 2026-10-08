@@ -211,6 +211,295 @@ fn routed_import(
     }
 }
 
+fn settled_missing_source_fixture(spectral: bool) -> (Rig, String, SampleId) {
+    use windfall_project::{ClipStretchQuality, SamplerKeyRange, SamplerPatch, SamplerStretch};
+    let rig = Rig::new();
+    let folder = rig.folder.path().join("Restored");
+    fs::create_dir(&folder).unwrap();
+    let path = paths::display(&folder.join("missing.wav"));
+    let added = rig
+        .session
+        .dispatch(
+            Command::AddSample {
+                name: "Missing assigned source".into(),
+                path: SamplePath::External(path.clone()),
+            },
+            None,
+        )
+        .unwrap();
+    let sample = SampleId(added.created[0]);
+    rig.wait_until_loaded_or_failed(sample); // Real failed decoder, no synthetic pool/failure edits.
+    rig.session
+        .dispatch(
+            Command::SetChannelSample {
+                id: rig.channel(0),
+                sample: Some(sample),
+            },
+            None,
+        )
+        .unwrap();
+    for channel in rig.project().channels.iter().skip(1) {
+        rig.session
+            .dispatch(Command::RemoveChannel { id: channel.id }, None)
+            .unwrap();
+    }
+    if spectral {
+        rig.session
+            .dispatch(
+                Command::UpdateSampler {
+                    id: rig.channel(0),
+                    patch: SamplerPatch {
+                        stretch: Some(SamplerStretch::Spectral {
+                            ratio: 1.0,
+                            quality: ClipStretchQuality::Fast,
+                            formants: false,
+                            range: SamplerKeyRange {
+                                first: 60,
+                                last: 60,
+                            },
+                        }),
+                        ..Default::default()
+                    },
+                },
+                None,
+            )
+            .unwrap();
+    }
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel: rig.channel(0),
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .browser_add_root(&paths::display(&folder))
+        .unwrap();
+    let saved = rig
+        .session
+        .project_save(Some(&rig.file("Saved/missing.windfall")))
+        .unwrap();
+    // Exercise the review's actual missing-source Open ordering as well as
+    // the initial background failure. Open settles the missing decoder before
+    // any restore/import; only the budget uses the existing test seam.
+    rig.session.project_new().unwrap();
+    rig.session.project_open(&saved).unwrap();
+    {
+        let mut state = rig.session.state();
+        let mut limited = windfall_engine::SamplePool::with_sampler_budget(256 * 1024);
+        for (id, audio) in state.pool.iter() {
+            limited.insert(id, audio.clone());
+        }
+        state.pool = limited;
+    }
+    rig.session
+        .dispatch(
+            Command::AddChannel {
+                name: Some("Preserve this redo branch".into()),
+                sample: None,
+                instrument: None,
+                index: None,
+                mixer_track: None,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.undo().unwrap();
+    let before = rig.session.document_snapshot();
+    assert!(before.history.cursor < before.history.entries.len() as u32);
+    let state = rig.session.state();
+    assert!(state.failed.contains(&sample));
+    assert!(!state.loaded.contains(&sample));
+    assert!(!state.loading.contains(&sample));
+    assert!(!state.pool.contains(sample));
+    drop(state);
+    (rig, path, sample)
+}
+
+fn same_path_missing_source_recovery(browser: bool, spectral: bool) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    let (mut rig, path, sample) = settled_missing_source_fixture(spectral);
+    write_wav(
+        &path,
+        &AudioBuffer::from_interleaved(48_000, 1, vec![0.75; 4800]),
+        WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let restored = rig
+        .session
+        .inner
+        .cache
+        .decode(std::path::Path::new(&path))
+        .unwrap();
+    let before = rig.session.document_snapshot();
+    let edits = rig.session.state().edits;
+    let (pool, mut loaded, loading, mut failed) = {
+        let state = rig.session.state();
+        (
+            state.pool.clone(),
+            state.loaded.clone(),
+            state.loading.clone(),
+            state.failed.clone(),
+        )
+    };
+    routed_import(&rig, &path, browser, "replacement").unwrap();
+    assert_eq!(
+        rig.session.document_snapshot(),
+        before,
+        "recovery must preserve revision/dirty/document/history/redo"
+    );
+    {
+        let state = rig.session.state();
+        let attached = state.pool.get(sample);
+        assert!(
+            attached.is_some(),
+            "{browser}/{spectral}: identical replacement returned success but the settled failed source is still absent"
+        );
+        assert_eq!(attached.unwrap().identity(), restored.identity());
+        assert_eq!(state.pool.len(), pool.len() + 1);
+        for (id, audio) in pool.iter() {
+            assert_eq!(state.pool.get(id).unwrap().identity(), audio.identity());
+        }
+        loaded.insert(sample);
+        failed.remove(&sample);
+        assert_eq!(state.loaded, loaded);
+        assert_eq!(state.loading, loading);
+        assert_eq!(state.failed, failed);
+        assert_eq!(state.edits, edits);
+        assert!(!state.pool.needs_sampler_preparation(&before.project));
+    }
+    assert!(
+        rig.session
+            .controller()
+            .sampler_key_supported(rig.channel(0), 60)
+    );
+    assert_eq!(
+        rig.session
+            .controller()
+            .sampler_key_supported(rig.channel(0), 59),
+        !spectral
+    );
+    rig.run(960);
+    rig.session.controller().note_on(rig.channel(0), 60, 1.0);
+    assert!(
+        rig.run(6000).iter().any(|value| value.abs() > 0.01),
+        "restored source must reach the runtime plan"
+    );
+    let export_path = rig.file("restored.wav");
+    rig.session
+        .export_audio(windfall_ipc::ExportOptions {
+            path: export_path.clone(),
+            mode: windfall_ipc::PlayMode::Pattern,
+            sample_rate: super::SAMPLE_RATE,
+            tail_secs: 0.0,
+            auto_tail: false,
+            bit_depth: windfall_ipc::BitDepth::Float32,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rig.events.wait_for_export().error.is_none());
+    let exported = windfall_codec::decode_file(&export_path).unwrap();
+    rig.session.transport_seek(0.0);
+    rig.session.transport_play().unwrap();
+    let played = rig.run(exported.frames());
+    rig.session.transport_stop();
+    rig.run(960);
+    assert!(played.iter().any(|value| value.abs() > 0.01));
+    assert_eq!(played.len(), exported.samples().len());
+    let mismatch = played
+        .iter()
+        .zip(exported.samples())
+        .enumerate()
+        .find(|(_, (played, exported))| played.to_bits() != exported.to_bits());
+    assert!(
+        mismatch.is_none(),
+        "restored playback/export differ: {mismatch:?}"
+    );
+    // Once held, another identical replacement must remain a genuine no-op.
+    routed_import(&rig, &path, browser, "replacement").unwrap();
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert_eq!(
+        rig.session.state().pool.get(sample).unwrap().identity(),
+        restored.identity()
+    );
+}
+
+#[test]
+fn ordinary_same_path_missing_spectral_source_recovers_without_musical_edit() {
+    same_path_missing_source_recovery(false, true);
+}
+#[test]
+fn checked_same_path_missing_spectral_source_recovers_without_musical_edit() {
+    same_path_missing_source_recovery(true, true);
+}
+#[test]
+fn ordinary_same_path_missing_tape_source_recovers_without_musical_edit() {
+    same_path_missing_source_recovery(false, false);
+}
+#[test]
+fn checked_same_path_missing_tape_source_recovers_without_musical_edit() {
+    same_path_missing_source_recovery(true, false);
+}
+
+fn same_path_missing_source_budget_refusal(browser: bool) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    let (mut rig, path, sample) = settled_missing_source_fixture(true);
+    write_wav(
+        &path,
+        &AudioBuffer::from_interleaved(48_000, 2, vec![0.75; 48_000 * 2]),
+        WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let before = rig.session.document_snapshot();
+    let edits = rig.session.state().edits;
+    let (pool, loaded, loading, failed) = {
+        let state = rig.session.state();
+        (
+            state.pool.clone(),
+            state.loaded.clone(),
+            state.loading.clone(),
+            state.failed.clone(),
+        )
+    };
+    let result = routed_import(&rig, &path, browser, "replacement");
+    assert!(
+        result.is_err(),
+        "{browser}: over-budget identical missing-source replacement incorrectly returned success"
+    );
+    assert!(result.unwrap_err().contains("budget"));
+    assert_eq!(rig.session.document_snapshot(), before);
+    {
+        let state = rig.session.state();
+        assert!(state.pool.same_sources(&pool));
+        assert_eq!(
+            state.pool.sampler_retained_bytes(),
+            pool.sampler_retained_bytes()
+        );
+        assert!(!state.pool.contains(sample));
+        assert_eq!(state.loaded, loaded);
+        assert_eq!(state.loading, loading);
+        assert_eq!(state.failed, failed);
+        assert_eq!(state.edits, edits);
+    }
+    rig.run(960);
+    rig.session.controller().note_on(rig.channel(0), 60, 1.0);
+    assert!(rig.run(6000).iter().all(|value| *value == 0.0));
+}
+
+#[test]
+fn ordinary_same_path_missing_source_budget_refusal_is_atomic() {
+    same_path_missing_source_budget_refusal(false);
+}
+#[test]
+fn checked_same_path_missing_source_budget_refusal_is_atomic() {
+    same_path_missing_source_budget_refusal(true);
+}
+
 fn successful_file_sampler_replacement(browser: bool) {
     use windfall_codec::{WavSampleFormat, write_wav};
     use windfall_core::AudioBuffer;
@@ -826,6 +1115,103 @@ fn unchanged_file_imports_deduplicate_across_save_after_decoded_cache_eviction()
             assert_eq!(current, before);
         }
     }
+}
+
+#[cfg(windows)]
+fn unchanged_case_alias_import(browser: bool, destination: &str) {
+    use windfall_codec::{WavSampleFormat, write_wav};
+    use windfall_core::AudioBuffer;
+    for rename in [false, true] {
+        let rig = Rig::new();
+        let folder = rig.folder.path().join("CaseSource");
+        fs::create_dir(&folder).unwrap();
+        let file = folder.join("Tone.wav");
+        let alias = folder.join("tOnE.WAV");
+        let write = |file: &std::path::Path, frames, level| {
+            write_wav(
+                file,
+                &AudioBuffer::from_interleaved(48_000, 1, vec![level; frames]),
+                WavSampleFormat::Float32,
+            )
+            .unwrap();
+        };
+        write(&file, 480, 0.25);
+        rig.session
+            .browser_add_root(&paths::display(&folder))
+            .unwrap();
+        let first = rig
+            .session
+            .add_channel_from_file(&paths::display(&file), None)
+            .unwrap();
+        let sample = SampleId(first.created[0]);
+        let original = rig.session.state().pool.get(sample).unwrap().identity();
+        for i in 0..65 {
+            let other = folder.join(format!("evict-{i}.wav"));
+            write(&other, 8, 0.1);
+            rig.session.inner.cache.decode(&other).unwrap();
+        }
+        assert!(rig.session.inner.cache.peek(&file).is_none());
+        if rename {
+            fs::rename(&file, &alias).unwrap();
+        }
+        rig.session.library_refresh();
+        let path = paths::display(&alias);
+        let before = rig.project();
+        let result = routed_import(&rig, &path, browser, destination);
+        assert!(
+            result.is_ok(),
+            "{browser}/{destination}/rename={rename}: unchanged Windows alias refused: {result:?}"
+        );
+        assert_eq!(rig.project().samples.len(), before.samples.len());
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().identity(),
+            original
+        );
+        rig.session.undo().unwrap();
+        let mut undone = rig.project();
+        undone.next_id = before.next_id;
+        assert_eq!(undone, before);
+        // Casing equivalence must not weaken genuine source-version checks.
+        write(&alias, 960, 0.75);
+        rig.session.library_refresh();
+        let before = rig.session.document_snapshot();
+        assert!(routed_import(&rig, &path, browser, destination).is_err());
+        assert_eq!(rig.session.document_snapshot(), before);
+        let state = rig.session.state();
+        assert_eq!(state.pool.get(sample).unwrap().identity(), original);
+        assert_eq!(state.pool.get(sample).unwrap().frames(), 480);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn ordinary_case_alias_rack_preserves_loaded_version() {
+    unchanged_case_alias_import(false, "rack");
+}
+#[cfg(windows)]
+#[test]
+fn checked_case_alias_rack_preserves_loaded_version() {
+    unchanged_case_alias_import(true, "rack");
+}
+#[cfg(windows)]
+#[test]
+fn ordinary_case_alias_playlist_preserves_loaded_version() {
+    unchanged_case_alias_import(false, "playlist");
+}
+#[cfg(windows)]
+#[test]
+fn checked_case_alias_playlist_preserves_loaded_version() {
+    unchanged_case_alias_import(true, "playlist");
+}
+#[cfg(windows)]
+#[test]
+fn ordinary_case_alias_replacement_preserves_loaded_version() {
+    unchanged_case_alias_import(false, "replacement");
+}
+#[cfg(windows)]
+#[test]
+fn checked_case_alias_replacement_preserves_loaded_version() {
+    unchanged_case_alias_import(true, "replacement");
 }
 
 #[test]
