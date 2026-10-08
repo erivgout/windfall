@@ -1,8 +1,9 @@
 # Fixed-source review rounds, 2026-10-08
 
 These reports keep standards and specification findings separate. They are
-independent reviews of source not yet integrated into root. Owners received
-all findings and their full prior briefs; the full project remains active.
+independent reviews of fixed source before root integration; the status after
+each round records subsequent composition. Owners received all findings and
+their full prior briefs; the full project remains active.
 
 # Timeline R3
 
@@ -316,3 +317,109 @@ forwarding and a versioned 14-word ABI3 transport codec with verified slot
 layout. Neither may edit M1's central registration paths. Earlier guarded
 cancellation and typed identity closures are retained; the 28 independent
 passes do not waive the bar-origin finding. No timeline source is integrated.
+
+# Delay family E3 R2
+
+Fixed source: `42d58df48e499a9fc4c3997f0382310976bc4415`. Both reviewers received the original brief,
+all earlier findings, responses and remaining objections.
+
+## Standards
+
+Standards R2 review of `caeef779…42d58df` and incremental `6326f883…42d58df`: **no documented-standard violations found; one unchanged P3 heuristic remains.**
+
+- **Prior P2 preparation finding resolved.** [Roadmap §3](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-delay-family-e3/docs/IMPLEMENTATION-ROADMAP.md:73) requires observable overflow/failure behavior. [History staging](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-delay-family-e3/crates/windfall-dsp/src/echo_bank/support.rs:103) now checks capacity and budgets, reserves fallibly, and completes every history before either processor mutates live state. Refusal preserves audio state and latches a copyable typed status, including through legacy `Effect::prepare`. Staged and replaced histories retire on the calling control thread.
+
+- **P3 — Possible Mysterious Name / Primitive Obsession; judgement only.** [echo_bank.rs:232](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-delay-family-e3/crates/windfall-dsp/src/echo_bank.rs:232) still expresses feedback as `back[side] * c[3] * global_fb * c[13]`. Processing, readiness and tail queries depend on the positional `Ramps<14>` layout. Named indices or a named snapshot would clarify those relationships. Existing filter processors use positional controls; this remains a nonblocking suggestion, not a documented-rule breach.
+
+Ownership remains intact, with only the two authorized `lib.rs` declarations. Source inspection found no callback allocation/free/lock/wait/IO violation.
+
+I independently executed **two provenance-checked cached release cases**, sequentially and single-threaded: signed-descriptor/JSON/audio regression and parameter/default contracts. Both passed; the signed-audio allocator guard observed zero calls. Preparation fault-injection tests were inspected, not executed. The owner’s 132-library/26-release runs, Clippy, formatting and earlier CPU measurements were not rerun. Diff checks passed; the worktree remains clean. No edits or builds occurred.
+
+This review does not establish host admission, registry/editor acceptance or full E3 parity.
+
+## Spec
+
+**Spec review: no new findings.** Reviewed the full `caeef779…42d58df4` diff and incremental `6326f883…42d58df4` repair.
+
+Both prior P2 findings are resolved:
+
+- **Recoverable preparation:** [staging and reservation](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-delay-family-e3/crates/windfall-dsp/src/echo_bank/support.rs:103) use checked budgets and fallible allocation before publishing replacement histories. Refusal preserves live audio state and latches typed status, including through legacy `Effect::prepare`.
+- **Signed descriptors:** all output/send coefficients now use [`None`](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-delay-family-e3/crates/windfall-dsp/src/echo_bank/params.rs:150), preserving indices, ranges, defaults and JSON.
+
+The declared counts and chain controls agree with the primary [Delay Bank](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/Fruity%20Delay%20Bank.htm) and [Multiband Delay](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/Multiband%20Delay.htm) references. Deferred controls remain explicitly documented.
+
+I independently ran **five provenance-checked cached release cases**, sequentially and single-threaded: parameter contracts, signed metadata/audio, block/no-op/reset invariance, serial/parallel routing, and sixteen-band impulse/control isolation. All passed; applicable callback allocator guards reported zero calls.
+
+I inspected the private reservation-failure/rollback tests but did not execute them. The owner’s 132-library-test and full 26-release-test results, Clippy and formatting remain owner-reported. CPU measurements remain attributed to `6326f883`.
+
+No edits or builds occurred; HEAD remains fixed and the worktree clean. Host admission, saturating tail aggregation, registry/project/engine integration, drawn editors and remaining E3 work remain open. This establishes no full parity acceptance.
+
+Foundation review is accepted with no documented-standard or specification defect. The unchanged positional-control heuristic is nonblocking. Source remains outside root pending composition and fresh tests; host admission, saturating tails, registry/project/engine integration, drawn editors and the remaining E3 processors stay open.
+
+# Release foundation R2
+
+Fixed source: `477209ec1d3c5f2d7efe5e7147b5551a4bfbe0c1`. Both reviewers received the original brief,
+all earlier findings, responses and remaining objections.
+
+## Standards
+
+Standards review of `f7102e7c…477209ec`, including incremental `67191069…477209ec`: **0 documented-standard breaches; 1 nonblocking judgment-call smell.** Both earlier duplication findings are resolved.
+
+Applicable documented sources were [ARCHITECTURE.md](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-release-engineering-r1/docs/ARCHITECTURE.md) and [roadmap R1](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-release-engineering-r1/docs/IMPLEMENTATION-ROADMAP.md:327). No local AGENTS or dedicated standards file was found.
+
+- **Possible Duplicated Code** — [action-provenance.mjs:287](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-release-engineering-r1/scripts/release/action-provenance.mjs:287) and [line 437](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-release-engineering-r1/scripts/release/action-provenance.mjs:437) repeat the workflow action extraction—`Object.values(...jobs).flatMap(...).filter(...).map(...)`—and identical audited-pin assertion. Changes to this normalization require synchronized edits. Extract a private helper used by collection and checking. This is a smell-baseline heuristic, not a documented-rule violation.
+
+Executed: **8/8 offline provenance tests**, syntax checks for all ten Node modules, workflow contract check and local provenance check. The Cargo-dependent release suite and network reproduction were not rerun. The unresolved toolchain license closure remains explicit.
+
+Worktree remains clean at the fixed commit; no edits, builds or publication actions occurred.
+
+## Spec
+
+SPEC review of `f7102e7c…477209ec`, including incremental `67191069…477209ec`: **0 new findings. Prior P1/P2 are resolved by the fixed implementation.**
+
+- **P1:** The requirement “Future bridge/model resources must be an explicit validated packaging contract” is enforced by [source.mjs:225](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-release-engineering-r1/scripts/release/source.mjs:225). A Cargo-free temporary fixture rejected all 15 platform filenames and both alternate base filenames, while preserving the valid base inventory. These match the [pinned Tauri filename/merge contract](https://github.com/tauri-apps/tauri/blob/30da1fd6e17de6107ecc850c95dfb16b5729f2dd/crates/tauri-utils/src/config/parse.rs).
+
+- **P2:** “Untrusted metadata evidence cannot bootstrap ownproof” is now enforced: [dependencies.mjs:457](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-release-engineering-r1/scripts/release/dependencies.mjs:457) reconstructs and compares declarations, notices, edges, features, kinds and predicates. The offline collector also compares supplied Cargo metadata with a fresh locked read. This conclusion is from source tracing; Cargo-dependent regressions were not rerun under this review’s prohibition.
+
+The unresolved `buffers@0.1.1` closure remains explicit and publication remains ineligible. Fresh primary-source reads reproduced four pinned upload-action files, tarball integrity and both distribution matches; the [maintainer’s MIT comment](https://github.com/actions/upload-artifact/blob/cf430e030ddbb5b0abf93d22962f4752f3646cd9/.licensed.yml) is not promoted to a verified grant.
+
+Executed: **11 selected tests passed**, the resource probe, actual lock readers (**538 Cargo / 589 npm entries**), workflow contract and offline evidence checks. The full 56-fixture suite was not rerun. Worktree remains clean at `477209ec`; no edits, Cargo, builds, dispatch or publication occurred. Native/signing/install/updater gates remain open.
+
+Source review is accepted with no documented-standard or specification defect; the action-extraction duplication heuristic is nonblocking. Source remains outside root. The historical buffers@0.1.1 license closure is unresolved and publication stays ineligible. Owner evidence is 55/56 in one full run plus the corrected fixture passing separately, not one fresh full 56-test pass. Native bundles, installation, signing and updater acceptance are unverified.
+
+# Rack note preview R2
+
+Fixed source: `fd62eb055810c31ab7f54d13bd831a48c3b77293`. Both reviewers received the original brief,
+all earlier findings, responses and remaining objections.
+
+## Standards
+
+**Standards: clean.** No actionable documented-standard violations or additional smell findings in fixed `fd62eb055810c31ab7f54d13bd831a48c3b77293`. Reviewed both `f9a1d2ee...fd62eb0` and `ea2f36dd...fd62eb0`; the log contains the feature commit and its repair.
+
+Both prior P2 findings are closed by source trace:
+
+- **Registry and shortcuts:** [actions.ts:56](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/actions.ts:56) registers scoped view commands with canonical titles, shortcuts, checked state and disabled reasons. Menus reuse that metadata; the open alias reveals the existing piano action’s configured key. This satisfies [ARCHITECTURE.md:430](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/docs/ARCHITECTURE.md:430): “Every user action is a named entry in the action registry.”
+- **Thumbnail context menu:** [note-preview.tsx:219](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/note-preview.tsx:219) wraps the actual thumbnail in `ContextActions`, deriving entries from the registry and retaining captured-target guards. This follows [ARCHITECTURE.md:440](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/docs/ARCHITECTURE.md:440): “They nest, and the innermost one opens.”
+
+The optional Primitive Obsession concern is resolved: callers pass typed lane identity, and [rack-store.ts:77](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/rack-store.ts:77) keeps store-key encoding private.
+
+**My execution:** the two preview test files passed **47/47**, using `--maxWorkers=2 --no-cache --configLoader=runner`. UI tests used the assigned actual WASM; geometry tests used pure fixtures. `check-sim`, hash/size, 174-binding inventory and both diff checks passed. Artifacts are unchanged and the worktree remains clean.
+
+The owner’s 201-test run, static checks and browser measurements remain owner evidence. Native desktop/window-focus smoke and parent composition/acceptance remain open. No spec-axis verdict or parity completion is asserted.
+
+## Spec
+
+**Clean on the spec axis:** no actionable defect found in fixed `fd62eb055810c31ab7f54d13bd831a48c3b77293`. Reviewed both `f9a1d2ee...fd62eb05` and incremental `ea2f36dd...fd62eb05`; the repair commit directly follows immutable `ea2f36dd`.
+
+The implementation satisfies “Shows a thumbnail of a channel’s piano roll notes in place of its step buttons.” [Geometry](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/note-preview-geometry.ts:56) preserves timing/duration/pitch, clips finite coordinates and bounds dense rendering. Explicit Steps retains the original detail-dot assertions and editing behavior.
+
+Both R1 repairs meet their granted behavioral contract:
+
+- [Registered view actions](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/actions.ts:56) provide canonical titles, shortcuts, checked state and disabled reasons. Palette/keymap execution targets the current selected lane.
+- The thumbnail owns an [inner context menu](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/note-preview.tsx:219). Captured commands [validate generation, pattern and channel before selection/execution](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-rack-note-preview-t0/apps/desktop/src/features/channel-rack/note-preview-target.ts:98). Navigation/view changes preserve document, history and dirty state.
+
+**My execution:** note-preview, geometry, rack and rack-render passed **94/94 tests**, using `--maxWorkers=2 --no-cache --configLoader=runner`. UI cases used the assigned actual WASM through `SimDocument`; geometry cases are supplemental pure tests. `check-sim`, both diff-checks and artifact verification passed: unchanged 174 bindings and 1,881,168-byte WASM, SHA-256 `9feb181f0a3d6aed64d9aabd26c61cedcf015b1437889bfa5ca7b309d18dde3a`. The worktree remains clean.
+
+The owner’s 201-test run, browser measurements/screenshots and static checks remain **owner evidence**. Native desktop/window-focus smoke and parent composition/acceptance remain open. Parity is not marked done.
+
+Both review axes are clean. Root imported the original feature and incremental repair as 1e90a885 and b4db603c; the original source commits remain immutable. Fresh root UI/static validation is being completed separately. Native desktop/window-focus smoke and the parent's parity decision remain open.

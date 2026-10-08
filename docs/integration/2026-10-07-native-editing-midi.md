@@ -1071,3 +1071,56 @@ prevent helper failure from being published as successful partial audio while
 preserving cancellation and sampler-error behavior. No such production
 integration is verified yet; the next source checkpoint must prove actual
 failed-prefix staging discard, healthy retries and untouched live owners.
+
+At `9c909879`, CI UI now passes all 2530 tests, type/lint and the production
+build; all three binding jobs, parity and simulator freshness also pass.
+macOS and Ubuntu stop in strict Clippy on the new Windows startup writer:
+`Packet::write_bounded` is unused in their production library. `4c69b7bf`
+compiles that method only for Windows or tests. It preserves every platform's
+partial-write unit regression rather than suppressing warnings or skipping
+tests. Fresh root process 33599 exits zero: four packet tests, strict host
+all-feature/all-target Clippy on Windows and the Linux cross target, fmt,
+freshness and diff checks. Log: `C:/Temp/windfall-root-bridge-ci-cfg-verification.log`.
+Linux cross checking is compilation evidence, not Linux test execution.
+
+A separate analysis/codec Linux cross check stops at the missing local
+`x86_64-linux-gnu-gcc` needed by `ogg_next_sys`. It establishes neither a
+source failure nor a platform pass. Native CI must complete those checks.
+No dependency, product code or assertion was changed for that tool absence.
+The previous `9c909879` Windows job was still running at this observation;
+its result is not inferred from the successful earlier Windows run.
+
+Rack preview R2 at `fd62eb05` is clean on both independent axes. Root imports
+`ea2f36dd` and its incremental repair as `1e90a885` and `b4db603c`. Fresh
+root process 54760 passes all 201 tests across the seven focused preview,
+rack, step-grid and piano-roll files using the current shared Rust WASM.
+Registry shortcuts, checked context menus and captured lane guards are
+included. All original legacy assertions remain active. Native window-focus
+smoke and parity completion remain open; no matrix row is closed here.
+
+E3 R2 at `42d58df4` passes both source reviews, with one unchanged nonblocking
+positional-control heuristic. Fallible staged preparation and signed controls
+close the earlier findings. The accepted foundation remains outside root
+until fresh composition, and its owner is specifying fallible host admission
+and saturating tails before registry/editor expansion. Release R2 at
+`477209ec` also has no blocking source defect, with one nonblocking duplication
+heuristic. Its historical `buffers@0.1.1` license closure remains unresolved;
+candidate publication stays ineligible. Neither source review proves native
+bundles, signatures, installation or updater behavior.
+
+T1's seven-path native metadata prerequisite `94e168ae` is handed to N4 and
+imported there as `1fa5a16d` without the full timeline branch. N4 owns ABI3,
+runtime forwarding and explicit render failure. T1 retains the checked meter
+producer and narrowly granted control-side preparation/publication gates;
+invalid maps must report `Unsupported` and retain the old installed plan,
+not become scalar fallback or successful render output. M1's real registered
+Session integration is compiling in its own target; no new native pass is
+claimed before that run completes.
+
+A new GPT-6.1-Sol T3 implementation task owns the T8 bounded tap queues,
+off-thread FFT/statistics and time-history foundation in
+`gpt/t3-analyzer-taps-t8` from fixed `9c909879`. It cannot edit the active
+processor/Session/native integration windows. Real engine taps, source
+selection, analyzer/EQ/mixer views and native smoke remain later acceptance
+gates. The full project goal stays active, with the old alpha and collaborator
+invitation unchanged.
