@@ -445,10 +445,10 @@
       "summary": "Shows a thumbnail of a channel's piano roll notes in place of its step buttons.",
       "windfall_name": "Note preview in rack",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Bounded per-lane note thumbnails, explicit step/note views, canonical menu/shortcut actions and guarded opening of the current piano-roll lane are integrated. Independent review and composed shared-WASM tests preserve the existing step-detail assertions. Browser zoom/scroll/focus evidence is recorded; native desktop window-focus verification and final parity acceptance remain open. See docs/RACK-NOTE-PREVIEW.md and docs/integration/2026-10-08-review-rounds.md."
+      "notes": "Integrated bounded authoritative note thumbnails replace step buttons automatically or by explicit choice. Canonical menu/shortcuts/context actions open the guarded current piano lane without changing document/history. Independent R2, composed shared-WASM tests and browser zoom/scroll/focus checks pass; current full UI CI passes. See docs/RACK-NOTE-PREVIEW.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-rack-send-to-piano-roll",
@@ -649,10 +649,10 @@
       "summary": "Places whole chords or scale patterns from a menu with one click.",
       "windfall_name": "Chord stamp",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Delayed blur/tool/Escape cancellation and idle outside-grid preview repairs passed combined tests and review. Review found pending-choice right-click and rejected-press pointer-capture cases; further repairs are in progress. See docs/PIANO-SCALES.md and docs/PIANO-STAMP-REPAIRS.md."
+      "notes": "Chord and scale menu stamps preview/place atomically with checked key/tick limits, undo and stale-lane/project guards. Delayed choice, right-click, rejected capture, Escape/blur/tool/history cancellation repairs are accepted in independent R4 and root/browser checks. Current full UI CI passes. See docs/PIANO-SCALES.md, docs/PIANO-STAMP-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-piano-keyboard",
@@ -1057,10 +1057,10 @@
       "summary": "Zooms the view to a dragged region.",
       "windfall_name": "Playlist zoom tool",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Dragged song-region selection and registry zoom are integrated with logical coordinates, cancellation, focus/clip-selection preservation and replacement guards. Shared-WASM tests cover 75–200% zoom, DPR and scroll; native window/device and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md."
+      "notes": "Dragging a ruler region zooms the playlist using logical coordinates, with Escape/focus/selection preservation and replacement guards. Actual shared-WASM tests cover 75–200% scaling, DPR and scroll; composed UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-playlist-playback",
@@ -1117,10 +1117,10 @@
       "summary": "Named points on the timeline that label sections and can loop, skip or pause playback.",
       "windfall_name": "Time markers",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Persisted named/loop/skip/pause markers, checked undoable commands and bounded engine navigation are integrated. Native tests cover tempo, PDC, stopped-skip automation tails and buffered/stream/stem parity; composed shared-WASM UI tests exercise editing and lifetime guards. Physical/native-platform and P1 publication acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
+      "notes": "Named, loop, skip and pause markers persist and edit through checked undoable commands. Bounded real engine navigation, tempo/PDC/stopped-skip tails and buffered/stream/stem parity pass; canonical UI/lifetime tests and independent source reviews are accepted. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-playlist-arrangements",
@@ -1189,10 +1189,10 @@
       "summary": "A highlighted time range that sets the loop for playback and the range for export.",
       "windfall_name": "Loop region",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Selected playback/loop/export ranges are integrated with native request ordering, source/revision guards, ordinary-transport supersession and reload/cancellation recovery. Native WAV/PDC/tail and buffered/stream/stem checks pass. The composed local UI suite passed. The asynchronous hydration-menu lookup repair passed both independent reviews, 64 focused combined-source tests and fresh CI (172 UI files/2,662 tests). Native window/device, P1 publication and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
+      "notes": "Highlighted regions drive playback/loop and linear export with canonical request/source/revision guards, transport supersession and reload/cancel recovery. Native WAV duration/content/PDC/tail, destination/staging failure checks and shared-WASM UI races pass. Fresh full UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-playlist-audio-clip-fades",
@@ -1525,10 +1525,10 @@
       "summary": "Finds files by name across the browser folders, with wildcards and boolean terms.",
       "windfall_name": "Browser search",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Recursive native indexing and shared Rust filename/path wildcard/Boolean queries are integrated with bounded scans, cancellation and checked imports. Independent integration review is pending. See docs/BROWSER-LIBRARY.md."
+      "notes": "Recursive bounded native indexing and shared Rust wildcard/Boolean filename/path queries are integrated with cancellation, generation checks and stale-result refusal. Browser R4/sampler R3 composed review is accepted; native and actual shared-WASM UI checks pass. See docs/BROWSER-LIBRARY.md, docs/BROWSER-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-browser-drag-drop",
@@ -1561,10 +1561,10 @@
       "summary": "User-defined labels on files for filtering the list.",
       "windfall_name": "Tags",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Normalized per-file tags persist atomically in separate local metadata and combine with query/favorite filters. Corrupt metadata is preserved and reported. Independent integration review is pending. See docs/BROWSER-LIBRARY.md."
+      "notes": "Normalized per-file tags persist atomically in local metadata and filter searches together with favorites. Corrupt/write-refused metadata is preserved and reported. Browser R4 composed review, native roundtrip and shared-WASM UI checks pass. See docs/BROWSER-LIBRARY.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-browser-starred",
@@ -1573,10 +1573,10 @@
       "summary": "Marks favorite files and shows them in their own tab.",
       "windfall_name": "Favorites",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Per-file favorites persist across restart and root removal; the Starred filtered view combines with queries and tags. Native/mock/UI checks pass; independent integration review is pending. See docs/BROWSER-LIBRARY.md."
+      "notes": "Per-file favorites persist across restart/root removal and appear in the Starred filtered view, combined with queries/tags. Browser R4 composed review and native/mock/UI checks pass. See docs/BROWSER-LIBRARY.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-browser-current-project",
@@ -2413,10 +2413,10 @@
       "summary": "A plain volume and pan utility.",
       "windfall_name": "Balance",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "Integrated chain-position gain/balance processor, generic controls, checked persistence/history and automation. Signal/RT, PDC and live/offline/stem tests pass; utility R7 and root composition are accepted. See docs/UTILITY-EFFECTS.md, docs/UTILITY-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-blood-overdrive",
@@ -2509,10 +2509,10 @@
       "summary": "A simple distortion with low CPU cost.",
       "windfall_name": "Drive distortion",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "Distinct drive/shape/output distortion processor with measured oversampled alias reduction and CPU throughput. Controls, persistence/history, automation, reported 32-frame PDC, callback guards and live/offline/stem parity pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-filter",
@@ -2737,10 +2737,10 @@
       "summary": "A soft-knee limiter that rounds off peaks instead of clipping them.",
       "windfall_name": "Soft clipper",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "Distinct soft-knee peak-rounding processor with ceiling/knee controls, tested odd/monotone/bounded transfer, persistence/history and automation. Callback and render parity checks pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-squeeze",
@@ -2773,10 +2773,10 @@
       "summary": "A left/right and mid/side mixing matrix with per-channel phase and delay controls.",
       "windfall_name": "Stereo matrix",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "Stereo and mid/side matrix, signed coefficients, encode/decode and independent channel delays are integrated. Controls/history, bounded priming/tap transitions, shared-delay PDC and live/offline/stem tests pass. Latency-changing delay automation and varying-branch transient cancellation retain the documented host limits. Utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/UTILITY-REPAIRS.md."
     },
     {
       "id": "fx-fruity-vocoder",
@@ -3001,10 +3001,10 @@
       "summary": "A two-knob bass enhancement EQ.",
       "windfall_name": "Bass shelf",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked persistence/automation and generic UI. Root passed 299 DSP tests, four project tests, all six reference engine/export/restoration tests and 70 focused shared-WASM UI tests on matching 174 bindings/WASM. The restored-owner test now checks the independently measured full serial handover, including its fresh-state transient, without changing production or error bounds. New independent downstream review remains pending; no row closure or hardware/listening claim. See docs/FILTER-FAMILY.md."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated two-control bass shelf with frequency/boost settings, exact 0 dB unity and measured monotonic transfer/headroom. Persistence/history/automation, generic UI, independent signal/RT/render and composed restoration checks pass. E1 downstream R4 is accepted. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-center",
@@ -3013,10 +3013,10 @@
       "summary": "Removes DC offset from a signal in real time.",
       "windfall_name": "DC blocker",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated stereo DC blocker with measured rejection/cutoff and independently checked double-precision step response. Controls, persistence/history, automation and RT/render parity pass; utility R7 and composed checks are accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-delay",
@@ -3037,10 +3037,10 @@
       "summary": "A low-CPU low-pass filter built for automation.",
       "windfall_name": "Fast lowpass",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked persistence/automation and generic UI. Root passed 299 DSP tests, four project tests, all six reference engine/export/restoration tests and 70 focused shared-WASM UI tests on matching 174 bindings/WASM. The restored-owner test now checks the independently measured full serial handover, including its fresh-state transient, without changing production or error bounds. New independent downstream review remains pending; no row closure or hardware/listening claim. See docs/FILTER-FAMILY.md."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated low-CPU resonant 12 dB/oct lowpass with cutoff/Q controls and frame-smoothed automation. Checked persistence/history, generic UI and independent signal/RT/live-offline-stem tests pass. E1 downstream R4 is clean on both axes; the composed serial restoration fixture passes unchanged numeric bounds. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-free-filter",
@@ -3049,10 +3049,10 @@
       "summary": "A general-purpose filter with low-pass, band-pass, high-pass, notch and shelving types.",
       "windfall_name": "Selectable filter",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked persistence/automation and generic UI. Root passed 299 DSP tests, four project tests, all six reference engine/export/restoration tests and 70 focused shared-WASM UI tests on matching 174 bindings/WASM. The restored-owner test now checks the independently measured full serial handover, including its fresh-state transient, without changing production or error bounds. New independent downstream review remains pending; no row closure or hardware/listening claim. See docs/FILTER-FAMILY.md."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated selectable lowpass/highpass/bandpass/notch/low-shelf/peak/high-shelf processor with continuous live histories and interruption-safe mode ramps. All modes/controls, persistence/history/automation, generic UI and independent signal/RT/render tests pass. E1 downstream R4 is accepted. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-mute-2",
@@ -3061,10 +3061,10 @@
       "summary": "Mutes the left, right or both channels, for automating mutes inside an effect chain.",
       "windfall_name": "Channel mute",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Independent left/right/both channel mutes work at any effect-chain position, with smoothed automation, persistence/history and generic controls. Signal/RT/render and accepted utility repair checks pass. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-phase-inverter",
@@ -3073,10 +3073,10 @@
       "summary": "Inverts the phase of the left or right channel.",
       "windfall_name": "Polarity",
       "phase": 5,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Independent left/right polarity inversion is integrated with smoothed switching, controls, persistence/history and automation. Signal/RT/live-offline checks and accepted utility repair tests pass. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "fx-fruity-reeverb",

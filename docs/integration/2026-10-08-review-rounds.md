@@ -1234,4 +1234,44 @@ Atomic fixture publication, differing executable names, C++ ABI ledger variants 
 
 The captured baseline confirms **12 PASS / 8 FAIL / 0 IGNORE**, all Unsupported. No candidate Mac execution is claimed. P1 preparation, N4 release/activation and the full 342-row goal remain open; preserved Windows/Linux evidence is unchanged. No edits, builds, tests, installations, handoffs or nested agents occurred.
 
-The same implementation owner has a documentation-only response window, retaining both frozen pins. A separate revised proposal and new audit must settle reentrant/deferred retirement, cycle-free contention, executable-load/failure reservation coverage, persistent source-identity admission, non-panicking unwind and bounded metadata/ticket capacity before implementation. The fresh `427ed0a7` Mac refusal above is baseline evidence, not a candidate failure; actual target headers, native bundle/ABI/owner-thread tests, P1 and editor/platform gates remain open.
+The initial response was documentation-only. The subsequent delivery workflow correction grants the same owner coherent implementation and tests addressing all six concrete findings, retaining both frozen pins. Actual target headers, native bundle/ABI/owner-thread execution, P1 and editor/platform gates remain open. The fresh `427ed0a7` Mac refusal above remains baseline evidence, not a candidate failure.
+
+# P1 engine stage 1 R1
+
+Fixed source: `b4e07679a035c6e57afe74d8e9b2de232965cf4b`, sole parent
+`937891439e4c9f268ddfa5cd91c1b7c6a9d4e8ff`. Both new independent tasks received
+the original goal, prior design findings/responses, all utility/T1/N4/M1
+constraints, exact source scope and owner evidence. Reports below are separate
+and verbatim; overlapping findings retain each reviewer's severity.
+
+## Standards
+
+**Standards verdict: changes requested — one documented ownership breach; one optional heuristic concern.**
+
+Verified source `b4e07679a035c6e57afe74d8e9b2de232965cf4b` and sole parent `937891439e4c9f268ddfa5cd91c1b7c6a9d4e8ff`. Their log contains one implementation commit; the diff is exactly **12 paths, +3458/−418**: eight engine files, new `project_preparation.rs`, two authorized test migrations and the preparation-document append. The prerequisite merge was treated as context.
+
+- **P2 — Live attachment replacement violates endpoint lifetime ordering.** [project_preparation.rs:547](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/project_preparation.rs:547) replaces `state.link` without requiring the previous Processor to have stopped. Entry rejects Starting/Closing but permits Running; unchanged generation checks likewise permit this replacement. Dropping the returned retirement carrier releases the old control endpoints while its Processor can remain alive. The documented rules require direct replacement without shutdown ordering to refuse `StaleStream` ([PROJECT-PREPARATION.md:760](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:760)) and prohibit silently replacing a live attached link ([line 847](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:847)). Enforce that admission condition before construction and revalidate before mutation, preserving abandoned-Processor retries. This is source-traced interface noncompliance, not an executed CPAL failure.
+
+**Optional Fowler judgment:** [rack.rs:1065](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/rack.rs:1065) duplicates the constructor shape at line 995. Centralizing shared initialization would keep stage storage and selected-count changes together while preserving their intentional capacity difference.
+
+The borrowed readiness/lease/retirement interface otherwise hides controller state and keeps ownership local. No additional documented-rule or legal breach identified. Original test assertions remain intact, including the exact three-line sampler migration. Initial R3/R5, invalid-meter and sampler failures remain documented with their corrections.
+
+Read-only Git-object review; no edits, builds, tests or agents. Reported **131/281 passes** and strict checks remain owner evidence. Deferred Session/N4 integration remains open scope. The Spec axis is not assessed or reranked here.
+
+## Spec
+
+**Hold stage1 acceptance: two spec findings.**
+
+Verified source `b4e07679a035c6e57afe74d8e9b2de232965cf4b`, sole parent `937891439e4c9f268ddfa5cd91c1b7c6a9d4e8ff`. The log contains one implementation commit; its diff is exactly 12 paths, **3,458 additions / 418 deletions**. Locations below refer to that source.
+
+- **P1 — Live attachment silently replaces control endpoints.** `crates/windfall-engine/src/project_preparation.rs:490` rejects Starting/Closing but accepts Running with a live Processor. At line 547 it replaces that Processor’s Link; `controller.rs:626` immediately drops the returned retirement carrier. Trigger: attach again while the previous Processor remains alive. Both Processors can publish shared transport/native selection, and the old Processor becomes the final ring-endpoint owner, so queued native-bearing messages can be destroyed during its later teardown. This violates `docs/PROJECT-PREPARATION.md:749–762`: retain control endpoints through Processor destruction and refuse still-attached replacement with StaleStream before mutation. Reject a live existing consumer before construction/admission; preserve abandoned-processor retry compatibility.
+
+- **P2 — Moving a restored effect loses predecessor ordering while retaining the old transfer.** `crates/windfall-engine/src/plan.rs:531` carries an outgoing reservation even when its active ID moved elsewhere, while line 599 links the successor only within the same track. `state.rs:1467–1476` then restarts the moved successor’s insertion with no predecessor remainder. Trigger: remove heard g0, restore g1, then move g1 to another sounding track before g0 finishes. g0 continues processing the old track while g1 can become audible after only its own priming. This violates the preserved immediate old-track switch (`docs/ARCHITECTURE.md:246`) and concrete predecessor-wait contract (`PROJECT-PREPARATION.md:520–530`). Preserve the existing move policy instead of retaining that old-track reservation. The unchanged R5 movement case waits for departure completion, so it does not exercise this trigger.
+
+These are source-traced counterexamples, not executed reproductions. No edits, builds, tests, imports or delegation occurred. Owner-reported passes remain owner evidence. Deferred Session stage2 integration is not counted as a finding.
+
+The same owner is repairing these concrete findings while completing coherent
+Session stage 2 preparation/publication/retirement. The immutable stage-1 pin
+stays available. Attached legacy refusal is not accepted as the final production
+route. These findings prevent P1 acceptance; no P1 row or global lock-ownership
+closure follows from the owner test counts.

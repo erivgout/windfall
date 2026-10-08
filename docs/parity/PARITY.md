@@ -14,21 +14,21 @@ As of 2026-10-08. Sources:
 
 ## Summary
 
-**70 of 342 rows accounted for (20.5%).** A row is accounted for when it is done or won't do.
+**88 of 342 rows accounted for (25.7%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
 | Todo | 212 |
-| In progress | 60 |
-| Done | 68 |
+| In progress | 42 |
+| Done | 86 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 12 | 8 | 2 | 1 |
-| Main windows | 113 | 47 | 21 | 44 | 1 |
+| Main windows | 113 | 47 | 13 | 52 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 63 | 15 | 2 | 0 |
+| Effects | 80 | 63 | 5 | 12 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
@@ -37,11 +37,11 @@ As of 2026-10-08. Sources:
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 6 | 9 | 22 | 2 |
-| 2. Write a song | 99 | 40 | 25 | 34 | 0 |
+| 1. Make a beat | 39 | 6 | 8 | 23 | 2 |
+| 2. Write a song | 99 | 40 | 18 | 41 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
-| 5. The long tail | 129 | 117 | 12 | 0 | 0 |
+| 5. The long tail | 129 | 117 | 2 | 10 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -90,7 +90,7 @@ As of 2026-10-08. Sources:
 | Cut and Cut-by groups | Cut groups | 1 | done |  |
 | Channel sampler: loop points and ping-pong loop | Sample looping | 1 | done | Persisted forward and ping-pong loops with inspector points relative to the trimmed sample, reverse-aware bounds, fractional boundary interpolation and note release. Undo/save/load, playback/export parity and zero callback allocations are tested. No hardware audio verification; details and limits are in docs/SAMPLER-LOOPS.md. |
 | Channel sampler: precomputed effects | Sample pre-processing | 1 | todo |  |
-| Mini piano roll preview | Note preview in rack | 2 | in-progress | Bounded per-lane note thumbnails, explicit step/note views, canonical menu/shortcut actions and guarded opening of the current piano-roll lane are integrated. Independent review and composed shared-WASM tests preserve the existing step-detail assertions. Browser zoom/scroll/focus evidence is recorded; native desktop window-focus verification and final parity acceptance remain open. See docs/RACK-NOTE-PREVIEW.md and docs/integration/2026-10-08-review-rounds.md. |
+| Mini piano roll preview | Note preview in rack | 2 | done | Integrated bounded authoritative note thumbnails replace step buttons automatically or by explicit choice. Canonical menu/shortcuts/context actions open the guarded current piano lane without changing document/history. Independent R2, composed shared-WASM tests and browser zoom/scroll/focus checks pass; current full UI CI passes. See docs/RACK-NOTE-PREVIEW.md and docs/integration/2026-10-08-completion-audit.md. |
 | Send to Piano roll | Steps to notes | 2 | todo |  |
 | Channel settings: envelopes, LFOs and filter | Channel envelopes and LFOs | 2 | in-progress | Volume envelope on the sampler only. |
 | Channel settings: arpeggiator | Channel arpeggiator | 2 | todo |  |
@@ -107,7 +107,7 @@ As of 2026-10-08. Sources:
 | Piano roll: Select tool | Piano roll select tool | 2 | done |  |
 | Piano roll: Zoom tool | Piano roll zoom tool | 2 | todo |  |
 | Piano roll: Playback (scrub) tool | Piano roll scrub tool | 2 | todo |  |
-| Piano roll: Chord stamp | Chord stamp | 2 | in-progress | One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Delayed blur/tool/Escape cancellation and idle outside-grid preview repairs passed combined tests and review. Review found pending-choice right-click and rejected-press pointer-capture cases; further repairs are in progress. See docs/PIANO-SCALES.md and docs/PIANO-STAMP-REPAIRS.md. |
+| Piano roll: Chord stamp | Chord stamp | 2 | done | Chord and scale menu stamps preview/place atomically with checked key/tick limits, undo and stale-lane/project guards. Delayed choice, right-click, rejected capture, Escape/blur/tool/history cancellation repairs are accepted in independent R4 and root/browser checks. Current full UI CI passes. See docs/PIANO-SCALES.md, docs/PIANO-STAMP-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Piano roll: preview keyboard and key labels | Preview keyboard | 2 | done |  |
 | Piano roll: event editor lane and note properties | Note property lane | 2 | in-progress | Velocity and pan lanes. Other note properties are not in the model yet. |
 | Piano roll: slide and portamento notes | Slide notes | 2 | todo |  |
@@ -141,18 +141,18 @@ As of 2026-10-08. Sources:
 | Playlist: Slip edit tool | Slip edit | 2 | todo |  |
 | Playlist: Slice tool | Playlist slice tool | 2 | in-progress | One selected audio clip can be split at reviewed grid/transient markers into source-linked clips in one undo step, retaining trim/reverse/tape pitch/routing. Drawn-line slicing across clip types remains pending. See docs/SLICER.md. |
 | Playlist: Select tool | Playlist select tool | 2 | done |  |
-| Playlist: Zoom tool | Playlist zoom tool | 2 | in-progress | Dragged song-region selection and registry zoom are integrated with logical coordinates, cancellation, focus/clip-selection preservation and replacement guards. Shared-WASM tests cover 75–200% zoom, DPR and scroll; native window/device and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md. |
+| Playlist: Zoom tool | Playlist zoom tool | 2 | done | Dragging a ruler region zooms the playlist using logical coordinates, with Escape/focus/selection preservation and replacement guards. Actual shared-WASM tests cover 75–200% scaling, DPR and scroll; composed UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Playlist: Playback tool | Playlist scrub tool | 2 | todo |  |
 | Playlist tracks (name, color, mute, solo, resize) | Playlist tracks | 2 | in-progress | Name, mute and reordering. No color, solo or per-track resize yet. |
 | Playlist: track grouping | Track groups | 2 | todo |  |
 | Playlist: instrument tracks and audio tracks | Linked tracks | 2 | todo |  |
-| Playlist: time markers | Time markers | 2 | in-progress | Persisted named/loop/skip/pause markers, checked undoable commands and bounded engine navigation are integrated. Native tests cover tempo, PDC, stopped-skip automation tails and buffered/stream/stem parity; composed shared-WASM UI tests exercise editing and lifetime guards. Physical/native-platform and P1 publication acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md. |
+| Playlist: time markers | Time markers | 2 | done | Named, loop, skip and pause markers persist and edit through checked undoable commands. Bounded real engine navigation, tempo/PDC/stopped-skip tails and buffered/stream/stem parity pass; canonical UI/lifetime tests and independent source reviews are accepted. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Playlist: arrangements | Arrangements | 2 | todo |  |
 | Playlist: clip source menu and picker panel | Clip picker | 2 | done | Patterns, audio and automations can each be picked as the brush. |
 | Playlist: clip grouping | Clip groups | 2 | todo |  |
 | Playlist: make unique | Make unique | 2 | todo |  |
 | Playlist: snap | Playlist snap | 2 | done |  |
-| Playlist: timeline selection and loop region | Loop region | 2 | in-progress | Selected playback/loop/export ranges are integrated with native request ordering, source/revision guards, ordinary-transport supersession and reload/cancellation recovery. Native WAV/PDC/tail and buffered/stream/stem checks pass. The composed local UI suite passed. The asynchronous hydration-menu lookup repair passed both independent reviews, 64 focused combined-source tests and fresh CI (172 UI files/2,662 tests). Native window/device, P1 publication and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md. |
+| Playlist: timeline selection and loop region | Loop region | 2 | done | Highlighted regions drive playback/loop and linear export with canonical request/source/revision guards, transport supersession and reload/cancel recovery. Native WAV duration/content/PDC/tail, destination/staging failure checks and shared-WASM UI races pass. Fresh full UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | in-progress | Fade in, fade out and gain handles. No automatic crossfades yet. |
 | Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Per-instance gain, pan, tape/spectral pitch, reverse, fades and independent playlist stretch are implemented. Native audio-editor normalization creates a unique derived WAV with undo; a direct non-destructive normalize property remains pending. See docs/AUDIO-EDITOR.md and docs/ARCHITECTURE.md. |
 | Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
@@ -180,11 +180,11 @@ As of 2026-10-08. Sources:
 | Browser: folder tree | Browser | 1 | done |  |
 | Browser: sample preview | Sample preview | 1 | done |  |
 | Browser: waveform preview | Waveform preview | 1 | done | Inline waveforms were added in FL Studio 2026. |
-| Browser: search | Browser search | 1 | in-progress | Recursive native indexing and shared Rust filename/path wildcard/Boolean queries are integrated with bounded scans, cancellation and checked imports. Independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
+| Browser: search | Browser search | 1 | done | Recursive bounded native indexing and shared Rust wildcard/Boolean filename/path queries are integrated with cancellation, generation checks and stale-result refusal. Browser R4/sampler R3 composed review is accepted; native and actual shared-WASM UI checks pass. See docs/BROWSER-LIBRARY.md, docs/BROWSER-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Browser: drag and drop | Drag and drop | 1 | done |  |
 | Browser: project backups folder | Backups list | 1 | todo |  |
-| Browser: tags | Tags | 2 | in-progress | Normalized per-file tags persist atomically in separate local metadata and combine with query/favorite filters. Corrupt metadata is preserved and reported. Independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
-| Browser: starred items | Favorites | 2 | in-progress | Per-file favorites persist across restart and root removal; the Starred filtered view combines with queries and tags. Native/mock/UI checks pass; independent integration review is pending. See docs/BROWSER-LIBRARY.md. |
+| Browser: tags | Tags | 2 | done | Normalized per-file tags persist atomically in local metadata and filter searches together with favorites. Corrupt/write-refused metadata is preserved and reported. Browser R4 composed review, native roundtrip and shared-WASM UI checks pass. See docs/BROWSER-LIBRARY.md and docs/integration/2026-10-08-completion-audit.md. |
+| Browser: starred items | Favorites | 2 | done | Per-file favorites persist across restart/root removal and appear in the Starred filtered view, combined with queries/tags. Browser R4 composed review and native/mock/UI checks pass. See docs/BROWSER-LIBRARY.md and docs/integration/2026-10-08-completion-audit.md. |
 | Browser: current project tab | Project tab | 2 | todo |  |
 | Project picker | Project overview | 2 | todo |  |
 | Browser: plugin database | Plugin database | 4 | todo |  |
@@ -264,7 +264,7 @@ As of 2026-10-08. Sources:
 | Effector (12 FX) | TBD | 5 | todo |  |
 | EQUO | TBD | 5 | todo |  |
 | Frequency Splitter | TBD | 5 | todo |  |
-| Fruity Balance | Balance | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Balance | Balance | 5 | done | Integrated chain-position gain/balance processor, generic controls, checked persistence/history and automation. Signal/RT, PDC and live/offline/stem tests pass; utility R7 and root composition are accepted. See docs/UTILITY-EFFECTS.md, docs/UTILITY-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Blood Overdrive | TBD | 5 | todo |  |
 | Fruity Chorus | TBD | 5 | todo |  |
 | Fruity Compressor | Compressor | 2 | done | Phase-2 core compressor per the plan. |
@@ -272,7 +272,7 @@ As of 2026-10-08. Sources:
 | Fruity Delay 2 | TBD | 5 | todo |  |
 | Fruity Delay 3 | Delay | 2 | in-progress | Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row. |
 | Fruity Delay Bank | Echo bank | 5 | in-progress | A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet. |
-| Fruity Fast Dist | Drive distortion | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Fast Dist | Drive distortion | 5 | done | Distinct drive/shape/output distortion processor with measured oversampled alias reduction and CPU throughput. Controls, persistence/history, automation, reported 32-frame PDC, callback guards and live/offline/stem parity pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Filter | TBD | 5 | todo |  |
 | Fruity Flanger | TBD | 5 | todo |  |
 | Fruity Flangus | TBD | 5 | todo |  |
@@ -291,10 +291,10 @@ As of 2026-10-08. Sources:
 | Fruity Reeverb 2 | Reverb | 2 | done | Phase-2 core reverb per the plan. |
 | Fruity Scratcher | TBD | 5 | todo |  |
 | Fruity Send | TBD | 5 | todo |  |
-| Fruity Soft Clipper | Soft clipper | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Soft Clipper | Soft clipper | 5 | done | Distinct soft-knee peak-rounding processor with ceiling/knee controls, tested odd/monotone/bounded transfer, persistence/history and automation. Callback and render parity checks pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Squeeze | TBD | 5 | todo |  |
 | Fruity Stereo Enhancer | TBD | 5 | todo |  |
-| Fruity Stereo Shaper | Stereo matrix | 5 | in-progress | Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Stereo Shaper | Stereo matrix | 5 | done | Stereo and mid/side matrix, signed coefficients, encode/decode and independent channel delays are integrated. Controls/history, bounded priming/tap transitions, shared-delay PDC and live/offline/stem tests pass. Latency-changing delay automation and varying-branch transient cancellation retain the documented host limits. Utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/UTILITY-REPAIRS.md. |
 | Fruity Vocoder | TBD | 5 | todo |  |
 | Fruity WaveShaper | TBD | 5 | todo |  |
 | Fruity X-Y Controller | TBD | 5 | todo |  |
@@ -313,13 +313,13 @@ As of 2026-10-08. Sources:
 | Emphasizer | TBD | 5 | todo |  |
 | VFX Script | TBD | 6 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. Grouped with the plan's phase-6 scripting. |
 | Fruity 7 Band EQ | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Bass Boost | Bass shelf | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked persistence/automation and generic UI. Root passed 299 DSP tests, four project tests, all six reference engine/export/restoration tests and 70 focused shared-WASM UI tests on matching 174 bindings/WASM. The restored-owner test now checks the independently measured full serial handover, including its fresh-state transient, without changing production or error bounds. New independent downstream review remains pending; no row closure or hardware/listening claim. See docs/FILTER-FAMILY.md. |
-| Fruity Center | DC blocker | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Bass Boost | Bass shelf | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated two-control bass shelf with frequency/boost settings, exact 0 dB unity and measured monotonic transfer/headroom. Persistence/history/automation, generic UI, independent signal/RT/render and composed restoration checks pass. E1 downstream R4 is accepted. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md. |
+| Fruity Center | DC blocker | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated stereo DC blocker with measured rejection/cutoff and independently checked double-precision step response. Controls, persistence/history, automation and RT/render parity pass; utility R7 and composed checks are accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Delay | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. |
-| Fruity Fast LP | Fast lowpass | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked persistence/automation and generic UI. Root passed 299 DSP tests, four project tests, all six reference engine/export/restoration tests and 70 focused shared-WASM UI tests on matching 174 bindings/WASM. The restored-owner test now checks the independently measured full serial handover, including its fresh-state transient, without changing production or error bounds. New independent downstream review remains pending; no row closure or hardware/listening claim. See docs/FILTER-FAMILY.md. |
-| Fruity Free Filter | Selectable filter | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. E1 is usable through the appended registry, checked persistence/automation and generic UI. Root passed 299 DSP tests, four project tests, all six reference engine/export/restoration tests and 70 focused shared-WASM UI tests on matching 174 bindings/WASM. The restored-owner test now checks the independently measured full serial handover, including its fresh-state transient, without changing production or error bounds. New independent downstream review remains pending; no row closure or hardware/listening claim. See docs/FILTER-FAMILY.md. |
-| Fruity Mute 2 | Channel mute | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
-| Fruity Phase Inverter | Polarity | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Built-in processor, generated controls, automation/history and native/shared-WASM integration are implemented with measured signal, latency and callback-allocation checks. Independent integration review is pending. See docs/UTILITY-EFFECTS.md. |
+| Fruity Fast LP | Fast lowpass | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated low-CPU resonant 12 dB/oct lowpass with cutoff/Q controls and frame-smoothed automation. Checked persistence/history, generic UI and independent signal/RT/live-offline-stem tests pass. E1 downstream R4 is clean on both axes; the composed serial restoration fixture passes unchanged numeric bounds. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md. |
+| Fruity Free Filter | Selectable filter | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated selectable lowpass/highpass/bandpass/notch/low-shelf/peak/high-shelf processor with continuous live histories and interruption-safe mode ramps. All modes/controls, persistence/history/automation, generic UI and independent signal/RT/render tests pass. E1 downstream R4 is accepted. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md. |
+| Fruity Mute 2 | Channel mute | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Independent left/right/both channel mutes work at any effect-chain position, with smoothed automation, persistence/history and generic controls. Signal/RT/render and accepted utility repair checks pass. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
+| Fruity Phase Inverter | Polarity | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Independent left/right polarity inversion is integrated with smoothed switching, controls, persistence/history and automation. Signal/RT/live-offline checks and accepted utility repair tests pass. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Reeverb | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. |
 
 ## Visual and video

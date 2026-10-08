@@ -521,5 +521,11 @@ Strict all-target engine Clippy, formatting, simulator freshness and diff
 checks passed. The full log is
 `windfall-root-e1-serial-clock-green.log`. Earlier fresh root checks passed
 the four project tests and 70 focused shared-WASM UI cases. Matching 174
-bindings and the 1,881,168-byte WASM are committed in root. A new independent
-downstream review still controls final three-row acceptance.
+bindings and the 1,881,168-byte WASM were committed with that composition.
+The subsequent independent downstream R4 reviews are clean on both axes;
+Spec independently ran the four project and six engine cases. Current combined
+UI CI passes all 2,662 tests. The parent completion audit accepts the three
+implemented filter rows; device deadlines, listening and native all-platform
+verification remain separate project gates. See
+[the completion audit](integration/2026-10-08-completion-audit.md) and
+[the separate R4 reports](integration/2026-10-08-review-rounds.md).
