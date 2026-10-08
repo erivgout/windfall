@@ -984,4 +984,64 @@ Both source verdicts are clean. The parent full 116-target execution and final a
 
 The analyzer owner reproduced default-parallel contention on unchanged source: nine pass/seven fail, then eleven pass/five fail, each with the existing optional timing ignore. Controlled unrelated admission reproduced the count discrepancy and legitimate `InstanceLimit`; concurrent probes still admitted exactly eight tap contenders, or four maximum-layout contenders with four `ByteLimit` refusals. No production quota defect was demonstrated. Parent granted only a test-local mutex held across all 17 analyzer cases and endpoint/native-worker destruction, with every quota/signal/allocator assertion and process-wide eight-tap/eight-slot/32 MiB policy unchanged. No global CI serialization or routing/source grant follows. New source and review remain pending.
 
-The release owner froze `cbaeedac`, a four-file workflow/context checker repair after the pinned GitHub parser reproduced three invalid job-level `runner` references and zero after repair. The VST portability owner froze `5d3fe8e7`, a four-file creator-identity fixture repair for verified GNU Linux x86_64, preserving both owner assertions and class0–20 behavior. New independent Standards/Spec pairs now inspect each exact increment. Neither is yet imported at this point; remote workflow/Ubuntu validation and macOS support remain distinct gates.
+The release owner froze `cbaeedac`, a four-file workflow/context checker repair after the pinned GitHub parser reproduced three invalid job-level `runner` references and zero after repair. The VST portability owner froze `5d3fe8e7`, a four-file creator-identity fixture repair for verified GNU Linux x86_64, preserving both owner assertions and class0–20 behavior. New independent Standards/Spec pairs inspected each exact increment. Neither was imported at this point; their subsequent source verdicts and parent execution are recorded below. Remote workflow/Ubuntu validation and macOS support remain distinct gates.
+
+# Native fixture identity repair review R1
+
+Immutable `5d3fe8e7c7f35cb1c0fd4538cfbc381796296387`, direct parent `1c22651e` (the separately applied equivalent `71dbec11` fixture prerequisite). Parent imported only the identity increment as `27db8b89`. Original classes0–20, both ownership assertion messages and R4 capacity/drop behavior remain intact.
+
+## Standards
+
+**0 standards findings.**
+
+Reviewed `1c22651ef288888294ca2351d57edba9c16dde52...5d3fe8e7c7f35cb1c0fd4538cfbc381796296387`, its commit log, all four changed paths, `docs/ARCHITECTURE.md`, and the full pinned identity/provenance document.
+
+The private `CreatorThread` type appropriately contains the platform identity. Its FFI signature and value equality match the documented Linux GNU x86_64 ABI verification, with the live-creator limitation explicit. Other targets retain the original `ThreadId` behavior. Both owner assertions and messages remain intact.
+
+Tests retain creator/library ownership during foreign-thread comparisons, exercise both actual fixture guards, and unload the exact-helper cdylib before worker exit. Reversing only the authorized substitutions reproduces the baseline fixture exactly; all six prerequisite blobs match `71dbec11`. No actionable baseline smell was found.
+
+Unresolved gates remain: original Ubuntu CI confirmation; macOS loader/bundle repair and native validation; other-platform ABI/unload verification; unavailable native Linux Clippy and the documented unchanged fixture warning at line 741. Full bridge activation, P1 construction acceptance, and the overall hosting goal remain open.
+
+Read-only Git-object review only; no builds or tests executed.
+
+## Spec
+
+Spec: **0 findings** for `1c22651ef288888294ca2351d57edba9c16dde52...5d3fe8e7c7f35cb1c0fd4538cfbc381796296387` and its single-commit log.
+
+The four-path diff stays within the grant. The private helper uses `pthread_self() -> c_ulong` with C linkage under the specified Linux/GNU/x86_64 cfg, consistent with the pinned ABI documentation. Other targets retain `ThreadId`. Both original owner assertions remain intact; tests keep creators alive during comparisons, exercise both actual component guards against another live owner, and drop the helper library before worker exit and join. Existing classes, DSP, R4 behavior, point arena, drop and scanner source remain unchanged.
+
+Linux/Windows passes and baseline SIGSEGV reproduction are **owner-reported execution evidence** in the fully read pinned document. This review inspected Git objects only and ran no builds or tests.
+
+Remaining gates: original Ubuntu CI confirmation, macOS loader repair and platform verification, and full native-hosting acceptance—including bridge activation and P1 construction under guard. Native Linux Clippy remains unavailable; the inherited standalone-fixture warning at `vst3.rs:741` remains outside the grant. Scoped lint passes do not waive broader checks or establish other-platform ABI correctness.
+
+Parent Windows execution after rebuilding the current 21-class fixture passed the four new ownership/unload regressions, all 20 realtime cases with default parallel scheduling, VST3 host 12 and scanner two. Strict host all-feature/all-target Clippy, workspace fmt, simulator freshness and diff checks passed. Log: `C:/Temp/windfall-root-vst-5d-final.log`. Linux native results remain owner evidence; original Ubuntu CI confirmation, macOS loader and unavailable native Linux Clippy are not relabelled as parent passes.
+
+# Candidate-workflow context repair review R3
+
+Immutable `cbaeedac810450dd1439ba3572eb1de0648828cb`, direct parent `477209ec`. Parent imported only this increment as `3459d430`, with the manual workflow and publication gates retained.
+
+## Standards
+
+0 Standards findings.
+
+Reviewed `477209ec1d3c5f2d7efe5e7147b5551a4bfbe0c1...cbaeedac810450dd1439ba3572eb1de0648828cb`. No documented architecture violation or actionable baseline smell found in the four-path diff.
+
+Static inspection confirms step-scoped `runner.temp` values reach every downstream consumer through `GITHUB_ENV`, including the upload’s `env.CANDIDATE_OUTPUT`. Manual dispatch, read-only permissions, action pins, source identity, immutable-alpha protections, license/resource gates, signing restrictions and verification before upload remain preserved.
+
+GitHub server acceptance, signing/notarization, native installer/install/update/uninstall validation, editor integration, helper/model admission and operator/license approval—including `buffers@0.1.1`—remain open. Parent alone publishes.
+
+Read-only Git object inspection only; recorded parser and fixture executions remain the owner’s evidence.
+
+## Spec
+
+0 Spec findings.
+
+Reviewed `477209ec1d3c5f2d7efe5e7147b5551a4bfbe0c1...cbaeedac810450dd1439ba3572eb1de0648828cb`, its single commit, all four changed paths, and the pinned release/architecture contracts.
+
+Source inspection confirms the three runner paths are defined in step `env` and exported through `GITHUB_ENV` before capture, native build, collection, verification, and upload. The upload consumes `env.CANDIDATE_OUTPUT` in step `with`. Manual dispatch, read-only permissions, action pins, immutable source identity, alpha protection, resource admission, SBOM/notices verification, signing rejection, and verified no-clobber upload remain preserved.
+
+The parser’s three-errors-to-zero comparison and 20 passing fixtures are owner-reported execution evidence; I did not rerun them.
+
+Unresolved gates remain: GitHub service acceptance; native installer contents and install/update/uninstall; signing/notarization; editor verification; helper/model resources; operator configuration; corresponding-source/license review, including historical `buffers@0.1.1` provenance. Publication remains parent-owned and gated.
+
+Root's static syntax/context/release-contract checker passed. The combined existing release and new workflow fixtures passed **68 tests**, zero failures/skips, in 163.79 seconds (`C:/Temp/windfall-root-release-cbae-final.log`). This is separate from the owner's narrow 20-fixture execution and pinned parser comparison. No candidate workflow was dispatched and no bundle, artifact upload or release was produced. Published alpha and future version/signing/operator/license requirements remain unchanged.
