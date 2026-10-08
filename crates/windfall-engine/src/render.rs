@@ -65,6 +65,7 @@ pub struct Rendered {
     /// when each was to start. They are the ones that start last and, of
     /// those that start on one tick, the ones with the highest ids.
     pub dropped_clips: u32,
+    pub sampler_error: Option<crate::sampler_processing::SamplerPreparationError>,
 }
 
 /// Renders a project to stereo audio. See [`render_reporting`], which this
@@ -103,7 +104,17 @@ pub fn render_reporting(
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Rendered {
     let sample_rate = options.sample_rate.max(1);
-    let plan = compile(project, pool);
+    let prepared_pool = match pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {}) {
+        Ok(pool) => pool,
+        Err(error) => {
+            return Rendered {
+                audio: AudioBuffer::from_interleaved(sample_rate, 2, Vec::new()),
+                dropped_clips: 0,
+                sampler_error: Some(error),
+            };
+        }
+    };
+    let plan = compile(project, &prepared_pool);
     let pattern = options
         .pattern
         .filter(|id| plan.pattern_ids.get(id.0).is_some())
@@ -190,6 +201,7 @@ pub fn render_reporting(
     Rendered {
         audio: AudioBuffer::from_interleaved(sample_rate, 2, data),
         dropped_clips: processor.clips_left_out(),
+        sampler_error: None,
     }
 }
 

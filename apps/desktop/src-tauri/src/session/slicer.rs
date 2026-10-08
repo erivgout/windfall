@@ -136,7 +136,8 @@ impl Session {
         document
             .dispatch(command.clone(), None)
             .map_err(|e| e.to_string())?;
-        let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool);
+        let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool)
+            .map_err(|error| error.to_string())?;
         #[cfg(test)]
         self.pause("slice:prepared");
         let _recording = self.recording_idle()?;

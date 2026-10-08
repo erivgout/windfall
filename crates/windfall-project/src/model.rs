@@ -429,6 +429,10 @@ impl ChannelSource {
 #[ts(export)]
 pub struct SamplerSettings {
     pub sample: Option<SampleId>,
+    /// Independent duration/pitch is prepared for an explicit inclusive MIDI range.
+    #[serde(default, skip_serializing_if = "SamplerStretch::is_tape")]
+    #[ts(as = "Option<SamplerStretch>", optional)]
+    pub stretch: SamplerStretch,
     /// The key that plays the sample at its recorded pitch.
     pub root_key: u8,
     /// Tuning offset in semitones, -48 to 48. Fractions are fine tuning.
@@ -465,6 +469,7 @@ impl Default for SamplerSettings {
     fn default() -> Self {
         Self {
             sample: None,
+            stretch: SamplerStretch::Tape,
             root_key: DEFAULT_KEY,
             tune: 0.0,
             gain: 1.0,
@@ -477,6 +482,58 @@ impl Default for SamplerSettings {
             envelope: None,
             cut_self: false,
             cut_group: 0,
+        }
+    }
+}
+
+/// Musical settings only; rendered banks are never serialized.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+#[ts(export)]
+pub enum SamplerStretch {
+    #[default]
+    Tape,
+    Spectral {
+        ratio: f64,
+        quality: ClipStretchQuality,
+        formants: bool,
+        range: SamplerKeyRange,
+    },
+}
+
+impl SamplerStretch {
+    fn is_tape(&self) -> bool {
+        matches!(self, Self::Tape)
+    }
+
+    pub fn validate(self) -> Result<(), &'static str> {
+        if let Self::Spectral { ratio, range, .. } = self {
+            if !ratio.is_finite() || !(0.25..=4.0).contains(&ratio) {
+                return Err("the sampler duration ratio must be finite and between 0.25 and 4");
+            }
+            if range.first > range.last || range.last > MAX_KEY {
+                return Err("the prepared sampler key range must be ordered within MIDI 0 to 127");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SamplerKeyRange {
+    pub first: u8,
+    pub last: u8,
+}
+
+impl SamplerKeyRange {
+    /// Twelve playable keys, centered near the root and kept inside MIDI bounds.
+    pub fn around_root(root: u8) -> Self {
+        let first = root.min(MAX_KEY).saturating_sub(6).min(MAX_KEY - 11);
+        Self {
+            first,
+            last: first + 11,
         }
     }
 }

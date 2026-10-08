@@ -502,6 +502,8 @@ pub struct ChannelPatch {
 #[ts(export)]
 pub struct SamplerPatch {
     #[ts(optional)]
+    pub stretch: Option<crate::SamplerStretch>,
+    #[ts(optional)]
     pub root_key: Option<u8>,
     #[ts(optional)]
     pub tune: Option<f32>,

@@ -273,7 +273,8 @@ impl Session {
             .dispatch(command.clone(), None)
             .map_err(|e| e.to_string())?;
         pool.insert(sample, decoded.clone());
-        let plan = Controller::prepare_project(document.project(), &pool);
+        let plan = Controller::prepare_project(document.project(), &pool)
+            .map_err(|error| error.to_string())?;
         #[cfg(test)]
         self.pause("audio-editor:prepared");
         let _recording = self.recording_idle()?;

@@ -170,6 +170,13 @@ export function createTauriBackend(): Backend {
     browserList: (path) => call("browser_list", { path }),
     sampleInfo: (path, browser) => call("sample_info", { path, browser }),
     prepareClipCommand: (command) => call("prepare_clip_command", { command }),
+    samplerPreparationBegin: () => call("sampler_preparation_begin"),
+    samplerPreparationCancel: (request) =>
+      call("sampler_preparation_cancel", { request }),
+    samplerPreparationProgress: (request) =>
+      call("sampler_preparation_progress", { request }),
+    prepareSamplerCommand: (command, request) =>
+      call("prepare_sampler_command", { command, request }),
     detectClipTempo: (sample) => call("detect_clip_tempo", { sample }),
     sampleInfoById: (sample) => call("sample_info_by_id", { sample }),
     addChannelFromFile: (path, index, browser) =>

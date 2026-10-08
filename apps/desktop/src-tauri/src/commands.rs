@@ -63,12 +63,13 @@ fn document_snapshot(session: State<'_, Session>) -> DocumentSnapshot {
 }
 
 #[tauri::command]
-fn dispatch(
+async fn dispatch(
     session: State<'_, Session>,
     command: Command,
     gesture: Option<u64>,
 ) -> Result<DispatchResult, String> {
-    session.dispatch(command, gesture)
+    let session = session.inner().clone();
+    blocking(move || session.dispatch(command, gesture)).await
 }
 
 #[tauri::command]
@@ -78,6 +79,30 @@ async fn prepare_clip_command(
 ) -> Result<DispatchResult, String> {
     let session = session.inner().clone();
     blocking(move || session.prepare_clip_command(command)).await
+}
+#[tauri::command]
+fn sampler_preparation_begin(session: State<'_, Session>) -> Result<u64, String> {
+    session.sampler_preparation_begin()
+}
+#[tauri::command]
+fn sampler_preparation_cancel(session: State<'_, Session>, request: u64) {
+    session.sampler_preparation_cancel(request);
+}
+#[tauri::command]
+fn sampler_preparation_progress(
+    session: State<'_, Session>,
+    request: u64,
+) -> windfall_ipc::SamplerPreparationProgress {
+    session.sampler_preparation_progress(request)
+}
+#[tauri::command]
+async fn prepare_sampler_command(
+    session: State<'_, Session>,
+    command: Command,
+    request: u64,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.prepare_sampler_command(command, request)).await
 }
 #[tauri::command]
 async fn detect_clip_tempo(
@@ -121,18 +146,21 @@ fn automate(
 }
 
 #[tauri::command]
-fn undo(session: State<'_, Session>) -> Option<ProjectPatch> {
-    session.undo()
+async fn undo(session: State<'_, Session>) -> Result<Option<ProjectPatch>, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.undo())).await
 }
 
 #[tauri::command]
-fn redo(session: State<'_, Session>) -> Option<ProjectPatch> {
-    session.redo()
+async fn redo(session: State<'_, Session>) -> Result<Option<ProjectPatch>, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.redo())).await
 }
 
 #[tauri::command]
-fn history_jump(session: State<'_, Session>, cursor: u32) -> ProjectPatch {
-    session.history_jump(cursor)
+async fn history_jump(session: State<'_, Session>, cursor: u32) -> Result<ProjectPatch, String> {
+    let session = session.inner().clone();
+    blocking(move || Ok(session.history_jump(cursor))).await
 }
 
 #[tauri::command]
@@ -662,6 +690,10 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         sample_info,
         sample_info_by_id,
         prepare_clip_command,
+        sampler_preparation_begin,
+        sampler_preparation_cancel,
+        sampler_preparation_progress,
+        prepare_sampler_command,
         detect_clip_tempo,
         audio_editor_open,
         audio_editor_apply,

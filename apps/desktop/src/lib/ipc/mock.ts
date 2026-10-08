@@ -852,7 +852,16 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     engineSettings: () => ipc(() => audioSettings),
 
     auditionNoteOn: (channel, key, velocity) =>
-      ipc(() => transport.noteOn(channel, key, velocity)),
+      ipc(() => {
+        const source = doc
+          .project()
+          .channels.find((item) => item.id === channel)?.source
+        if (source?.type === "sampler" && source.stretch?.mode === "spectral")
+          throw new Error(
+            "Spectral sampler audition requires the desktop audio engine."
+          )
+        transport.noteOn(channel, key, velocity)
+      }),
     auditionNoteOff: (channel, key) =>
       ipc(() => transport.noteOff(channel, key)),
     previewPlay: (filePath, browser) =>
@@ -909,6 +918,21 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         return sampleInfoFor(roots, filePath)
       }),
     prepareClipCommand: (command) => ipc(() => dispatchNow(command)),
+    samplerPreparationBegin: () =>
+      Promise.reject(
+        new Error(
+          "Spectral sampler preparation needs the desktop audio engine. Browser mode cannot prepare or audition key variants."
+        )
+      ),
+    samplerPreparationCancel: () => Promise.resolve(),
+    samplerPreparationProgress: (request) =>
+      Promise.resolve({ request, completed: 0, total: 0, current: false }),
+    prepareSamplerCommand: () =>
+      Promise.reject(
+        new Error(
+          "Spectral sampler preparation needs the desktop audio engine. Settings and history were kept."
+        )
+      ),
     audioEditorOpen: () =>
       Promise.reject(
         new Error(
@@ -1053,6 +1077,18 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
     exportAudio: (exportOptions) =>
       ipc(() => {
+        if (
+          doc
+            .project()
+            .channels.some(
+              (channel) =>
+                channel.source.type === "sampler" &&
+                channel.source.stretch?.mode === "spectral"
+            )
+        )
+          throw new Error(
+            "Spectral sampler export requires the desktop audio engine. Browser mode cannot render key variants."
+          )
         if (exporting) throw new Error("An export is already running.")
         if (!exportOptions.path)
           throw new Error("Choose where to save the file.")

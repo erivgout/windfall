@@ -22,6 +22,13 @@ use crate::state::{Ledger, PlanState};
 /// An immutable project compiled on a worker, ready for a short installation.
 pub struct PreparedProject {
     plan: Plan,
+    sampler_pool: SamplePool,
+}
+
+impl PreparedProject {
+    pub fn sampler_pool(&self) -> &SamplePool {
+        &self.sampler_pool
+    }
 }
 
 /// Sends requests to the audio thread and reads back what it publishes.
@@ -47,6 +54,7 @@ pub struct Controller {
 struct Inner {
     shared: Arc<Shared>,
     state: Mutex<State>,
+    sampler_error: Mutex<Option<crate::sampler_processing::SamplerPreparationError>>,
 }
 
 struct State {
@@ -99,6 +107,7 @@ impl Controller {
         Self {
             inner: Arc::new(Inner {
                 shared: Arc::new(Shared::new()),
+                sampler_error: Mutex::new(None),
                 state: Mutex::new(State {
                     link: None,
                     plan: Arc::new(Plan::empty()),
@@ -140,18 +149,75 @@ impl Controller {
     /// transport's pattern is not in the project, the transport moves to the
     /// project's first pattern.
     pub fn set_project(&self, project: &Project, pool: &SamplePool) {
-        self.set_prepared_project(project, Self::prepare_project(project, pool));
+        match Self::prepare_project(project, pool) {
+            Ok(prepared) => {
+                self.set_prepared_project(project, prepared);
+            }
+            Err(error) => {
+                *self
+                    .inner
+                    .sampler_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(error);
+            }
+        }
+    }
+
+    /// A refused convenience publication keeps the old plan and exposes its reason.
+    pub fn sampler_preparation_error(
+        &self,
+    ) -> Option<crate::sampler_processing::SamplerPreparationError> {
+        self.inner
+            .sampler_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn sampler_key_supported(&self, channel: ChannelId, key: u8) -> bool {
+        let state = self.lock();
+        state.plan.channel(channel).is_some_and(|index| {
+            let sampler = &state.plan.channels[index].sampler;
+            !sampler.spectral
+                || sampler
+                    .bank
+                    .as_ref()
+                    .is_some_and(|bank| bank.at(key).is_some())
+        })
     }
 
     /// Compiles and renders spectral clips on the caller's worker/control thread.
-    pub fn prepare_project(project: &Project, pool: &SamplePool) -> PreparedProject {
+    pub fn prepare_project(
+        project: &Project,
+        pool: &SamplePool,
+    ) -> Result<PreparedProject, crate::sampler_processing::SamplerPreparationError> {
+        Self::try_prepare_project(project, pool)
+    }
+
+    /// Fallible bounded preparation. Must run outside document/audio locks.
+    pub fn try_prepare_project(
+        project: &Project,
+        pool: &SamplePool,
+    ) -> Result<PreparedProject, crate::sampler_processing::SamplerPreparationError> {
+        let pool = pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {})?;
+        Ok(Self::compile_prepared_project(project, &pool))
+    }
+
+    /// Compile already prepared sampler banks; never performs sampler DSP.
+    pub fn compile_prepared_project(project: &Project, pool: &SamplePool) -> PreparedProject {
         PreparedProject {
             plan: compile(project, pool),
+            sampler_pool: pool.clone(),
         }
     }
 
     /// Installs a precompiled snapshot. The caller must verify it still matches the project.
     pub fn set_prepared_project(&self, project: &Project, prepared: PreparedProject) {
+        *self
+            .inner
+            .sampler_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         self.set_plan(prepared.plan);
         let mut state = self.lock();
         let pattern = state.transport.pattern;

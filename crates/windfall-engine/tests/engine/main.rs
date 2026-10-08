@@ -10,6 +10,7 @@ mod mixer;
 mod realtime;
 mod rendering;
 mod sampler;
+mod sampler_processing;
 mod sequencing;
 mod stems;
 mod support;

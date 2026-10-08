@@ -781,6 +781,7 @@ fn sampler_patch() -> impl Strategy<Value = SamplerPatch> {
                 loop_start,
                 loop_end,
             )| SamplerPatch {
+                stretch: None,
                 root_key,
                 tune,
                 gain,

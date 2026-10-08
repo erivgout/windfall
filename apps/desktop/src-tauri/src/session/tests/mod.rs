@@ -23,6 +23,7 @@ mod plugin_update;
 #[cfg(windows)]
 mod plugins;
 mod recording;
+mod sampler_processing;
 mod slicer;
 mod song;
 mod versions;
