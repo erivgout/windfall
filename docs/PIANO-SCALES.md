@@ -32,6 +32,8 @@ Root, scale and both options are retained in the existing `windfall.pianoRoll` U
 
 ## Validation
 
+[Stamp lifecycle repairs](PIANO-STAMP-REPAIRS.md) records the delayed-choice cancellation and pointer-presence regressions, fixes and focused validation on the integrated base.
+
 Focused tests cover all named scales and roots, deterministic nearest-key ties and MIDI limits, group policy, unchanged default row styles, malformed/retained preferences, stamp rhythms/dynamics and all-or-nothing bounds. Integration tests drive the real piano session and shared Rust WASM `addNotes`/`updateNotes`/undo/redo/file commands, including draw/paint bypass, chord drags, keyboard pitch moves, paste, previews, atomic pattern extension, selection, save/open and stale-session cancellation. Toolbar tests exercise accessible menu choices and Cancel.
 
 The pinned base precedes the parent's generated library bindings and simulator exports. Validation uses those parent-generated artifacts from `4b0d509d` locally; the scale/stamp source commit excludes all bindings and WASM artifacts. No Cargo build is needed for these UI changes. Parent integration owns artifact regeneration and parity updates.
