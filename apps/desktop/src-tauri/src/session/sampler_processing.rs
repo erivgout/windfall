@@ -16,6 +16,7 @@ pub(super) struct SampleEditTicket {
     document: Document,
     original_pool: SamplePool,
     candidate_pool: SamplePool,
+    recovered: HashSet<SampleId>,
     loading: HashSet<SampleId>,
     generation: u64,
     edits: u64,
@@ -98,6 +99,19 @@ impl PreparedSampleEdit {
                 .dispatch(ticket.command, ticket.gesture)
                 .map_err(|error| error.to_string())?
         };
+        // These no-op assignments were verified absent and settled in the
+        // original snapshot. Attach only their prepared handles; generic no-op
+        // publication must not fetch cache audio or replace a held source.
+        for id in ticket.recovered {
+            let audio = self
+                .prepared
+                .sampler_pool()
+                .get(id)
+                .expect("verified recovery source");
+            state.pool.insert(id, audio.clone());
+            state.loaded.insert(id);
+            state.failed.remove(&id);
+        }
         Ok(DispatchResult {
             created: applied.created,
             patch: ticket
@@ -109,7 +123,8 @@ impl PreparedSampleEdit {
 
 impl Session {
     /// Snapshot a candidate under the caller's existing lock order. Overlays are
-    /// private until successful publication and ignored for musical no-ops.
+    /// private until successful publication. A no-op can recover only a settled
+    /// absent source explicitly assigned by the command to its candidate channel.
     pub(super) fn sample_edit_ticket(
         &self,
         state: &State,
@@ -122,36 +137,55 @@ impl Session {
             .dispatch(command.clone(), gesture)
             .map_err(|error| error.to_string())?;
         let mut candidate_pool = state.pool.clone();
-        if !applied.touched.is_empty() {
-            for (id, audio) in sources {
-                if state.loading.contains(&id) {
-                    return Err(
-                        "The candidate source is already loading. Wait and try again.".into(),
-                    );
+        let mut recovered = HashSet::new();
+        fn assigns(command: &Command, document: &Document, sample: SampleId) -> bool {
+            match command {
+                Command::SetChannelSample {
+                    id,
+                    sample: Some(assigned),
+                } => {
+                    *assigned == sample
+                        && document
+                            .project()
+                            .channel(*id)
+                            .is_some_and(|channel| channel.source.sample() == Some(sample))
                 }
-                if !document
-                    .project()
-                    .samples
+                Command::Batch { commands, .. } => commands
                     .iter()
-                    .any(|asset| asset.id == id)
-                {
-                    return Err("The candidate source is not registered in the project.".into());
-                }
-                candidate_pool.insert(id, audio);
+                    .any(|command| assigns(command, document, sample)),
+                _ => false,
             }
-            if applied.touched.samples {
-                for asset in &document.project().samples {
-                    if !candidate_pool.contains(asset.id)
-                        && !state.loading.contains(&asset.id)
-                        && let Ok(path) = super::samples::locate(
-                            asset,
-                            state.sample_dir.as_deref(),
-                            &self.inner.factory_dir,
-                        )
-                        && let Some(audio) = self.inner.cache.peek(&path)
-                    {
-                        candidate_pool.insert(asset.id, audio);
-                    }
+        }
+        for (id, audio) in sources {
+            if applied.touched.is_empty() {
+                if state.pool.contains(id)
+                    || state.loading.contains(&id)
+                    || !assigns(&command, &document, id)
+                {
+                    continue;
+                }
+                recovered.insert(id);
+            }
+            if state.loading.contains(&id) {
+                return Err("The candidate source is already loading. Wait and try again.".into());
+            }
+            if document.project().sample(id).is_none() {
+                return Err("The candidate source is not registered in the project.".into());
+            }
+            candidate_pool.insert(id, audio);
+        }
+        if applied.touched.samples {
+            for asset in &document.project().samples {
+                if !candidate_pool.contains(asset.id)
+                    && !state.loading.contains(&asset.id)
+                    && let Ok(path) = super::samples::locate(
+                        asset,
+                        state.sample_dir.as_deref(),
+                        &self.inner.factory_dir,
+                    )
+                    && let Some(audio) = self.inner.cache.peek(&path)
+                {
+                    candidate_pool.insert(asset.id, audio);
                 }
             }
         }
@@ -163,6 +197,7 @@ impl Session {
             document,
             original_pool: state.pool.clone(),
             candidate_pool,
+            recovered,
             loading: state.loading.clone(),
             generation: state.generation,
             edits: state.edits,

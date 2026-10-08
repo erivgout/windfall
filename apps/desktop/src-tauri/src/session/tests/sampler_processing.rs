@@ -1188,3 +1188,420 @@ fn sampler_r1_pending_load_candidate_does_not_attach_a_newer_unrelated_cached_so
 fn sampler_r1_pending_load_history_does_not_attach_a_newer_unrelated_cached_source() {
     pending_load_publication("history");
 }
+
+#[test]
+fn sampler_r2_identical_assignment_recovers_a_settled_absent_source_without_a_musical_edit() {
+    for spectral in [false, true] {
+        settled_assignment_recovery(spectral);
+    }
+}
+
+fn settled_assignment_recovery(spectral: bool) {
+    use windfall_project::{SampleId, SamplePath};
+    let mut rig = Rig::new();
+    let channel = rig.channel(0);
+    let sample = SampleId(rig.project().next_id);
+    let file = rig.file("settled-missing.wav");
+    let batch = Command::Batch {
+        label: Some("Restore channel source".into()),
+        commands: vec![
+            Command::AddSample {
+                name: "Settled missing".into(),
+                path: SamplePath::External(file.clone()),
+            },
+            Command::SetChannelSample {
+                id: channel,
+                sample: Some(sample),
+            },
+        ],
+    };
+    rig.session.dispatch(batch.clone(), None).unwrap();
+    rig.wait_until_loaded_or_failed(sample);
+    assert!(rig.session.state().failed.contains(&sample));
+    if spectral {
+        prepare(&rig);
+    }
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel,
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .dispatch(
+            Command::UpdateSampler {
+                id: channel,
+                patch: SamplerPatch {
+                    gain: Some(0.5),
+                    ..Default::default()
+                },
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.undo().unwrap(); // a real redo branch must survive runtime recovery
+    let before = rig.session.document_snapshot();
+    let original = rig.session.state().pool.clone();
+    let edits = rig.session.state().edits;
+    let audio = AudioBuffer::from_interleaved(
+        48_000,
+        1,
+        (0..4096)
+            .map(|frame| (std::f32::consts::TAU * 440.0 * frame as f32 / 48_000.0).sin() * 0.25)
+            .collect(),
+    );
+    windfall_codec::write_wav(&file, &audio, windfall_codec::WavSampleFormat::Float32).unwrap();
+    let decoded = rig
+        .session
+        .inner
+        .cache
+        .decode(std::path::Path::new(&file))
+        .unwrap();
+    let ticket = {
+        let _recording = rig.session.recording_idle().unwrap();
+        let state = rig.session.state();
+        rig.session
+            .sample_edit_ticket(&state, batch, None, vec![(sample, decoded.clone())])
+            .unwrap()
+    };
+    let prepared = ticket.prepare().unwrap();
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert!(rig.session.state().pool.same_sources(&original));
+    assert!(rig.session.state().failed.contains(&sample));
+    {
+        let _recording = rig.session.recording_idle().unwrap();
+        prepared.commit(&mut rig.session.state()).unwrap();
+    }
+    assert_eq!(rig.session.document_snapshot(), before);
+    let expected = {
+        let state = rig.session.state();
+        assert_eq!(state.edits, edits);
+        assert_eq!(
+            state
+                .pool
+                .get(sample)
+                .expect("settled missing source was not recovered")
+                .identity(),
+            decoded.identity()
+        );
+        assert!(state.loaded.contains(&sample));
+        assert!(!state.failed.contains(&sample));
+        assert!(!state.loading.contains(&sample));
+        assert!(!state.pool.needs_sampler_preparation(&before.project));
+        assert!(rig.session.controller().sampler_key_supported(channel, 60));
+        assert_eq!(
+            rig.session.controller().sampler_key_supported(channel, 59),
+            !spectral
+        );
+        windfall_engine::render(
+            &before.project,
+            &state.pool,
+            &Default::default(),
+            &mut |_| true,
+        )
+    };
+    rig.session.transport_play().unwrap();
+    let playback = rig.run(8192);
+    assert!(playback.iter().any(|x| x.abs() > 0.01));
+    assert_eq!(playback, expected.samples()[..playback.len()]);
+    rig.session.transport_stop();
+    rig.session
+        .export_audio(windfall_ipc::ExportOptions {
+            path: rig.file("recovered-settled.wav"),
+            mode: windfall_ipc::PlayMode::Pattern,
+            bit_depth: windfall_ipc::BitDepth::Float32,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rig.events.wait_for_export().error.is_none());
+    assert_eq!(
+        windfall_codec::decode_file(rig.file("recovered-settled.wav"))
+            .unwrap()
+            .samples(),
+        expected.samples()
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+    rig.session.redo().unwrap();
+    assert_eq!(
+        rig.session.document_snapshot().history.cursor,
+        before.history.cursor + 1
+    );
+}
+
+fn settled_assignment(
+    rig: &Rig,
+    channel: ChannelId,
+    name: &str,
+) -> (windfall_project::SampleId, String, Command) {
+    use windfall_project::{SampleId, SamplePath};
+    let sample = SampleId(rig.project().next_id);
+    let file = rig.file(name);
+    let command = Command::Batch {
+        label: Some("Assign missing source".into()),
+        commands: vec![
+            Command::AddSample {
+                name: name.into(),
+                path: SamplePath::External(file.clone()),
+            },
+            Command::SetChannelSample {
+                id: channel,
+                sample: Some(sample),
+            },
+        ],
+    };
+    rig.session.dispatch(command.clone(), None).unwrap();
+    rig.wait_until_loaded_or_failed(sample);
+    assert!(rig.session.state().failed.contains(&sample));
+    assert!(!rig.session.state().pool.contains(sample));
+    (sample, file, command)
+}
+
+#[test]
+fn sampler_r2_noop_recovery_budget_refusal_preserves_failure_source_history_and_audible_plan() {
+    let mut rig = limited_candidate_fixture();
+    let channel = rig.channel(1);
+    let root = rig.channel(0);
+    let (sample, file, assignment) = settled_assignment(&rig, channel, "budget-missing.wav");
+    rig.session.dispatch(command(channel), None).unwrap();
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel: root,
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .dispatch(
+            Command::UpdateSampler {
+                id: root,
+                patch: SamplerPatch {
+                    gain: Some(0.5),
+                    ..Default::default()
+                },
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.undo().unwrap();
+    let before = rig.session.document_snapshot();
+    let (pool, failed, loaded, loading, edits) = {
+        let state = rig.session.state();
+        (
+            state.pool.clone(),
+            state.failed.clone(),
+            state.loaded.clone(),
+            state.loading.clone(),
+            state.edits,
+        )
+    };
+    let retained = pool.sampler_retained_bytes();
+    assert!(retained > 0);
+    rig.session.controller().note_on(root, 60, 0.8);
+    let old = rig.run(8192);
+    assert!(old.iter().any(|x| x.abs() > 0.01));
+    rig.session.controller().note_on(root, 60, 0.8);
+    assert_eq!(rig.run(128), old[..256]); // an old bank is still audible during preparation
+    windfall_codec::write_wav(
+        &file,
+        &AudioBuffer::from_interleaved(48_000, 2, vec![0.25; 524288]),
+        windfall_codec::WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let audio = rig
+        .session
+        .inner
+        .cache
+        .decode(std::path::Path::new(&file))
+        .unwrap();
+    let ticket = {
+        let _recording = rig.session.recording_idle().unwrap();
+        rig.session
+            .sample_edit_ticket(
+                &rig.session.state(),
+                assignment,
+                None,
+                vec![(sample, audio)],
+            )
+            .unwrap()
+    };
+    assert!(
+        ticket
+            .prepare()
+            .err()
+            .expect("oversized recovery was accepted")
+            .contains("budget")
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+    {
+        let state = rig.session.state();
+        assert!(state.pool.same_sources(&pool));
+        assert_eq!(state.pool.sampler_retained_bytes(), retained);
+        assert_eq!(state.failed, failed);
+        assert_eq!(state.loaded, loaded);
+        assert_eq!(state.loading, loading);
+        assert_eq!(state.edits, edits);
+        assert!(!state.pool.needs_sampler_preparation(&before.project));
+        assert!(!rig.session.controller().sampler_key_supported(channel, 60));
+    }
+    assert_eq!(rig.run(4096), old[256..8448]);
+    let expected =
+        windfall_engine::render(&before.project, &pool, &Default::default(), &mut |_| true);
+    rig.session
+        .export_audio(windfall_ipc::ExportOptions {
+            path: rig.file("budget-unchanged.wav"),
+            mode: windfall_ipc::PlayMode::Pattern,
+            bit_depth: windfall_ipc::BitDepth::Float32,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(rig.events.wait_for_export().error.is_none());
+    assert_eq!(
+        windfall_codec::decode_file(rig.file("budget-unchanged.wav"))
+            .unwrap()
+            .samples(),
+        expected.samples()
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+}
+
+#[test]
+fn sampler_r2_noop_recovery_ignores_unassigned_overlays_and_existing_empty_handles() {
+    use windfall_project::SamplePath;
+    for action in ["registration", "settings", "other assignment", "held empty"] {
+        let rig = Rig::new();
+        let channel = rig.channel(0);
+        let (sample, file, assignment) = settled_assignment(&rig, channel, "gated-missing.wav");
+        prepare(&rig);
+        let action = match action {
+            "registration" => Command::AddSample {
+                name: "gated-missing.wav".into(),
+                path: SamplePath::External(file),
+            },
+            "settings" => command(channel),
+            "other assignment" => Command::SetChannelSample {
+                id: rig.channel(1),
+                sample: rig.project().channels[1].source.sample(),
+            },
+            "held empty" => {
+                let mut state = rig.session.state();
+                state
+                    .pool
+                    .insert(sample, AudioBuffer::from_interleaved(48_000, 1, vec![]));
+                state.loaded.insert(sample);
+                state.failed.remove(&sample);
+                assignment
+            }
+            _ => unreachable!(),
+        };
+        let before = rig.session.document_snapshot();
+        let (pool, failed, loaded, loading, edits) = {
+            let state = rig.session.state();
+            (
+                state.pool.clone(),
+                state.failed.clone(),
+                state.loaded.clone(),
+                state.loading.clone(),
+                state.edits,
+            )
+        };
+        let ticket = rig
+            .session
+            .sample_edit_ticket(
+                &rig.session.state(),
+                action,
+                None,
+                vec![(
+                    sample,
+                    AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 4096]),
+                )],
+            )
+            .unwrap();
+        let prepared = ticket.prepare().unwrap();
+        {
+            let _recording = rig.session.recording_idle().unwrap();
+            let mut state = rig.session.state();
+            prepared.commit(&mut state).unwrap();
+            assert!(state.pool.same_sources(&pool));
+            assert_eq!(state.failed, failed);
+            assert_eq!(state.loaded, loaded);
+            assert_eq!(state.loading, loading);
+            assert_eq!(state.edits, edits);
+        }
+        assert_eq!(rig.session.document_snapshot(), before);
+        assert!(!rig.session.controller().sampler_key_supported(channel, 60));
+    }
+}
+
+#[test]
+fn sampler_r2_noop_recovery_leaves_an_assigned_pending_decoder_in_control() {
+    use std::sync::atomic::Ordering;
+    let rig = Rig::new();
+    let channel = rig.channel(0);
+    let (sample, file, assignment) = settled_assignment(&rig, channel, "pending-recovery.wav");
+    prepare(&rig);
+    windfall_codec::write_wav(
+        &file,
+        &AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 4096]),
+        windfall_codec::WavSampleFormat::Float32,
+    )
+    .unwrap();
+    let hold = rig.session.hold("samples:decoded");
+    let worker = rig.session.background(|session| session.samples_reload());
+    hold.wait();
+    let decoded = rig
+        .session
+        .inner
+        .cache
+        .peek(std::path::Path::new(&file))
+        .unwrap();
+    let before = rig.session.document_snapshot();
+    let ticket = {
+        let _recording = rig.session.recording_idle().unwrap();
+        rig.session
+            .sample_edit_ticket(
+                &rig.session.state(),
+                assignment,
+                None,
+                vec![(
+                    sample,
+                    AudioBuffer::from_interleaved(48_000, 1, vec![-0.125; 8192]),
+                )],
+            )
+            .unwrap()
+    };
+    let prepared = ticket.prepare().unwrap();
+    {
+        let _recording = rig.session.recording_idle().unwrap();
+        let mut state = rig.session.state();
+        prepared.commit(&mut state).unwrap();
+        assert!(state.loading.contains(&sample));
+        assert!(!state.pool.contains(sample));
+        assert!(!state.loaded.contains(&sample));
+        assert!(!rig.session.controller().sampler_key_supported(channel, 60));
+    }
+    assert_eq!(rig.session.document_snapshot(), before);
+    hold.release();
+    assert_eq!(worker.join().unwrap(), 0);
+    let deadline = std::time::Instant::now() + super::PATIENCE;
+    while rig.session.inner.preparing_samplers.load(Ordering::Acquire) {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let state = rig.session.state();
+    assert_eq!(
+        state.pool.get(sample).unwrap().identity(),
+        decoded.identity()
+    );
+    assert!(!state.loading.contains(&sample));
+    assert!(!state.failed.contains(&sample));
+    assert!(rig.session.controller().sampler_key_supported(channel, 60));
+    drop(state);
+    assert_eq!(rig.session.document_snapshot(), before);
+}
