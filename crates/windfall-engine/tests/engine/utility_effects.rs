@@ -1153,7 +1153,8 @@ fn utility_effects_r5_pending_revisions_keep_latency_changes_and_precompiled_pla
         // Metadata must snapshot installation identity, not query a past
         // plan's now-mutated factory or trust precompilation's old identity.
         for edit in 0..8 {
-            let prepared = windfall_engine::Controller::prepare_project(&rig.project, &rig.pool);
+            let prepared = windfall_engine::Controller::prepare_project(&rig.project, &rig.pool)
+                .expect("the restoration fixture prepares successfully");
             stats
                 .latency_override
                 .store(if edit % 2 == 0 { 64 } else { 32 }, Relaxed);
