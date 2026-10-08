@@ -721,3 +721,67 @@ jobs, immutable inputs, explicit model provenance/checksums, owned artifacts,
 cancellation and review tickets. Session/IPC/UI attachment is a later serialized
 window. Fake inference verifies lifecycle only; it cannot close any ML row.
 No additional parity completion or release publication is claimed.
+
+## 2026-10-08 composed restoration checks and next deliveries
+
+Utility R5 `a4b46967` is integrated as `821a67c1`. A test-only adapter in
+`88903d72` unwraps the root's now-fallible project preparation API; the
+owner's older API was infallible. The first root invocation stopped at that
+compile mismatch and executed no tests. The corrected invocation passed
+**100 unique focused native cases**: 71 effects, one Plan ownership bound,
+three Rack, three State, eight plugin, nine DSP repair, four actual CLAP/VST3
+effect/instrument capture roles and one adoption guard. Strict all-target
+Clippy for DSP/engine/desktop, workspace formatting, simulator freshness and
+whitespace checks passed. The complete resumed transcript is
+`windfall-root-utility-r5-native-resume.log` in the local temporary directory.
+
+Independent R6 passed 95 attributable cached native cases and confirmed the
+prior R1–R5 trigger closures. It found a further P2 in detached installation:
+a precompiled plan can retain an old factory revision while stream attachment
+prepares a current native owner. A subsequent unchanged plan can then lose
+that running owner and its latency. This is a source-traced finding with a
+float32 signal calculation, not yet a compiled reproduction. The same owner
+now has a narrow controller identity-refresh window in addition to Plan/State
+lifecycle bookkeeping. Utility acceptance remains open; passing the existing
+cases does not close this new trigger.
+
+E1 registry checkpoint `25b692b3` remains outside root. Independent R3 found
+no actionable source or registry-contract defects and confirmed that the
+existing EffectSlot section is unchanged. Its cached binaries could not be
+attributed to the final source, so the reported 299 tests remain owner
+provenance. The owner now has a narrow downstream test window: a new project
+persistence/history/automation suite, new engine filter tests with mechanical
+exhaustive registration, and generic-control UI tests. The only existing
+access-test edit is three keys in `features/params/access.test.ts`. No engine
+production or project-model changes are authorized by that window. Parent
+generation of matching descriptors, bindings and WASM is still required.
+
+T1's three R1 fixes are delivered in `e0809d0e`, following the previously
+reported four source commits. The ordered request watermark resides in
+Session Inner and is accessed under State; guarded set/seek/play reject stale
+generation, revision, region and request before transport mutation. Pending
+arm clear/replacement is ordered even before the first arm becomes active.
+Stopped skip navigation now preserves its destination automation hold through
+native tails. Owner evidence includes 234 focused UI and 70 focused native
+cases; fresh independent R2 is running. These sources and their validation
+artifacts remain outside root.
+
+M1 foundation `89d5ffbd` provides the owned native analysis crate, with one
+library and 12 native integration tests reported passing. Independent R1 is
+reviewing its workers, capture provenance, quotas and artifact ownership.
+Published assets remain charged and retained, including failed/partial apply
+publication; deferred retirement releases consumed staging and buffers.
+Session/IPC/UI installation and actual inference remain separate incomplete
+deliveries. The existing lock packages are reported unchanged.
+
+Release engineering is implementing candidate manifests, source/license
+inventory, validation tools and an artifact-only workflow in the T3-bound
+`gpt/t3-release-engineering-r1` worktree. It has no publication, version,
+updater, signing-secret or existing workflow window. N4 is continuing its
+three R2 repairs and sticky CLAP state-write refusal in the existing bound
+owner; desktop production routing remains closed.
+
+This is a checked development checkpoint with the utility issue explicitly
+open. No new parity row, release or full-project acceptance is claimed.
+The private repository and immutable `v0.1.0-alpha.1` assets were rechecked;
+the collaborator write invitation remains pending.
