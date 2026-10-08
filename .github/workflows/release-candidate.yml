@@ -1,0 +1,245 @@
+{
+  "name": "Release candidate (development artifacts only)",
+  "on": {
+    "workflow_dispatch": {
+      "inputs": {
+        "source_commit": {
+          "description": "Exact approved source commit (40 lowercase hex characters)",
+          "required": true,
+          "type": "string"
+        },
+        "version": {
+          "description": "Approved future version already committed in all source metadata",
+          "required": true,
+          "type": "string"
+        },
+        "channel": {
+          "description": "Version channel",
+          "required": true,
+          "type": "choice",
+          "options": ["prerelease", "stable"]
+        },
+        "mode": {
+          "description": "Signed release remains gated until operator/native verification integration",
+          "required": true,
+          "default": "unsigned-development",
+          "type": "choice",
+          "options": ["unsigned-development", "signed-release"]
+        }
+      }
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "release-candidate-${{ inputs.version }}-${{ inputs.source_commit }}",
+    "cancel-in-progress": false
+  },
+  "env": {
+    "REQUESTED_COMMIT": "${{ inputs.source_commit }}",
+    "REQUESTED_VERSION": "${{ inputs.version }}",
+    "REQUESTED_CHANNEL": "${{ inputs.channel }}",
+    "REQUESTED_MODE": "${{ inputs.mode }}",
+    "CARGO_BUILD_JOBS": "1",
+    "RUST_TEST_THREADS": "1",
+    "CARGO_TERM_COLOR": "never"
+  },
+  "defaults": {
+    "run": {
+      "shell": "bash"
+    }
+  },
+  "jobs": {
+    "preflight": {
+      "runs-on": "ubuntu-22.04",
+      "timeout-minutes": 15,
+      "steps": [
+        {
+          "name": "Checkout workflow tools at immutable workflow commit",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "ref": "${{ github.sha }}",
+            "path": "release-tools",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Node 26.4.0",
+          "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "with": {
+            "node-version": "26.4.0"
+          }
+        },
+        {
+          "name": "Validate request before source checkout",
+          "run": "node -e \"if(!/^[a-f0-9]{40}$/.test(process.env.REQUESTED_COMMIT))throw Error('Full immutable commit required')\"\nnode release-tools/scripts/release/check-workflow.mjs\n"
+        },
+        {
+          "name": "Checkout exact source commit",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "ref": "${{ inputs.source_commit }}",
+            "path": "source",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Pinned Rust metadata toolchain",
+          "run": "rustup toolchain install 1.99.0 --profile minimal\nrustup default 1.99.0\n"
+        },
+        {
+          "name": "Authored release fixtures",
+          "run": "node --test --test-concurrency=1 release-tools/scripts/release/release.test.mjs"
+        },
+        {
+          "name": "Source and read-only published identity gate",
+          "run": "node release-tools/scripts/release/cli.mjs preflight --source source --commit \"$REQUESTED_COMMIT\" --version \"$REQUESTED_VERSION\" --channel \"$REQUESTED_CHANNEL\" --mode \"$REQUESTED_MODE\" --github",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}"
+          }
+        }
+      ]
+    },
+    "candidate": {
+      "needs": "preflight",
+      "name": "${{ matrix.platform }} ${{ matrix.architecture }} development candidate",
+      "runs-on": "${{ matrix.os }}",
+      "timeout-minutes": 90,
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "include": [
+            {
+              "os": "windows-2022",
+              "platform": "windows",
+              "architecture": "x64",
+              "target": "x86_64-pc-windows-msvc",
+              "bundles": "nsis"
+            },
+            {
+              "os": "macos-15",
+              "platform": "macos",
+              "architecture": "aarch64",
+              "target": "aarch64-apple-darwin",
+              "bundles": "dmg"
+            },
+            {
+              "os": "ubuntu-22.04",
+              "platform": "linux",
+              "architecture": "x64",
+              "target": "x86_64-unknown-linux-gnu",
+              "bundles": "deb"
+            }
+          ]
+        }
+      },
+      "env": {
+        "CARGO_TARGET_DIR": "${{ github.workspace }}/source/target/release-r1-native",
+        "TS_RS_EXPORT_DIR": "${{ runner.temp }}/release-r1-bindings",
+        "CANDIDATE_OUTPUT": "${{ runner.temp }}/windfall-candidate-${{ matrix.platform }}-${{ matrix.architecture }}",
+        "SOURCE_CAPTURE": "${{ runner.temp }}/windfall-source-capture.json",
+        "NATIVE_PLATFORM": "${{ matrix.platform }}",
+        "NATIVE_ARCHITECTURE": "${{ matrix.architecture }}",
+        "NATIVE_TARGET": "${{ matrix.target }}",
+        "NATIVE_BUNDLES": "${{ matrix.bundles }}"
+      },
+      "steps": [
+        {
+          "name": "Checkout immutable workflow tools",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "ref": "${{ github.sha }}",
+            "path": "release-tools",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Checkout immutable source",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "ref": "${{ inputs.source_commit }}",
+            "path": "source",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Pinned Node",
+          "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "with": {
+            "node-version": "26.4.0"
+          }
+        },
+        {
+          "name": "Install existing package-manager version without install scripts",
+          "run": "npm install --global --ignore-scripts pnpm@11.1.2\n"
+        },
+        {
+          "name": "Locate pnpm content-addressed store",
+          "id": "pnpm-store",
+          "run": "printf 'path=%s\\n' \"$(pnpm store path --silent)\" >> \"$GITHUB_OUTPUT\""
+        },
+        {
+          "name": "Cache locked package sources",
+          "uses": "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+          "with": {
+            "path": "${{ steps.pnpm-store.outputs.path }}\n~/.cargo/registry\n~/.cargo/git",
+            "key": "release-r1-${{ matrix.target }}-rust1.99.0-pnpm11.1.2-${{ hashFiles('source/Cargo.lock', 'source/apps/desktop/pnpm-lock.yaml') }}"
+          }
+        },
+        {
+          "name": "Pinned native Rust toolchain",
+          "run": "rustup toolchain install 1.99.0 --profile minimal --target \"$NATIVE_TARGET\"\nrustup default 1.99.0\n"
+        },
+        {
+          "name": "Existing Linux native prerequisites",
+          "if": "runner.os == 'Linux'",
+          "run": "sudo apt-get update\nsudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev\n"
+        },
+        {
+          "name": "Frozen desktop dependencies",
+          "working-directory": "source/apps/desktop",
+          "run": "pnpm install --frozen-lockfile"
+        },
+        {
+          "name": "Capture clean source and approved metadata before native build",
+          "run": "node release-tools/scripts/release/cli.mjs capture --source source --commit \"$REQUESTED_COMMIT\" --version \"$REQUESTED_VERSION\" --channel \"$REQUESTED_CHANNEL\" --mode \"$REQUESTED_MODE\" --output \"$SOURCE_CAPTURE\""
+        },
+        {
+          "name": "Verify actual generated factory resources",
+          "working-directory": "source",
+          "run": "if [[ \"$RUNNER_OS\" == 'Windows' ]]; then\n  source scripts/msvc-env.sh\nfi\ncargo run --locked -p windfall-factory -- verify content/factory\n"
+        },
+        {
+          "name": "Build native development bundles with signing explicitly disabled",
+          "working-directory": "source/apps/desktop",
+          "run": "if [[ \"$RUNNER_OS\" == 'Windows' ]]; then\n  source ../../scripts/msvc-env.sh\nfi\npnpm tauri build --ci --no-sign --target \"$NATIVE_TARGET\" --bundles \"$NATIVE_BUNDLES\" -- --locked\n"
+        },
+        {
+          "name": "Generate verified candidate evidence and recheck remote identity",
+          "run": "node release-tools/scripts/release/cli.mjs candidate --source source --commit \"$REQUESTED_COMMIT\" --version \"$REQUESTED_VERSION\" --channel \"$REQUESTED_CHANNEL\" --mode \"$REQUESTED_MODE\" --capture \"$SOURCE_CAPTURE\" --bundle-root \"$CARGO_TARGET_DIR/$NATIVE_TARGET/release/bundle\" --platform \"$NATIVE_PLATFORM\" --architecture \"$NATIVE_ARCHITECTURE\" --output \"$CANDIDATE_OUTPUT\" --github",
+          "env": {
+            "GH_TOKEN": "${{ github.token }}"
+          }
+        },
+        {
+          "name": "Independent verification before upload",
+          "run": "node release-tools/scripts/release/cli.mjs verify --source source --commit \"$REQUESTED_COMMIT\" --version \"$REQUESTED_VERSION\" --channel \"$REQUESTED_CHANNEL\" --mode \"$REQUESTED_MODE\" --candidate \"$CANDIDATE_OUTPUT\""
+        },
+        {
+          "name": "Upload development candidate workflow artifact",
+          "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+          "with": {
+            "name": "unsigned-development-${{ inputs.version }}-${{ matrix.platform }}-${{ matrix.architecture }}-${{ github.run_id }}-${{ github.run_attempt }}",
+            "path": "${{ env.CANDIDATE_OUTPUT }}/",
+            "if-no-files-found": "error",
+            "retention-days": 14,
+            "overwrite": false,
+            "compression-level": 0,
+            "include-hidden-files": true
+          }
+        }
+      ]
+    }
+  }
+}
