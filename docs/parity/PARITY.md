@@ -14,13 +14,13 @@ As of 2026-10-08. Sources:
 
 ## Summary
 
-**88 of 342 rows accounted for (25.7%).** A row is accounted for when it is done or won't do.
+**90 of 342 rows accounted for (26.3%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 212 |
-| In progress | 42 |
-| Done | 86 |
+| Todo | 211 |
+| In progress | 41 |
+| Done | 88 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
@@ -28,20 +28,20 @@ As of 2026-10-08. Sources:
 | Core features | 23 | 12 | 8 | 2 | 1 |
 | Main windows | 113 | 47 | 13 | 52 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 63 | 5 | 12 | 0 |
+| Effects | 80 | 62 | 5 | 13 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
-| Workflow, MIDI and settings | 39 | 28 | 6 | 5 | 0 |
+| Workflow, MIDI and settings | 39 | 28 | 5 | 6 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 6 | 8 | 23 | 2 |
+| 1. Make a beat | 39 | 6 | 7 | 24 | 2 |
 | 2. Write a song | 99 | 40 | 18 | 41 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
-| 5. The long tail | 129 | 117 | 2 | 10 | 0 |
+| 5. The long tail | 129 | 116 | 2 | 11 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
 
@@ -292,7 +292,7 @@ As of 2026-10-08. Sources:
 | Fruity Scratcher | TBD | 5 | todo |  |
 | Fruity Send | TBD | 5 | todo |  |
 | Fruity Soft Clipper | Soft clipper | 5 | done | Distinct soft-knee peak-rounding processor with ceiling/knee controls, tested odd/monotone/bounded transfer, persistence/history and automation. Callback and render parity checks pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
-| Fruity Squeeze | TBD | 5 | todo |  |
+| Fruity Squeeze | Lo-fi reduction | 5 | done | Distinct quantization, rate reduction, drive, timed preservation/replacement and resonant pre/post filtering with 16 persisted/automatable controls. Independent signal, callback, live/offline/stem and shared-WASM UI checks pass; Standards/Spec reviews and parent composition accepted. Finite activity and intentional aliasing policies are documented; device/listening/platform qualification remains separate. See docs/LOFI.md. |
 | Fruity Stereo Enhancer | TBD | 5 | todo |  |
 | Fruity Stereo Shaper | Stereo matrix | 5 | done | Stereo and mid/side matrix, signed coefficients, encode/decode and independent channel delays are integrated. Controls/history, bounded priming/tap transitions, shared-delay PDC and live/offline/stem tests pass. Latency-changing delay automation and varying-branch transient cancellation retain the documented host limits. Utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/UTILITY-REPAIRS.md. |
 | Fruity Vocoder | TBD | 5 | todo |  |
@@ -395,7 +395,7 @@ As of 2026-10-08. Sources:
 | Themes | Light and dark themes | 1 | done | Light and dark themes. |
 | Interface scaling | Interface scaling | 1 | in-progress | Whole-application scaling with persisted preferences and coherent canvas/control coordinates is being implemented in an isolated T3 task. Native third-party editor content scaling remains a required plugin-host integration; application-only browser checks will not complete this row. |
 | Hint bar | Hints | 1 | done |  |
-| Output meter and CPU/memory panels | Status meters | 1 | in-progress | Master meter and engine load. No memory readout. |
+| Output meter and CPU/memory panels | Status meters | 1 | done | Master output, engine load/dropouts and bounded native resident Host RAM readout with explicit accounting scope, unavailable/error recovery and lifecycle-safe polling. Windows native and shared-WASM UI checks pass; independent Standards/Spec reviews accepted. macOS/Linux runtime execution remains a platform gate. See docs/TOOLBAR-MEMORY.md. |
 | Undo and edit history | Undo history | 2 | done | The plan calls for linear undo with a visible history list. |
 | Multithreaded processing | Multi-core mixing | 2 | todo |  |
 | Global snap | Global snap | 2 | todo |  |

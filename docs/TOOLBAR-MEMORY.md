@@ -63,8 +63,11 @@ present. Evidence screenshot:
 Numeric polling behavior is exercised by the component tests with a substituted
 backend response; browser preview does not prove native desktop IPC execution.
 
-macOS and Linux native queries await their platform CI execution. Physical
-device performance and aggregate child-process accounting are not claimed.
+The existing `7f180337` CI run executed both native query tests successfully on
+macOS; its overall Rust job later failed the separate VST3 bundle-entry tests.
+Ubuntu's full Rust job passed. These are remote results from the last run before
+automatic CI was disabled at the user's request, not new dispatched jobs.
+Physical device performance and aggregate child-process accounting are not claimed.
 
 ## Independent source review
 
@@ -77,3 +80,7 @@ assertion and all 11 memory lifecycle tests pass after that correction;
 TypeScript and scoped ESLint pass. Native accounting, IPC, units and polling
 are unchanged. Both initial reviews were read-only source audits, not executed
 platform tests.
+
+The bounded Spec follow-up at `7f180337` confirms that correction and reports
+no remaining concrete blockers or regressions. The software row is accepted;
+macOS/Linux execution and physical device qualification remain separate gates.

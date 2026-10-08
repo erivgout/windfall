@@ -634,7 +634,7 @@ The following table is an exhaustive snapshot from base `docs/parity/parity.json
 | `fx-fruity-scratcher` | Fruity Scratcher | 5 | todo | E6 |
 | `fx-fruity-send` | Fruity Send | 5 | todo | E7 / T2 / T7 |
 | `fx-fruity-soft-clipper` | Fruity Soft Clipper | 5 | todo | N2 |
-| `fx-fruity-squeeze` | Fruity Squeeze | 5 | todo | E4 |
+| `fx-fruity-squeeze` | Fruity Squeeze | 5 | done | E4 |
 | `fx-fruity-stereo-enhancer` | Fruity Stereo Enhancer | 5 | todo | E1 |
 | `fx-fruity-stereo-shaper` | Fruity Stereo Shaper | 5 | todo | N2 |
 | `fx-fruity-vocoder` | Fruity Vocoder | 5 | todo | E5 / M3 |
@@ -737,7 +737,7 @@ The following table is an exhaustive snapshot from base `docs/parity/parity.json
 | `wf-themes` | Themes | 1 | done | B |
 | `wf-ui-scaling` | Interface scaling | 1 | todo | R1 |
 | `wf-hint-bar` | Hint bar | 1 | done | B |
-| `wf-toolbar-meters` | Output meter and CPU/memory panels | 1 | in-progress | T0 |
+| `wf-toolbar-meters` | Output meter and CPU/memory panels | 1 | done | T0 |
 | `wf-undo-history` | Undo and edit history | 2 | done | B |
 | `wf-multithreading` | Multithreaded processing | 2 | todo | P1 |
 | `wf-global-snap` | Global snap | 2 | todo | T5 |

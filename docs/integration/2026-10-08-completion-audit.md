@@ -68,3 +68,38 @@ delivery; extra review rounds require a concrete unresolved finding.
 
 Private repository access and `v0.1.0-alpha.1` are preserved. This audit creates
 no release, tag, public publication, dependency upgrade or new product exclusion.
+
+## Subsequent integrated deliveries
+
+The parent implemented the resident Host RAM toolbar readout at `0e81f508`,
+corrected its accessible accounting-scope label at `7f180337`, and accepted the
+clean Standards and bounded Spec follow-up. Native Windows and remote
+macOS/Linux query checks, polling/lifecycle/component checks and the actual
+browser layout support `wf-toolbar-meters`. The readout explicitly excludes
+webviews and plugin helpers; it is not aggregate process-tree memory.
+
+The complete Lo-fi reduction source `d073d6e3` + `be6c9811` is composed at
+`9c565d8b` + `13822c08`. Both independent review axes report zero findings.
+Fresh parent checks cover all DSP targets, project persistence/history and
+automation, live/offline/both stem modes and actual shared-WASM controls.
+Its 16 controls and distinct quantization, rate reduction, drive, timed
+replacement and resonant pre/post filtering satisfy `fx-fruity-squeeze`.
+Finite activity, intentional aliasing, device/listening and platform limits
+remain documented in [LOFI.md](../LOFI.md).
+
+The tracker is now **88 done, 41 in progress, 211 todo and 2 excluded**:
+**90/342 accounted for, 26.3%**; completed features alone are **25.7%**.
+This adds two delivered features to the earlier eighteen-row accounting audit.
+Chorus/Flanger/Phaser are delivered on a separate branch but await the concrete
+Phaser tail-reentry repair and parent composition, so their rows stay open.
+
+The independently reviewed ABI4 reset increment is composed at `a0e71327`.
+Parent local execution includes the original epoch-2/no-new-DSP capture oracle,
+82 host library cases, 31 real helper-process cases and 20 realtime cases.
+This repairs a concrete host failure; it does not close production routing,
+off-lock preparation, native editor, packaged discovery or the overall N4 row.
+
+The user explicitly prohibited further GitHub Actions minutes. Automatic CI
+is disabled remotely; no workflow is dispatched or rerun for this batch.
+Verification continues locally. The last already-completed remote run remains
+separate provenance, and unexecuted platform/device gates remain open.

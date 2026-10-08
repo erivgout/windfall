@@ -9,6 +9,7 @@ import type { DistortionParams } from "./DistortionParams";
 import type { EqParams } from "./EqParams";
 import type { FastLowpassParams } from "./FastLowpassParams";
 import type { LimiterParams } from "./LimiterParams";
+import type { LofiParams } from "./LofiParams";
 import type { PolarityParams } from "./PolarityParams";
 import type { ReverbParams } from "./ReverbParams";
 import type { SelectableFilterParams } from "./SelectableFilterParams";
@@ -19,4 +20,4 @@ import type { StereoMatrixParams } from "./StereoMatrixParams";
  * The settings of any one effect. This is what a project stores for an
  * effect slot.
  */
-export type EffectParams = { "type": "eq" } & EqParams | { "type": "compressor" } & CompressorParams | { "type": "limiter" } & LimiterParams | { "type": "reverb" } & ReverbParams | { "type": "delay" } & DelayParams | { "type": "balance" } & BalanceParams | { "type": "dcBlock" } & DcBlockParams | { "type": "channelMute" } & ChannelMuteParams | { "type": "polarity" } & PolarityParams | { "type": "stereoMatrix" } & StereoMatrixParams | { "type": "softClipper" } & SoftClipperParams | { "type": "distortion" } & DistortionParams | { "type": "fastLowpass" } & FastLowpassParams | { "type": "selectableFilter" } & SelectableFilterParams | { "type": "bassShelf" } & BassShelfParams;
+export type EffectParams = { "type": "eq" } & EqParams | { "type": "compressor" } & CompressorParams | { "type": "limiter" } & LimiterParams | { "type": "reverb" } & ReverbParams | { "type": "delay" } & DelayParams | { "type": "balance" } & BalanceParams | { "type": "dcBlock" } & DcBlockParams | { "type": "channelMute" } & ChannelMuteParams | { "type": "polarity" } & PolarityParams | { "type": "stereoMatrix" } & StereoMatrixParams | { "type": "softClipper" } & SoftClipperParams | { "type": "distortion" } & DistortionParams | { "type": "fastLowpass" } & FastLowpassParams | { "type": "selectableFilter" } & SelectableFilterParams | { "type": "bassShelf" } & BassShelfParams | { "type": "lofi" } & LofiParams;

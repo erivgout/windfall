@@ -1275,3 +1275,118 @@ Session stage 2 preparation/publication/retirement. The immutable stage-1 pin
 stays available. Attached legacy refusal is not accepted as the final production
 route. These findings prevent P1 acceptance; no P1 row or global lock-ownership
 closure follows from the owner test counts.
+
+# RAM, lo-fi and authoritative reset final reviews
+
+## Toolbar RAM
+
+Fixed initial source `0e81f508`, follow-up `7f180337`, base `125d709c`.
+Standards R1 reports zero findings; Spec R1's accessible accounting-scope P2
+was repaired and the bounded Spec R2 is clean:
+
+R1 Spec P2 is resolved at `7f1803379c3e2e439b1591733e20c067ea845f34`.
+
+The [label at line 51](/C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src/features/transport/memory-readout.tsx:51) includes resident desktop-host meaning and webview/plugin-helper exclusions for both numeric and unavailable states. The [exact accessible-name assertion](/C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src/features/transport/memory-readout.test.tsx:37) checks that wording.
+
+No remaining concrete Spec blockers or regressions found in the bounded follow-up diff.
+
+This was a read-only audit of pinned blobs; I ran no tests. Reported test passes remain owner evidence, and macOS/Linux runtime verification remains an external platform gate.
+
+## Lo-fi reduction
+
+Fixed complete source `be6c9811` through immutable foundation `d073d6e3`,
+base `427ed0a7`. Parent composed those increments at `9c565d8b` and
+`13822c08` without importing other owner's work.
+
+### Standards
+
+**Standards: 0 findings.** Reviewed `427ed0a7…be6c9811`, including ordered foundation `d073d6e3`, from pinned source blobs.
+
+No documented contract breaches or meaningful heuristic findings identified. Fixed callback storage, parameter sanitization, append-only registration/defaults, and generic document/UI integration follow the [architecture contracts](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-lofi-e4/docs/ARCHITECTURE.md:229) and [DSP interface rules](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-lofi-e4/crates/windfall-dsp/src/effect.rs:34).
+
+Read-only audit; worktree remained clean. No builds, tests, imports, browser actions, nested agents or artifacts. Owner verification claims were inspected, not reproduced.
+
+### Spec
+
+No supported **Spec findings** for `be6c981166c500d04fa6a9aa8b0637d943819175` against `427ed0a7a07f3cae41ab1b91133b5e317b0f3dc9`, through immutable foundation `d073d6e3`.
+
+The source covers distinct quantization, rate reduction, drive, timed preservation/replacement, resonant pre/post filtering, and all 16 controls through registration, persistence/history, automation, engine rendering, both stem modes, and generic UI editing. Replacement relationships and filter placement align with the [primary manual](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/plugins/Fruity%20Squeeze.htm).
+
+The accepted finite activity and intentional aliasing policies are documented. Parent-owned artifacts and physical/platform qualification remain outside this acceptance.
+
+Read-only audit completed; tests were inspected, not executed. Worktree remains clean.
+
+## Native reset authority
+
+Fixed host-only source `2dc22609`, direct `6b228e12`. Parent composed
+ONLY the nine-path increment at `a0e71327`; no production `19f` routing
+or `6b` facade was imported.
+
+### Standards
+
+No documented-standard violations found. One nonblocking heuristic:
+
+- **P3 — Possible Duplicated Code (judgment call):** [reset_timeline](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-plugin-process-bridge/crates/windfall-plugin-host/src/bridge/adapter.rs:314) and [fail_timeline](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-plugin-process-bridge/crates/windfall-plugin-host/src/bridge/adapter.rs:349) repeat `self.health.acknowledged_generation = 0`, `self.completed_proof = None`, and the Signals proof reset. Future proof fields could drift between these paths. Consider a private proof-invalidation helper while preserving their distinct transition behavior.
+
+Pinned-source review only: `6b228e12...2dc22609`, exactly nine paths. The original reset test body is unchanged. No edits, builds, tests, imports, browser use, or nested agents.
+
+**Standards result:** 0 documented violations; 1 optional P3 heuristic. No blocker identified for this host-only leaf; production `19f`, P1, and full N4 acceptance remain outside this review.
+
+### Spec
+
+No actionable Spec findings in `2dc226099d18c02fa4d7a64ac2ab90e8331b6dca` against exact parent `6b228e1216d6e33757faa2d5970fba66f935039d`.
+
+Source supports the requested reset contract: proof invalidation before the sole strong authority CAS, preserved HELPER_WRITE ownership, stale retirement without DSP/DONE, old-epoch proof retention, capture fences after native recovery and under the cache mutex, and Hello3/ABI4 compatibility rejection. The original epoch2/proof0/health0 oracle remains unchanged.
+
+Read-only pinned-blob audit; no edits, builds, tests, imports, browser, or nested agents. This verdict covers only the host reset increment. Production19f routing, P1/meter-render gates, and full N4 acceptance remain separate.
+
+The optional P3 proof-reset duplication heuristic is retained as a maintenance
+note; it does not block the tested reset leaf or require another review round.
+
+## Parent combined execution
+
+The actual parent composed source passed all DSP targets: 135 library, 152 DSP,
+13 filter, six registry and 21 lo-fi tests (327 passes; five existing optional
+measurement ignores). Four project lo-fi and four real engine lo-fi tests pass,
+including all 16 automated controls, live/offline and both stem modes.
+
+The full shared-WASM UI run passed 2,680 tests and failed one stale literal
+inventory assertion: the new effect expands automation ranges from 149 to 165.
+Only that expected count, its nine-sample total and comment were updated;
+original mapping/tolerance assertions remain. The affected curve/lo-fi/access/
+RAM files then passed all 84 tests. This is a full-run result plus a focused
+correction, not a claim of another full run after the one-line inventory repair.
+TypeScript and full desktop ESLint pass. Fresh parent generation contains 186
+binding/artifact files and a 2,001,474-byte simulator, SHA-256
+`16dc0d3e2b28974459f1d0cc4b630a870c540da0990a86de7d3dfa1996dd4a7e`,
+source inputs `5aee11f9b285c10cbc506924113f275086933f834a52d11011ca157915a7d0c6`.
+The freshness check passes; no child-generated artifacts were imported.
+
+The ABI4 root check used a separately prebuilt current fixture and executed
+all ignored native library regressions explicitly: **82 passed, zero ignored**.
+Actual bridge processes passed **31 cases**; the one ignored authentication
+role was invoked by its passing parent tests. Realtime passed **20 cases**.
+The original CI reset oracle remains unchanged and passing. Native log:
+`C:/Temp/windfall-root-abi4-native.log`, SHA-256
+`a220a8d64786c5c5310bfa287eddf8cf7d2753d4517f0198bfc322819a277305`.
+
+Strict five-package all-target Clippy, host all-feature/all-target Clippy and
+workspace formatting pass. An initial overly broad desktop all-feature command
+entered optional ASIO and stopped for missing libclang; it is not a source
+failure or ASIO validation result. The final command uses the unchanged
+production desktop features and the host's required feature matrix. No SDK or
+dependency was installed to expand that unrelated validation scope.
+
+## GitHub Actions budget constraint
+
+The user explicitly prohibited further Actions minutes. Automatic `ci.yml`
+is disabled remotely and no jobs remain queued/running. Run `37783570574`
+had already completed before the cancellation command arrived; no new run was
+dispatched. Its Ubuntu Rust/UI/bindings/parity/freshness passed; macOS executed
+the new RAM tests successfully before its separate eight VST3 bundle-entry
+refusals. The overall run remains failed. All new combined checks above are
+LOCAL, and subsequent pushes preserve disabled CI and use `[skip ci]`.
+
+Full P1 Session readiness/retirement, production N4 activation, ordinary-global
+Windows namespace authority, macOS native loader execution, hardware/editor/
+installer and remaining roadmap gates stay open.

@@ -116,9 +116,9 @@ describe("the range of a target", () => {
         checked += 1
       })
     }
-    // Includes 19 utility ranges and eight controls from the three filter kinds.
-    expect(fixtures.ranges).toHaveLength(149)
-    expect(checked).toBe(149 * 9)
+    // Includes utilities, the three filter kinds and all 16 lo-fi controls.
+    expect(fixtures.ranges).toHaveLength(165)
+    expect(checked).toBe(165 * 9)
     expect(worstForward).toBeLessThan(RANGE_TOLERANCE)
     expect(worstBack).toBeLessThan(RANGE_TOLERANCE)
   })

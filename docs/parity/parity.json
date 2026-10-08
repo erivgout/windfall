@@ -2747,12 +2747,12 @@
       "area": "effect",
       "fl_feature": "Fruity Squeeze",
       "summary": "A bit-reduction and distortion effect with filtering for gritty, lo-fi tones.",
-      "windfall_name": null,
+      "windfall_name": "Lo-fi reduction",
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Distinct quantization, rate reduction, drive, timed preservation/replacement and resonant pre/post filtering with 16 persisted/automatable controls. Independent signal, callback, live/offline/stem and shared-WASM UI checks pass; Standards/Spec reviews and parent composition accepted. Finite activity and intentional aliasing policies are documented; device/listening/platform qualification remains separate. See docs/LOFI.md."
     },
     {
       "id": "fx-fruity-stereo-enhancer",
@@ -3745,10 +3745,10 @@
       "summary": "Toolbar displays for master output level, CPU load and memory use.",
       "windfall_name": "Status meters",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "Master meter and engine load. No memory readout."
+      "notes": "Master output, engine load/dropouts and bounded native resident Host RAM readout with explicit accounting scope, unavailable/error recovery and lifecycle-safe polling. Windows native and shared-WASM UI checks pass; independent Standards/Spec reviews accepted. macOS/Linux runtime execution remains a platform gate. See docs/TOOLBAR-MEMORY.md."
     },
     {
       "id": "wf-undo-history",

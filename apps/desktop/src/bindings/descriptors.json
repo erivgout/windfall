@@ -963,6 +963,232 @@
         }
       ]
     },
+    "lofi": {
+      "defaults": {
+        "bits": 8,
+        "cutoffHz": 8000.0,
+        "distortion": 0.25,
+        "driveDb": 6.0,
+        "filter": 1.0,
+        "mix": 1.0,
+        "outputDb": -3.0,
+        "placement": "post",
+        "preserveMs": 10.0,
+        "quantize": 1.0,
+        "rateRatio": 4.0,
+        "replaceMs": 2.0,
+        "replacement": 0.0,
+        "replacementValue": 0.0,
+        "resonance": 0.0,
+        "runRelation": "independent",
+        "type": "lofi"
+      },
+      "name": "Lo-fi reduction",
+      "params": [
+        {
+          "choices": [],
+          "default": 8.0,
+          "id": "bits",
+          "kind": "integer",
+          "max": 16.0,
+          "min": 2.0,
+          "name": "Resolution",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "quantize",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Quantization",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 4.0,
+          "id": "rateRatio",
+          "kind": "float",
+          "max": 64.0,
+          "min": 1.0,
+          "name": "Rate reduction",
+          "scale": "logarithmic",
+          "unit": "ratio"
+        },
+        {
+          "choices": [],
+          "default": 6.0,
+          "id": "driveDb",
+          "kind": "float",
+          "max": 36.0,
+          "min": 0.0,
+          "name": "Drive",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 0.25,
+          "id": "distortion",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Distortion",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 8000.0,
+          "id": "cutoffHz",
+          "kind": "float",
+          "max": 20000.0,
+          "min": 20.0,
+          "name": "Tone cutoff",
+          "scale": "logarithmic",
+          "unit": "hertz"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "filter",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Tone filter",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 1.0,
+          "id": "mix",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Mix",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": -3.0,
+          "id": "outputDb",
+          "kind": "float",
+          "max": 12.0,
+          "min": -24.0,
+          "name": "Output",
+          "scale": "linear",
+          "unit": "decibels"
+        },
+        {
+          "choices": [],
+          "default": 10.0,
+          "id": "preserveMs",
+          "kind": "float",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "Preserve time",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [],
+          "default": 2.0,
+          "id": "replaceMs",
+          "kind": "float",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "Replace time",
+          "scale": "linear",
+          "unit": "milliseconds"
+        },
+        {
+          "choices": [
+            {
+              "label": "Independent",
+              "value": "independent"
+            },
+            {
+              "label": "Equal",
+              "value": "equal"
+            },
+            {
+              "label": "Double",
+              "value": "double"
+            },
+            {
+              "label": "Half",
+              "value": "half"
+            }
+          ],
+          "default": 0.0,
+          "id": "runRelation",
+          "kind": "choice",
+          "max": 3.0,
+          "min": 0.0,
+          "name": "Run relationship",
+          "scale": "linear",
+          "unit": "none"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "replacementValue",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Replacement value",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "replacement",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Replacement",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [],
+          "default": 0.0,
+          "id": "resonance",
+          "kind": "float",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Resonance",
+          "scale": "linear",
+          "unit": "fraction"
+        },
+        {
+          "choices": [
+            {
+              "label": "Post",
+              "value": "post"
+            },
+            {
+              "label": "Pre",
+              "value": "pre"
+            }
+          ],
+          "default": 0.0,
+          "id": "placement",
+          "kind": "choice",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "Filter placement",
+          "scale": "linear",
+          "unit": "none"
+        }
+      ]
+    },
     "polarity": {
       "defaults": {
         "left": false,
