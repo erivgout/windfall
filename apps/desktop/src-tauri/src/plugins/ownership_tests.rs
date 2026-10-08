@@ -68,6 +68,7 @@ fn transport() -> windfall_engine::plugins::PluginTransport {
         position_seconds: 0.0,
         numerator: 4,
         denominator: 4,
+        meter_anchor: None,
     }
 }
 

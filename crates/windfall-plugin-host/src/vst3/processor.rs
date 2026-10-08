@@ -702,5 +702,4 @@ mod meter_tests {
             );
         }
     }
-
 }

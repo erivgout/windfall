@@ -1,8 +1,8 @@
-//! Explicit version-two words. These offsets, not Rust object layouts, are the ABI.
+//! Explicit version-three words. These offsets, not Rust object layouts, are the ABI.
 
 use crate::{HostEvent, Transport};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const DEFAULT_BLOCK: usize = 256;
 pub const MAGIC: u32 = u32::from_le_bytes(*b"WFBR");
 pub const SLOT_COUNT: usize = 4;
@@ -32,7 +32,7 @@ pub const PARAM_COUNT: usize = 13;
 pub const FLAGS: usize = 14;
 pub const NOTE_CHANNEL: usize = 15;
 pub const TRANSPORT: usize = 16;
-pub const EPOCH: usize = 28;
+pub const EPOCH: usize = 30;
 pub const CONTROL_START: usize = 48;
 pub const CONTROL_END: usize = 50;
 pub const REPLY_IDENTITY: usize = 32;
@@ -154,7 +154,7 @@ impl Config {
         words[25] = PARAMETERS as u32;
         Ok(words)
     }
-    /// Accept only the exact v2 layout; never trust a peer-provided offset.
+    /// Accept only the exact v3 layout; never trust a peer-provided offset.
     pub fn from_header(words: &[u32], mapped_bytes: usize) -> Result<Self, ProtocolError> {
         if words.len() != HEADER_WORDS || mapped_bytes != REGION_BYTES {
             return Err(ProtocolError::Layout);
@@ -276,7 +276,7 @@ pub fn decode_event(words: [u32; EVENT_WORDS], frames: usize) -> Result<HostEven
     Ok(event)
 }
 
-pub fn encode_transport(transport: Transport) -> Result<[u32; 10], ProtocolError> {
+pub fn encode_transport(transport: Transport) -> Result<[u32; 14], ProtocolError> {
     if !transport.tempo_bpm.is_finite()
         || !(1.0..=1_000.0).contains(&transport.tempo_bpm)
         || !transport.position_beats.is_finite()
@@ -289,7 +289,7 @@ pub fn encode_transport(transport: Transport) -> Result<[u32; 10], ProtocolError
     {
         return Err(ProtocolError::Transport);
     }
-    let mut words = [0; 10];
+    let mut words = [0; 14];
     words[0] = u32::from(transport.playing);
     words[1] = u32::from(transport.numerator);
     words[2] = u32::from(transport.denominator);
@@ -304,11 +304,26 @@ pub fn encode_transport(transport: Transport) -> Result<[u32; 10], ProtocolError
         words[4 + index * 2] = value.to_bits() as u32;
         words[5 + index * 2] = (value.to_bits() >> 32) as u32;
     }
+    if let Some(anchor) = transport.meter_anchor {
+        if transport.bar_position().is_none() {
+            return Err(ProtocolError::Transport);
+        }
+        words[3] = 1;
+        words[10] = anchor.bar_origin_beats.to_bits() as u32;
+        words[11] = (anchor.bar_origin_beats.to_bits() >> 32) as u32;
+        words[12] = anchor.bar_origin_index;
+    }
     Ok(words)
 }
 
-pub fn decode_transport(words: [u32; 10]) -> Result<Transport, ProtocolError> {
-    if words[0] > 1 || words[1] > u16::MAX as u32 || words[2] > u16::MAX as u32 || words[3] != 0 {
+pub fn decode_transport(words: [u32; 14]) -> Result<Transport, ProtocolError> {
+    if words[0] > 1
+        || words[1] > u16::MAX as u32
+        || words[2] > u16::MAX as u32
+        || words[3] > 1
+        || words[13] != 0
+        || (words[3] == 0 && words[10..13].iter().any(|word| *word != 0))
+    {
         return Err(ProtocolError::Transport);
     }
     let transport = Transport {
@@ -318,6 +333,10 @@ pub fn decode_transport(words: [u32; 10]) -> Result<Transport, ProtocolError> {
         tempo_bpm: f64::from_bits(pair(words[4], words[5])),
         position_beats: f64::from_bits(pair(words[6], words[7])),
         position_seconds: f64::from_bits(pair(words[8], words[9])),
+        meter_anchor: (words[3] == 1).then(|| crate::MeterAnchor {
+            bar_origin_beats: f64::from_bits(pair(words[10], words[11])),
+            bar_origin_index: words[12],
+        }),
     };
     encode_transport(transport)?;
     Ok(transport)
@@ -391,15 +410,17 @@ mod tests {
         assert_eq!(SLOT_WORDS * 4 % 64, 0);
     }
     #[test]
-    fn mapping_v1_never_downgrades_the_v2_completion_contract() {
+    fn mapping_v1_v2_never_downgrade_the_v3_anchor_contract() {
         let mut header = config().header().unwrap();
-        assert_eq!(header[1], 2);
+        assert_eq!(header[1], 3);
         assert_eq!(header[OWNER_COMPLETIONS], 0);
-        header[1] = 1;
-        assert_eq!(
-            Config::from_header(&header, REGION_BYTES),
-            Err(ProtocolError::Layout)
-        );
+        for version in [1, 2] {
+            header[1] = version;
+            assert_eq!(
+                Config::from_header(&header, REGION_BYTES),
+                Err(ProtocolError::Layout)
+            );
+        }
     }
     #[test]
     fn event_roundtrip_preserves_native_precision_and_rejects_unchecked_bytes() {
@@ -439,6 +460,105 @@ mod tests {
         ] {
             assert!(decode_event(words, 64).is_err());
         }
+    }
+    #[test]
+    fn v3_transport_anchor_roundtrip_and_metadata_ranges_do_not_overlap() {
+        assert_eq!(TRANSPORT + 14, EPOCH);
+        assert_eq!(EPOCH + 2, REPLY_IDENTITY);
+        let ranges = [
+            (STATE, 1),
+            (IDENTITY, 8),
+            (SEQUENCE, 2),
+            (FRAMES, 1),
+            (EVENT_COUNT, 1),
+            (PARAM_COUNT, 1),
+            (FLAGS, 1),
+            (NOTE_CHANNEL, 1),
+            (TRANSPORT, 14),
+            (EPOCH, 2),
+            (REPLY_IDENTITY, 8),
+            (REPLY_SEQUENCE, 2),
+            (REPLY_FRAMES, 1),
+            (REPLY_STATUS, 1),
+            (REPLY_EPOCH, 2),
+            (PROCESSED_GENERATION, 2),
+            (CONTROL_START, 2),
+            (CONTROL_END, 2),
+            (NATIVE_DROPS, 1),
+        ];
+        let mut used = [false; META_WORDS];
+        for (start, count) in ranges {
+            for word in &mut used[start..start + count] {
+                assert!(!*word);
+                *word = true;
+            }
+        }
+        let origin = 4001.0 / 960.0;
+        let transport = Transport {
+            playing: true,
+            tempo_bpm: 137.0,
+            position_beats: origin + 3.75,
+            position_seconds: 9.25,
+            numerator: 7,
+            denominator: 8,
+            meter_anchor: Some(crate::MeterAnchor {
+                bar_origin_beats: origin,
+                bar_origin_index: 2,
+            }),
+        };
+        let words = encode_transport(transport).unwrap();
+        assert_eq!(words.len(), 14);
+        assert_eq!(words[3], 1);
+        assert_eq!(words[12], 2);
+        assert_eq!(words[13], 0);
+        assert_eq!(decode_transport(words), Ok(transport));
+        assert_eq!(
+            decode_transport(words).unwrap().bar_position(),
+            Some((origin + 3.5, 3))
+        );
+        for anchor in [
+            crate::MeterAnchor {
+                bar_origin_beats: f64::NAN,
+                bar_origin_index: 2,
+            },
+            crate::MeterAnchor {
+                bar_origin_beats: -1.0,
+                bar_origin_index: 2,
+            },
+            crate::MeterAnchor {
+                bar_origin_beats: transport.position_beats + 1.0,
+                bar_origin_index: 2,
+            },
+            crate::MeterAnchor {
+                bar_origin_beats: origin,
+                bar_origin_index: i32::MAX as u32,
+            },
+        ] {
+            assert!(
+                encode_transport(Transport {
+                    meter_anchor: Some(anchor),
+                    ..transport
+                })
+                .is_err()
+            );
+        }
+        for index in [3, 10, 11, 12, 13] {
+            let mut none = encode_transport(Transport::default()).unwrap();
+            none[index] = 2;
+            assert!(decode_transport(none).is_err());
+        }
+        let mut malformed = words;
+        malformed[13] = 1;
+        assert!(decode_transport(malformed).is_err());
+        let legacy = Transport {
+            position_beats: -3.5,
+            position_seconds: -2.0,
+            ..Transport::default()
+        };
+        assert_eq!(
+            decode_transport(encode_transport(legacy).unwrap()),
+            Ok(legacy)
+        );
     }
     #[test]
     fn transport_and_latency_are_bounded() {

@@ -1341,6 +1341,12 @@ impl HostedEffect for Audio {
             position_seconds: transport.position_seconds,
             numerator: transport.numerator,
             denominator: transport.denominator,
+            meter_anchor: transport
+                .meter_anchor
+                .map(|anchor| windfall_plugin_host::MeterAnchor {
+                    bar_origin_beats: anchor.bar_origin_beats,
+                    bar_origin_index: anchor.bar_origin_index,
+                }),
         };
         self.transport = Some(transport);
         match self.adapter_mut() {

@@ -538,3 +538,47 @@ Production routing remains closed
 pending independent leaf acceptance; engine/document integration, packaged
 installer, licensed Windows corpus, native editors/other OSes and hardware
 acceptance remain open.
+
+## ABI3 native meter metadata prerequisite
+
+This isolated prerequisite imports no production facade, helper discovery,
+manager routing or render-error work. The seven-path native metadata commit
+94e168ae was imported alone as1fa5a16d, directly atop0741117f. Fixture checkpoint
+71dbec11 remains separate; its creator identity hooks belong exclusively to the
+portability owner. No T1 parent/full branch or local020 merge is imported.
+
+Mapping ABI3 carries fourteen explicit LE atomic transport words at16..29.
+Relative words0..2 retain playing/numerator/denominator; word3 is None0/Some1;
+words4..9 retain tempo/beats/seconds f64; words10/11 are the optional anchor
+origin f64, word12 its zero-based cumulative index, and word13 reserved zero.
+None requires words10..13 zero and preserves legacy scalar negative positions.
+Some requires a finite nonnegative origin<=absolute beat and a checked i32 bar
+index. Epoch moves to30/31; reply identity stays32..39. Other offsets, slot/map
+sizes, atomic payload/CAS ownership and owner-completion semantics are unchanged.
+The full metadata-range audit proves no overlaps. ABI1/2, malformed/nonfinite
+anchors, reserved words and overflow are refused before native installation.
+Hello2/WFAP1/WFCB1 are unchanged; there is no downgrade.
+
+The native desktop facade faithfully forwards the optional anchor. The two full
+desktop transport literals gain only meter_anchor:None. The readonly local
+collection_frontier getter changes no generation/event; completed_proof supplies
+only an earlier matching, timely COMPLETE epoch/sequence/processed generation and
+clears on reset. Neither getter turns adoption, submit, or owner liveness into DSP
+acknowledgement. The control write method retains the parent's cfg(windows|test)
+guard, preserving Windows production and all-platform partial-write units.
+
+Checks on this isolated source passed:61 host library units,27 real bridge
+process cases,20 realtime cases, strict all-feature/all-target host Clippy,
+engine all-target Clippy, desktop lib/tests Clippy, workspace/full-fixture
+formatting and whitespace checks. The ordinary library/process suites retain
+their two explicit child/native-test roles as ignored entries. The new getter
+unit checks readonly counters, no proof on submit or DONE publication alone,
+matching output collection, unknown-output proof retention and reset; the
+old-epoch regression additionally checks the getter stays empty.
+
+The existing native ABI-builder tests and bridge codec/layout/process tests
+exercise these seams. No new actual native bar-readback fixture is claimed. The
+full Song meter producer is separately coordinated by the parent. Production
+routing/renderer integration and the inherited native preparation/retirement
+under State/controller guards remain unaccepted pending the larger leaf and P1.
+N4 stays partial; separate processes provide crash containment, not a sandbox.
