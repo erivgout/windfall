@@ -14,7 +14,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-const RECORD_BYTES: u64 = 64 * 1024;
+// Includes worst-case native paths for sixteen staged/published/prebuilt
+// artifact records, bounded destinations, transitions and scheduler nodes.
+const RECORD_BYTES: u64 = 128 * 1024;
 const CODEC_ALLOWANCE: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -173,6 +175,15 @@ struct Proposal {
     destinations: Option<Vec<RelativeName>>,
 }
 impl Proposal {
+    fn check_eligibility(&self, current: &CaptureStamp, model: &ModelManifest) -> Result<()> {
+        if self.input.stamp() != current
+            || self.model != *model
+            || !current.source_identity.is_live()
+        {
+            return Err(AnalysisError::Stale);
+        }
+        Ok(())
+    }
     fn review(&self, id: JobId, ticket: TicketId) -> Review {
         Review {
             job: id,
@@ -199,6 +210,7 @@ struct Record {
     files: usize,
     budget: JobBudget,
     cleanup_path: Option<PathBuf>,
+    publication_temp: Option<PathBuf>,
 }
 impl Record {
     fn bump(&mut self) -> Result<()> {
@@ -222,6 +234,25 @@ struct Counters {
     ticket: u64,
     request: u64,
 }
+// A replaced Session/manager cannot make an old in-process IPC ticket name a
+// new job. These volatile IDs are process-wide; tickets are never persisted.
+static IDENTIFIERS: Mutex<Counters> = Mutex::new(Counters {
+    job: 1,
+    ticket: 1,
+    request: 1,
+});
+impl Counters {
+    fn submission(&mut self) -> Result<(JobId, TicketId, u64)> {
+        let mut prepared = self.clone();
+        let ids = (
+            JobId(next(&mut prepared.job)?),
+            TicketId(next(&mut prepared.ticket)?),
+            next(&mut prepared.request)?,
+        );
+        *self = prepared;
+        Ok(ids)
+    }
+}
 fn next(counter: &mut u64) -> Result<u64> {
     if *counter == u64::MAX {
         return Err(AnalysisError::Exhausted);
@@ -234,7 +265,8 @@ struct State {
     records: BTreeMap<JobId, Record>,
     queue: VecDeque<JobId>,
     usage: Usage,
-    counters: Counters,
+    #[cfg(test)]
+    counters: Option<Counters>,
     shutdown: bool,
 }
 struct Shared {
@@ -276,6 +308,11 @@ impl JobManager {
         fs::create_dir_all(&config.published_root)?;
         config.staging_root = fs::canonicalize(&config.staging_root)?;
         config.published_root = fs::canonicalize(&config.published_root)?;
+        if config.staging_root.as_os_str().len() > 1024
+            || config.published_root.as_os_str().len() > 1024
+        {
+            return Err(AnalysisError::Invalid("job root path length"));
+        }
         let roots = [
             &config.staging_root as &Path,
             &config.published_root,
@@ -317,11 +354,8 @@ impl JobManager {
                     published_files,
                     ..Usage::default()
                 },
-                counters: Counters {
-                    job: 1,
-                    ticket: 1,
-                    request: 1,
-                },
+                #[cfg(test)]
+                counters: None,
                 shutdown: false,
             }),
         });
@@ -393,14 +427,26 @@ impl JobManager {
             )?,
             CODEC_ALLOWANCE,
         )?;
+        let memory = add(
+            memory,
+            add(
+                request.model.retained_bytes()?,
+                request
+                    .model
+                    .copy_bytes()?
+                    .checked_mul(2)
+                    .ok_or(AnalysisError::Exhausted)?,
+            )?,
+        )?;
         let disk = b
             .output_bytes
-            .checked_mul(2)
+            .checked_mul(3)
             .ok_or(AnalysisError::Exhausted)?;
         let deadline = Instant::now()
             .checked_add(b.timeout)
             .ok_or(AnalysisError::Exhausted)?;
-        let files = request.model.outputs.len();
+        // One sequential publication temporary plus the bounded final set.
+        let files = request.model.outputs.len() + 1;
         let mut state = lock(&self.shared.state);
         if state.shutdown {
             return Err(AnalysisError::Shutdown);
@@ -431,11 +477,7 @@ impl JobManager {
         {
             return Err(AnalysisError::Budget("persistent output count"));
         }
-        let mut counters = state.counters.clone();
-        let id = JobId(next(&mut counters.job)?);
-        let ticket = TicketId(next(&mut counters.ticket)?);
-        let request_id = next(&mut counters.request)?;
-        state.counters = counters;
+        let (id, ticket, request_id) = allocate_submission(&mut state)?;
         state.usage.memory_bytes += memory + RECORD_BYTES;
         state.usage.reserved_disk_bytes += disk;
         state.usage.reserved_output_files += files;
@@ -454,7 +496,11 @@ impl JobManager {
                     completed_work: 0,
                     maximum_work: b.work_units,
                     failure: None,
-                    transitions: vec![JobStatus::Queued],
+                    transitions: {
+                        let mut transitions = Vec::with_capacity(8);
+                        transitions.push(JobStatus::Queued);
+                        transitions
+                    },
                 },
                 task: Some(Task { request, deadline }),
                 proposal: None,
@@ -466,6 +512,7 @@ impl JobManager {
                 files,
                 budget: b,
                 cleanup_path: None,
+                publication_temp: None,
             },
         );
         self.shared.changed.notify_all();
@@ -559,6 +606,7 @@ impl JobManager {
                         proposal,
                         terminal: JobStatus::Cancelled,
                         failure: None,
+                        work: None,
                     }
                 }
             }
@@ -580,7 +628,7 @@ impl JobManager {
         ) {
             return Err(AnalysisError::NotReady);
         }
-        if record.cleanup_path.is_some() {
+        if record.cleanup_path.is_some() || record.publication_temp.is_some() {
             return Err(AnalysisError::Budget("staging cleanup remains reserved"));
         }
         debug_assert_eq!(record.memory, 0);
@@ -605,9 +653,7 @@ impl JobManager {
             return Err(AnalysisError::Claimed);
         }
         let proposal = record.proposal.as_ref().ok_or(AnalysisError::NotReady)?;
-        proposal
-            .review(id, ticket)
-            .check_eligibility(current, model)?;
+        proposal.check_eligibility(current, model)?;
         if record.snapshot.completed_work >= record.budget.work_units {
             return Err(AnalysisError::Budget("apply work units"));
         }
@@ -615,7 +661,7 @@ impl JobManager {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or(AnalysisError::Exhausted)?;
-        let request = next(&mut state.counters.request)?;
+        let request = allocate_apply(&mut state)?;
         let record = state.records.get_mut(&id).expect("ticket found");
         record.bump()?;
         record.claimed = true;
@@ -634,7 +680,7 @@ impl JobManager {
             ticket,
             request,
             proposal,
-            work,
+            work: Some(work),
         })
     }
     pub fn shutdown(&self) {
@@ -656,7 +702,7 @@ impl JobManager {
     /// Retry only this job's private refused staging, never a published path.
     /// A cleanup failure retains its disk/count reservation and blocks forget.
     pub fn retry_cleanup(&self, id: JobId) -> Result<()> {
-        let path = {
+        let paths = {
             let mut state = lock(&self.shared.state);
             let record = state.records.get_mut(&id).ok_or(AnalysisError::Unknown)?;
             if record.claimed || record.retiring {
@@ -668,18 +714,19 @@ impl JobManager {
             ) {
                 return Err(AnalysisError::NotReady);
             }
-            let Some(path) = record.cleanup_path.clone() else {
+            if record.cleanup_path.is_none() && record.publication_temp.is_none() {
                 return Ok(());
-            };
+            }
             record.retiring = true;
-            path
+            (record.cleanup_path.clone(), record.publication_temp.clone())
         };
-        let result = remove_owned_stage(&path, &self.shared.config.staging_root);
+        let result = remove_job_paths(&paths, &self.shared.config);
         let mut state = lock(&self.shared.state);
         let record = state.records.get_mut(&id).expect("cleanup retry retained");
         record.retiring = false;
         if result.is_ok() {
             record.cleanup_path = None;
+            record.publication_temp = None;
             let (disk, files) = (record.disk, record.files);
             record.disk = 0;
             record.files = 0;
@@ -703,6 +750,20 @@ fn find_ticket(state: &State, ticket: TicketId) -> Result<(JobId, &Record)> {
         .find(|(_, record)| record.snapshot.ticket == ticket)
         .map(|(id, record)| (*id, record))
         .ok_or(AnalysisError::Unknown)
+}
+fn allocate_submission(_state: &mut State) -> Result<(JobId, TicketId, u64)> {
+    #[cfg(test)]
+    if let Some(counters) = _state.counters.as_mut() {
+        return counters.submission();
+    }
+    lock(&IDENTIFIERS).submission()
+}
+fn allocate_apply(_state: &mut State) -> Result<u64> {
+    #[cfg(test)]
+    if let Some(counters) = _state.counters.as_mut() {
+        return next(&mut counters.request);
+    }
+    next(&mut lock(&IDENTIFIERS).request)
 }
 fn make_work(
     shared: &Arc<Shared>,
@@ -798,6 +859,7 @@ fn worker(shared: Arc<Shared>) {
                         proposal,
                         terminal,
                         failure,
+                        work: None,
                     })
                 }
             }
@@ -859,21 +921,23 @@ struct Cleanup {
     proposal: Option<Proposal>,
     terminal: JobStatus,
     failure: Option<String>,
+    // The progress closure and its allocation are retired after State guards.
+    work: Option<Work>,
 }
 impl Drop for Cleanup {
     fn drop(&mut self) {
         drop(self.task.take());
         drop(self.proposal.take());
-        let path = lock(&self.shared.state)
-            .records
-            .get(&self.id)
-            .expect("cleanup record retained")
-            .cleanup_path
-            .clone();
-        let removal = path
-            .as_ref()
-            .map(|p| remove_owned_stage(p, &self.shared.config.staging_root))
-            .transpose();
+        drop(self.work.take());
+        let paths = {
+            let state = lock(&self.shared.state);
+            let record = state
+                .records
+                .get(&self.id)
+                .expect("cleanup record retained");
+            (record.cleanup_path.clone(), record.publication_temp.clone())
+        };
+        let removal = remove_job_paths(&paths, &self.shared.config);
         let mut state = lock(&self.shared.state);
         let record = state
             .records
@@ -885,12 +949,13 @@ impl Drop for Cleanup {
         record.snapshot.failure = self.failure.take();
         if let Err(error) = &removal {
             record.snapshot.failure = Some(format!(
-                "Owned staging cleanup failed and remains reserved: {error}"
+                "Owned staging/publication cleanup failed and remains reserved: {error}"
             ));
         } else {
             record.disk = 0;
             record.files = 0;
             record.cleanup_path = None;
+            record.publication_temp = None;
         }
         if record.snapshot.status != self.terminal {
             record.transition(self.terminal);
@@ -902,6 +967,58 @@ impl Drop for Cleanup {
         }
         self.shared.changed.notify_all();
     }
+}
+
+fn remove_job_paths(
+    paths: &(Option<PathBuf>, Option<PathBuf>),
+    config: &ManagerConfig,
+) -> Result<()> {
+    let staging = paths
+        .0
+        .as_ref()
+        .map(|path| remove_owned_stage(path, &config.staging_root))
+        .transpose();
+    let publication = paths
+        .1
+        .as_ref()
+        .map(|path| remove_owned_publication(path, &config.published_root))
+        .transpose();
+    staging.and(publication).map(|_| ())
+}
+fn remove_owned_publication(path: &Path, root: &Path) -> Result<()> {
+    if path.parent() != Some(root) {
+        return Err(AnalysisError::Invalid(
+            "publication temporary ownership path",
+        ));
+    }
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            fs::remove_file(path)?;
+            Ok(())
+        }
+        Ok(_) => Err(AnalysisError::Invalid(
+            "publication temporary was replaced; manual recovery required",
+        )),
+    }
+}
+fn cleanup_publication_temp(shared: &Shared, id: JobId) -> Result<()> {
+    let path = lock(&shared.state)
+        .records
+        .get(&id)
+        .expect("claimed record retained")
+        .publication_temp
+        .clone();
+    if let Some(path) = path {
+        remove_owned_publication(&path, &shared.config.published_root)?;
+        lock(&shared.state)
+            .records
+            .get_mut(&id)
+            .expect("claimed record retained")
+            .publication_temp = None;
+    }
+    Ok(())
 }
 
 fn remove_owned_stage(path: &Path, root: &Path) -> Result<()> {
@@ -931,7 +1048,7 @@ pub struct ApplyLease {
     ticket: TicketId,
     request: u64,
     proposal: Option<Proposal>,
-    work: Work,
+    work: Option<Work>,
 }
 impl ApplyLease {
     pub fn request(&self) -> u64 {
@@ -952,10 +1069,11 @@ impl ApplyLease {
     pub fn prepare(mut self, names: Vec<RelativeName>) -> Result<PreparedApply> {
         let proposal = self.proposal.as_mut().expect("live lease");
         if names.len() != proposal.artifacts.len()
-            || names
-                .iter()
-                .enumerate()
-                .any(|(i, n)| names[..i].contains(n))
+            || names.iter().enumerate().any(|(i, n)| {
+                names[..i]
+                    .iter()
+                    .any(|old| old.as_str().eq_ignore_ascii_case(n.as_str()))
+            })
         {
             return Err(AnalysisError::Invalid("publication name count/duplicates"));
         }
@@ -967,6 +1085,10 @@ impl ApplyLease {
             return Err(AnalysisError::Invalid("publication destinations changed"));
         }
         proposal.destinations = Some(names.clone());
+        // One tracked publication temporary at a time. A refused deletion
+        // blocks a retry before it can allocate/write another temporary.
+        cleanup_publication_temp(&self.shared, self.id)?;
+        let work = self.work.as_mut().expect("live apply work");
         for (artifact, name) in proposal.artifacts.iter_mut().zip(names) {
             let target = self.shared.config.published_root.join(name.as_str());
             if let Some(path) = &artifact.metadata.published_path {
@@ -976,7 +1098,7 @@ impl ApplyLease {
                 let fingerprint = crate::ContentFingerprint::reader(
                     fs::File::open(path)?,
                     artifact.metadata.bytes,
-                    &mut self.work,
+                    work,
                 )?;
                 if fingerprint.bytes != artifact.metadata.bytes
                     || fingerprint.sha256 != artifact.metadata.sha256
@@ -985,7 +1107,20 @@ impl ApplyLease {
                 }
                 continue;
             }
-            publish(artifact, &target, &mut self.work)?;
+            let publication = publish(artifact, &target, work, |path| {
+                let path = path.to_path_buf();
+                lock(&self.shared.state)
+                    .records
+                    .get_mut(&self.id)
+                    .expect("claimed record retained")
+                    .publication_temp = Some(path);
+            });
+            if let Err(error) = publication {
+                // Keep the original refusal while preserving the path/charge
+                // if the explicit deletion attempt also fails.
+                let _ = cleanup_publication_temp(&self.shared, self.id);
+                return Err(error);
+            }
             artifact.metadata.published_path = Some(target);
             let mut state = lock(&self.shared.state);
             let record = state
@@ -998,8 +1133,18 @@ impl ApplyLease {
             state.usage.published_disk_bytes += artifact.metadata.bytes;
             state.usage.reserved_output_files -= 1;
             state.usage.published_files += 1;
+            drop(state);
+            cleanup_publication_temp(&self.shared, self.id)?;
         }
-        Ok(PreparedApply { lease: self })
+        let artifacts = proposal
+            .artifacts
+            .iter()
+            .map(|a| a.metadata.clone())
+            .collect();
+        Ok(PreparedApply {
+            lease: self,
+            artifacts,
+        })
     }
 }
 impl Drop for ApplyLease {
@@ -1024,6 +1169,7 @@ impl Drop for ApplyLease {
                     proposal: Some(proposal),
                     terminal: JobStatus::Cancelled,
                     failure: None,
+                    work: self.work.take(),
                 })
             } else {
                 record.proposal = Some(proposal);
@@ -1037,13 +1183,28 @@ impl Drop for ApplyLease {
 
 pub struct PreparedApply {
     lease: ApplyLease,
+    artifacts: Vec<ArtifactMetadata>,
 }
 impl PreparedApply {
+    /// Prebuilt output metadata for off-State pool/command preparation.
+    pub fn artifacts(&self) -> &[ArtifactMetadata] {
+        &self.artifacts
+    }
+    pub fn input(&self) -> &CapturedInput {
+        self.lease.input()
+    }
+    pub fn request(&self) -> u64 {
+        self.lease.request()
+    }
     pub fn review(&self) -> Review {
         self.lease.review()
     }
     pub fn check_eligibility(&self, current: &CaptureStamp, model: &ModelManifest) -> Result<()> {
-        self.review().check_eligibility(current, model)
+        self.lease
+            .proposal
+            .as_ref()
+            .expect("prepared proposal")
+            .check_eligibility(current, model)
     }
     /// Call ONLY after the caller's real atomic document commit. Infallible,
     /// with no disk/codec/worker operations; returns deferred retirement, which
@@ -1063,11 +1224,7 @@ impl PreparedApply {
             self.lease.shared.changed.notify_all();
         }
         // Move metadata, retain input/staging reservations until retirement.
-        let artifacts = proposal
-            .artifacts
-            .iter()
-            .map(|a| a.metadata.clone())
-            .collect();
+        let artifacts = std::mem::take(&mut self.artifacts);
         AppliedAssets {
             artifacts,
             cleanup: Some(Cleanup {
@@ -1077,6 +1234,7 @@ impl PreparedApply {
                 proposal: Some(proposal),
                 terminal: JobStatus::Consumed,
                 failure: None,
+                work: self.lease.work.take(),
             }),
         }
     }
@@ -1101,11 +1259,424 @@ impl AppliedAssets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AudioShape, ContentFingerprint, FrameRange, ModelProvenance, OutputRole};
+    use std::sync::Barrier;
+    use windfall_core::AudioBuffer;
+    struct UnitAdapter {
+        entered: Barrier,
+        release: Barrier,
+        expire: std::sync::atomic::AtomicBool,
+    }
+    impl AnalysisAdapter for UnitAdapter {
+        fn id(&self) -> &str {
+            "test-only-unit"
+        }
+        fn version(&self) -> &str {
+            "1"
+        }
+        fn run(
+            &self,
+            input: &CapturedInput,
+            _: &VerifiedModel,
+            context: &mut WorkerContext,
+            writer: &mut ArtifactWriter,
+        ) -> Result<()> {
+            self.entered.wait();
+            self.release.wait();
+            if self.expire.load(std::sync::atomic::Ordering::SeqCst) {
+                context.work.expire_at_checkpoint();
+            }
+            context.checkpoint(1)?;
+            writer.start_audio(RelativeName::new("unit.wav")?, "unit", context.work())?;
+            writer.write_audio(input.selected_samples(), context.work())?;
+            writer.finish_audio(context.work())
+        }
+    }
+    struct UnitRelease(Option<Arc<UnitAdapter>>);
+    impl Drop for UnitRelease {
+        fn drop(&mut self) {
+            if let Some(adapter) = self.0.take() {
+                adapter.release.wait();
+            }
+        }
+    }
+    fn setup() -> (TempDir, JobManager, Arc<UnitAdapter>, AudioBuffer) {
+        setup_with_limits(None)
+    }
+    fn setup_with_limits(
+        limits: Option<(u64, usize)>,
+    ) -> (TempDir, JobManager, Arc<UnitAdapter>, AudioBuffer) {
+        use sha2::{Digest, Sha256};
+        let root = tempfile::tempdir().unwrap();
+        let bytes = b"authored unit fixture only";
+        let model = ModelManifest {
+            id: "test-only-unit".into(),
+            version: "1".into(),
+            revision: 1,
+            sha256: Sha256::digest(bytes).into(),
+            bytes: bytes.len() as u64,
+            max_bytes: 128,
+            provenance: ModelProvenance {
+                origin: "authored:unit".into(),
+                source_revision: "1".into(),
+                author: "Windfall contributors".into(),
+                license_spdx: "CC0-1.0".into(),
+                license_reference: "authored tests".into(),
+                adapter_id: "test-only-unit".into(),
+                adapter_version: "1".into(),
+                device: "cpu".into(),
+            },
+            sample_rate: 48_000,
+            input_channels: 1,
+            max_input_frames: 4,
+            outputs: vec![OutputRole {
+                role: "unit".into(),
+                channels: 1,
+            }],
+        };
+        let cache =
+            ModelCache::new(root.path().join("models"), ModelCacheLimits::default()).unwrap();
+        cache
+            .import_reader(
+                &model,
+                std::io::Cursor::new(bytes),
+                &mut Work::new(CancelToken::default(), 10_000, Duration::from_secs(30)).unwrap(),
+            )
+            .unwrap();
+        let adapter = Arc::new(UnitAdapter {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+            expire: std::sync::atomic::AtomicBool::new(false),
+        });
+        let mut config =
+            ManagerConfig::bounded(root.path().join("staging"), root.path().join("published"));
+        config.workers = 1;
+        if let Some((disk, files)) = limits {
+            config.disk_bytes = disk;
+            config.max_published_files = files;
+            fs::create_dir_all(&config.published_root).unwrap();
+            fs::write(config.published_root.join("competitor.wav"), b"competitor").unwrap();
+        }
+        let manager = JobManager::new(config, cache, adapter.clone()).unwrap();
+        let audio = AudioBuffer::from_interleaved(48_000, 1, vec![0.0, 0.25]);
+        // Keep the manifest in a helper request; reconstructing it is bounded.
+        (root, manager, adapter, audio)
+    }
+    fn unit_request(manager: &JobManager, audio: &AudioBuffer) -> JobRequest {
+        use sha2::{Digest, Sha256};
+        let bytes = b"authored unit fixture only";
+        let mut work = Work::new(CancelToken::default(), 10_000, Duration::from_secs(30)).unwrap();
+        let capture = CaptureStamp {
+            generation: 1,
+            edit_revision: 1,
+            source_key: 1,
+            binding: [0; 32],
+            source_identity: audio.identity(),
+            source_fingerprint: ContentFingerprint::audio(audio, &mut work).unwrap(),
+            input_shape: AudioShape::of(audio),
+            selection: FrameRange { start: 0, end: 2 },
+        };
+        let model = ModelManifest {
+            id: "test-only-unit".into(),
+            version: "1".into(),
+            revision: 1,
+            sha256: Sha256::digest(bytes).into(),
+            bytes: bytes.len() as u64,
+            max_bytes: 128,
+            provenance: ModelProvenance {
+                origin: "authored:unit".into(),
+                source_revision: "1".into(),
+                author: "Windfall contributors".into(),
+                license_spdx: "CC0-1.0".into(),
+                license_reference: "authored tests".into(),
+                adapter_id: manager.shared.adapter.id().into(),
+                adapter_version: "1".into(),
+                device: "cpu".into(),
+            },
+            sample_rate: 48_000,
+            input_channels: 1,
+            max_input_frames: 4,
+            outputs: vec![OutputRole {
+                role: "unit".into(),
+                channels: 1,
+            }],
+        };
+        JobRequest {
+            input: CapturedInput::capture(audio, capture, InputLimits::default(), &mut work)
+                .unwrap(),
+            model,
+            budget: JobBudget {
+                scratch_bytes: 0,
+                output_bytes: 4096,
+                work_units: 10_000,
+                timeout: Duration::from_secs(30),
+            },
+        }
+    }
     #[test]
     fn counters_fail_before_rollover_without_reusing_ids() {
         let mut counter = u64::MAX - 1;
         assert_eq!(next(&mut counter).unwrap(), u64::MAX - 1);
         assert!(matches!(next(&mut counter), Err(AnalysisError::Exhausted)));
         assert_eq!(counter, u64::MAX);
+    }
+    #[test]
+    #[cfg(windows)]
+    fn r1_locked_publication_temporary_retains_quota_until_explicit_cleanup() {
+        use std::cell::RefCell;
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::rc::Rc;
+        let (_root, manager, adapter, audio) = setup_with_limits(Some((12298, 3)));
+        let id = manager.submit(unit_request(&manager, &audio)).unwrap();
+        adapter.entered.wait();
+        drop(UnitRelease(Some(adapter)));
+        let ready = manager.wait(id).unwrap();
+        let current = unit_request(&manager, &audio);
+        let target = manager.shared.config.published_root.join("competitor.wav");
+        fs::write(&target, b"competitor").unwrap();
+        let held = Rc::new(RefCell::new(None));
+        let copy = held.clone();
+        crate::artifacts::PUBLICATION_TEST_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |path| {
+                *copy.borrow_mut() = Some(
+                    fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(3)
+                        .open(path)
+                        .unwrap(),
+                );
+            }));
+        });
+        let result = manager
+            .claim(ready.ticket, current.input.stamp(), &current.model)
+            .unwrap()
+            .prepare(vec![RelativeName::new("competitor.wav").unwrap()]);
+        crate::artifacts::PUBLICATION_TEST_HOOK.with(|hook| {
+            hook.borrow_mut().take();
+        });
+        assert!(matches!(result, Err(AnalysisError::Collision)));
+        assert_eq!(
+            fs::read_dir(&manager.shared.config.published_root)
+                .unwrap()
+                .count(),
+            2
+        );
+        for _ in 0..2 {
+            let refused = manager
+                .claim(ready.ticket, current.input.stamp(), &current.model)
+                .unwrap()
+                .prepare(vec![RelativeName::new("competitor.wav").unwrap()]);
+            assert!(matches!(refused, Err(AnalysisError::Io(_))));
+            assert_eq!(manager.snapshot(id).unwrap().status, JobStatus::Ready);
+            assert_eq!(
+                fs::read_dir(&manager.shared.config.published_root)
+                    .unwrap()
+                    .count(),
+                2
+            );
+            assert_eq!(manager.usage().reserved_disk_bytes, 12288);
+        }
+        manager.cancel(id).unwrap();
+        assert_eq!(manager.usage().reserved_disk_bytes, 12288);
+        assert_eq!(manager.usage().reserved_output_files, 2);
+        for _ in 0..4 {
+            assert_eq!(manager.cancel(id).unwrap(), JobStatus::Cancelled);
+            assert!(matches!(manager.forget(id), Err(AnalysisError::Budget(_))));
+            assert!(matches!(
+                manager.submit(unit_request(&manager, &audio)),
+                Err(AnalysisError::Budget(_))
+            ));
+            assert!(manager.retry_cleanup(id).is_err());
+            assert_eq!(
+                manager.usage().reserved_disk_bytes + manager.usage().published_disk_bytes,
+                12298
+            );
+            assert_eq!(
+                manager.usage().reserved_output_files + manager.usage().published_files,
+                3
+            );
+            assert_eq!(
+                fs::read_dir(&manager.shared.config.published_root)
+                    .unwrap()
+                    .count(),
+                2
+            );
+        }
+        held.borrow_mut().take();
+        manager.retry_cleanup(id).unwrap();
+        assert_eq!(manager.usage().reserved_disk_bytes, 0);
+        assert_eq!(manager.usage().reserved_output_files, 0);
+        manager.forget(id).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"competitor");
+        assert_eq!(
+            fs::read_dir(&manager.shared.config.published_root)
+                .unwrap()
+                .count(),
+            1
+        );
+        eprintln!(
+            "R1_CLEANUP ready_retries_blocked=2 cancelled_refusals=4 reserved_bytes=12288 reserved_files=2 competitor_bytes=10 competitor_files=1 after_retry_reserved_bytes=0 after_retry_reserved_files=0"
+        );
+    }
+    #[test]
+    fn r1_artifact_case_alias_preserves_actual_first_pcm_and_checksum() {
+        use sha2::{Digest, Sha256};
+        let (_root, manager, _adapter, audio) = setup();
+        let mut model = unit_request(&manager, &audio).model;
+        model.outputs.push(OutputRole {
+            role: "second".into(),
+            channels: 1,
+        });
+        let mut writer =
+            ArtifactWriter::new(&manager.shared.config.staging_root, &model, 2, 0, 4096).unwrap();
+        let mut work = Work::new(CancelToken::default(), 10000, Duration::from_secs(30)).unwrap();
+        writer
+            .start_audio(RelativeName::new("stem.wav").unwrap(), "unit", &mut work)
+            .unwrap();
+        writer.write_audio(&[0.25, -0.5], &mut work).unwrap();
+        writer.finish_audio(&mut work).unwrap();
+        let first = writer.path().join("stem.wav");
+        let before = fs::read(&first).unwrap();
+        assert!(matches!(
+            writer.start_audio(RelativeName::new("STEM.wav").unwrap(), "second", &mut work),
+            Err(AnalysisError::Invalid(_))
+        ));
+        assert_eq!(fs::read(&first).unwrap(), before);
+        assert_eq!(
+            Sha256::digest(&before),
+            Sha256::digest(fs::read(&first).unwrap())
+        );
+        assert_eq!(
+            windfall_codec::decode_file_strict_with(
+                &first,
+                &windfall_codec::DecodeOptions {
+                    max_decoded_bytes: 8
+                }
+            )
+            .unwrap()
+            .samples(),
+            &[0.25, -0.5]
+        );
+        assert_eq!(fs::read_dir(writer.path()).unwrap().count(), 1);
+        writer
+            .start_audio(RelativeName::new("other.wav").unwrap(), "second", &mut work)
+            .unwrap();
+        writer.write_audio(&[0.125, 0.125], &mut work).unwrap();
+        writer.finish_audio(&mut work).unwrap();
+        let (directory, artifacts) = writer.complete(&mut work).unwrap();
+        assert_eq!(
+            artifacts[0].metadata.sha256,
+            <[u8; 32]>::from(Sha256::digest(&before))
+        );
+        assert_eq!(fs::read(&artifacts[0].staged).unwrap(), before);
+        drop(directory);
+        assert_eq!(
+            fs::read_dir(&manager.shared.config.staging_root)
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    #[test]
+    fn expired_queued_deadline_is_checked_before_adapter_and_releases_owned_resources() {
+        let (_root, manager, adapter, audio) = setup();
+        let running = manager.submit(unit_request(&manager, &audio)).unwrap();
+        adapter.entered.wait();
+        let release = UnitRelease(Some(adapter.clone()));
+        let queued = manager.submit(unit_request(&manager, &audio)).unwrap();
+        lock(&manager.shared.state)
+            .records
+            .get_mut(&queued)
+            .unwrap()
+            .task
+            .as_mut()
+            .unwrap()
+            .deadline = Instant::now();
+        drop(release);
+        assert_eq!(manager.wait(running).unwrap().status, JobStatus::Ready);
+        let failure = manager.wait(queued).unwrap();
+        assert_eq!(failure.status, JobStatus::Failed);
+        assert!(failure.failure.unwrap().contains("deadline"));
+        assert_eq!(failure.completed_work, 0);
+        manager.cancel(running).unwrap();
+        assert_eq!(manager.usage().reserved_disk_bytes, 0);
+        assert_eq!(manager.usage().active, 0);
+    }
+    #[test]
+    fn native_progress_exhaustion_terminates_without_wrapping_or_leaking_staging() {
+        let (_root, manager, adapter, audio) = setup();
+        let running = manager.submit(unit_request(&manager, &audio)).unwrap();
+        adapter.entered.wait();
+        let release = UnitRelease(Some(adapter.clone()));
+        lock(&manager.shared.state)
+            .records
+            .get_mut(&running)
+            .unwrap()
+            .snapshot
+            .sequence = u64::MAX - 16;
+        drop(release);
+        let failure = manager.wait(running).unwrap();
+        assert_eq!(failure.status, JobStatus::Failed);
+        assert!(failure.failure.unwrap().contains("exhausted"));
+        assert_eq!(failure.sequence, u64::MAX - 15);
+        assert_eq!(manager.usage().reserved_disk_bytes, 0);
+        assert_eq!(
+            fs::read_dir(&manager.shared.config.staging_root)
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    #[test]
+    fn job_ticket_request_exhaustion_refuses_actual_admission_atomically() {
+        let (_root, manager, _adapter, audio) = setup();
+        for counters in [
+            Counters {
+                job: u64::MAX,
+                ticket: 1,
+                request: 1,
+            },
+            Counters {
+                job: 1,
+                ticket: u64::MAX,
+                request: 1,
+            },
+            Counters {
+                job: 1,
+                ticket: 1,
+                request: u64::MAX,
+            },
+        ] {
+            lock(&manager.shared.state).counters = Some(counters);
+            assert!(matches!(
+                manager.submit(unit_request(&manager, &audio)),
+                Err(AnalysisError::Exhausted)
+            ));
+            assert_eq!(manager.usage().memory_bytes, 0);
+            assert_eq!(manager.usage().reserved_disk_bytes, 0);
+            assert_eq!(manager.usage().retained_jobs, 0);
+        }
+    }
+    #[test]
+    fn running_deadline_fails_at_bounded_checkpoint_without_sleep_or_stale_ready() {
+        let (_root, manager, adapter, audio) = setup();
+        let id = manager.submit(unit_request(&manager, &audio)).unwrap();
+        adapter.entered.wait();
+        let release = UnitRelease(Some(adapter.clone()));
+        adapter
+            .expire
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(release);
+        let failed = manager.wait(id).unwrap();
+        assert_eq!(failed.status, JobStatus::Failed);
+        assert!(failed.failure.unwrap().contains("deadline"));
+        assert!(!failed.transitions.contains(&JobStatus::Ready));
+        assert_eq!(manager.usage().reserved_disk_bytes, 0);
+        assert_eq!(
+            fs::read_dir(&manager.shared.config.staging_root)
+                .unwrap()
+                .count(),
+            0
+        );
     }
 }

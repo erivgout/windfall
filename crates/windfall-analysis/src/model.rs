@@ -44,6 +44,56 @@ pub struct ModelManifest {
     pub outputs: Vec<OutputRole>,
 }
 impl ModelManifest {
+    /// Actual retained heap capacity, including unused String/Vec capacity.
+    /// Admission also reserves two compact copies used during worker loading.
+    pub fn retained_bytes(&self) -> Result<u64> {
+        self.storage_bytes(true)
+    }
+    pub(crate) fn copy_bytes(&self) -> Result<u64> {
+        self.storage_bytes(false)
+    }
+    fn storage_bytes(&self, capacity: bool) -> Result<u64> {
+        let p = &self.provenance;
+        let mut bytes = (if capacity {
+            self.outputs.capacity()
+        } else {
+            self.outputs.len()
+        })
+        .checked_mul(size_of::<OutputRole>())
+        .ok_or(AnalysisError::Exhausted)? as u64;
+        for field in [
+            &self.id,
+            &self.version,
+            &p.origin,
+            &p.source_revision,
+            &p.author,
+            &p.license_spdx,
+            &p.license_reference,
+            &p.adapter_id,
+            &p.adapter_version,
+            &p.device,
+        ] {
+            bytes = add(
+                bytes,
+                (if capacity {
+                    field.capacity()
+                } else {
+                    field.len()
+                }) as u64,
+            )?;
+        }
+        for output in &self.outputs {
+            bytes = add(
+                bytes,
+                (if capacity {
+                    output.role.capacity()
+                } else {
+                    output.role.len()
+                }) as u64,
+            )?;
+        }
+        Ok(bytes)
+    }
     pub fn validate(&self) -> Result<()> {
         let p = &self.provenance;
         for field in [
@@ -169,6 +219,9 @@ impl ModelCache {
         }
         fs::create_dir_all(root.as_ref())?;
         let root = fs::canonicalize(root)?;
+        if root.as_os_str().len() > 1024 {
+            return Err(AnalysisError::Invalid("cache root path length"));
+        }
         inventory(&root, limits)?;
         Ok(Self(Arc::new(CacheInner {
             root,

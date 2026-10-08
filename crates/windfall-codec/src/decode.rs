@@ -92,7 +92,47 @@ pub fn decode_file_with(
     try_both_ways(|seekable| {
         let (file, len) = open_file(path)?;
         let source = as_source(file, seekable);
-        decode(source, len, extension_of(path), options)
+        decode(source, len, extension_of(path), options, false)
+    })
+}
+
+/// Decodes with the ordinary parser, shape and byte limits, refusing nonfinite
+/// decoded samples with [`CodecError::Corrupt`] before sanitation, even when
+/// earlier samples were finite. Ordinary decoding still replaces them with zero.
+pub fn decode_file_strict_with(
+    path: impl AsRef<Path>,
+    options: &DecodeOptions,
+) -> Result<AudioBuffer, CodecError> {
+    let path = path.as_ref();
+    try_both_ways(|seekable| {
+        let (file, len) = open_file(path)?;
+        decode(
+            as_source(file, seekable),
+            len,
+            extension_of(path),
+            options,
+            true,
+        )
+    })
+}
+
+/// Memory counterpart of [`decode_file_strict_with`].
+pub fn decode_bytes_strict_with(
+    bytes: &[u8],
+    hint_ext: Option<&str>,
+    options: &DecodeOptions,
+) -> Result<AudioBuffer, CodecError> {
+    if bytes.is_empty() {
+        return Err(CodecError::NoAudio);
+    }
+    try_both_ways(|seekable| {
+        decode(
+            as_source(Cursor::new(bytes), seekable),
+            bytes.len() as u64,
+            hint_ext,
+            options,
+            true,
+        )
     })
 }
 
@@ -115,7 +155,7 @@ pub fn decode_bytes_with(
     }
     try_both_ways(|seekable| {
         let source = as_source(Cursor::new(bytes), seekable);
-        decode(source, bytes.len() as u64, hint_ext, options)
+        decode(source, bytes.len() as u64, hint_ext, options, false)
     })
 }
 
@@ -368,6 +408,7 @@ fn decode<'s>(
     source_len: u64,
     hint_ext: Option<&str>,
     options: &DecodeOptions,
+    strict: bool,
 ) -> Result<AudioBuffer, CodecError> {
     let mut format = open_format(source, hint_ext)?;
     let (track, params) = audio_track(format.as_ref())?;
@@ -429,6 +470,11 @@ fn decode<'s>(
         // every filter and meter downstream.
         for sample in block {
             if !sample.is_finite() {
+                if strict {
+                    return Err(CodecError::Corrupt(
+                        "nonfinite decoded audio sample".to_owned(),
+                    ));
+                }
                 *sample = 0.0;
             }
         }

@@ -58,7 +58,7 @@ or controller locks. The adapter has no mutable document or engine pointer.
 
 Default limits: two workers, four queued jobs, sixteen total retained records,
 256 MiB admitted memory, 1 GiB staging/publication/retained disk, 256 retained
-output files, 64 MiB adapter scratch per job, 4,000,000,000 work units per job,
+output/temporary files, 64 MiB adapter scratch per job, 4,000,000,000 work units per job,
 ten-minute execution/apply timeout. Input defaults cap whole captures at
 64 MiB, 23,040,000 frames, mono/stereo and 8,000–192,000 Hz. Model cache defaults
 cap a model at 256 MiB, cache at 1 GiB, 32 directory entries and one import.
@@ -66,11 +66,18 @@ Callers may configure tighter bounds. No CUDA/Python installation is required.
 
 Each admission reserves:
 
-- Actual compact input capacity, manifest's exact model bytes, declared adapter
-  scratch, one largest decoded output PCM buffer, a 2 MiB codec/IO allowance,
-  and 64 KiB for its retained record/provenance/metadata.
-- Twice the output byte budget for private staging and no-clobber publication,
-  plus the declared number of aligned role files. Already published bytes/files
+- Actual compact input capacity, manifest's exact model bytes, **every retained
+  manifest String/Vec capacity** (`ModelManifest::retained_bytes`), and two
+  compact manifest copies for peak worker model/writer preparation. This includes
+  unused provenance/device/role string capacity and unused output-vector slots;
+  validating short lengths does not excuse retained large allocations.
+- Declared adapter scratch, one largest decoded output PCM buffer, a 2 MiB
+  codec/IO allowance, and 128 KiB for retained records, worst-case native
+  staged/published paths, prebuilt commit metadata and scheduler storage.
+- Three times the output byte budget for private staging, persistent publication
+  and an owned temporary whose deletion may be refused, plus the declared
+  aligned role count **and one sequential publication temporary slot**.
+  Already published bytes/files
   stay charged even after job removal. Existing files in the dedicated output
   directory are included when the manager starts.
 - Every queued/running/ready/apply-claimed/retiring input, scratch or output
@@ -99,7 +106,11 @@ file retirement while a caller commits. Failure/cancellation releases buffers
 and staging off the manager lock before releasing their reservations.
 
 Job, review ticket and request IDs increase without reuse, including after
-forgetting. ID allocation refuses before integer rollover; checked arithmetic
+forgetting or replacing a manager/Session in this process. The process-wide
+allocator is not reset by shutdown. Tickets are volatile and must never be
+saved/reused across application process launches. The later IPC must encode
+u64 IDs as decimal strings to avoid JavaScript integer precision loss.
+ID allocation refuses before integer rollover; checked arithmetic
 refuses oversized shape/budget/deadline calculations. Status/progress sequence
 numbers increase, work never regresses/exceeds its budget, progress is coalesced
 instead of appended to an unbounded event list, and transition history has at
@@ -144,14 +155,23 @@ never speculatively garbage-collected.
 ## Artifacts and publication/commit protocol
 
 `ArtifactWriter` creates a unique private job directory. Portable flat relative
-names reject separators/drives/ADS/traversal/dots/spaces/device names. Outputs
-must be Float32 WAV, one per declared role, exactly aligned selected frame count
+names reject separators/drives/ADS/traversal/dots/spaces/device names. Artifact
+names and publication destinations reject ASCII case aliases before any writes,
+including on a case-sensitive host. Relative names compact unused String capacity.
+Outputs must be Float32 WAV, one per declared role, exactly aligned selected frame count
 and original frame origin, at the manifest rate and role channel count. Chunk
 writes cap at 4096 whole-frame finite samples. Disk/count/byte/frame overflows,
 nonfinite data, missing/extra/duplicate roles and bad paths are refused. Encoded
-helper output first streams into bounded owned staging, then is decoded and
-normalized to this contract. Completed WAVs are independently decoded for shape
-and finiteness and hashed before review. No output PCM is retained between files.
+helper output first streams into bounded owned staging, then is probed for
+exact aligned Float32 WAV before creating a decoder and normalizing to this
+contract. Compressed helper codecs need a separate memory audit and are refused
+by this first foundation. Completed WAVs are independently decoded for shape
+and finiteness and hashed before review. Both decodes use the additive codec
+`decode_file_strict_with` entry: nonfinite samples return `CodecError::Corrupt`
+before ordinary sanitation. `decode_bytes_strict_with` uses the same supported
+parser/layout/byte limits. Every ordinary decode entry keeps its previous
+signature, defaults, damaged-file handling and NaN/Inf-to-zero behavior. No
+format, model runtime or dependency was added. No output PCM is retained between files.
 Codec replacing-writer APIs see only private staging, never persistent targets.
 
 The Session integration must follow this protocol:
@@ -174,9 +194,14 @@ The Session integration must follow this protocol:
    using the existing prepared-plan publication/retirement path. A recording,
    project replacement, stale edit/model/source or rejected batch changes no
    document/history/pool/engine state. Pure crate tests do not prove this step.
+   `PreparedApply::check_eligibility` compares borrowed canonical fields directly;
+   do not call the allocating `review()` here. `prepare()` has already built
+   bounded output metadata, exposed by `artifacts()`, before entering these guards.
 6. Only after the actual caller commit, call
    `PreparedApply::acknowledge_commit`. This infallible transition does no IO,
-   codec work or worker joining. It returns `AppliedAssets` with deferred
+   codec work, allocation, deallocation or worker joining. It moves prebuilt
+   metadata and defers even the progress closure's destruction. It returns
+   `AppliedAssets` with deferred
    retirement. Release all Session/recording guards, then `retire`/drop the assets.
    Their final files remain external sources for undo/redo/save/archive.
 
@@ -190,12 +215,22 @@ permanently charged for the manager lifetime and re-inventoried on restart; this
 finite budget can require another directory/explicit user-owned recovery. There
 is no speculative source GC or claim that a failed publication/commit is free.
 
-If staging cleanup fails, its disk/file reservations remain charged, the record
-reports failure and cannot be forgotten. `retry_cleanup` is explicit, bounded
-to that job's private child directory and refuses a replacement file/symlink.
-It never points at cache/persistent roots or another job. No automatic cleanup
-can unlink committed or competitor files. Ordinary Drop cleanup is a fallback;
-resource/accounting retirement also verifies whether the owned directory remains.
+Every publication temporary is registered on its job immediately after exclusive
+creation, before fallible copying/checksum/sync/rename. At most one exists per
+job. A failed destructor deletion is followed by explicit owned-path cleanup;
+a refusal keeps that path and its disk/file reservations charged. Apply retries
+must remove it before writing another temporary. Cancellation/consumption retain
+the record and reservations until both private staging and publication-temporary
+cleanup succeed; repeated cancel/forget/admit cannot bypass the quotas.
+
+`retry_cleanup` is explicit and bounded to that job's private child directory
+and exact registered publication-temporary path. Replacement files/symlinks at
+the private directory, and directories/symlinks at the temporary path, are
+refused for manual recovery. It never takes a final path, cache path or another
+job's path. No cleanup unlinks committed or competitor destinations. Ordinary
+Drop is only the first attempt; retirement checks both tracked paths. A crash
+leftover in the publication root is counted by the next startup inventory and
+is never guessed to be garbage.
 
 ## First-stage verification and next exclusive window
 
@@ -214,6 +249,46 @@ collisions, refusal/retry/double consume and staged versus persistent lifetime.
 No hardware, packaged app, Session undo/save/archive, browser UI or real inference
 verification is claimed by these crate tests.
 
+R1 at immutable `89d5ffbd3cb426d62d36786636a1e0a6e032b8b8` identified five
+foundation defects. Compiled RED regressions reproduced a locked publication
+temporary releasing its reservation, undercharged high-capacity manifests,
+20 allocations/18 frees in the final seam, sanitized encoded nonfinite PCM
+reaching Ready, and Windows case aliases reaching Ready/partial publication.
+All five repairs have compiled GREEN native regressions. Extended checks cover:
+
+- An actual Windows no-delete file handle blocks two Ready apply retries and
+  four cancel/forget/admit/cleanup cycles. A 12,288-byte/two-file reservation
+  stays charged alongside the pre-inventoried 10-byte competitor; closing the
+  handle and explicitly retrying removes only the owned temporary, releases
+  reservations and leaves competitor bytes unchanged.
+- An 8 MiB String plus 4 MiB output-vector capacity retains 12,583,031 manifest
+  bytes, charged within 14,815,904 admitted bytes while Running and Ready.
+  A valid queued manifest adds 4,194,486 retained bytes (21,243,263 total admitted);
+  a separate 128 MiB-capacity valid String is refused by the 24 MiB manager.
+  Actual Rust heap above the test baseline was 12,603,238 bytes at the worker
+  barrier and 12,606,051 after Ready, confirming the charged capacity remained
+  retained rather than merely predicting admission from source.
+- Thread-local allocator/free guards measure **zero allocations and zero frees**
+  across borrowed valid/stale eligibility plus acknowledgement, for both one
+  and sixteen prebuilt output metadata records. Retirement happens afterwards.
+- Authored native Float32/Float64 WAVs containing NaN/+Inf/-Inf are refused by
+  both strict file and byte decoding. Ordinary decoding still sanitizes all six
+  cases to zero. Finite PCM and the same decoded-byte limits remain compatible;
+  a real analysis helper worker refuses encoded Float32 nonfinite outputs.
+- Native artifact case aliases preserve the first WAV's PCM/bytes/stored SHA;
+  destination case aliases refuse before publishing any file. Existing partial
+  publication, competitor, failed caller commit, stale and history-owner tests
+  continue to preserve finals without speculative deletion.
+
+The one-second authored 48 kHz stereo lifecycle emits exactly 384,058 bytes,
+SHA-256 `1704336f534fe5e5105dc93e12b068a27ce34bc432c54955794ab16134fe886f`.
+One measured run took 13,669 microseconds, admitted 3,001,010 memory bytes and
+measured 939,174 Rust heap bytes above its baseline (which excludes the original
+caller source). It reserved 3,145,728 disk bytes; after publication 2,761,670
+remained reserved and 384,058 were persistent; retirement released the remainder.
+This is a lifecycle sample, not a performance guarantee, RSS measurement,
+real-time result or inference/ML-quality evidence.
+
 Run one Cargo at a time in Git Bash after `source scripts/msvc-env.sh`, with
 `CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=1`, `CARGO_TARGET_DIR=target/m1-native` and
 task-local `TS_RS_EXPORT_DIR`. Cargo generated only the new windfall-analysis
@@ -222,12 +297,25 @@ lock entry, referencing already locked packages; subsequent checks use
 `--all-targets` Clippy. No full desktop/workspace/UI build or binding generation.
 
 Proposed next child ownership, after acceptance and explicit parent grant:
-new `session/analysis_jobs.rs`, `session/tests/analysis_jobs.rs`, IPC `analysis.rs`
-and `features/analysis/*` with native source/history/save/archive and UI review
-tests. Serialized registration window: workspace analysis dependency entry,
-desktop Cargo dependency, `session/mod.rs` module/Inner construction/drop,
-IPC lib export, native commands/lib invoke registrations, Backend/Tauri/mock
-methods and audio clip-inspector action entry. Existing editor/edit/library/
+- New `apps/desktop/src-tauri/src/session/analysis_jobs.rs` and
+  `apps/desktop/src-tauri/src/session/tests/analysis_jobs.rs`,
+  `crates/windfall-ipc/src/analysis.rs`, and
+  `apps/desktop/src/features/analysis/*`, including source/history/save/archive
+  and UI review tests.
+- Serialized registration only: root `Cargo.toml` analysis dependency entry,
+  `apps/desktop/src-tauri/Cargo.toml`, native `session/mod.rs` module/Inner
+  construction/drop, `session/tests/mod.rs` test registration,
+  `crates/windfall-ipc/src/lib.rs`, native `commands.rs` and `src/lib.rs` invoke
+  registrations, `apps/desktop/src/lib/ipc/{backend,tauri,mock}.ts`, and
+  `apps/desktop/src/features/playlist/audio/clip-inspector.tsx` action entry.
+
+Final native seam: off-State `claim`/`prepare`/borrowed `artifacts` plus loaded
+pool/command/controller preparation; recording-before-State borrowed
+`PreparedApply::check_eligibility` and one real checked document batch;
+`acknowledge_commit` only after that commit; `AppliedAssets::retire` after every
+guard. Decimal-string IDs must remain process-volatile on IPC. Shared files
+remain closed until parent acceptance and explicit exclusive window grant.
+Existing editor/edit/library/
 files/clip_processing, sampler/cache and Document exact-source/history internals
 remain reserved. Parent owns generated TS/WASM, shared root documentation/parity
 and final integration/publication. Mock must honestly report native inference
@@ -240,7 +328,7 @@ The only dependency graph addition is the native analysis package; sha2 0.10.9
 and tempfile 3.27.0 already existed in Cargo.lock. Default features only (std;
 tempfile randomness via existing getrandom). No runtime, FFI model binary,
 network library or weights were added. Existing windfall-core/codec/serde/
-thiserror are reused unchanged; preserve codec's existing Symphonia MPL-2.0,
+thiserror dependency versions are reused without upgrades; preserve codec's existing Symphonia MPL-2.0,
 Vorbis BSD-3-Clause and LAME LGPL obligations described in its manifest.
 
 Local primary license files from the exact locked registry source were inspected
