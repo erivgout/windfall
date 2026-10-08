@@ -430,9 +430,11 @@ mod tests {
     }
     #[test]
     fn transport_and_latency_are_bounded() {
-        let mut transport = Transport::default();
-        transport.playing = true;
-        transport.position_beats = -3.5;
+        let mut transport = Transport {
+            playing: true,
+            position_beats: -3.5,
+            ..Transport::default()
+        };
         assert_eq!(
             decode_transport(encode_transport(transport).unwrap()),
             Ok(transport)
