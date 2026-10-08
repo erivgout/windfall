@@ -236,7 +236,7 @@ impl Effect for FastLowpass {
     fn prepare(&mut self, rate: f32, _max_block: usize) {
         self.rate = sample_rate(rate);
         self.controls.prepare(self.rate);
-        self.tail = svf_tail(self.rate, 20.0, 1.0, 1.0 / MAX_Q);
+        self.tail = svf_tail(self.rate, 1.0, 1.0 / MAX_Q, 2.0);
         self.reset();
     }
 
@@ -333,10 +333,16 @@ impl Effect for SelectableFilter {
     fn prepare(&mut self, rate: f32, _max_block: usize) {
         self.rate = sample_rate(rate);
         self.controls.prepare(self.rate);
-        // Includes every inactive bank and all gain/Q extremes. Allow the
-        // independently ramped g and k to reach their Cartesian extrema.
+        // Includes every inactive bank and all gain/Q extremes. Keep the
+        // shelf and peak bounds separate: their different damping ranges
+        // cannot coincide in the same bank, even during automation.
         let a = 10.0_f32.powf(18.0 / 40.0);
-        self.tail = svf_tail(self.rate, 20.0, a.sqrt(), 1.0 / (MAX_Q * a));
+        self.tail = svf_tail(self.rate, a.sqrt(), 1.0 / MAX_Q, 2.0).max(svf_tail(
+            self.rate,
+            1.0,
+            1.0 / (MAX_Q * a),
+            2.0 * a,
+        ));
         self.reset();
     }
 
@@ -490,18 +496,31 @@ impl Effect for BassShelf {
     }
 }
 
-// For positive g and 0<k<=2, the slowest poles occur at the g endpoints
-// and smallest damping (k). 64 natural-log units leaves ample room for
-// the maximum resonant gain, float error and a repeated critical pole.
-fn svf_tail(rate: f32, minimum_hz: f32, gain_scale: f32, minimum_k: f32) -> usize {
-    let min_g = f64::from(cutoff_gain(minimum_hz, rate) / gain_scale);
+// Positive g and k yield stable poles. The largest radius over a rectangular
+// g/k domain is at its endpoints: low damping covers complex poles, maximum
+// damping covers overdamped real poles. Include both rather than assuming
+// every gain-dependent peak bank is underdamped.
+fn svf_tail(rate: f32, gain_scale: f32, minimum_k: f32, maximum_k: f32) -> usize {
+    let min_g = f64::from(cutoff_gain(20.0, rate) / gain_scale);
     let max_g = f64::from(cutoff_gain(20_000.0, rate) * gain_scale);
-    let k = f64::from(minimum_k);
     let radius = [min_g, max_g]
-        .map(|g| ((1.0 - g * k + g * g) / (1.0 + g * k + g * g)).sqrt())
         .into_iter()
+        .flat_map(|g| [minimum_k, maximum_k].map(|k| pole_radius(g, f64::from(k))))
         .fold(0.0_f64, f64::max);
     decay_samples(radius, rate)
+}
+
+fn pole_radius(g: f64, k: f64) -> f64 {
+    let divisor = 1.0 + g * k + g * g;
+    let a1 = 2.0 * (g * g - 1.0) / divisor;
+    let a2 = (1.0 - g * k + g * g) / divisor;
+    let discriminant = a1 * a1 - 4.0 * a2;
+    if discriminant < 0.0 {
+        a2.sqrt()
+    } else {
+        let root = discriminant.sqrt();
+        ((-a1 + root) * 0.5).abs().max(((-a1 - root) * 0.5).abs())
+    }
 }
 
 fn decay_samples(radius: f64, rate: f32) -> usize {

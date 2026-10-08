@@ -152,12 +152,14 @@ lookahead delay. Tail and gap both conservatively reserve decay time, rather
 than treating an IIR zero crossing as the end of a tail.
 
 Tail bounds are calculated only at prepare. For an SVF, the complex-pole
-radius is `r = sqrt((1−gk+g²)/(1+gk+g²))`; the global bound uses the smallest
-damping and endpoint integrator gains over all supported controls, including
-inactive banks and independently ramped gain/damping extrema. For the
+radius is `r = sqrt((1−gk+g²)/(1+gk+g²))`; overdamped real-pole radii are
+calculated from the corresponding quadratic roots. The global bound uses
+the endpoint damping and integrator gains over all supported controls,
+including inactive banks and independently ramped gain/damping extrema.
+Shelf and peak domains are bounded separately to avoid mixing extrema from
+different banks. For the
 first-order shelf, `r = abs((1−p)/(1+p))`. The reported bound is
-`ceil(64/−ln(r)) + rampFrames + 64`. The damping bound is deliberately slower
-than the allowed overdamped peak cases, too. The 64 natural-log-unit margin
+`ceil(64/−ln(r)) + rampFrames + 64`. The 64 natural-log-unit margin
 allows for resonant amplitude, repeated poles and floating-point residue.
 
 This policy assumes controls stop moving once a tail is allowed to finish.
@@ -172,7 +174,8 @@ contract; parameter/sample-rate sanitization is separate from audio clipping.
 double-precision direct-form reference derives polynomials from the transfer
 equations; it never calls product coefficient constructors or SVF updates.
 Checks cover impulses at five rates/frequency/Q/gain extrema, impulse DFT,
-tones, bass headroom, mode crossfades including rapid retargets, arbitrary
+tones, logarithmic sweeps with independent stereo noise, reported-tail decay,
+bass headroom, mode crossfades including rapid retargets, arbitrary
 partitions and duplicate automation writes, silent/reset state, stereo
 independence, descriptors/JSON, tiny/invalid rates, and guarded callback
 alloc/realloc/free. The allocator verifies that its own allocation/free
@@ -191,3 +194,60 @@ slot, save/load/undo edits and automation, expose the controls and all modes,
 and verify matching live-engine/offline-export behavior. Slot bypass and
 removal/restore continuity require the utility owner's accepted engine seam.
 No production hostbridge or T8 spectrum work is included.
+
+## Executed source checks and measurements
+
+Initial immutable checkpoint: `f0ad5e44f43e92acebd166c003c8fc186c0d0a96`,
+based on `015da36c2d8094323101988f2713a07104d3121d`. A separate source
+follow-up adds sweep, stereo-history, zero-gain return and tail-decay tests
+and separates shelf/peak tail domains. Independent review of the initial
+checkpoint is pending; the follow-up needs its own fixed-source review.
+
+Executed on Windows, 2026-10-08, Intel Core i9-14900F (24 cores, 32 logical
+processors), Rust `1.99.0 (b940084d7 2026-09-28)`. All Cargo commands sourced
+`scripts/msvc-env.sh` and used one build job, one test thread and the isolated
+`target/e1-native` directory.
+
+- `cargo test -p windfall-dsp --test filter_family -- --nocapture`:
+  13 passed, one ignored throughput measurement (1.47 s test execution).
+- `cargo test -p windfall-dsp --release --test filter_family -- --include-ignored --nocapture`:
+  14 passed, including throughput (3.03 s total test execution).
+- `cargo clippy -p windfall-dsp --test filter_family -- -D warnings`: passed.
+- Owned Rust files were formatted with `rustfmt --edition 2024`; diff
+  whitespace checks passed. No workspace build, Tauri, bindings export,
+  WASM rebuild, package install, push or PR was performed.
+
+The release measurement uses the repository's unchanged release profile,
+30,000 blocks of 128 stereo frames per case (3.84 million stereo frames),
+refilling preallocated buffers with deterministic input. The timed region
+includes those copies, processing and optional once-per-block automation,
+but excludes construction/prepare and test console output. Automation cycles
+descriptor extrema; this measures bounded parameter-update cost alongside
+audio processing, rather than predicting a particular musical workload.
+
+| Processor | Constant µs/128 | Automated µs/128 | Constant M stereo frames/s | Automated M stereo frames/s | Fixed storage |
+| --- | --- | --- | --- | --- | --- |
+| Fast lowpass | 0.510 | 0.549 | 251.23 | 233.06 | 80 bytes |
+| Selectable filter | 3.121 | 3.302 | 41.01 | 38.77 | 408 bytes |
+| Bass shelf | 0.278 | 0.294 | 460.71 | 435.38 | 72 bytes |
+
+At 48 kHz these automated cases consumed respectively 0.021%, 0.124% and
+0.011% of a single core's audio-duration walltime. Other T3 work was active;
+earlier runs varied (for example, selectable-filter constant processing was
+2.702 µs). These are scoped throughput observations, not scheduling bounds,
+device-buffer deadline tests, underrun measurements or listening acceptance.
+No instrumentation was added to product callbacks.
+
+At 48 kHz the global reported tails are 489229 frames (fast lowpass),
+1378281 (selectable filter) and 34754 (bass shelf). The tests process past
+the reported bound with frozen controls at 1, 48000 and 384000 Hz and check
+residue below 1e−18; the tested extrema include minimum cutoff, maximum
+resonance/boost and Nyquist-limited tuning. Bounds are deliberately
+conservative and do not claim that the entire reported interval is audible.
+
+The mode-transition test first failed on rapid retarget: weights already
+aiming at zero retained their old arrival time, so their sum could dip.
+The initial checkpoint fixes this by retargeting the whole weight vector
+from its current mix only when the requested mode changes. The independent
+live-bank sum now matches through interrupted fades; duplicate writes and
+unrelated parameter edits retain their original timing.
