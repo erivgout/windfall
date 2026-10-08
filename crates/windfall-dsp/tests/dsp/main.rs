@@ -15,6 +15,7 @@ mod slot;
 mod support;
 mod synth;
 mod utilities;
+mod utility_repairs;
 
 /// Counts allocator calls for the realtime tests. It does nothing on a
 /// thread that is not being watched, so the other tests are unaffected.

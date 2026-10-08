@@ -6,6 +6,7 @@
 //! [`PlanState`](crate::state::PlanState) to the next, and they travel back
 //! inside the state they were last in to be dropped off the audio thread.
 
+use windfall_dsp::blocks::tap_crossfade::TapCrossfade;
 use windfall_dsp::{AnyEffect, AnyInstrument, EffectSlot, GainReductionMeter};
 use windfall_project::{EffectKind, EffectParams, InstrumentKind, InstrumentParams, TrackId};
 
@@ -696,10 +697,8 @@ pub(crate) struct Compensation {
     /// Where the next frame goes.
     write: usize,
     delay: usize,
-    /// The delay being faded out, and how many frames of that fade are left.
-    from: usize,
-    fade_left: u32,
-    fade_frames: u32,
+    /// The current tap mixture, also used by matrix wet/dry delay edits.
+    fade: TapCrossfade,
     /// Frames to go before that fade starts.
     wait: u32,
 }
@@ -714,9 +713,7 @@ impl Compensation {
             mask: length - 1,
             write: 0,
             delay: delay.min(length - 1),
-            from: 0,
-            fade_left: 0,
-            fade_frames: 1,
+            fade: TapCrossfade::new(length - 1, delay),
             wait: 0,
         }
     }
@@ -733,17 +730,15 @@ impl Compensation {
         if delay == self.delay {
             return;
         }
-        self.from = self.delay;
         self.delay = delay;
-        self.fade_frames = fade_frames.max(1);
-        self.fade_left = self.fade_frames;
+        self.fade.retarget(delay, fade_frames.max(1));
         self.wait = wait;
     }
 
     /// Sets the delay at once.
     pub fn snap(&mut self, delay: usize) {
         self.delay = delay.min(self.capacity());
-        self.fade_left = 0;
+        self.fade.snap(self.delay);
         self.wait = 0;
     }
 
@@ -756,9 +751,7 @@ impl Compensation {
             self.ring[self.write.wrapping_sub(back) & self.mask] = frame;
         }
         self.delay = other.delay.min(self.capacity());
-        self.from = other.from.min(self.capacity());
-        self.fade_left = other.fade_left;
-        self.fade_frames = other.fade_frames;
+        self.fade.take_history(&other.fade);
         self.wait = other.wait;
     }
 
@@ -766,18 +759,14 @@ impl Compensation {
     pub fn process(&mut self, block: &mut [Frame]) {
         for frame in block {
             self.ring[self.write] = *frame;
-            let mut out = self.ring[self.write.wrapping_sub(self.delay) & self.mask];
-            if self.fade_left > 0 {
-                let before = self.ring[self.write.wrapping_sub(self.from) & self.mask];
-                if self.wait > 0 {
-                    self.wait -= 1;
-                    out = before;
-                } else {
-                    let old = self.fade_left as f32 / self.fade_frames as f32;
-                    out[0] += (before[0] - out[0]) * old;
-                    out[1] += (before[1] - out[1]) * old;
-                    self.fade_left -= 1;
-                }
+            let out = std::array::from_fn(|side| {
+                self.fade
+                    .read(|delay| self.ring[self.write.wrapping_sub(delay) & self.mask][side])
+            });
+            if self.wait > 0 {
+                self.wait -= 1;
+            } else {
+                self.fade.advance();
             }
             self.write = (self.write + 1) & self.mask;
             *frame = out;

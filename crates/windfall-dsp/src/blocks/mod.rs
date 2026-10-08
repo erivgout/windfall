@@ -18,6 +18,7 @@ pub mod oscillator;
 pub mod shaper;
 pub mod smooth;
 pub mod svf;
+pub mod tap_crossfade;
 
 /// Samples between two updates of the values a processor moves slowly:
 /// filter coefficients, envelope targets, parameter glides.
