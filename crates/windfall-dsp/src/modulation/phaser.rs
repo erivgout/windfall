@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use super::{Controls, advance, rate, signal, sine};
 use crate::blocks::math::{clean, flush, ms_to_samples};
+use crate::blocks::smooth::LinearRamp;
 use crate::effect::Effect;
 use crate::param::{ParamSet, param_set};
 
@@ -62,6 +63,7 @@ pub struct Phaser {
     feedback: [f32; 2],
     phase: f64,
     idle: [usize; 2],
+    tail_gain: [LinearRamp; 2],
     idle_limit: usize,
     fade_length: usize,
     prepared: bool,
@@ -77,6 +79,7 @@ impl Default for Phaser {
             feedback: [0.0; 2],
             phase: 0.0,
             idle: [0; 2],
+            tail_gain: [LinearRamp::new(1.0); 2],
             idle_limit: 192_000,
             fade_length: 480,
             prepared: false,
@@ -119,6 +122,7 @@ impl Effect for Phaser {
         self.feedback = [0.0; 2];
         self.phase = 0.0;
         self.idle = [0; 2];
+        self.tail_gain = [LinearRamp::new(1.0); 2];
         self.controls.reset();
         self.update();
     }
@@ -141,11 +145,19 @@ impl Effect for Phaser {
             for channel in 0..2 {
                 if input[channel].abs() >= 1e-20 {
                     self.idle[channel] = 0;
+                    // Reentry during the idle fade retains live filter memory.
+                    // Recover from its current audible gain; repeated input
+                    // or parameter writes must not restart this frame clock.
+                    self.tail_gain[channel].set_target(1.0, fade_frames as u32);
                 } else {
                     self.idle[channel] = (self.idle[channel] + 1).min(idle_frames + fade_frames);
+                    if self.idle[channel] > idle_frames {
+                        self.tail_gain[channel].snap(
+                            1.0 - (self.idle[channel] - idle_frames) as f32 / fade_frames as f32,
+                        );
+                    }
                 }
-                let tail_gain = 1.0
-                    - (self.idle[channel].saturating_sub(idle_frames) as f32 / fade_frames as f32);
+                let tail_gain = self.tail_gain[channel].tick();
                 let amount = 0.5 + 0.5 * sine(self.phase + f64::from(stereo) * channel as f64);
                 let frequency = (low + (high - low) * amount)
                     .exp()

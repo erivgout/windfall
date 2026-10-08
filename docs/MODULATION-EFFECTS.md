@@ -115,14 +115,23 @@ floor of `rate/pi * atan(0.0005/1.9995)` (about 30.56 Hz at 384 kHz); it
 only exceeds the 20 Hz parameter minimum at the highest prepared rates.
 This preserves energy as the coefficient moves instead of
 using an unstable time-varying direct-form recurrence. Six stages per side hold
-12 floats and feedback holds two. It has no preparation heap allocation.
+12 floats and feedback holds two. Two fixed gain ramps add 32 bytes of state
+with the current `LinearRamp` layout. It has no preparation heap allocation.
 Warmup/readiness are zero. Its explicit finite **idle-tail policy** allows four
 seconds of zero input, fades wet output over the next 10 ms, then clears the
 filter/feedback state independently for each channel. This is a deliberate tail
 cap, not a claimed natural pole-decay bound at every setting. Tail and gap both
 include the four seconds and fade; modulation phase continues through silence.
-Input at or above 1e-20
-resets the idle counter. No extra gate applies while audio is present.
+Input at or above 1e-20 resets the idle counter. If it returns during the fade,
+wet gain recovers from its current value to one over the next 10 ms (480 frames
+at 48 kHz). The old filter/feedback history continues processing throughout;
+reentry neither freezes nor clears it. Recovery also applies from zero after
+the terminal tail clear. Repeated nonzero input or equal parameter writes do
+not restart recovery; empty blocks do not advance it. Recovery continues even
+if the resumed input becomes silent again, until the next four-second idle
+period starts another fade. Reset/prepare clear history and restore gain one.
+Each channel has its own gain clock. Continuous input that has not entered an
+idle fade remains at full gain, and Mix zero remains exact dry.
 
 ## Evidence and scope
 
@@ -147,7 +156,7 @@ artifacts and parity review. This delivery does not claim Vintage Chorus,
 many-voice Chorus, stacked Flanger, Vintage Phaser, wider E3 families or full
 feature-row closure.
 
-### Checks on this isolated branch
+### Original feature-checkpoint checks (`b2fef7d1`)
 
 Verified thread attachment, clean checkout and branch
 `gpt/t3-modulation-effects-e3b` at base
@@ -193,7 +202,7 @@ whole milliseconds stable when retyped. Signed feedback uses percentages,
 including its finite extrema. Static tone-reference checks observed maximum
 absolute gain error `0.000015637` across the tested feedback/polarity cases.
 
-### Host work and memory observations
+### Original host work and memory observations (`b2fef7d1`)
 
 Windows, Intel Core i9-14900F (32 logical processors), Rust
 `1.99.0 (b940084d7 2026-09-28)`, optimized release test executable, one test thread.
@@ -241,6 +250,62 @@ implementation. Parent must regenerate combined bindings/descriptors, automation
 fixtures and WASM after registry composition; locally generated artifacts are
 excluded from this source checkpoint. Parent also owns parity decisions,
 private push and independent Standards/Spec reviews.
+
+### Spec P2 repair: tail-fade reentry
+
+Independent Standards reported zero actionable violations. Independent Spec
+identified one P2: resumed input reset Phaser's idle counter and restored wet
+gain immediately while the old allpass history remained audible. The original
+feature checkpoint `b2fef7d1d16d25920ff8945726bc5c1b9f79ec9e` is preserved.
+
+Before changing production source, the actual committed processor was executed
+at 48 kHz, endpoints 20 Hz, rate zero, feedback +0.85, Mix one: DC 1 for 48000
+frames, silence for 192240 frames, then DC 1e-6. The added regression failed:
+
+| Executed source | Last quiet output | First resumed output | One-frame jump |
+| --- | ---: | ---: | ---: |
+| Original `b2fef7d1` | 0.0032145930 | 0.0064299246 | 0.0032153316 |
+| Repaired recovery | 0.0032145930 | 0.0032216602 | 0.0000070671 |
+
+The repair retains the existing idle fade and live allpass/feedback processing.
+Two per-channel frame-clock ramps recover from current wet gain over 10 ms;
+the behavior and reset/noop policy are specified above. No parameter, kind,
+JSON, automation-index, latency or tail-length contract changes. Related slot
+code already recovers wet gain with `LinearRamp`; Chorus and Flanger have no
+corresponding idle-tail gain reset. No shared-tail implementation changed.
+
+Three new regressions cover the reported half-fade reentry, delayed right-channel
+reentry, single-frame versus irregular partitions, equal parameter/tempo writes,
+empty calls, simultaneous Mix edits, reset during recovery, exact dry Mix and
+reentry after terminal state clearing. Allocator guards cover the actual
+recovery callbacks and reset, observing zero allocation/reallocation/free.
+
+An independent f64 direct-form recurrence predicts the retained tail's evolution
+and a separate fresh-input response. The residual history is normalized at the
+last quiet frame to separate accumulated five-second f32 history rounding from
+the gain-envelope discontinuity; the new-input response remains unscaled. The
+history normalization is bounded within 1% of the nominal reference, and the
+known old tail amplitude is asserted. Maximum recovery prediction error was
+`1.418e-7`, below the new `5e-7` bound. The original jump limit stays `1e-4`,
+and every pre-existing assertion is unchanged. Freezing or prematurely clearing
+the old history cannot satisfy the evolving-tail prediction.
+
+Repair checks were local, with the same serial Cargo/private-target policy:
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p windfall-dsp --test dsp phaser_tail -- --test-threads=1 --nocapture` | 3 passed |
+| `cargo test -p windfall-dsp --test dsp -- --test-threads=1` | 166 passed; 5 opt-in tests ignored |
+| `cargo clippy -p windfall-dsp --all-targets -- -D warnings` | Passed |
+| `cargo test -p windfall-engine --test engine modulation -- --test-threads=1` | 5 passed; all three effects' routing/automation/live/offline/stems/RT assertions retained |
+| `CARGO_TARGET_DIR="$PWD/target/sim" cargo check -p windfall-dsp --release --target wasm32-unknown-unknown` | Passed |
+
+Only `src/modulation/phaser.rs`, `tests/dsp/modulation.rs` and this document change
+in the incremental repair. UI/project/contracts and generated artifacts are
+unchanged; their original checkpoint evidence remains above. No GitHub Actions
+were dispatched or rerun, and no push/import/nested agent was used. Parent owns
+the bounded fresh Spec followup and combined generation. External platform runs
+await future user authorization and available minutes.
 
 ## Public behavior sources
 

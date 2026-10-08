@@ -557,6 +557,251 @@ fn phaser_idle_tail_is_independent_per_channel_and_does_not_gate_continuous_inpu
     assert!(left[tail..].iter().all(|v| v.abs() > 0.01));
 }
 
+fn phaser_reentry_params() -> PhaserParams {
+    PhaserParams {
+        min_hz: 20.0,
+        max_hz: 20.0,
+        rate_hz: 0.0,
+        feedback: 0.85,
+        mix: 1.0,
+        ..Default::default()
+    }
+}
+
+fn phaser_reentry_input(fade_age: usize) -> (Vec<f32>, usize) {
+    let mut input = vec![1.0; 48_000];
+    input.resize(48_000 + 192_000 + fade_age, 0.0);
+    let reentry = input.len();
+    input.resize(reentry + 960, 1e-6);
+    (input, reentry)
+}
+
+fn process_phaser_parts(
+    fx: &mut AnyEffect,
+    left: &mut [f32],
+    right: &mut [f32],
+    partitions: &[usize],
+    repeated: Option<&EffectParams>,
+) {
+    assert_eq!(left.len(), right.len());
+    assert!(!partitions.is_empty() && partitions.iter().all(|n| *n > 0));
+    assert_eq!(
+        super::realtime::allocator_calls(|| {
+            let mut start = 0;
+            let mut piece = 0;
+            while start < left.len() {
+                if let Some(params) = repeated {
+                    fx.set_params(params);
+                    fx.set_tempo(120.0);
+                }
+                // Empty calls are deliberately inserted at every boundary.
+                fx.process(&mut [], &mut []);
+                let end = (start + partitions[piece % partitions.len()]).min(left.len());
+                fx.process(&mut left[start..end], &mut right[start..end]);
+                let _ = (fx.latency_samples(), fx.tail_samples());
+                start = end;
+                piece += 1;
+            }
+        }),
+        0
+    );
+}
+
+fn phaser_static_wet_reference(input: &[f32], p: PhaserParams) -> Vec<f64> {
+    // Independent direct-form allpasses, not the processor's lattice states.
+    // This reference keeps evolving through silence/reentry with signed
+    // feedback. The separate envelope assertions must not freeze or erase it.
+    let g = (std::f64::consts::PI * f64::from(p.min_hz) / 48_000.0).tan();
+    let a = (g - 1.0) / (g + 1.0);
+    let mut previous_input = [0.0; 6];
+    let mut previous_output = [0.0; 6];
+    let mut feedback = 0.0;
+    input
+        .iter()
+        .map(|input| {
+            let mut wet = f64::from(*input) + f64::from(p.feedback) * feedback;
+            for stage in 0..6 {
+                let next = a * wet + previous_input[stage] - a * previous_output[stage];
+                previous_input[stage] = wet;
+                previous_output[stage] = next;
+                wet = next;
+            }
+            feedback = wet;
+            wet
+        })
+        .collect()
+}
+
+#[test]
+fn phaser_tail_fade_reentry_recovers_gain_without_a_history_jump() {
+    let p = phaser_reentry_params();
+    let params = EffectParams::Phaser(p);
+    let (input, reentry) = phaser_reentry_input(240);
+    let mut right_input = input.clone();
+    right_input[reentry..reentry + 100].fill(0.0);
+    let render = |parts: &[usize], repeated| {
+        let mut fx = AnyEffect::new(&params);
+        fx.prepare(RATE, 512);
+        let mut left = input.clone();
+        let mut right = right_input.clone();
+        process_phaser_parts(&mut fx, &mut left, &mut right, parts, repeated);
+        (left, right)
+    };
+    let (output, right) = render(&[1], None);
+    assert_eq!(
+        (output.clone(), right.clone()),
+        render(&[7, 137, 1, 512, 31], Some(&params))
+    );
+    let previous = output[reentry - 1];
+    let resumed = output[reentry];
+    let jump = (resumed - previous).abs();
+    eprintln!(
+        "Phaser actual tail reentry: previous={previous:.10}, resumed={resumed:.10}, jump={jump:.10}"
+    );
+    assert!(jump < 1e-4, "tail recovery jumped by {jump}");
+    assert!(
+        (0.003..0.0034).contains(&previous),
+        "old tail history was lost"
+    );
+    let mut maximum = 0.0_f64;
+    for (actual, source, offset) in [(&output, &input, 0), (&right, &right_input, 100)] {
+        let reference = phaser_static_wet_reference(source, p);
+        let new_input = phaser_static_wet_reference(&source[reentry..], p);
+        let starting_gain = 1.0 - (240 + offset) as f64 / 480.0;
+        // Five seconds of high-feedback f32 processing accumulates history
+        // rounding relative to f64. Normalize only the residual history at
+        // the last quiet frame, leaving the new-input response unscaled.
+        // The independent recurrence still evolves that history: holding it
+        // fixed, clearing it early or snapping its gain cannot pass this test.
+        let prior = reentry + offset - 1;
+        let history_scale = f64::from(actual[prior]) / (reference[prior] * starting_gain);
+        assert!((history_scale - 1.0).abs() < 0.01);
+        for n in 0..960 {
+            let gain = if n < offset {
+                1.0 - (240 + n + 1) as f64 / 480.0
+            } else {
+                starting_gain + (1.0 - starting_gain) * ((n - offset + 1) as f64 / 480.0).min(1.0)
+            };
+            let wet = (reference[reentry + n] - new_input[n]) * history_scale + new_input[n];
+            let error = (f64::from(actual[reentry + n]) - wet * gain).abs();
+            maximum = maximum.max(error);
+            assert!(
+                error < 5e-7,
+                "reentry offset {offset}, frame {n}: error {error}"
+            );
+        }
+    }
+    eprintln!("Phaser retained-history/envelope reference max error={maximum:.10}");
+}
+
+#[test]
+fn phaser_tail_reentry_control_noop_reset_and_dry_semantics_keep_the_frame_clock() {
+    let p = phaser_reentry_params();
+    let params = EffectParams::Phaser(p);
+    let changed = EffectParams::Phaser(PhaserParams { mix: 0.25, ..p });
+    let (input, reentry) = phaser_reentry_input(240);
+    let reference = phaser_static_wet_reference(&input, p);
+    let render = |parts: &[usize], repeated| {
+        let mut fx = AnyEffect::new(&params);
+        fx.prepare(RATE, 512);
+        let mut left = input.clone();
+        let mut right = input.clone();
+        process_phaser_parts(
+            &mut fx,
+            &mut left[..reentry],
+            &mut right[..reentry],
+            parts,
+            None,
+        );
+        fx.set_params(&changed);
+        process_phaser_parts(
+            &mut fx,
+            &mut left[reentry..],
+            &mut right[reentry..],
+            parts,
+            repeated,
+        );
+        (fx, left)
+    };
+    let (mut fx, output) = render(&[1], Some(&changed));
+    let (_, irregular) = render(&[137, 7, 512, 1, 31], None);
+    assert_eq!(output, irregular);
+    for n in 0..960 {
+        let progress = ((n + 1) as f64 / 480.0).min(1.0);
+        let gain = 0.5 + 0.5 * progress;
+        let mix = 1.0 - 0.75 * progress;
+        let dry = f64::from(input[reentry + n]);
+        let expected = dry + mix * (reference[reentry + n] * gain - dry);
+        assert!((f64::from(output[reentry + n]) - expected).abs() < 1e-5);
+    }
+
+    // Reset halfway through another recovery must start at full gain with
+    // cleared filter state, and snap the currently requested controls.
+    let mut left = input[..reentry].to_vec();
+    let mut right = left.clone();
+    fx.reset();
+    process_phaser_parts(&mut fx, &mut left, &mut right, &[137], None);
+    let mut onset = [1e-6; 73];
+    let mut other = onset;
+    process_phaser_parts(&mut fx, &mut onset, &mut other, &[7], Some(&changed));
+    assert_eq!(
+        super::realtime::allocator_calls(|| {
+            fx.reset();
+            fx.set_params(&changed);
+            fx.process(&mut [], &mut []);
+        }),
+        0
+    );
+    let mut reset_left = vec![0.02; 960];
+    let mut reset_right = reset_left.clone();
+    process_phaser_parts(
+        &mut fx,
+        &mut reset_left,
+        &mut reset_right,
+        &[7, 137],
+        Some(&changed),
+    );
+    assert_eq!(reset_left, process(changed, &[0.02; 960], 1));
+
+    let dry = EffectParams::Phaser(PhaserParams { mix: 0.0, ..p });
+    let mut fx = AnyEffect::new(&dry);
+    fx.prepare(RATE, 512);
+    let mut left = input.clone();
+    let mut right = input.clone();
+    process_phaser_parts(&mut fx, &mut left, &mut right, &[1, 137, 7], Some(&dry));
+    assert_eq!(left, input);
+    assert_eq!(right, input);
+}
+
+#[test]
+fn phaser_tail_reentry_after_state_clear_recovers_from_zero_gain() {
+    let p = phaser_reentry_params();
+    let params = EffectParams::Phaser(p);
+    for fade_age in [480, 1000] {
+        let (input, reentry) = phaser_reentry_input(fade_age);
+        let mut fx = AnyEffect::new(&params);
+        fx.prepare(RATE, 512);
+        let mut left = input.clone();
+        let mut right = input.clone();
+        process_phaser_parts(
+            &mut fx,
+            &mut left,
+            &mut right,
+            &[1, 137, 7, 512],
+            Some(&params),
+        );
+        assert_eq!(left[reentry - 1], 0.0);
+        let reference = phaser_static_wet_reference(&input[reentry..], p);
+        for (n, wet) in reference.into_iter().enumerate() {
+            let gain = ((n + 1) as f64 / 480.0).min(1.0);
+            assert!(
+                (f64::from(left[reentry + n]) - wet * gain).abs() < 1e-9,
+                "cleared tail, frame {n}"
+            );
+        }
+    }
+}
+
 #[test]
 fn append_only_contracts_and_authored_settings_roundtrip_with_every_index() {
     let old = [
