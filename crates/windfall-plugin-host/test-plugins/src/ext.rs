@@ -106,6 +106,7 @@ const SINE_PARAMS: &[ParamDef] = &[ParamDef {
 pub(crate) fn params_of(kind: Kind) -> &'static [ParamDef] {
     match kind {
         Kind::Gain => GAIN_PARAMS,
+        Kind::BridgeDelayed => &GAIN_PARAMS[..1],
         Kind::Sine | Kind::MidiSine => SINE_PARAMS,
         _ => &[],
     }
@@ -497,8 +498,12 @@ static NOTE_PORTS: clap_plugin_note_ports = clap_plugin_note_ports {
     get: Some(note_ports_get),
 };
 
-unsafe extern "C" fn latency_get(_plugin: *const clap_plugin) -> u32 {
-    SINE_LATENCY as u32
+unsafe extern "C" fn latency_get(plugin: *const clap_plugin) -> u32 {
+    if unsafe { Plugin::from_raw(plugin) }.kind == Kind::BridgeDelayed {
+        crate::bridge_behaviors::DELAY as u32
+    } else {
+        SINE_LATENCY as u32
+    }
 }
 
 static LATENCY: clap_plugin_latency = clap_plugin_latency {
@@ -536,9 +541,12 @@ pub(crate) fn get(kind: Kind, id: &CStr) -> *const c_void {
         &raw const NOTE_PORTS as *const c_void
     } else if id == CLAP_EXT_PARAMS && has_params {
         &raw const PARAMS as *const c_void
-    } else if id == CLAP_EXT_STATE && matches!(kind, Kind::Gain | Kind::Sine) {
+    } else if id == CLAP_EXT_STATE && matches!(kind, Kind::Gain | Kind::Sine | Kind::BridgeDelayed)
+    {
         &raw const STATE as *const c_void
-    } else if id == CLAP_EXT_LATENCY && matches!(kind, Kind::Sine | Kind::MidiSine) {
+    } else if id == CLAP_EXT_LATENCY
+        && matches!(kind, Kind::Sine | Kind::MidiSine | Kind::BridgeDelayed)
+    {
         &raw const LATENCY as *const c_void
     } else if id == CLAP_EXT_TAIL && kind == Kind::Sidechain {
         &raw const TAIL as *const c_void

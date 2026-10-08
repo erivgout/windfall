@@ -12,7 +12,7 @@ use std::{
 use windfall_plugin_host::{
     PluginHost, PluginState,
     bridge::{
-        adapter::{Audio, ParameterSpec, Signals},
+        adapter::{Audio, OfflineError, ParameterSpec, Signals},
         protocol::{Config, Identity, Kind},
         slots::{LocalWords, Region},
         supervisor::{self, Control, Launch},
@@ -59,7 +59,8 @@ fn guarded(work: impl FnOnce()) -> usize {
 }
 fn fixture(format: &str) -> PathBuf {
     if let Some(source) = std::env::var_os("WINDFALL_BRIDGE_FIXTURE") {
-        let folder = Path::new(env!("CARGO_TARGET_TMPDIR")).join("bridge-fixture");
+        let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("bridge-fixture-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let target = folder.join(format!("bridge.{format}"));
         if !target.exists() {
@@ -397,6 +398,132 @@ fn default_block_native_helpers_measure_extra_512_frames() {
         drop(audio);
         drop(control);
     }
+}
+
+#[test]
+fn truthful_native_delay_aligns_healthy_audio_dry_fallback_and_latency_report() {
+    for format in ["clap", "vst3"] {
+        for block in [64, 256] {
+            let id = if format == "clap" {
+                "org.windfall.test.bridge-delayed".to_owned()
+            } else {
+                vst_id(10)
+            };
+            let mut options = options(
+                format,
+                &id,
+                Kind::Effect,
+                vec![gain(format)],
+                Duration::from_secs(2),
+            );
+            options.config.block = block;
+            options.offline = true;
+            let (control, mut audio, _) = supervisor::launch(options).unwrap();
+            let expected_latency = if block == 64 { 165 } else { 549 };
+            assert_eq!(audio.latency(), expected_latency);
+            let mut left = [0.0; 2048];
+            let mut right = left;
+            left[0] = 1.0;
+            right[0] = 1.0;
+            audio
+                .process_offline(
+                    &mut left,
+                    &mut right,
+                    Instant::now() + Duration::from_secs(2),
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .unwrap();
+            assert_eq!(
+                left.iter().position(|value| *value != 0.0),
+                Some(expected_latency)
+            );
+            assert_eq!(left[expected_latency], 0.5);
+            assert_eq!(audio.health().missed_blocks, 0);
+            audio.reset_timeline();
+            assert!(control.terminate().reaped);
+            left.fill(0.0);
+            right.fill(0.0);
+            left[0] = 1.0;
+            right[0] = 1.0;
+            assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+            assert_eq!(
+                left.iter().position(|value| *value != 0.0),
+                Some(expected_latency)
+            );
+            assert_eq!(left[expected_latency], 1.0);
+            assert_eq!(audio.health().acknowledged_generation, 0);
+            drop(audio);
+            drop(control);
+        }
+    }
+}
+
+#[test]
+fn offline_deadline_and_cancellation_reap_only_the_render_helper() {
+    let (live_control, mut live_audio) = launch(
+        "clap",
+        common::GAIN,
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_secs(2),
+    );
+    for cancel in [false, true] {
+        let mut options = options(
+            "clap",
+            common::SLOW,
+            Kind::Effect,
+            vec![],
+            Duration::from_secs(2),
+        );
+        options.offline = true;
+        let (control, mut audio, _) = supervisor::launch(options).unwrap();
+        let mut left = [0.25; 128];
+        let mut right = left;
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        audio
+            .process_offline(
+                &mut left,
+                &mut right,
+                Instant::now() + Duration::from_secs(2),
+                &cancelled,
+            )
+            .unwrap();
+        cancelled.store(cancel, Ordering::Release);
+        left.fill(0.125);
+        right.fill(0.125);
+        let result = audio.process_offline(
+            &mut left,
+            &mut right,
+            Instant::now() + Duration::from_millis(1),
+            &cancelled,
+        );
+        assert_eq!(
+            result,
+            Err(if cancel {
+                OfflineError::Cancelled
+            } else {
+                OfflineError::Deadline
+            })
+        );
+        assert!(left.iter().all(|value| *value == 0.125));
+        let status = control.terminate();
+        assert!(status.reaped);
+        assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+        drop(audio);
+        drop(control);
+        assert!(!live_control.status().failed);
+        let mut left = [1.0; 64];
+        let mut right = left;
+        for _ in 0..5 {
+            left.fill(1.0);
+            right.fill(1.0);
+            live_audio.process(&mut left, &mut right);
+            std::thread::sleep(Duration::from_millis(3));
+        }
+        assert!(left.iter().all(|value| *value == 0.5));
+    }
+    drop(live_audio);
+    drop(live_control);
 }
 
 #[test]

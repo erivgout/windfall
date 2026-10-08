@@ -10,6 +10,10 @@ schedule and host-library edit window; production runtime/manager/main and
 shared fixture hooks remain reserved while native control-ordering repairs are
 reviewed. The initial 512-frame default delay was a proposal; the evidence
 below now measures it with B=256 native helper fixtures, separately from B=64.
+The owner subsequently imported reviewed R4 `ec601edf` in local merge
+`02072c81`, using the parent's applied `ea145d93` composition to preserve the
+accepted capture and native point-delivery repairs. Production wiring is still
+reserved separately.
 
 ## Boundary and ownership
 
@@ -190,11 +194,12 @@ parent's existing runtime/main/manager edit reservation.
 
 Current Windows headless evidence:
 
-- Eleven bridge unit checks pass, including exact layout/identity/events,
+- Fourteen bridge unit checks pass, including exact layout/identity/events,
   corrupt output, late helper-owned slot preservation, overflow snapshots,
   epoch rejection, no submission acknowledgement, continuous fallback ramps,
-  counter exhaustion and local-reference two-block impulse delay.
-- Eight real process checks pass: CLAP native crash, nonfinite samples and a
+  counter exhaustion, transport-bound exhaustion without callback panic,
+  bounded retry/cooldown/stale-attempt rejection and local-reference delay.
+- Ten real process checks pass: CLAP native crash, nonfinite samples and a
   helper deadline exceeded by a slow native block are terminated/reaped while
   the parent stays alive with aligned dry fallback; VST3 processing errors and
   nonfinite samples are likewise contained. These tests do not yet exercise a
@@ -213,22 +218,32 @@ Current Windows headless evidence:
   It cannot establish truthful native-latency acoustic alignment.
 - With the default B=256, independent real CLAP/VST3 gain helpers place an
   impulse at exactly **512 frames** under offline scheduling. CLAP reports 512
-  total; the undelayed VST3 fixture reports 529. A new truthful delayed effect
-  fixture is still required to verify native-delay plus bridge-delay and
-  fallback/PDC alignment together.
+  total; the undelayed VST3 fixture reports 529.
+- Newly appended truthful delayed CLAP and VST3 effect fixtures implement a
+  preallocated 37-frame stereo delay. Healthy helper audio and delayed dry
+  fallback after confirmed termination both begin at **165 frames for B=64**
+  and **549 for B=256**, exactly matching the adapter's latency report. VST3
+  class 10 follows the unchanged original classes 0–9; scanner count is 11.
+  Engine graph PDC/routing/dry-wet integration remains unverified until wiring.
 - Before any native DSP block, capture retains pending parameter intent without
   claiming DSP acknowledgement. CLAP stays active: its opaque state retains
   actual 0.5 while the separate companion value carries pending 0.75. VST3
   reconciles inactive state to 0.75 and reports a separate reconciliation
   generation. Both report DSP generation zero. Rejected capture metadata
   preserves the previous validated state and leaves a healthy helper alive.
+- Separate offline native helpers return cancellation/deadline errors without
+  changing the caller's unconsumed buffers. Explicit control-side termination
+  confirms exit while audio retains its mapping for allocation-free fallback,
+  and an independent live helper stays healthy. Exit bookkeeping reports reaped
+  only after confirmed process exit, with a bounded termination deadline.
 - A calibrated thread-local allocator guard records zero callback alloc,
   realloc and free calls through startup, full/late slots, parameter/note
   saturation, reset and latched failure with variable callbacks. One recorded
   run of 320 calls measured maximum 73 microseconds and average 1 microsecond.
   Maximum and average are separate wall-clock observations on a busy machine,
   not CPU utilization or a physical audio deadline claim.
-- Scoped strict host Clippy (library, helper binary, bridge integration target)
+- Strict host Clippy with **all features and all targets**, and the appended
+  VST3 factory/scanner count check,
   and formatting pass. Native processed acknowledgement is conditional on
   separate event admission success, a matching successful nonempty native
   completion, and unchanged nonsaturated dropped counters taken immediately
@@ -243,7 +258,7 @@ Current Windows headless evidence:
 Pending: production factory/manager/helper mode and adopted document metadata,
 true hang/capture-exit/malformed-state/bad-latency fixture hooks (shared hooks
 reserved), save/undo/replacement/recording barriers, engine PDC/routing/export
-and stems, bounded manager retry budget, packaged installer discovery, licensed
+and stems, manager wiring for the tested retry budget, packaged installer discovery, licensed
 corpus, native editors and other OS execution. Existing state bytes are opaque:
 checked container/stream validity is enforced, but this does not prove an
 arbitrary plugin can restore every semantically malformed native payload.
