@@ -56,6 +56,9 @@ describe("descriptors", () => {
       selectableFilter: true,
       bassShelf: true,
       lofi: true,
+      chorus: true,
+      flanger: true,
+      phaser: true,
     }
     const instruments: Record<InstrumentKind, true> = {
       subtractiveSynth: true,

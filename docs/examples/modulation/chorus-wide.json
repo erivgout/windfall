@@ -1,0 +1,10 @@
+{
+  "type": "chorus",
+  "delayMs": 12,
+  "depthMs": 4,
+  "rate1Hz": 0.6,
+  "rate2Hz": 0.8,
+  "rate3Hz": 1.1,
+  "stereoPhase": 0.25,
+  "mix": 0.5
+}

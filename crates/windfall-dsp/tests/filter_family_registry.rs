@@ -80,7 +80,7 @@ fn signal(seed: usize, n: usize) -> Vec<f32> {
 
 #[test]
 fn kinds_are_appended_and_have_distinct_tags_names_defaults_and_controls() {
-    assert_eq!(EffectKind::ALL.len(), 16);
+    assert_eq!(EffectKind::ALL.len(), 19);
     assert_eq!(EffectKind::ALL[12..15], KINDS);
     // Preserve the previous registration order and discriminants used by
     // test/random settings and existing enum consumers.

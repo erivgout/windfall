@@ -28,6 +28,7 @@ use crate::filter_family::{
 };
 use crate::limiter::{LOOKAHEAD_FADE_MS, Limiter, LimiterParams};
 use crate::lofi::{Lofi, LofiParams};
+use crate::modulation::{Chorus, ChorusParams, Flanger, FlangerParams, Phaser, PhaserParams};
 use crate::param::{ParamInfo, ParamSet};
 use crate::reverb::{Reverb, ReverbParams};
 
@@ -175,10 +176,13 @@ pub enum EffectKind {
     SelectableFilter,
     BassShelf,
     Lofi,
+    Chorus,
+    Flanger,
+    Phaser,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 16] = [
+    pub const ALL: [EffectKind; 19] = [
         EffectKind::Eq,
         EffectKind::Compressor,
         EffectKind::Limiter,
@@ -195,6 +199,9 @@ impl EffectKind {
         EffectKind::SelectableFilter,
         EffectKind::BassShelf,
         EffectKind::Lofi,
+        EffectKind::Chorus,
+        EffectKind::Flanger,
+        EffectKind::Phaser,
     ];
 
     /// The effect's name as shown to the user.
@@ -216,6 +223,9 @@ impl EffectKind {
             EffectKind::SelectableFilter => SelectableFilterParams::NAME,
             EffectKind::BassShelf => BassShelfParams::NAME,
             EffectKind::Lofi => LofiParams::NAME,
+            EffectKind::Chorus => ChorusParams::NAME,
+            EffectKind::Flanger => FlangerParams::NAME,
+            EffectKind::Phaser => PhaserParams::NAME,
         }
     }
 
@@ -238,6 +248,9 @@ impl EffectKind {
             EffectKind::SelectableFilter => SelectableFilterParams::descriptors(),
             EffectKind::BassShelf => BassShelfParams::descriptors(),
             EffectKind::Lofi => LofiParams::descriptors(),
+            EffectKind::Chorus => ChorusParams::descriptors(),
+            EffectKind::Flanger => FlangerParams::descriptors(),
+            EffectKind::Phaser => PhaserParams::descriptors(),
         }
     }
 
@@ -260,7 +273,10 @@ impl EffectKind {
             | EffectKind::FastLowpass
             | EffectKind::SelectableFilter
             | EffectKind::BassShelf
-            | EffectKind::Lofi => 0,
+            | EffectKind::Lofi
+            | EffectKind::Chorus
+            | EffectKind::Flanger
+            | EffectKind::Phaser => 0,
         }
     }
 
@@ -285,6 +301,9 @@ impl EffectKind {
             }
             EffectKind::BassShelf => EffectParams::BassShelf(BassShelfParams::default()),
             EffectKind::Lofi => EffectParams::Lofi(LofiParams::default()),
+            EffectKind::Chorus => EffectParams::Chorus(ChorusParams::default()),
+            EffectKind::Flanger => EffectParams::Flanger(FlangerParams::default()),
+            EffectKind::Phaser => EffectParams::Phaser(PhaserParams::default()),
         }
     }
 }
@@ -311,6 +330,9 @@ pub enum EffectParams {
     SelectableFilter(SelectableFilterParams),
     BassShelf(BassShelfParams),
     Lofi(LofiParams),
+    Chorus(ChorusParams),
+    Flanger(FlangerParams),
+    Phaser(PhaserParams),
 }
 
 /// Runs `$body` with `$params` bound to the settings inside an
@@ -334,6 +356,9 @@ macro_rules! each_params {
             EffectParams::SelectableFilter($params) => $body,
             EffectParams::BassShelf($params) => $body,
             EffectParams::Lofi($params) => $body,
+            EffectParams::Chorus($params) => $body,
+            EffectParams::Flanger($params) => $body,
+            EffectParams::Phaser($params) => $body,
         }
     };
 }
@@ -357,6 +382,9 @@ impl EffectParams {
             EffectParams::SelectableFilter(_) => EffectKind::SelectableFilter,
             EffectParams::BassShelf(_) => EffectKind::BassShelf,
             EffectParams::Lofi(_) => EffectKind::Lofi,
+            EffectParams::Chorus(_) => EffectKind::Chorus,
+            EffectParams::Flanger(_) => EffectKind::Flanger,
+            EffectParams::Phaser(_) => EffectKind::Phaser,
         }
     }
 
@@ -381,6 +409,9 @@ impl EffectParams {
             }
             EffectParams::BassShelf(params) => EffectParams::BassShelf(params.sanitized()),
             EffectParams::Lofi(params) => EffectParams::Lofi(params.sanitized()),
+            EffectParams::Chorus(params) => EffectParams::Chorus(params.sanitized()),
+            EffectParams::Flanger(params) => EffectParams::Flanger(params.sanitized()),
+            EffectParams::Phaser(params) => EffectParams::Phaser(params.sanitized()),
         }
     }
 
@@ -406,7 +437,10 @@ impl EffectParams {
             | EffectParams::FastLowpass(_)
             | EffectParams::SelectableFilter(_)
             | EffectParams::BassShelf(_)
-            | EffectParams::Lofi(_) => 0,
+            | EffectParams::Lofi(_)
+            | EffectParams::Chorus(_)
+            | EffectParams::Flanger(_)
+            | EffectParams::Phaser(_) => 0,
         }
     }
 
@@ -448,6 +482,9 @@ pub enum AnyEffect {
     SelectableFilter(Box<SelectableFilter>),
     BassShelf(Box<BassShelf>),
     Lofi(Box<Lofi>),
+    Chorus(Box<Chorus>),
+    Flanger(Box<Flanger>),
+    Phaser(Box<Phaser>),
 }
 
 /// Runs `$body` with `$effect` bound to the effect inside an [`AnyEffect`].
@@ -470,6 +507,9 @@ macro_rules! each_effect {
             AnyEffect::SelectableFilter($effect) => $body,
             AnyEffect::BassShelf($effect) => $body,
             AnyEffect::Lofi($effect) => $body,
+            AnyEffect::Chorus($effect) => $body,
+            AnyEffect::Flanger($effect) => $body,
+            AnyEffect::Phaser($effect) => $body,
         }
     };
 }
@@ -495,6 +535,9 @@ impl AnyEffect {
             EffectKind::SelectableFilter => AnyEffect::SelectableFilter(Box::default()),
             EffectKind::BassShelf => AnyEffect::BassShelf(Box::default()),
             EffectKind::Lofi => AnyEffect::Lofi(Box::default()),
+            EffectKind::Chorus => AnyEffect::Chorus(Box::default()),
+            EffectKind::Flanger => AnyEffect::Flanger(Box::default()),
+            EffectKind::Phaser => AnyEffect::Phaser(Box::default()),
         };
         effect.set_params(params);
         effect
@@ -518,6 +561,9 @@ impl AnyEffect {
             AnyEffect::SelectableFilter(_) => EffectKind::SelectableFilter,
             AnyEffect::BassShelf(_) => EffectKind::BassShelf,
             AnyEffect::Lofi(_) => EffectKind::Lofi,
+            AnyEffect::Chorus(_) => EffectKind::Chorus,
+            AnyEffect::Flanger(_) => EffectKind::Flanger,
+            AnyEffect::Phaser(_) => EffectKind::Phaser,
         }
     }
 
@@ -576,6 +622,11 @@ impl AnyEffect {
                 effect.set_params(params)
             }
             (AnyEffect::Lofi(effect), EffectParams::Lofi(params)) => effect.set_params(params),
+            (AnyEffect::Chorus(effect), EffectParams::Chorus(params)) => effect.set_params(params),
+            (AnyEffect::Flanger(effect), EffectParams::Flanger(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Phaser(effect), EffectParams::Phaser(params)) => effect.set_params(params),
             _ => return false,
         }
         true

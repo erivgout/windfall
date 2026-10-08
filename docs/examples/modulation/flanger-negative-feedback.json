@@ -1,0 +1,12 @@
+{
+  "type": "flanger",
+  "delayMs": 0.5,
+  "depthMs": 4,
+  "rateHz": 0.2,
+  "stereoPhase": 0.5,
+  "feedback": -0.7,
+  "damping": 0.35,
+  "shape": 0.4,
+  "invertWet": true,
+  "mix": 0.5
+}

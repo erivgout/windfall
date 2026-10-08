@@ -9,6 +9,7 @@ mod filter_family;
 mod instruments;
 mod lofi;
 mod mixer;
+mod modulation;
 mod realtime;
 mod rendering;
 mod sampler;

@@ -62,6 +62,7 @@ pub mod frequency_delay;
 mod instrument;
 mod limiter;
 pub mod lofi;
+pub mod modulation;
 mod param;
 mod polarity;
 mod reverb;
@@ -86,6 +87,7 @@ pub use filter_family::{
 pub use instrument::{AnyInstrument, Instrument, InstrumentKind, InstrumentParams};
 pub use limiter::{Limiter, LimiterParams};
 pub use lofi::{FilterPlacement, Lofi, LofiParams, RunRelation};
+pub use modulation::{Chorus, ChorusParams, Flanger, FlangerParams, Phaser, PhaserParams};
 pub use param::{ParamChoice, ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit};
 pub use polarity::{Polarity, PolarityParams};
 pub use reverb::{Reverb, ReverbParams};

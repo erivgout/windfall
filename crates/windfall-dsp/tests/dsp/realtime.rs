@@ -6,10 +6,11 @@ use std::cell::Cell;
 use windfall_dsp::LofiParams;
 use windfall_dsp::blocks::noise::Rng;
 use windfall_dsp::{
-    AnyEffect, AnyInstrument, BalanceParams, BassShelfParams, ChannelMuteParams, CompressorParams,
-    DcBlockParams, DelayParams, DistortionParams, EffectKind, EffectParams, EffectSlot, EqParams,
-    FastLowpassParams, InstrumentKind, InstrumentParams, LimiterParams, PolarityParams,
-    ReverbParams, SelectableFilterParams, SoftClipperParams, StereoMatrixParams, SynthParams,
+    AnyEffect, AnyInstrument, BalanceParams, BassShelfParams, ChannelMuteParams, ChorusParams,
+    CompressorParams, DcBlockParams, DelayParams, DistortionParams, EffectKind, EffectParams,
+    EffectSlot, EqParams, FastLowpassParams, FlangerParams, InstrumentKind, InstrumentParams,
+    LimiterParams, PhaserParams, PolarityParams, ReverbParams, SelectableFilterParams,
+    SoftClipperParams, StereoMatrixParams, SynthParams,
 };
 
 use crate::support::{noise, random_params};
@@ -17,17 +18,19 @@ use crate::support::{noise, random_params};
 thread_local! {
     static WATCHING: Cell<bool> = const { Cell::new(false) };
     static CALLS: Cell<usize> = const { Cell::new(0) };
+    static BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The system allocator, counting every call made on a thread while that
 /// thread is inside [`allocator_calls`].
 pub struct CountingAllocator;
 
-fn count() {
+fn count(bytes: usize) {
     // The thread-locals hold plain values with no destructor, so reading
     // them here cannot allocate. `try_with` covers a thread being torn down.
     if WATCHING.try_with(Cell::get).unwrap_or(false) {
         let _ = CALLS.try_with(|calls| calls.set(calls.get() + 1));
+        let _ = BYTES.try_with(|total| total.set(total.get() + bytes));
     }
 }
 
@@ -35,25 +38,25 @@ fn count() {
 // reads and writes thread-local cells and nothing else.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count();
+        count(layout.size());
         // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        count();
+        count(layout.size());
         // SAFETY: the caller upholds `GlobalAlloc::alloc_zeroed`'s contract.
         unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        count();
+        count(0);
         // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract.
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        count();
+        count(new_size);
         // SAFETY: the caller upholds `GlobalAlloc::realloc`'s contract.
         unsafe { System.realloc(pointer, layout, new_size) }
     }
@@ -61,8 +64,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 /// Runs `work` and returns how many times it allocated, reallocated or
 /// freed memory.
-fn allocator_calls(work: impl FnOnce()) -> usize {
+pub(super) fn allocator_calls(work: impl FnOnce()) -> usize {
     CALLS.set(0);
+    BYTES.set(0);
     WATCHING.set(true);
     work();
     WATCHING.set(false);
@@ -75,6 +79,12 @@ fn the_counter_sees_allocations_and_frees() {
     assert_eq!(allocator_calls(|| kept = Some(vec![1_u8; 64])), 1);
     assert_eq!(allocator_calls(|| drop(kept.take())), 1);
     assert_eq!(allocator_calls(|| assert_eq!(2 + 2, 4)), 0);
+}
+
+/// Newly allocated payload, separate from frees and pre-existing processor data.
+pub(super) fn allocated_bytes(work: impl FnOnce()) -> usize {
+    allocator_calls(work);
+    BYTES.get()
 }
 
 /// Random settings for one kind of effect.
@@ -106,6 +116,9 @@ fn random_effect_params(kind: EffectKind, rng: &mut Rng) -> EffectParams {
         }
         EffectKind::BassShelf => EffectParams::BassShelf(random_params::<BassShelfParams>(rng)),
         EffectKind::Lofi => EffectParams::Lofi(random_params::<LofiParams>(rng)),
+        EffectKind::Chorus => EffectParams::Chorus(random_params::<ChorusParams>(rng)),
+        EffectKind::Flanger => EffectParams::Flanger(random_params::<FlangerParams>(rng)),
+        EffectKind::Phaser => EffectParams::Phaser(random_params::<PhaserParams>(rng)),
     }
 }
 

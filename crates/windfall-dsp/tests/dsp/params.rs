@@ -6,11 +6,11 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use windfall_dsp::blocks::noise::Rng;
 use windfall_dsp::{
-    AnyEffect, AnyInstrument, BalanceParams, ChannelMuteParams, CompressorParams, DcBlockParams,
-    DelayMode, DelayParams, DetectorMode, DistortionParams, EffectKind, EffectParams, EqParams,
-    InstrumentKind, InstrumentParams, LimiterParams, NoteDivision, ParamInfo, ParamKind,
-    ParamScale, ParamSet, ParamUnit, PolarityParams, ReverbParams, SoftClipperParams,
-    StereoMatrixParams, SynthParams, Waveform,
+    AnyEffect, AnyInstrument, BalanceParams, ChannelMuteParams, ChorusParams, CompressorParams,
+    DcBlockParams, DelayMode, DelayParams, DetectorMode, DistortionParams, EffectKind,
+    EffectParams, EqParams, FlangerParams, InstrumentKind, InstrumentParams, LimiterParams,
+    NoteDivision, ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit, PhaserParams,
+    PolarityParams, ReverbParams, SoftClipperParams, StereoMatrixParams, SynthParams, Waveform,
 };
 
 use crate::support::random_params;
@@ -197,6 +197,9 @@ fn every_parameter_struct_agrees_with_its_description() {
     check::<StereoMatrixParams>();
     check::<SoftClipperParams>();
     check::<DistortionParams>();
+    check::<ChorusParams>();
+    check::<FlangerParams>();
+    check::<PhaserParams>();
     check::<SynthParams>();
 }
 
@@ -388,6 +391,9 @@ fn names_are_plain_descriptions() {
             "Selectable filter",
             "Bass shelf",
             "Lo-fi reduction",
+            "Chorus",
+            "Flanger",
+            "Phaser",
             "Subtractive synth"
         ]
     );

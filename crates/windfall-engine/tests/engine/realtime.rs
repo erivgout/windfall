@@ -523,7 +523,10 @@ fn effect_at(kind: EffectKind, step: u32) -> EffectParams {
         | EffectKind::FastLowpass
         | EffectKind::SelectableFilter
         | EffectKind::BassShelf
-        | EffectKind::Lofi => {
+        | EffectKind::Lofi
+        | EffectKind::Chorus
+        | EffectKind::Flanger
+        | EffectKind::Phaser => {
             let mut params = kind.default_params();
             for (index, info) in kind.descriptors().iter().enumerate() {
                 params.set(index, info.min + turn * (info.max - info.min));
