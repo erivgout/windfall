@@ -95,7 +95,10 @@ export const TIMELINE_ACTIONS: Action[] = [
     section: "Playlist",
     keywords: "timeline time selection range",
     enabled: hasRange,
-    whyDisabled: () => "Select time in the playlist ruler first",
+    whyDisabled: (state) =>
+      inPlaylist(state)
+        ? "Select time in the playlist ruler first"
+        : "Open the playlist first",
     run: () => playTimelineSelection(loopSong),
   })),
   {
@@ -103,6 +106,12 @@ export const TIMELINE_ACTIONS: Action[] = [
     title: "Zoom to selected song region",
     section: "Playlist",
     enabled: (state) => hasRange(state) && activeMetrics() !== null,
+    whyDisabled: (state) =>
+      !inPlaylist(state)
+        ? "Open the playlist first"
+        : timeline().selection
+          ? "Open the playlist canvas first"
+          : "Select time in the playlist ruler first",
     run: () => {
       const range = timeline().selection
       if (range) activeMetrics()?.fitRegion(range)
@@ -113,6 +122,10 @@ export const TIMELINE_ACTIONS: Action[] = [
     title: "Export selected song region…",
     section: "Playlist",
     enabled: hasRange,
+    whyDisabled: (state) =>
+      inPlaylist(state)
+        ? "Select time in the playlist ruler first"
+        : "Open the playlist first",
     run: exportTimelineSelection,
   },
   {
@@ -122,6 +135,10 @@ export const TIMELINE_ACTIONS: Action[] = [
     enabled: (state) =>
       inPlaylist(state) &&
       (!!timeline().selection || timeline().active || !timeline().hydrated),
+    whyDisabled: (state) =>
+      inPlaylist(state)
+        ? "No song time selection to clear"
+        : "Open the playlist first",
     run: clearTimelineSelection,
   },
 ]

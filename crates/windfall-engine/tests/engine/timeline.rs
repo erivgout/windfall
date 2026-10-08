@@ -1,12 +1,151 @@
 //! Real processor navigation and linear region rendering, without an audio device.
 use windfall_engine::{RenderOptions, StemOptions, render, render_stems, render_streaming_checked};
 use windfall_ipc::{PlayMode, StemMode, TransportPatch};
-use windfall_project::{MarkerKind, TickRange, TimelineMarker, TrackId};
+use windfall_project::{
+    MarkerKind, MeterChangeId, TickRange, TimelineMarker, TimelineMarkerId, TrackId,
+};
 
 use crate::realtime::allocator_calls;
 use crate::support::{Rig, counted, counting, left, run};
 
 const RATE: u32 = 48_000;
+
+#[test]
+fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+    use windfall_engine::plugins::{
+        HostedEffect, HostedInstrument, PluginFactory, PluginTransport,
+    };
+    use windfall_project::{EffectParams, MeterChange, PluginBinding, PluginTarget, TimeSignature};
+    #[derive(Debug, Default)]
+    struct Probe([AtomicU64; 6]);
+    struct Unit(Arc<Probe>);
+    impl HostedEffect for Unit {
+        fn transport(&mut self, t: PluginTransport) {
+            for (cell, value) in self.0.0.iter().zip([
+                u64::from(t.playing),
+                t.tempo_bpm.to_bits(),
+                t.position_beats.to_bits(),
+                t.position_seconds.to_bits(),
+                u64::from(t.numerator),
+                u64::from(t.denominator),
+            ]) {
+                cell.store(value, Ordering::Relaxed);
+            }
+        }
+        fn process(&mut self, _: &mut [f32], _: &mut [f32]) {}
+        fn set_param(&mut self, _: u32, _: f32) {}
+        fn set_tempo(&mut self, _: f32) {}
+        fn latency(&self) -> usize {
+            0
+        }
+        fn tail(&self) -> usize {
+            0
+        }
+    }
+    impl HostedInstrument for Unit {
+        fn note_on(&mut self, _: u8, _: f32) {}
+        fn note_off(&mut self, _: u8) {}
+        fn all_notes_off(&mut self) {}
+        fn voices(&self) -> usize {
+            0
+        }
+    }
+    #[derive(Debug)]
+    struct Factory(Vec<Arc<Probe>>);
+    impl PluginFactory for Factory {
+        fn effect(
+            &self,
+            binding: &PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn HostedEffect>, String> {
+            Ok(Box::new(Unit(
+                self.0[binding.id.parse::<usize>().unwrap()].clone(),
+            )))
+        }
+        fn instrument(
+            &self,
+            binding: &PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn HostedInstrument>, String> {
+            Ok(Box::new(Unit(
+                self.0[binding.id.parse::<usize>().unwrap()].clone(),
+            )))
+        }
+    }
+    let mut rig = tape();
+    let probes: Vec<_> = (0..4).map(|_| Arc::new(Probe::default())).collect();
+    for (i, format) in ["clap", "vst3"].into_iter().enumerate() {
+        let channel = rig.synth_on(Default::default(), TrackId::MASTER);
+        let effect = rig.effect(TrackId::MASTER, EffectParams::Limiter(Default::default()));
+        for (j, target) in [
+            PluginTarget::Instrument { channel },
+            PluginTarget::Effect { effect },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            rig.project.plugins.push(PluginBinding {
+                target,
+                format: format.into(),
+                path: "transport-probe".into(),
+                id: (i * 2 + j).to_string(),
+                name: "Transport probe".into(),
+                state: Vec::new(),
+                parameters: Vec::new(),
+            });
+        }
+    }
+    rig.pool
+        .set_plugin_factory(Arc::new(Factory(probes.clone())));
+    for (tick, numerator, denominator) in [(0, 7, 8), (1001, 3, 4)] {
+        let id = rig.project.next_id;
+        rig.project.next_id += 1;
+        rig.project.playlist.timeline.meters.push(MeterChange {
+            id: MeterChangeId(id),
+            tick,
+            signature: TimeSignature {
+                numerator,
+                denominator,
+            },
+        });
+    }
+    let pattern = rig.first_pattern();
+    let other_pattern = rig.pattern(16);
+    let (mut processor, controller) = rig.song_processor(RATE);
+    // One frame observes exactly the requested position, through actual hosted
+    // instruments and effect facades for both saved format identifiers.
+    for (mode, source, tick, signature) in [
+        (PlayMode::Song, pattern, 0., (7, 8)),
+        (PlayMode::Pattern, pattern, 0., (4, 4)),
+        (PlayMode::Pattern, other_pattern, 2001., (4, 4)),
+        (PlayMode::Song, other_pattern, 2001., (3, 4)),
+        (PlayMode::Song, pattern, 0., (7, 8)),
+    ] {
+        controller.set_transport(TransportPatch {
+            mode: Some(mode),
+            pattern: Some(source),
+            ..Default::default()
+        });
+        controller.seek(tick);
+        controller.play();
+        let mut out = [0.; 2];
+        assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+        for probe in &probes {
+            let values = probe.0.each_ref().map(|v| v.load(Ordering::Relaxed));
+            assert_eq!((values[4], values[5]), signature, "{mode:?} tick {tick}");
+            assert_eq!(values[0], 1);
+            assert_eq!(f64::from_bits(values[1]), 120.);
+            assert_eq!(f64::from_bits(values[2]), tick / 960.);
+            assert_eq!(f64::from_bits(values[3]), tick / 1920.);
+        }
+    }
+}
 
 fn tape() -> Rig {
     let mut rig = Rig::new();
@@ -21,7 +160,7 @@ fn marker(rig: &mut Rig, tick: u32, kind: MarkerKind) {
     let id = rig.project.next_id;
     rig.project.next_id += 1;
     rig.project.playlist.timeline.markers.push(TimelineMarker {
-        id,
+        id: TimelineMarkerId(id),
         tick,
         name: "Navigation".into(),
         kind,

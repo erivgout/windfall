@@ -709,12 +709,16 @@ impl Processor {
             .tempo_map
             .as_ref()
             .map_or(tick, |map| map.warp(tick));
-        let signature = self.plan.meters[..self
-            .plan
-            .meters
-            .partition_point(|(at, _)| f64::from(*at) <= tick)]
-            .last()
-            .map_or(self.plan.signature, |(_, signature)| *signature);
+        let signature = if self.sequencer.mode() == windfall_ipc::PlayMode::Song {
+            self.plan.meters[..self
+                .plan
+                .meters
+                .partition_point(|(at, _)| f64::from(*at) <= tick)]
+                .last()
+                .map_or(self.plan.signature, |(_, signature)| *signature)
+        } else {
+            self.plan.signature
+        };
         let transport = crate::plugins::PluginTransport {
             playing: self.sequencer.playing(),
             tempo_bpm: self.state.tempo(),

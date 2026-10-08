@@ -40,7 +40,7 @@ it("adds, edits, deletes and undoes meters/markers through accessible menus and 
   render(<PlaylistPanel />)
   await user.click(screen.getByRole("button", { name: "Timeline" }))
   expect(
-    screen.getByRole("menuitem", { name: "Play selection" })
+    screen.getByRole("menuitem", { name: /^Play selected song region/ })
   ).toHaveAttribute("aria-disabled", "true")
   await user.click(screen.getByRole("menuitem", { name: "Add meter change…" }))
   fireEvent.change(screen.getByLabelText("Song tick"), {
@@ -124,6 +124,91 @@ it("fits dragged bounds in logical coordinates at 75–200% scale, DPR and scrol
       expect(useTimelineStore.getState().selection).toBeNull()
     }
   }
+})
+
+it("keeps typed timeline identities numeric through actual WASM commands, refusal, history and save/open", async () => {
+  const first = useProjectStore.getState().project.nextId
+  const reply = await rig.backend.dispatch({
+    type: "batch",
+    commands: [
+      {
+        type: "addMeterChange",
+        tick: 4001,
+        signature: { numerator: 7, denominator: 8 },
+      },
+      {
+        type: "addTimelineMarker",
+        tick: 17,
+        name: "Verse",
+        kind: { type: "named" },
+      },
+    ],
+  })
+  expect(reply.created).toEqual([first, first + 1])
+  const snapshot = await rig.backend.documentSnapshot()
+  const timeline = snapshot.project.playlist.timeline!
+  expect(timeline.meters[0].id).toBe(first)
+  expect(timeline.markers[0].id).toBe(first + 1)
+  expect(typeof timeline.meters[0].id).toBe("number")
+  const saved = await rig.backend.projectSave("/typed-timeline")
+  const savedSnapshot = await rig.backend.documentSnapshot()
+  for (const id of [0, -1, 1.5, 2 ** 32, first + 1]) {
+    await expect(
+      rig.backend.dispatch({ type: "removeMeterChange", id })
+    ).rejects.toThrow()
+    expect(await rig.backend.documentSnapshot()).toEqual(savedSnapshot)
+  }
+  await expect(
+    rig.backend.dispatch({ type: "removeTimelineMarker", id: first })
+  ).rejects.toThrow()
+  await expect(
+    rig.backend.dispatch({
+      type: "updateTimelineMarker",
+      marker: { ...timeline.markers[0], id: first },
+    })
+  ).rejects.toThrow()
+  expect(await rig.backend.documentSnapshot()).toEqual(savedSnapshot)
+  await rig.backend.dispatch({
+    type: "updateMeterChange",
+    id: first,
+    tick: 4201,
+    signature: { numerator: 3, denominator: 4 },
+  })
+  await rig.backend.dispatch({
+    type: "updateTimelineMarker",
+    marker: { ...timeline.markers[0], tick: 29, name: "Chorus" },
+  })
+  const changed = (await rig.backend.documentSnapshot()).project.playlist
+    .timeline
+  await rig.backend.dispatch({
+    type: "batch",
+    commands: [
+      { type: "removeMeterChange", id: first },
+      { type: "removeTimelineMarker", id: first + 1 },
+    ],
+  })
+  await rig.backend.undo()
+  expect(
+    (await rig.backend.documentSnapshot()).project.playlist.timeline
+  ).toEqual(changed)
+  await rig.backend.redo()
+  expect(
+    (await rig.backend.documentSnapshot()).project.playlist.timeline
+  ).toBeUndefined()
+  await rig.backend.projectOpen(saved)
+  expect(
+    (await rig.backend.documentSnapshot()).project.playlist.timeline
+  ).toEqual(timeline)
+  const next = (await rig.backend.documentSnapshot()).project.nextId
+  expect(
+    (
+      await rig.backend.dispatch({
+        type: "addMeterChange",
+        tick: 0,
+        signature: { numerator: 5, denominator: 8 },
+      })
+    ).created
+  ).toEqual([next])
 })
 
 it("cancels preview drags and refuses late region requests after edits/replacement", async () => {

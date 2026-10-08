@@ -14,6 +14,81 @@ use windfall_project::{Command, TickRange, TrackId};
 
 struct Capture;
 
+#[test]
+fn timeline_chained_unpublished_successors_cancel_the_live_native_owner_only() {
+    for scenario in 0..3 {
+        let ordinary = scenario == 1;
+        let mut rig = Rig::new();
+        let a = seed_selection(&rig);
+        // B and C are prepared off State and do not become native authority
+        // before publication. A can still commit while their requests wait.
+        let b_request = a.request + 1;
+        let c_request = a.request + 2;
+        rig.session.timeline_transport_play(a).unwrap();
+        assert_eq!(play_owner(&rig), a.request);
+        assert!(rms(&rig.run(600)) > 1e-5);
+        if ordinary {
+            rig.session.transport_seek(99.0);
+        }
+        if scenario == 2 {
+            rig.run(25_000);
+            assert!(!rig.session.transport_state().playing);
+            assert_eq!(play_owner(&rig), a.request);
+        }
+        let tick = rig.session.controller().frame().tick;
+        let document = rig.session.document_snapshot();
+        let cleared = rig
+            .session
+            .timeline_region_request(None, a.generation, a.revision, Some(a.request + 3), Some(a))
+            .unwrap();
+        assert_eq!(cleared.region, None);
+        assert_eq!(rig.session.transport_state().playing, ordinary);
+        assert_eq!(play_owner(&rig), 0);
+        if scenario == 2 {
+            // Naturally stopped ownership is retired without a second Stop:
+            // the accepted endpoint/automation hold remains available to tails.
+            assert_eq!(rig.session.controller().frame().tick, tick);
+        }
+        for stale in [c_request, b_request] {
+            assert!(
+                rig.session
+                    .timeline_region_request(
+                        a.region,
+                        a.generation,
+                        a.revision,
+                        Some(stale),
+                        Some(a)
+                    )
+                    .is_err()
+            );
+            assert_eq!(rig.session.timeline_state(), cleared);
+        }
+        if !ordinary {
+            rig.run(2000);
+            assert!(rms(&rig.run(600)) < 1e-7);
+        }
+        let after = rig.session.document_snapshot();
+        assert_eq!(after.project, document.project);
+        assert_eq!(after.revision, document.revision);
+        assert_eq!(after.history, document.history);
+        assert_eq!(after.dirty, document.dirty);
+        let rearm = rig
+            .session
+            .timeline_region_request(
+                a.region,
+                a.generation,
+                a.revision,
+                Some(a.request + 4),
+                None,
+            )
+            .unwrap();
+        rig.session.timeline_transport_seek(17.0, rearm).unwrap();
+        rig.session.timeline_transport_play(rearm).unwrap();
+        assert_eq!(play_owner(&rig), rearm.request);
+        assert!(rms(&rig.run(600)) > 1e-5);
+    }
+}
+
 fn play_owner(rig: &Rig) -> u64 {
     let _state = rig.session.state();
     rig.session
