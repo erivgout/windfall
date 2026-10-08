@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        11
+        13
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..11).contains(&index) {
+        if info.is_null() || !(0..13).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -63,6 +63,8 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Recovery Failure",
                         "VST3 Parameter Sources",
                         "VST3 Bridge Delayed Effect",
+                        "VST3 Bridge Permanent Process Hang",
+                        "VST3 Bridge Held Key Probe",
                     ][index as usize],
                 ),
             });
@@ -83,18 +85,20 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..11).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..13).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
                 absurd: class == cid(1),
-                instrument: class == cid(2),
+                instrument: class == cid(2) || class == cid(12),
+                bridge_note_probe: class == cid(12),
                 mono: class == cid(3),
                 refuse: class == cid(6),
                 notify: class == cid(7),
                 recovery_failure: class == cid(8),
                 multi_params: class == cid(9),
-                bridge_delayed: class == cid(10),
+                bridge_delayed: class == cid(10) || class == cid(11),
+                bridge_hang: class == cid(11),
                 activations: std::sync::atomic::AtomicU32::new(0),
                 creator: std::thread::current().id(),
                 notified: std::sync::atomic::AtomicBool::new(false),
@@ -125,7 +129,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..11).contains(&index) {
+        if info.is_null() || !(0..13).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -147,10 +151,12 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Recovery Failure",
                         "VST3 Parameter Sources",
                         "VST3 Bridge Delayed Effect",
+                        "VST3 Bridge Permanent Process Hang",
+                        "VST3 Bridge Held Key Probe",
                     ][index as usize],
                 ),
                 classFlags: 0,
-                subCategories: chars(if index == 2 {
+                subCategories: chars(if index == 2 || index == 12 {
                     "Instrument|Synth"
                 } else {
                     "Fx|Tools"
@@ -166,12 +172,14 @@ impl IPluginFactory2Trait for Factory {
 struct Component {
     absurd: bool,
     instrument: bool,
+    bridge_note_probe: bool,
     mono: bool,
     refuse: bool,
     notify: bool,
     recovery_failure: bool,
     multi_params: bool,
     bridge_delayed: bool,
+    bridge_hang: bool,
     activations: std::sync::atomic::AtomicU32,
     creator: std::thread::ThreadId,
     notified: std::sync::atomic::AtomicBool,
@@ -476,6 +484,9 @@ impl IAudioProcessorTrait for Component {
         kResultOk
     }
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
+        if self.bridge_hang {
+            crate::bridge_behaviors::hang();
+        }
         if self.fault == 1 {
             return kInternalError;
         }
@@ -622,6 +633,8 @@ impl IAudioProcessorTrait for Component {
                 unsafe {
                     out.add(frame as usize).write(if self.fault == 2 {
                         f32::NAN
+                    } else if self.bridge_note_probe {
+                        f32::from(audio.held[0][69])
                     } else if self.multi_params && channel == 1 {
                         audio.extra.iter().sum::<f64>() as f32
                     } else {

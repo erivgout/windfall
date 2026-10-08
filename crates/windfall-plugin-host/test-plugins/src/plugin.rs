@@ -83,6 +83,7 @@ struct Audio {
     ringing: usize,
     blocks: u32,
     bridge_delay: crate::bridge_behaviors::DelayedEffect,
+    bridge_notes: [bool; 128],
 }
 
 /// What only the main thread touches.
@@ -181,6 +182,7 @@ pub(crate) fn create(
             ringing: 0,
             blocks: 0,
             bridge_delay: crate::bridge_behaviors::DelayedEffect::default(),
+            bridge_notes: [false; 128],
         }),
         main: UnsafeCell::new(Main {
             timer: None,
@@ -207,6 +209,12 @@ unsafe extern "C" fn init(plugin: *const clap_plugin) -> bool {
     // SAFETY: the host passes the plugin it was given.
     let plugin = unsafe { Plugin::from_raw(plugin) };
     match plugin.kind {
+        Kind::BridgeIdleHang => {
+            if let Some(callback) = unsafe { (*plugin.host).request_callback } {
+                unsafe { callback(plugin.host) };
+            }
+            true
+        }
         Kind::InitFail => false,
         Kind::InitHang => loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -242,6 +250,7 @@ unsafe extern "C" fn activate(
     audio.delay_at = 0;
     audio.ringing = 0;
     audio.bridge_delay.reset();
+    audio.bridge_notes.fill(false);
     true
 }
 
@@ -261,11 +270,16 @@ unsafe extern "C" fn reset(plugin: *const clap_plugin) {
     audio.delay_at = 0;
     audio.ringing = 0;
     audio.bridge_delay.reset();
+    audio.bridge_notes.fill(false);
 }
 
 unsafe extern "C" fn on_main_thread(plugin: *const clap_plugin) {
     // SAFETY: the host passes the plugin it was given.
-    unsafe { Plugin::from_raw(plugin) }.add_value(slot::MAIN_THREAD_CALLS, 1.0);
+    let plugin = unsafe { Plugin::from_raw(plugin) };
+    if plugin.kind == Kind::BridgeIdleHang {
+        crate::bridge_behaviors::hang();
+    }
+    plugin.add_value(slot::MAIN_THREAD_CALLS, 1.0);
 }
 
 unsafe extern "C" fn get_extension(plugin: *const clap_plugin, id: *const c_char) -> *const c_void {
@@ -380,7 +394,11 @@ unsafe extern "C" fn process(
     unsafe {
         match plugin.kind {
             Kind::Gain => process_gain(plugin, block),
-            Kind::BridgeDelayed => process_bridge_delayed(plugin, audio, block),
+            Kind::BridgeDelayed | Kind::BridgeIdleHang => {
+                process_bridge_delayed(plugin, audio, block)
+            }
+            Kind::BridgeNoteProbe => process_bridge_note_probe(audio, block),
+            Kind::BridgeProcessHang => crate::bridge_behaviors::hang(),
             Kind::Sine | Kind::MidiSine => process_sine(plugin, audio, block),
             Kind::Swap => process_stereo(block, |left, right| (right, left)),
             Kind::Sidechain => process_sidechain(block),
@@ -438,6 +456,46 @@ unsafe fn process_bridge_delayed(
         unsafe {
             *channels[2].add(at) = output[0];
             *channels[3].add(at) = output[1];
+        }
+    }
+    CLAP_PROCESS_CONTINUE
+}
+
+/// # Safety
+/// Event and output pointers belong to the host's current valid block.
+unsafe fn process_bridge_note_probe(
+    audio: &mut Audio,
+    block: &clap_process,
+) -> clap_process_status {
+    let left = unsafe { channel(block.audio_outputs, block.audio_outputs_count, 0, 0) };
+    let right = unsafe { channel(block.audio_outputs, block.audio_outputs_count, 0, 1) };
+    if left.is_null() || right.is_null() {
+        return CLAP_PROCESS_ERROR;
+    }
+    let mut incoming = unsafe { Incoming::new(block.in_events) };
+    for frame in 0..block.frames_count {
+        while let Some(event) = unsafe { incoming.due(frame) } {
+            let head = unsafe { &*event };
+            if head.space_id != CLAP_CORE_EVENT_SPACE_ID {
+                continue;
+            }
+            if matches!(
+                head.type_,
+                CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE
+            ) {
+                let note = unsafe { &*(event as *const clap_event_note) };
+                if note.channel == 0 && (0..128).contains(&note.key) {
+                    audio.bridge_notes[note.key as usize] =
+                        head.type_ == CLAP_EVENT_NOTE_ON && note.velocity > 0.0;
+                } else if note.key < 0 && head.type_ != CLAP_EVENT_NOTE_ON {
+                    audio.bridge_notes.fill(false);
+                }
+            }
+        }
+        let marker = f32::from(audio.bridge_notes[69]);
+        unsafe {
+            *left.add(frame as usize) = marker;
+            *right.add(frame as usize) = marker;
         }
     }
     CLAP_PROCESS_CONTINUE

@@ -106,7 +106,7 @@ const SINE_PARAMS: &[ParamDef] = &[ParamDef {
 pub(crate) fn params_of(kind: Kind) -> &'static [ParamDef] {
     match kind {
         Kind::Gain => GAIN_PARAMS,
-        Kind::BridgeDelayed => &GAIN_PARAMS[..1],
+        Kind::BridgeDelayed | Kind::BridgeProcessHang | Kind::BridgeIdleHang => &GAIN_PARAMS[..1],
         Kind::Sine | Kind::MidiSine => SINE_PARAMS,
         _ => &[],
     }
@@ -394,8 +394,8 @@ const WITH_EXTRA: &[Port] = &[
 
 fn ports_of(kind: Kind, is_input: bool) -> &'static [Port] {
     match kind {
-        Kind::Sine | Kind::MidiSine if is_input => NONE,
-        Kind::Sine | Kind::MidiSine | Kind::Swap => STEREO_SEPARATE,
+        Kind::Sine | Kind::MidiSine | Kind::BridgeNoteProbe if is_input => NONE,
+        Kind::Sine | Kind::MidiSine | Kind::BridgeNoteProbe | Kind::Swap => STEREO_SEPARATE,
         Kind::Sidechain => WITH_EXTRA,
         Kind::Mono => MONO_IN_PLACE,
         _ => STEREO_IN_PLACE,
@@ -461,7 +461,7 @@ unsafe extern "C" fn note_ports_count(plugin: *const clap_plugin, is_input: bool
     // SAFETY: the host passes the plugin it was given.
     match unsafe { Plugin::from_raw(plugin) }.kind {
         Kind::AbsurdPorts => u32::MAX,
-        Kind::Gain | Kind::Sine | Kind::MidiSine if is_input => 1,
+        Kind::Gain | Kind::Sine | Kind::MidiSine | Kind::BridgeNoteProbe if is_input => 1,
         _ => 0,
     }
 }
@@ -476,7 +476,7 @@ unsafe extern "C" fn note_ports_get(
     let (kind, info) = unsafe { (Plugin::from_raw(plugin).kind, &mut *info) };
     let dialects = match kind {
         Kind::AbsurdPorts => CLAP_NOTE_DIALECT_CLAP,
-        Kind::Gain | Kind::Sine if is_input && index == 0 => {
+        Kind::Gain | Kind::Sine | Kind::BridgeNoteProbe if is_input && index == 0 => {
             CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI
         }
         Kind::MidiSine if is_input && index == 0 => CLAP_NOTE_DIALECT_MIDI,
@@ -499,7 +499,10 @@ static NOTE_PORTS: clap_plugin_note_ports = clap_plugin_note_ports {
 };
 
 unsafe extern "C" fn latency_get(plugin: *const clap_plugin) -> u32 {
-    if unsafe { Plugin::from_raw(plugin) }.kind == Kind::BridgeDelayed {
+    if matches!(
+        unsafe { Plugin::from_raw(plugin) }.kind,
+        Kind::BridgeDelayed | Kind::BridgeProcessHang | Kind::BridgeIdleHang
+    ) {
         crate::bridge_behaviors::DELAY as u32
     } else {
         SINE_LATENCY as u32
@@ -541,11 +544,26 @@ pub(crate) fn get(kind: Kind, id: &CStr) -> *const c_void {
         &raw const NOTE_PORTS as *const c_void
     } else if id == CLAP_EXT_PARAMS && has_params {
         &raw const PARAMS as *const c_void
-    } else if id == CLAP_EXT_STATE && matches!(kind, Kind::Gain | Kind::Sine | Kind::BridgeDelayed)
+    } else if id == CLAP_EXT_STATE
+        && matches!(
+            kind,
+            Kind::Gain
+                | Kind::Sine
+                | Kind::BridgeDelayed
+                | Kind::BridgeProcessHang
+                | Kind::BridgeIdleHang
+        )
     {
         &raw const STATE as *const c_void
     } else if id == CLAP_EXT_LATENCY
-        && matches!(kind, Kind::Sine | Kind::MidiSine | Kind::BridgeDelayed)
+        && matches!(
+            kind,
+            Kind::Sine
+                | Kind::MidiSine
+                | Kind::BridgeDelayed
+                | Kind::BridgeProcessHang
+                | Kind::BridgeIdleHang
+        )
     {
         &raw const LATENCY as *const c_void
     } else if id == CLAP_EXT_TAIL && kind == Kind::Sidechain {

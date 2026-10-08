@@ -2,6 +2,7 @@
 //! evidence does not establish packaged installation or hardware deadlines.
 #![cfg(windows)]
 mod common;
+use std::io::{BufRead, Read, Write};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,
@@ -98,6 +99,7 @@ fn options(
         offline: false,
         startup_timeout: Duration::from_secs(5),
         audio_timeout,
+        cancelled: None,
     }
 }
 fn launch(
@@ -400,6 +402,441 @@ fn default_block_native_helpers_measure_extra_512_frames() {
     }
 }
 
+// Test-only process ownership; even a failing RED assertion has bounded reap.
+struct TestChild(std::process::Child);
+impl TestChild {
+    fn finish(&mut self, kill: bool) -> std::process::ExitStatus {
+        if kill {
+            let _ = self.0.kill();
+        }
+        let end = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(status) = self.0.try_wait().unwrap() {
+                return status;
+            }
+            assert!(Instant::now() < end, "test child did not exit");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+impl Drop for TestChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let end = Instant::now() + Duration::from_secs(2);
+        while self.0.try_wait().ok().flatten().is_none() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+#[test]
+#[ignore = "subprocess role used by the authentication regression"]
+fn auth_impostor_client_process() {
+    let endpoint = std::env::var("WINDFALL_TEST_AUTH_ENDPOINT").unwrap();
+    let mut stalled: Vec<_> = (0..8)
+        .map(|_| std::net::TcpStream::connect(&endpoint).unwrap())
+        .collect();
+    let mut wrong = std::net::TcpStream::connect(&endpoint).unwrap();
+    let mut hello = [0u8; 40];
+    hello[..4].copy_from_slice(b"WFAH");
+    hello[4..8].copy_from_slice(&1u32.to_le_bytes());
+    wrong.write_all(&hello).unwrap();
+    println!("CONNECTED");
+    std::io::stdout().flush().unwrap();
+    for socket in stalled.iter_mut().chain(std::iter::once(&mut wrong)) {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buffer = [0u8; 1024];
+        match socket.read(&mut buffer) {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            result => panic!("unrelated client was not closed without disclosure: {result:?}"),
+        }
+    }
+}
+
+#[test]
+fn unrelated_first_and_stalled_clients_receive_no_load_before_real_child_authentication() {
+    use std::process::{Command, Stdio};
+    use windfall_plugin_host::bridge::{
+        auth,
+        control::{Decoder, Message, Packet},
+        mapping::Mapping,
+    };
+    let key = auth::Key::generate().unwrap();
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut impostor = TestChild(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "auth_impostor_client_process",
+                "--nocapture",
+            ])
+            .env("WINDFALL_TEST_AUTH_ENDPOINT", address.to_string())
+            .env_remove("WINDFALL_BRIDGE_FIXTURE")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = impostor.0.stdout.take().unwrap();
+    let (ready, received) = std::sync::mpsc::sync_channel(1);
+    let reader = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line.contains("CONNECTED") {
+                let _ = ready.try_send(());
+            }
+        }
+    });
+    let connected = received.recv_timeout(Duration::from_secs(2));
+    if connected.is_err() {
+        impostor.finish(true);
+        reader.join().unwrap();
+        panic!("unrelated client did not connect before startup");
+    }
+    let options = options(
+        "clap",
+        common::GAIN,
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_secs(2),
+    );
+    let name = format!(
+        "Local\\Windfall-Audio-{:016x}-{:016x}",
+        options.config.identity.session, options.config.identity.token
+    );
+    let _region = Region::initialize(Mapping::create(&name).unwrap(), options.config).unwrap();
+    let mut child = TestChild(
+        Command::new(&options.helper)
+            .args(["--windfall-audio-helper", &address.to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    key.write_to_child(&mut child.0, options.config.identity.session)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut socket = auth::accept(&listener, &mut child.0, &key, deadline, None).unwrap();
+    socket.set_nonblocking(false).unwrap();
+    let mut load = Packet::new(
+        1,
+        options.config.identity.into(),
+        Message::Load {
+            mapping: name,
+            settings: options.config.into(),
+            path: options.plugin.to_string_lossy().into_owned(),
+            id: options.id,
+            format: options.format,
+            approved_binary: options.approved_binary,
+            parameters: options.parameters.into_iter().map(Into::into).collect(),
+            offline: false,
+        },
+    );
+    let host = PluginHost::windfall();
+    let module = host.load(&options.plugin).unwrap();
+    let mut reference = module.create(common::GAIN).unwrap();
+    assert!(reference.set_param(7, 0.625));
+    load.state = reference.save_state().unwrap().into_bytes();
+    load.write(&mut socket).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let mut decoder = Decoder::default();
+    loop {
+        assert!(Instant::now() < deadline);
+        if let Some(packet) = decoder.poll(&mut socket).unwrap() {
+            assert!(matches!(packet.body, Message::Ready { .. }));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    child.finish(true);
+    let status = impostor.finish(false);
+    reader.join().unwrap();
+    let mut diagnostic = String::new();
+    impostor
+        .0
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut diagnostic)
+        .unwrap();
+    assert!(status.success(), "unrelated client failed: {diagnostic}");
+}
+
+#[test]
+fn wrong_child_key_and_startup_cancellation_fail_closed_with_bounded_reap() {
+    use std::process::{Command, Stdio};
+    use windfall_plugin_host::bridge::auth;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let key = auth::Key::generate().unwrap();
+    let wrong = auth::Key::generate().unwrap();
+    let mut child = TestChild(
+        Command::new(env!("CARGO_BIN_EXE_windfall-plugin-audio"))
+            .args([
+                "--windfall-audio-helper",
+                &listener.local_addr().unwrap().to_string(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wrong.write_to_child(&mut child.0, 7).unwrap();
+    let start = Instant::now();
+    assert!(
+        auth::accept(
+            &listener,
+            &mut child.0,
+            &key,
+            start + Duration::from_millis(100),
+            None
+        )
+        .is_err()
+    );
+    child.finish(true);
+    assert!(start.elapsed() < Duration::from_secs(1));
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut settings = options(
+        "clap",
+        common::GAIN,
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_secs(2),
+    );
+    settings.cancelled = Some(flag);
+    let start = Instant::now();
+    assert!(supervisor::launch(settings).is_err());
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn note_only_overflow_reconciles_the_contiguous_next_block_before_acknowledging() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            "org.windfall.test.bridge-note-probe".to_owned()
+        } else {
+            vst_id(12)
+        };
+        let parameters = if format == "clap" {
+            vec![]
+        } else {
+            vec![gain(format)]
+        };
+        let (control, mut audio) = launch(
+            format,
+            &id,
+            Kind::Instrument,
+            parameters,
+            Duration::from_secs(2),
+        );
+        assert_eq!(
+            guarded(|| {
+                for _ in 0..1024 {
+                    assert!(audio.note_on(60, 0.5));
+                }
+                assert!(!audio.note_on(69, 0.75));
+            }),
+            0
+        );
+        let desired = audio.desired_generation();
+        let mut left = [0.0; 64];
+        let mut right = left;
+        for _ in 0..2 {
+            assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+        assert_eq!(
+            audio.health().acknowledged_generation,
+            0,
+            "incomplete block falsely acknowledged"
+        );
+        assert_eq!(audio.health().unknown_blocks, 1);
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+        let ack = audio.health().acknowledged_generation;
+        let marker = left;
+        assert_eq!(ack, desired, "whole snapshot not recovered");
+        assert!(
+            marker.iter().all(|sample| *sample == 1.0),
+            "{format} acknowledged an actually missing key69: {marker:?}"
+        );
+        assert_eq!(
+            guarded(|| {
+                assert!(audio.note_off(69));
+            }),
+            0
+        );
+        for _ in 0..3 {
+            assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            left.iter().all(|sample| *sample == 0.0),
+            "native recovered key was not actually released"
+        );
+        assert_eq!(
+            audio.health().acknowledged_generation,
+            audio.desired_generation()
+        );
+        assert!(control.terminate().reaped);
+    }
+}
+
+#[test]
+fn healthy_idle_reset_and_turnover_do_not_arm_false_stalls_or_dsp_acknowledgements() {
+    let mut settings = options(
+        "clap",
+        common::GAIN,
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_millis(50),
+    );
+    settings.config.block = 256;
+    let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(!control.status().failed && !control.status().reaped);
+    assert_eq!(audio.health().acknowledged_generation, 0);
+    assert_eq!(guarded(|| audio.reset_timeline()), 0);
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(!control.status().failed && !control.status().reaped);
+    assert_eq!(audio.health().acknowledged_generation, 0);
+    for count in [1, 7, 64, 480, 512].into_iter().cycle().take(120) {
+        let mut left = [0.25; 512];
+        let mut right = left;
+        assert_eq!(
+            guarded(|| audio.process(&mut left[..count], &mut right[..count])),
+            0
+        );
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    assert!(!control.status().failed && !control.status().reaped);
+    assert!(audio.health().completed_blocks > 0);
+    assert_eq!(guarded(|| audio.reset_timeline()), 0);
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(!control.status().failed && !control.status().reaped);
+    assert_eq!(audio.health().acknowledged_generation, 0);
+    assert!(control.terminate().reaped);
+}
+
+#[test]
+fn idle_native_hang_is_reaped_while_callbacks_keep_turning_over_ready_slots() {
+    let mut settings = options(
+        "clap",
+        "org.windfall.test.bridge-idle-hang",
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_millis(30),
+    );
+    settings.config.block = 256;
+    let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+    let end = Instant::now() + Duration::from_millis(400);
+    let mut calls = 0;
+    while Instant::now() < end && !control.status().reaped {
+        let mut left = [0.25; 256];
+        let mut right = left;
+        assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+        calls += 1;
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let result = control.status();
+    assert!(control.terminate().reaped);
+    assert!(calls >= 3);
+    assert!(
+        result.reaped && result.failed,
+        "idle hang evaded watchdog: {result:?}"
+    );
+    assert_eq!(audio.health().acknowledged_generation, 0);
+}
+
+#[test]
+fn vst3_capture_does_not_relabel_dsp_proof_after_a_reset_without_processing() {
+    let mut options = options(
+        "vst3",
+        &vst_id(0),
+        Kind::Effect,
+        vec![gain("vst3")],
+        Duration::from_secs(2),
+    );
+    options.offline = true;
+    let (control, mut audio, _) = supervisor::launch(options).unwrap();
+    audio
+        .process_offline(
+            &mut [1.0; 512],
+            &mut [1.0; 512],
+            Instant::now() + Duration::from_secs(2),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    let first = control
+        .capture(
+            1,
+            audio.desired_generation(),
+            &[gain("vst3")],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(first.processed_generation > 0);
+    audio.reset_timeline();
+    let second = control
+        .capture(
+            2,
+            audio.desired_generation(),
+            &[gain("vst3")],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert_eq!(second.epoch, 2);
+    assert_eq!(second.processed_generation, 0);
+    assert_eq!(audio.health().acknowledged_generation, 0);
+    drop(audio);
+    drop(control);
+}
+
+#[test]
+fn permanent_native_process_hangs_are_killed_with_aligned_dry_fallback() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            "org.windfall.test.bridge-process-hang".to_owned()
+        } else {
+            vst_id(11)
+        };
+        let (control, mut audio) = launch(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_millis(20),
+        );
+        let mut left = [0.25; 64];
+        let mut right = left;
+        audio.process(&mut left, &mut right);
+        wait_failed(&control);
+        for _ in 0..10 {
+            left.fill(0.25);
+            right.fill(0.25);
+            assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+        }
+        assert_eq!(audio.latency(), 165);
+        assert!(left.iter().all(|value| *value == 0.25));
+        assert_eq!(audio.health().acknowledged_generation, 0);
+        drop(audio);
+        drop(control);
+    }
+}
+
 #[test]
 fn truthful_native_delay_aligns_healthy_audio_dry_fallback_and_latency_report() {
     for format in ["clap", "vst3"] {
@@ -505,7 +942,7 @@ fn offline_deadline_and_cancellation_reap_only_the_render_helper() {
                 OfflineError::Deadline
             })
         );
-        assert!(left.iter().all(|value| *value == 0.125));
+        assert!(left.iter().chain(&right).all(|value| *value == 0.0));
         let status = control.terminate();
         assert!(status.reaped);
         assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);

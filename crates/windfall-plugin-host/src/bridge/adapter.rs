@@ -476,6 +476,22 @@ impl Audio {
         deadline: std::time::Instant,
         cancelled: &AtomicBool,
     ) -> Result<(), OfflineError> {
+        let result = self.process_offline_inner(left, right, deadline, cancelled);
+        if result.is_err() {
+            // A staging caller receives no retained partial/fallback output.
+            // It must still discard its complete render artifact on this error.
+            left.fill(0.0);
+            right.fill(0.0);
+        }
+        result
+    }
+    fn process_offline_inner(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        deadline: std::time::Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<(), OfflineError> {
         if left.len() != right.len() {
             return Err(OfflineError::Shape);
         }
@@ -484,7 +500,7 @@ impl Audio {
             if cancelled.load(Ordering::Acquire) {
                 return Err(OfflineError::Cancelled);
             }
-            if self.signals.failed.load(Ordering::Acquire) {
+            if self.signals.failed.load(Ordering::Acquire) || self.region.helper_failed() {
                 return Err(OfflineError::Failed);
             }
             if std::time::Instant::now() >= deadline {
@@ -495,7 +511,7 @@ impl Audio {
                     if cancelled.load(Ordering::Acquire) {
                         return Err(OfflineError::Cancelled);
                     }
-                    if self.signals.failed.load(Ordering::Acquire) {
+                    if self.signals.failed.load(Ordering::Acquire) || self.region.helper_failed() {
                         return Err(OfflineError::Failed);
                     }
                     if std::time::Instant::now() >= deadline {
@@ -507,6 +523,7 @@ impl Audio {
             let frames = (self.region.config.block - self.cursor).min(left.len() - offset);
             let corrupt = self.health.corrupt_blocks;
             let full = self.health.full_blocks;
+            let unknown = self.health.unknown_blocks;
             self.process(
                 &mut left[offset..offset + frames],
                 &mut right[offset..offset + frames],
@@ -517,7 +534,16 @@ impl Audio {
             if self.health.full_blocks != full {
                 return Err(OfflineError::Failed);
             }
+            if self.health.unknown_blocks != unknown
+                || self.signals.failed.load(Ordering::Acquire)
+                || self.region.helper_failed()
+            {
+                return Err(OfflineError::Failed);
+            }
             offset += frames;
+        }
+        if self.signals.failed.load(Ordering::Acquire) || self.region.helper_failed() {
+            return Err(OfflineError::Failed);
         }
         Ok(())
     }
@@ -684,6 +710,27 @@ mod tests {
         assert!(worker.controls_complete);
         assert_eq!(worker.parameters[0].value, 0.75);
         assert_eq!(worker.notes, [0.0; 128]);
+    }
+
+    #[test]
+    fn offline_rejects_shared_native_failure_before_the_supervisor_signal() {
+        let (mut audio, region) = make(Kind::Effect, 0);
+        audio.process(&mut [0.25; 128], &mut [0.25; 128]);
+        let mut input = InputBlock::new();
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        region.latch_helper_failure();
+        region.complete(slot, sequence, &OutputBlock::silent(), OUTPUT_FAILED);
+        assert!(!audio.signals().failed.load(Ordering::Acquire));
+        let mut left = [0.5; 64];
+        let mut right = left;
+        let result = audio.process_offline(
+            &mut left,
+            &mut right,
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            &AtomicBool::new(false),
+        );
+        assert_eq!(result, Err(OfflineError::Failed));
+        assert!(left.iter().chain(&right).all(|value| *value == 0.0));
     }
 
     #[test]
