@@ -1028,6 +1028,18 @@ impl PlanState {
         let mut wait = 0;
         for (index, track) in plan.tracks.iter().enumerate() {
             for (place, effect) in track.effects.iter().enumerate() {
+                // The outgoing definition is serially before its fresh active
+                // successor, so its actual splice is already adopted here.
+                let departure = effect
+                    .after
+                    .as_ref()
+                    .and_then(|life| {
+                        track.effects.iter().position(|before| {
+                            before.leaving && std::sync::Arc::ptr_eq(&before.life, life)
+                        })
+                    })
+                    .and_then(|before| self.chains[index][before].as_ref())
+                    .map_or(0, EffectUnit::removal_remaining);
                 let seat = &mut self.chains[index][place];
                 let new = seat.is_some();
                 if !new {
@@ -1094,47 +1106,17 @@ impl PlanState {
                     (true, false) => unit.drop_out(),
                     (false, true) if arrived => {
                         unit.fade_in(fades.splice);
-                        // The predecessor is processed first in this serial
-                        // chain. Do not expose a fresh owner's input history
-                        // until the old splice and its own priming are done.
+                        // Concrete preparation/arrival decides this wait,
+                        // never inheritance of a shared progress marker.
+                        unit.wait_for_departure(departure);
                     }
                     (false, _) => wait = wait.max(unit.insertion_wait()),
                 }
             }
         }
 
-        for (index, track) in plan.tracks.iter().enumerate() {
-            for (place, effect) in track
-                .effects
-                .iter()
-                .enumerate()
-                .filter(|(_, effect)| !effect.leaving)
-            {
-                let predecessor = effect.after.as_ref().and_then(|life| {
-                    track.effects.iter().position(|before| {
-                        before.leaving && std::sync::Arc::ptr_eq(&before.life, life)
-                    })
-                });
-                let remaining = predecessor
-                    .and_then(|before| self.chains[index][before].as_ref())
-                    .map_or(0, EffectUnit::removal_remaining);
-                if let Some(unit) = &mut self.chains[index][place] {
-                    // Only a freshly prepared owner starts this wait. Retained
-                    // owners carry the numeric countdown through later plans.
-                    let previously_active =
-                        old_plan.effect_ids.get(effect.id.0).is_some_and(|before| {
-                            let (track, place) = old_plan.effect_places[before];
-                            std::sync::Arc::ptr_eq(
-                                &old_plan.tracks[track].effects[place].life,
-                                &effect.life,
-                            )
-                        });
-                    if !previously_active {
-                        unit.wait_for_departure(remaining);
-                    }
-                    wait = wait.max(unit.insertion_wait());
-                }
-            }
+        for unit in self.chains.iter().flatten().flatten() {
+            wait = wait.max(unit.insertion_wait());
         }
 
         for (index, channel) in plan.channels.iter().enumerate() {

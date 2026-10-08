@@ -243,6 +243,72 @@ the old one remains audible. Revised bindings keep their own latency and
 retire the departing native owner only on the control side. All these
 callbacks are guarded for zero alloc/realloc/free calls.
 
+## Fifth review: revision-only replacement while restoration waits (7491dfb6 source)
+
+This review's source-equation prediction was reproduced with compiled native
+RED before production edits. At 48 kHz, opposite 0.25-amplitude 173 Hz sampler
+tracks were primed for 4092 frames, with a real hosted 32-frame delay followed
+by a 1/1 ms identity matrix on one track. The hosted slot was removed for 80
+frames, restored for another 80, then **only the same factory's revision** was
+incremented. The project, binding state, parameter values/layout, slot id and
+factory Arc were unchanged. The measured cancellation residual over 400
+revision frames was **0.05907429**. A 64-revision-frame remove/restore variant
+left **three live native owners**, exceeding the approved bound of two. Both
+assertions failed in `cargo test -p windfall-engine --test engine
+utility_effects_r5 -- --nocapture`. The 48-frame downstream matrix delays the
+first mismatch reaching the output; observing only 64 revision frames would
+miss the eventual cancellation failure.
+
+A shared factory Arc exposes its current revision, not the revision a previous
+plan prepared. Active effect definitions now carry an internal control-side
+snapshot of binding/provider/revision identity. Compilation snapshots initial
+identity; installation refreshes it before comparing with the previous frozen
+snapshot, including plans compiled before a retry. A revision-only preparation
+therefore gets a fresh progress generation. It cannot inherit a superseded
+owner's heard marker, departure authority or compensation stage. This adds one
+optional identity value per definition, no persisted id or model change, and
+no native owner handle. Unchanged native owners and built-in effects retain
+their progress across ordinary plans and track moves.
+
+State now adds the actual predecessor's remaining removal count when a concrete
+prepared or arriving rack unit begins insertion. Marker equality is no longer
+used as proof that the concrete owner was retained. The serial predecessor has
+already been adopted at that point, so the fresh owner's wait is exactly that
+remaining removal plus its own priming. Retained owners keep their existing
+countdown without extending it on intervening plans. Prepared compensation
+stages use the new generation and its actual wait, while superseded unheard
+units retire through the existing control-side collection path. No native
+facade/adoption hook, controller, processor or navigation seam is changed.
+
+The exact cancellation GREEN residual is **0.000000014901161**, below the
+unchanged **1e-6** bound. The solo 173 Hz remove/restore variant measures maximum
+step **0.006233236**, below the unchanged **0.04** bound. The exact subsequent
+remove/restore at revision frame 64 also cancels after the original departure
+finishes, stays within two live owners, and destroys each retired owner once
+outside the callback. Six R5 tests additionally cover:
+
+- Repeated revision-only replacements before, between and after two matrices,
+  with unchanged bindings and alternating prepared 32/64-frame latency.
+- Precompiled plans installed after the same factory revision changes, seven
+  single-frame callbacks per revision, irregular continuation blocks, and the
+  final requested latency.
+- Forty revised preparations across twenty pairs of plans, where the first
+  plan of each pair is superseded before callback processing. Each such owner
+  processes zero blocks, drops once on the control side, and never joins the
+  departure lineage. At control collection boundaries only the audible
+  outgoing and current active owner remain; final collection leaves one owner.
+- Moving the revised native id to the master after its departure has completed,
+  preserving constant unity and reusing the current owner. The prior tone,
+  automation, move/topology boundaries and speculative-owner tests remain.
+
+All adoption, history, revision, further remove/restore and retirement callbacks
+use the existing allocator guard and report zero alloc/realloc/free calls.
+Snapshot/hash work occurs on the control side; audio-side predecessor matching
+uses the existing track's prepared definitions, and no added callback lock,
+blocking wait, owner destruction or unbounded storage is introduced. The
+one-outgoing/one-active representation and control-side retirement contract
+from R4 remain intact. No new phase or readiness exception is added.
+
 ## Transition policy and bounds
 
 When history is ready, a retarget freezes the current tap mixture at its
@@ -506,3 +572,43 @@ remain as previously documented; the solo restoration splice cut, completed
 identity-prefix history, and differing serial restoration clocks are fixed
 without another exception. Hardware listening and worst-case device deadline
 measurements are not claimed.
+
+## Fifth-repair verification (7491dfb6 source)
+
+Checks reuse the existing worktree-local `target/utility-repairs-native` and
+`target/utility-repairs-bindings`, with `source scripts/msvc-env.sh`,
+`CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=1`, and sequential Cargo processes.
+The exact RED command before production edits and final focused GREEN command
+were `cargo test -p windfall-engine --test engine utility_effects_r5 -- --nocapture`.
+No source-equation prediction is presented as executed failure evidence.
+
+Completed fixed-source checks:
+
+- `cargo test -p windfall-engine --test engine utility_effects_r5 -- --nocapture`:
+  **six passed**, including printed exact cancellation and solo maxima above.
+- `cargo test -p windfall-engine --test engine effects --quiet`:
+  **71 passed**, 183 unrelated tests filtered out. Retains all R1-R4 closures,
+  unchanged tone/cancellation bounds, utility/limiter behavior and allocator
+  guards, plus all six R5 cases.
+- `cargo test -p windfall-engine --lib repeated_restores --quiet`: **one passed**.
+- `cargo test -p windfall-engine --lib rack::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib state::tests --quiet`: **three passed**.
+- `cargo test -p windfall-engine --lib plugins::tests --quiet`: **eight passed**.
+- `cargo test -p windfall-dsp --test dsp utility_repairs --quiet`: **nine passed**.
+  This followup changes no DSP source.
+- `cargo clippy -p windfall-dsp -p windfall-engine --all-targets -- -D warnings`
+  and `cargo fmt --all --check`: **passed after the final source edits**.
+- Prettier on both utility documents and `git diff --check`: **passed**.
+- Every guarded new revision/precompiled-plan adoption, continuation,
+  remove/restore, move and retirement callback: **zero alloc/realloc/free calls**.
+
+This is a source-only followup atop 7491dfb6; no parent imports, amendment,
+generated artifact, new review thread, push or release is included. Only
+Plan/State lifecycle source, owned regression tests and this repair document
+change. EffectSlot policies, DSP registries, native adoption facade/hook,
+controller/processor and navigation fields remain with their owners. Combined
+acceptance/artifacts remain with the parent. Existing independent varying-branch
+and topology phase boundaries and the one-second fallback are unchanged; the
+revision-only readiness/cancellation and two-owner failures are fixed without
+new exceptions. Hardware listening, native worst-case device deadlines and
+combined shared-WASM parity are not claimed.
