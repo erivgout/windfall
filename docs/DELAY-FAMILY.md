@@ -392,3 +392,360 @@ also checks the private test-only allocator/rollback code. The new preparation
 cases are part of the library run. Foundation R2 review, fallible host admission,
 saturating engine tail aggregation, registry/project integration, drawn editors and all other
 remaining E3 work remain pending; this repair does not close parity.
+
+## R2 foundation status and read-only host admission proposal
+
+2026-10-08. This inventory is against bound branch `gpt/t3-delay-family-e3`,
+immutable source `42d58df48e499a9fc4c3997f0382310976bc4415`, whose parent is
+`6326f883a434af507a1436532d497889fec400e2`. Independent R2 returned no hard
+Standards findings and no Spec findings; the positional-controls P3 judgement
+is unchanged. Both R1 P2 findings are closed. The reviewers independently ran
+two and five attributed release cases; reservation rollback tests were inspected,
+not independently executed. The 132-library/26-release results above remain
+owner-attributed. No completed tests or CPU observations were rerun for this
+proposal. The earlier statement that R2 was pending records the repair's earlier
+checkpoint, not the current review status.
+
+Only this document is changed for this assignment. Every API and policy below
+is **proposed**, not installed or tested host behavior. This branch has no E3
+registry variants. Parent N4 owns pool/render/stems/plugins work; T1's Controller
+window is meter-only. Controller ownership, generation/retirement contracts and
+desktop transactions need parent-serialized windows with their owners. The
+inventory does not incorporate newer parent commits or imply permission to edit
+any of those files. Host/editor acceptance, both parity rows and remaining E3
+requirements remain open.
+
+### Actual construction and limits at source 42d58df4
+
+| Existing boundary | Observed behavior and consequence |
+| --- | --- |
+| `windfall-dsp/src/effect.rs`: `AnyEffect::new` (466), `prepare` (509) | Fifteen boxed original/E1 variants; no bank or frequency variant. Construction and preparation are infallible. A new variant must dispatch to the concrete `try_prepare`, not merely call the trait's void method. |
+| Same file: `EffectSlot::new` (686), `prepare` (709) | Construction already allocates default dry histories/tap storage. Preparation sets the slot clock, calls void effect preparation, allocates dry histories, tap storage, two scratch buffers and aligned flags, then resets the processor. Calling this after a successful E3 preparation would prepare the histories twice. Calling it after a refusal could reset the previous valid effect and wrap an unprepared fresh effect as if healthy. |
+| `windfall-engine/src/rack.rs`: `EffectUnit::build` (103) | Creates `AnyEffect`, slot and prepared buffers at `MAX_BLOCK = 256`, then applies tempo/params/enabled/mix. It returns no error. Native plugin installation happens later, so even a plugin-bound slot currently has a prepared builtin fallback; admission must count that actual allocation until N4 changes the construction contract. There is no separate `Rack` struct: runtime chains belong to `PlanState`. |
+| `plan.rs`: `compile` (509), `compile_render` (573), `keep_leaving` (334) | Plans contain settings and owner-generation metadata, not prepared E3 histories. Compilation clips to 128 mixer tracks and 10 active effects per track. Departure definitions can coexist with active definitions. These are logical limits, not byte limits. Render compilation clones the pool and can select a separate plugin provider; provider identity/revision still matters. |
+| `state.rs`: `PlanState::build` (629), `take_over` (892) | Build calls plugin preparation, creates compensation/buffers and constructs fresh units. Known units and departures use empty seats for subsequent ownership transfer. `Ledger` is a projection of expected owners, not ownership of their histories. Transfer moves the generation-matched physical unit; a same-ID restore can retain a distinct heard departure. |
+| `controller.rs`: `try_prepare_project` (198), `compile_prepared_project` (207) | `PreparedProject` contains a compiled `Plan` and sampler pool only. Its fallible result concerns sampler preparation; it does not make effect DSP ready. |
+| Same file: `set_plan` (232), `attach` (505) | With a stream, `set_plan` builds runtime DSP under the Controller mutex before queuing it. Without a stream it stores metadata. `attach` builds all units fresh at the requested rate, then publishes link/ledger and clears backlog. Neither returns DSP preparation failure. |
+| `message.rs` and Controller `send`/`maintain` (615/638) | Message capacity is 1024; garbage capacity is 4096 with four-slot headroom. Controller backlog is an unbounded `VecDeque`. These count messages, not histories or bytes. Queued `SetPlan` and retired `State` still own buffers. The defensive garbage-overflow path deliberately leaks rather than freeing on RT. |
+| `pool.rs` and `sampler_processing.rs` | Pool clones share source maps/caches. `share_sampler_budget` preserves the sampler budget across replacement. Sampler banks have a shared 256 MiB reservation/lease budget including unpublished preparation, with one off-thread FFT workspace at a time. This is a useful ownership precedent, not an effect or process-wide budget. |
+| `clip_processing.rs` | The clip cache retains at most 32 variants/256 MiB except a single larger clip. This counter concerns rendered cache audio; source identity/audio is also held. Cloned cache counters are not a global ownership lease. Decoded input audio has no aggregate pool byte bound here. Native plugin allocation is opaque to these counters. |
+| `render.rs`: `render_reporting` (100) | Prepares samplers, creates a new Controller and attaches a fresh runtime. Headless rate is only normalized with `max(1)`. Full output uses `Vec::with_capacity`/growth; block size and total output allocation have no memory admission. Its report has sampler error only. |
+| `stems.rs`: checked streaming (302), stems (325), `Pass::new` (559) | Checked streaming currently checks samplers only. `TrackOutputs` uses one pass; `ToMaster` uses a mix pass if needed and then sequential fresh stem passes. `leave_only` changes inputs but leaves bus effects present: profile the compiled pass, not just the selected track. Each pass constructs fresh DSP independently of live playback. `Outlet::held` can accumulate quiet audio awaiting an automatic-tail decision. Streaming alone therefore does not bound memory. |
+| Desktop `session/export.rs` | One active export per Session, rates 8k..384k, a day/frame and WAV-size horizon. These are job/format limits, not delay-memory admission. Other Sessions/API renders can coexist. Pool snapshots preserve sampler charges; they must also preserve the future delay budget. |
+
+Paths in the table are relative to `crates/` unless prefixed with desktop.
+`EffectLife` atomics describe heard/finished progress, not ownership or a
+reusable authorization to allocate. A unit marked gone, disabled or dormant
+still owns its complete prepared histories until its physical owner is dropped.
+
+The current zero-PDC slot also has a measurable cost outside E3 payload.
+At block size 256, two four-sample dry rings use 32 bytes, one dry tap uses
+16 bytes on this 64-bit build, scratch uses 2048 bytes, and flags use 256 bytes:
+2352 retained heap bytes, plus slot/unit/plan/container payload. Default ring/tap
+allocations can overlap their replacements during construction. Future admission
+must measure capacities and include these costs; the processor's reported
+614435600/49156352 bytes already includes its own inline state, so do not count
+that state twice when profiling its box.
+
+### Proposed shared byte scope and preparation reservation
+
+Use one owner-scope admission ledger shared by live Controller, replacement
+documents/pools, pending preparation jobs, queued plans, retiring plans and
+their render snapshots. N4 should provide the shared resource anchor if its
+current work already introduces one. New pools, fresh caches, new render
+Controllers, provider snapshots and subsequent stem passes must inherit the
+anchor; `SamplePool::default()` must not quietly reset admission for a related
+replacement or render. A deliberate unrelated engine/session may create a new
+scope; a separate global cap is needed if the parent intends a multi-session
+limit rather than a per-session limit.
+
+Concrete proposed initial policy: a configurable **2 GiB managed prepared-delay
+payload limit** per scope, with stricter lower limits for tests/callers and no
+single-large-instance exception. Count E3 state, histories and the associated
+host slot/unit/plan storage covered by the profile, plus unpublished staging.
+Reserve all arithmetic with checked sizes and atomic compare/reserve or an
+off-thread ledger lock. Do not wait for space while holding document/Controller
+locks; return an admission error with requested, currently charged and limit
+bytes. This policy is proposed for parent acceptance, not an existing limit.
+It limits concurrent owners, not supported DSP rates, time ranges or band count.
+
+At 384k, three bank payloads alone total 1843306800 bytes; four total
+2457742400 and exceed 2147483648 before slot costs. One active bank plus a
+fresh replacement needs approximately 1.229 GB before wrapper costs. The old
+bank cannot be credited as free while it is audible, queued for transfer, or
+awaiting garbage collection. Ten active banks alone require 6144356000 bytes;
+the project slot-count limit does not admit them. No automatic time reduction,
+rate substitution, partial sixteen-band allocation, or bypass-on-refusal is allowed.
+
+This is a managed payload policy, not a process RSS guarantee. The existing
+sampler sub-limit, decoded samples, clip cache, output buffers, allocation
+bookkeeping and third-party plugin allocations must be reported separately or
+covered by N4's broader broker. Their limits must not be advertised as already
+solving cumulative E3 ownership. Admitting bytes also does not establish CPU
+deadline or device capability; the original observations do not establish those.
+
+Prepare a complete candidate serially off RT, with a flight reservation acquired
+**before any large histories or host buffers are allocated**. For fresh owners,
+let `R_i`/`P_i` be the checked retained/peak requirements from an empty processor,
+`H` the candidate host/container retained charge, and `W_i` its extra transient
+wrapper/boxing charge. A serial candidate requires a checked reservation of
+`H + sum(R_i) + max(P_i - R_i + W_i)`; shared old owners are already charged by
+the scope and must neither be subtracted early nor double-counted in this new
+reservation. Concurrent candidates each reserve their whole additional peak.
+Host profile estimates must include actual buffer capacities, ring rounding,
+box layout/alignment and plan queue storage, not just history length.
+
+Pass finite per-instance retained/peak caps backed by that reservation into
+the concrete `try_prepare`. After success verify `prepared_bytes()` and wrapper
+capacities against their profiles before publication. R1 also checks actual
+history capacities before committing them. Allocator bookkeeping is outside
+these payload numbers; an allocator/profile with unbounded capacity excess cannot
+support a strict physical-peak claim. A capacity discrepancy must refuse the
+candidate and retire its buffers off thread, rather than silently retain extra
+arrays or treat a post-hoc byte estimate as admission. Establish the reservation
+extent used by the selected allocation helpers as part of host acceptance.
+
+On any reserve/preparation/stale/cancelled error, drop all earlier fresh units,
+wrapper buffers and staged plugins on the proper control/worker owner thread,
+then release their reservation. Keep the old runtime, plan, projected ledger,
+project, history cursor, pool and transport untouched. A successful flight splits
+its reserved charge into physical-owner leases without a release/re-reserve gap;
+release staging headroom only after staging is actually freed. Field/drop ordering
+must destroy buffers before releasing their charge.
+
+An exclusively detached in-place reprepare may reserve the checked extra peak
+`requirements.peak_bytes - existing.prepared_bytes()` while its existing lease
+remains held. Resize its lease only after success and retirement of old buffers.
+Never reprepare an attached callback owner in place. Ordinary parameter, tempo,
+enabled and mix edits reuse the full-range prepared owner and need no new history
+allocation. Distinct active/departing generations each own a lease; transfer in
+`take_over` moves the lease with the unit. Progress atomics, a meter clone or a
+Ledger entry must not release or duplicate that physical charge.
+
+Carry leases unchanged in queued `SetPlan`, active/dormant/departing units and
+`Garbage::State`. Release them only on physical control-side destruction, including
+candidate cancellation and final offline-pass cleanup. A deliberately forgotten
+garbage item must remain charged, making any leak observable through refusal.
+No lease allocation, destruction, broker access or reservation occurs in audio
+processing/reset/setters/tempo/ownership transfer. Verify device feeder destruction
+also returns owners off RT; backend callback destruction is not assumed safe.
+
+Byte admission is necessary but not a bound on zero-history metadata churn.
+Propose a separate 16-ticket limit for prepared-but-not-yet-adopted `SetPlan`
+transactions, including backlog, with an off-thread adoption acknowledgement.
+Reject before musical commit when no ticket is available. Do not overwrite queued
+plans or collapse progress/generation semantics to reclaim space. Existing transport
+messages retain their ordering; parent utility ownership must approve this policy.
+
+### Proposed typed API and publication contract
+
+Keep `Effect::prepare` unchanged. Add narrow fallible construction seams in the
+serialized DSP/host window. Suggested signatures/types, not current exports;
+the first two belong to DSP and must not depend on engine types or leases:
+
+```rust
+AnyEffect::try_new_prepared(params, actual_rate, max_block, budget: PreparationBudget)
+    -> Result<PreparedEffect, EffectPreparationError>;
+EffectSlot::try_from_prepared(effect: PreparedEffect, max_block, budget: PreparationBudget)
+    -> Result<EffectSlot, EffectPreparationError>;
+EffectUnit::try_build(plan_effect, track, context, permit)
+    -> Result<(EffectUnit, Option<GainReductionMeter>), PlanPreparationError>;
+PlanState::try_build(plan, context, reservation)
+    -> Result<(PlanState, Ledger), PlanPreparationError>;
+Controller::try_prepare_runtime_project(project, pool, context)
+    -> Result<PreparedRuntimeProject, PlanPreparationError>;
+Controller::try_set_prepared_project(project, prepared: PreparedRuntimeProject)
+    -> Result<(), PlanPreparationError>;
+Controller::try_attach(actual_rate)
+    -> Result<Processor, PlanPreparationError>;
+```
+
+`PreparedEffect` has a private verified-state constructor, using only DSP-local
+budget/status/error types. The engine keeps its flight reservation during those
+calls, then attaches a lease to the physical `EffectUnit`; the DSP crate never
+imports the host broker or project IDs. `PreparedRuntimeProject` has private
+fields and owns its host reservation/prepared owners. `PreparedEffect` contains
+an E3 processor only after `try_prepare` returned `Ok`, status is prepared with
+no refusal, and its actual clock equals the requested engine clock. A previously
+valid processor with a latched failed replacement is not a fresh candidate for
+a new clock. E3 supports
+1..384000 Hz; host input outside that range must return an unsupported-rate error
+instead of installing a sanitized 384k processor in a differently clocked engine.
+
+The slot constructor consumes prepared DSP and initializes its own buffers;
+it **never calls void `prepare` again**. Provide fallible slot rings/tap/scratch
+and boxed-state construction, with checked limits. Existing `Box::default`,
+`DelayLine::new`, `TapCrossfade::new` and `vec!` are not fallible just because the
+inner E3 histories are. A small reviewed allocation helper/ownership representation
+is required for boxed inline state on the supported Rust toolchain; do not assume
+unstable `Box::try_new` is available. Exact optional block constructor seams need
+parent/utility permission; no whole Effect trait refactor is proposed. Preserve
+the existing fifteen kinds and their dispatch/control behavior. Recovery/budget
+claims for other legacy/native constructors need their own supported profiles;
+an opaque plugin allocator cannot be made recoverable by wrapping it in Rust Result.
+
+Propose a DSP-local `EffectPreparationError` carrying the concrete E3
+`PreparationError` or a slot/box checked-capacity/reservation refusal, with
+component and requested bytes. Map it at the engine boundary, preserving the
+source detail; DSP remains independent of engine types. Propose engine
+`PlanPreparationError` variants for `Admission { requested, charged,
+limit }`, checked capacity overflow (component), unsupported rate, owner-scoped
+`DelayPreparation { track, effect, generation, actual_rate, source:
+PreparationError }`, wrapper allocation refusal, sampler preparation, stale
+context, cancellation and pending-ticket refusal. Formatting happens off RT.
+Report the original history index/requested bytes on real DSP reservation refusal,
+not just an estimate or generic sampler error. Queue/adoption rejection uses a
+fixed scalar acknowledgement and retires the complete candidate through garbage.
+The general error/status may need a later IPC window; no generated exports here.
+
+Do not rename a compiled metadata-only `PreparedProject` into healthy DSP.
+Either keep it explicitly as compiled input to the new runtime builder or give
+it a distinct compiled type. Only the sealed runtime type may publish an E3
+owner. A refused fresh instance's normalized passthrough is diagnostic behavior,
+not an admissible replacement. There is no healthy empty-seat fallback on failure.
+
+Use a two-phase Controller/document transaction:
+
+1. Under existing short locks capture actual stream/device epoch and rate,
+   Controller publication serial and projected Ledger, previous plan identity,
+   project generation/edits/replacement/loading stamps and exact pool source
+   identities. Capture native provider identity/revision and binding ownership
+   separately from mutable parameter values. Copy metadata only; do not clone
+   DSP histories or hold controller/document locks during construction.
+2. Apply the command/history move to a private document; run `keep_leaving` on
+   its private plan using the existing owner-generation rules. Profile, reserve
+   and build all new owners on workers, with cancellation. Empty seats are sealed
+   reuse promises `(id, kind, generation, rate, native owner)` or explicit
+   departure promises, never substitutes for failed construction.
+3. Prebuild the replacement document/history, pool handles, native parameter
+   stages and event/queue payloads on the control side as part of the ticket.
+   Obtain a short publication permit using the existing owner-approved lock
+   order. Revalidate all stamps, pool identities, native factory revision, actual
+   rate/epoch, projected owner promises and pending-ticket availability **before**
+   dispatching into the live document, moving its undo cursor, changing a gesture,
+   replacing pools, committing native parameters, changing transport, installing
+   Controller metadata, or emitting a project patch. Refusal/staleness destroys
+   only the candidate. Retry requires a new context/reservation, not an old permit.
+4. Move the already built candidate document/pool and plan/state into their
+   owners as one validated transaction, with reserved queue/backlog storage and
+   no fallible construction between final checks and queue insertion. A second
+   live-document dispatch must not allocate or fail after installing half the
+   transaction; use the prepared mutation/document under the session owner's
+   history/gesture contract. Queued plans continue projecting ownership in order.
+   Before
+   `Processor::adopt` mutates voices or transfers histories, bounded preflight
+   validates every reuse/departure promise against the currently installed owner
+   generations. On an invariant mismatch, retain the old runtime and retire the
+   entire candidate; never create missing effects on RT. Such mismatch is a host
+   invariant failure requiring acknowledgement/reconciliation, not successful edit
+   admission. Normal publication must guarantee these promises cannot go stale.
+
+For a stopped/detached Controller, propose retaining a sealed prepared candidate
+at the **explicitly configured** rate under the same scope, for later attachment
+at that exact rate. Do not invent an implicit clock. If no rate is configured,
+return a needs-rate refusal for an audio-ready transaction; compile-only loading
+must be explicitly unprepared and may not claim healthy audio. A different actual
+device rate requires new admission while the detached candidate remains charged.
+This needs the utility owner's detached-identity contract/window. `try_attach`
+must finish preparation before publishing a new link/ledger, clearing backlog,
+panicking hardware or changing shared transport. `device.rs::build` already has
+a Result boundary and should propagate refusal there. Preserving an old viable
+stream requires N4's device replacement protocol; if the device has already been
+lost, preserve the documented detached/stopped state instead of claiming that an
+old device remains usable.
+
+### Exact serialized file hooks and transaction coverage
+
+| Future file window | Required hook and owner coordination |
+| --- | --- |
+| `crates/windfall-dsp/src/effect.rs` | Registry additions, fallible prepared dispatch, sealed slot construction and buffer profile. The registry remains closed now. Existing two lib declarations need no further exports for this proposal. |
+| `crates/windfall-dsp/src/blocks/delay_line.rs`, `blocks/tap_crossfade.rs` | Optional exact fallible checked constructors/empty staging, approved by their owner, preserving callback tap behavior. Alternatively propose a scoped E3 slot adapter for review; do not duplicate or weaken bypass/warm-up policies. |
+| `crates/windfall-engine/src/pool.rs`, shared broker module chosen by N4 | Preserve the common scope through pool clones, replacement, `cached_clip_pool`, render provider snapshots and worker jobs. Keep sampler-bank identity/leases intact; no replacement-cache budget reset. |
+| Engine `rack.rs`, `state.rs` | Fallible fresh unit construction, complete candidate rollback, measured host/compensation/container capacities, unit-owned leases. Maintain the utility owner's exact generation/departure/reuse transfer; require rate in reuse promises. |
+| Engine `plan.rs`, `controller.rs` | Private compilation/context and `keep_leaving`, two-phase preparation/publication, typed error latch and configured detached-rate candidate; no long preparation under mutex. Coordinate with utility ownership and T1's meter-only edits. |
+| Engine `processor.rs`, `message.rs` | Pre-adoption validation and ordered acknowledgement; move leases with units; retired state returned for off-RT destruction; unexpected leaks stay charged. Preserve queue headroom and no callback frees. Utility/retirement owner approval is required. |
+| Engine `device.rs` | Fallible actual-rate attachment before link/stream publication; rollback/retry and feeder destruction coordinated with device lifecycle owner. |
+| Engine `render.rs`, `stems.rs`, `plugins.rs` | N4 window: shared scope, typed checked render constructors/results, sequential pass cleanup, actual compiled-pass profiling, provider/revision validation and native retirement thread. |
+| Desktop `session/edit.rs` (`dispatch`, `publish_with_prepared`, `push_project`, `prepare_history`) | Current sampler-only branch does not cover ordinary effect insertion/replacement. Route every owner-affecting candidate through full runtime admission before live dispatch/history mutation; keep cheap same-owner param/tempo edits allocation-free. No patch/native-parameter commit before the publication permit. |
+| Desktop `session/sampler_processing.rs` (`SampleEditTicket::prepare`, prepared commit, refresh jobs) | Extend existing private candidate/stamp workflow to complete host runtime admission, not just sampler banks plus compiled metadata. Background refresh must validate controller/device/native epochs too. |
+| Desktop `session/files.rs::install` | Prepare decoded candidate pool and staged plugins with the shared scope before replacing Document/Pool, generation/history, plugin document or transport. Source-42 calls effect preparation only later through Controller; it does not already guarantee this rollback. |
+| Desktop `session/clip_processing.rs`, `audio_editor.rs`, `slicer.rs` | All existing prepared-candidate publication paths must use the same sealed runtime transaction, including recovered sources and source-identity checks. No alternate compiled-only installation path. |
+| Desktop `session/export.rs::export_audio`/`write_files` | Keep immutable project/pool/plugin snapshot validation; acquire shared admission before large pass allocations. Use checked rendering for non-stem export too. Map preparation failure to error, not `Outcome::Cancelled`; retain file staging/rollback and old destination files. Root/N4 serialized window only. |
+
+There are no source edits, imports, tests, generated types, Cargo changes or
+editor changes in these windows in this checkpoint. Parent must reconcile this
+source-42 inventory with N4's newer work before assigning exact hunks.
+
+### Saturating tails and bounded offline horizons
+
+`state.rs::PlanState::settled` (1222) uses ordinary `sum` for tail/gap at
+1235/1236, then ordinary additions for direct/onward holds, ring deadline and
+quiet deadline. Two sustaining banks can overflow the tail sum. Change tail and
+gap folds to saturating addition and all associated `u64` deadline/hold additions
+to saturating addition. Explicitly map the `usize::MAX` infinite-tail sentinel to
+`u64::MAX` before conversion, including on 32-bit targets; widening a 32-bit
+sentinel as a finite deadline is incorrect. A finite gap can still allow a track
+to settle after genuinely quiet output; saturation must not force every feedback
+effect to render forever or declare it finished before a late echo.
+
+E3 algorithmic PDC remains zero. Its musical-delay/warm-up/gap horizons must not
+be assigned to the compensation rings. Review checked compensation arithmetic in
+`state.rs::Layout::of` (including latency/path sums) against the existing finite
+one-second compensation bound; the bound is not a substitute for checked sizes.
+
+Render `most`, `body_end`, `loud_end + hold` and interleaved byte/frame products
+in `render.rs` (157 onward) and `stems.rs::Pass` (611 onward) also need explicit
+checked construction and saturating deadline comparisons. Reject overflowing,
+unsupported or unadmitted horizons/blocks with typed errors. Do not saturate a
+frame count to MAX and then attempt that allocation. The finite requested export
+tail is a truthful truncation horizon for still-sustaining audio, not evidence
+that its feedback tail has ended. Keep the actual supported rate/time ranges.
+
+N4 should bound/fallibly prepare render blocks and tap buffers, and charge
+in-memory output/automatic-tail retention separately. Propose a finite capped
+chunk size for streaming I/O (splitting caller blocks leaves frame DSP unchanged),
+with no silent shortening of output. For `Outlet::held`, use a reviewed bounded
+staging/spool strategy for quiet audio that may precede a later echo, or return
+an explicit storage refusal before exceeding its reservation. A ring that merely
+discards old quiet frames would lose required timeline silence. Use the existing
+file transaction for export-stage cleanup; in-memory `render` needs a checked
+Result core rather than an apparently successful empty audio fallback.
+
+One ToMaster pass at a time may release its charge only after the entire pass,
+Controller queues/garbage and native owners have been destroyed on their proper
+worker threads. Live playback remains charged throughout export. Multiple jobs
+or snapshots cannot each receive an independent unlimited delay budget. Cancelled
+render, allocation refusal and stale plugin snapshot must remain distinct results.
+
+### Required host acceptance evidence in the later windows
+
+No host tests were executed here. Before registry exposure, parent acceptance
+should require:
+
+- Shared-budget refusal before construction of a fourth 384k bank profile,
+  without allocating four banks or attempting OS OOM. Use strict small budgets
+  and deterministic allocator seams to exercise real prepared candidates; do
+  not shorten production ranges or substitute an estimate-only test for rollback.
+- Failure at every E3 history and new wrapper/boxing reservation position after
+  earlier units have staged; charged bytes return only after cleanup. Old audio,
+  clock, params, histories, project, history cursor/gesture, pool, projected Ledger,
+  pending order and transport remain unchanged. Stale/cancelled candidates follow
+  the same ownership path.
+- Repeated same-ID remove/restore, kind/rate/provider changes, disabled/dormant
+  units, paused audio, full queues/backlog, delayed garbage collection and export
+  alongside playback. Physical outgoing owners stay charged; successful history
+  transfer does not duplicate or release their lease. Verify acknowledgement and
+  reuse promises before any RT mutation, and no callback allocation/free/lock/wait.
+- Replacement pools, clip-cache snapshots, sampler sharing and render provider
+  snapshots retain the same scope; ToMaster sequential cleanup cannot outrun
+  native/queue retirement. Unsupported engine clocks fail explicitly. Native
+  allocation/retirement limitations and decoded/output bytes are reported honestly.
+- Multiple `usize::MAX` feedback tails and finite gap horizons at nonzero and
+  near-overflow frame clocks, explicit 32-bit sentinel conversion, late echoes
+  across silent gaps, bypass/dormant restoration and finite export horizons.
+  Checked in-memory/streaming buffer refusal is an error with old files preserved,
+  not cancellation or apparently healthy silence.
+
+These gates add host evidence to the accepted DSP foundation. They do not replace
+the existing full-rate signal proofs, future drawn bank links/sixteen-band editor,
+device/listening validation or the rest of E3, and do not close parity by themselves.
