@@ -7,9 +7,11 @@ presets. The existing seven-band EQ is unchanged.
 
 This stage does **not** complete `fx-fruity-fast-lp`, `fx-fruity-free-filter`,
 or `fx-fruity-bass-boost`. The DSP registry now constructs all three through
-`AnyEffect` and `EffectSlot`. Project persistence/command acceptance,
-generated controls, live engine and export acceptance await the parent's
-serialized ownership windows. No parity status is changed here.
+`AnyEffect` and `EffectSlot`. The approved downstream test window now proves
+project commands/persistence, generated controls and live/offline/stem behavior
+in the isolated worktree. Interrupted removal/restore still fails on this
+branch's older engine policy and needs the parent's utility composition.
+Generated artifacts remain parent-owned. No parity status is changed here.
 
 ## Behavioral sources and equivalence scope
 
@@ -306,8 +308,9 @@ target as the acoustic stage. The first all-target compile identified the
 old exhaustive allocator-test match; only its granted new arms were added.
 No downstream crate, frontend or full workspace check is claimed.
 
-The following is a proposal for the next exact ownership windows, not an
-authorization or implementation of those changes:
+The following proposal established the minimal downstream windows. The parent
+subsequently authorized the test-only paths and mechanical appends described
+in the next section; production model/engine/UI edits remain closed:
 
 1. **Project acceptance:** add an auto-discovered
    `crates/windfall-project/tests/filter_family.rs` covering add/replace,
@@ -317,7 +320,7 @@ authorization or implementation of those changes:
    `lower.rs::add_effect` uses `kind.default_params()` and `checked_effect`
    iterates descriptors. No duplicate project union or production model/
    command/check/lower/edit/patch/lib edits are proposed without an actual
-   failing contract. This stage still requires the T1 owner's window.
+   failing contract. No production project window proved necessary.
 2. **Engine acceptance:** the actual staged exhaustive consumer is
    `crates/windfall-engine/tests/engine/realtime.rs::effect_at` at the
    `Balance | ... | Distortion` arm. Append the three new kinds to that
@@ -353,3 +356,122 @@ authorization or implementation of those changes:
 Full parity still requires independently reviewed native/project/UI/export
 evidence and any requested device/listening checks. Passing the DSP suite
 does not close the engine utility restore issue or establish a usable UI.
+
+## Downstream test-only acceptance checkpoint
+
+This source increment is based on immutable registry commit
+`25b692b3c4f58d28adfad9a5935b258e5005190e`. It changes no DSP implementation,
+registry, project production, engine production, UI production, dependencies,
+lockfile or file version. The exact owned source paths are:
+
+- New `crates/windfall-project/tests/filter_family.rs` (four tests).
+- New `crates/windfall-engine/tests/engine/filter_family.rs` (six tests),
+  `tests/engine/main.rs`'s single `mod filter_family` registration, and only
+  three appended kinds in `tests/engine/realtime.rs::effect_at`'s existing
+  descriptor-driven arm.
+- New `apps/desktop/src/features/effects/filter-family.test.tsx` (13 tests),
+  and only three appended `Record<EffectKind, true>` keys in the confirmed
+  `features/params/access.test.ts` path.
+- This acceptance record. Existing utility case bodies are untouched.
+
+The project tests exercise actual `Document` commands, bounded settings,
+coalesced gestures, noop/dirty behavior, rejected-index/kind/NaN atomicity,
+all seven mode tags, version-one serde defaults, temporary-disk save/load,
+every descriptor's automation range and target, curve edits and undo/redo of
+removal/replacement. Project commands intentionally map infinities to range
+endpoints through the existing `checked_setting` policy; this differs from
+direct DSP nonfinite writes. Undo's id allocator is monotonic, so undo content
+comparison preserves the live counter rather than asserting an id rewind.
+
+The engine tests use the existing public `Rig` harness, avoiding any direct
+`prepare_project` call. The parent's newer fallible preparation API can
+therefore stay encapsulated in its existing harness. All nine processor paths
+(fast, seven selectable responses, bass shelf) have routed stereo impulses
+compared against independently expanded f64 bilinear numerator/denominator
+recurrences. Separate 50/1000/10000 Hz left and 60/1200/12000 Hz right tones
+provide 54 analytic gain comparisons. This checks the actual sampler/track/
+master path, not a descriptor dispatch in isolation. Results at 48000 Hz:
+
+| Measurement | Observed maximum | Acceptance bound |
+| --- | --- | --- |
+| Absolute impulse sample error | 3.0267984e-9 | 2e-6 |
+| Tone gain error / max(reference gain, 1) | 7.446086640503532e-7 | 3e-4 |
+| Guarded callback alloc/zeroed-alloc/realloc/free | 0 calls | 0 |
+| Reported live latency | 0 frames | 0 |
+
+Each descriptor control is automated through real project automation clips;
+live blocks of 1 and 137 frames, offline blocks of 101 frames and both
+`TrackOutputs` and `ToMaster` stems are sample-identical. Automation changes
+the signal relative to static settings. A last-song-frame impulse demonstrates
+real post-boundary ringout in automatic-tail export. Repeated identical plans,
+parameter edits, bypass/wake, removal and restore after departure settles
+are processed under the existing global engine allocator guard. This is
+headless signal evidence, not a device deadline or listening result.
+
+The UI tests use generated descriptors, real generic controls, mixer actions,
+stores and the shared Rust WASM document. Only jsdom's unavailable resize
+surface and toast display are replaced. They exercise actual menu discovery,
+frequency/Q/gain keyboard edits and indices, all seven mode choices, gesture
+undo/redo, reset and noop, dry/wet/bypass/copy/replace, backend save/reopen,
+automation from actual control context menus and restoration after removal.
+Persistence equality uses the authoritative document snapshot: incremental UI
+patches omit the id allocator and are not a complete serialized project.
+The real app's `ValueContextMenus` provider wraps the mixer, as it does in
+production, so automation actions are not substituted by direct test hooks.
+
+Executed checks for this increment, with one Cargo process, one job/test
+thread, MSVC setup and private worktree targets:
+
+- `cargo test -p windfall-project --test filter_family`: four passed.
+- `cargo test -p windfall-engine --test engine filter_family:: -- --nocapture`:
+  five passed, one **failed**, described below. The failure is active, not
+  ignored. The five independent cases also pass when the known failing case
+  is explicitly skipped for isolation; that run is not an all-green suite.
+- `cargo test -p windfall-engine --test engine
+  realtime::effects_and_instruments_never_allocate_or_free_on_the_audio_path
+  -- --nocapture`: passed with all 15 kinds in the existing exhaustive guard.
+- Strict scoped Clippy for the new project target and engine test target:
+  passed (`cargo clippy -p windfall-project --test filter_family -- -D warnings`
+  and `cargo clippy -p windfall-engine --test engine -- -D warnings`).
+- `scripts/gen-bindings.sh target/e1-bindings/generated`, with Cargo target
+  `target/e1-bindings`: generated 174 matching files for validation.
+- `scripts/build-sim.sh`: rebuilt actual shared WASM in this worktree's
+  private `target/sim` (1881168 bytes). SHA-256:
+  `9feb181f0a3d6aed64d9aabd26c61cedcf015b1437889bfa5ca7b309d18dde3a`;
+  recorded source-input checksum:
+  `26ac50ad9e44561b20ca18d811b00fc8f66e98082d9ecbe89580c07791cc250f`.
+- Focused Vitest with the regenerated artifacts: 70 passed (13 new filter
+  tests plus 57 descriptor/access tests), 9.43 seconds total headless walltime.
+  Frontend dependencies were reused through a local junction; no install ran.
+- `tsc -b`, focused ESLint, changed-file Rustfmt/Prettier and `git diff --check`:
+  passed. All regenerated tracked artifacts are restored and the four new
+  generated type files removed before the source-only commit. Parent commits
+  matching bindings/descriptors/WASM; this child hands over no artifacts.
+
+### Active utility composition failure and exact next integration action
+
+`restore_during_removal_preserves_the_current_wet_history_and_splice_share`
+keeps a filter's same slot/id, removes it after 4096 tone frames, processes
+80 of the 240 departure frames and restores it before departure ends. The
+last departure sample agrees with `dry + (wet - dry) * 161/240`. The restored
+first sample must preserve the current mixture and histories, allowing one
+frame of fade movement. On this branch's older utility policy, Fast lowpass
+1000 Hz/Q=1.3 instead starts with dry output:
+
+- Actual restored first left sample: 1.4208998e-16.
+- Retained-history/current-share reference: 0.0018127069.
+- Allowed one-frame movement plus numeric tolerance: 0.0000132590485.
+
+The generic transfer, steady restore, automation and exported audio tests
+remain green. The failure was sent to the parent as a concrete new signal
+fixture for the already-owned utility restore-during-removal repair. E1 does
+not alter `Plan`, `Rack`, `State`, effect-slot policies or readiness to hide
+it, and does not import the parent's production repairs into this branch.
+
+The exact remaining action is to compose this source increment with the
+accepted utility repair, run the active restore fixture and the scoped engine
+cases afresh there, and independently review the composed project/UI tests
+using the parent's committed matching artifacts. The model union/lower,
+engine constructor and generic UI already consume the registry, so no new
+production adapter is proposed. No full-workspace, Tauri, full-Vitest, device,
+listening, hosted-plugin activation or three-row completion claim is made.
