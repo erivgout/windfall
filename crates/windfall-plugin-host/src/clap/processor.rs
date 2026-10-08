@@ -191,7 +191,8 @@ impl ClapProcessor {
     }
 }
 
-fn transport_event(transport: &Transport) -> TransportEvent {
+fn transport_event(transport: &Transport) -> Result<TransportEvent, ProcessFailed> {
+    let (bar_start, bar_number) = transport.bar_position().ok_or(ProcessFailed)?;
     let mut flags = TransportFlags::HAS_TEMPO
         | TransportFlags::HAS_BEATS_TIMELINE
         | TransportFlags::HAS_SECONDS_TIMELINE
@@ -199,14 +200,7 @@ fn transport_event(transport: &Transport) -> TransportEvent {
     if transport.playing {
         flags |= TransportFlags::IS_PLAYING;
     }
-    let beats_per_bar =
-        f64::from(transport.numerator) * 4.0 / f64::from(transport.denominator.max(1));
-    let bar = if beats_per_bar > 0.0 {
-        (transport.position_beats / beats_per_bar).floor()
-    } else {
-        0.0
-    };
-    TransportEvent {
+    Ok(TransportEvent {
         header: EventHeader::new_core(0, EventFlags::empty()),
         flags,
         song_pos_beats: BeatTime::from_float(transport.position_beats),
@@ -217,11 +211,11 @@ fn transport_event(transport: &Transport) -> TransportEvent {
         loop_end_beats: BeatTime::from_int(0),
         loop_start_seconds: SecondsTime::from_int(0),
         loop_end_seconds: SecondsTime::from_int(0),
-        bar_start: BeatTime::from_float(bar * beats_per_bar),
-        bar_number: bar as i32,
+        bar_start: BeatTime::from_float(bar_start),
+        bar_number,
         time_signature_numerator: transport.numerator,
         time_signature_denominator: transport.denominator,
-    }
+    })
 }
 
 impl ProcessorBackend for ClapProcessor {
@@ -233,6 +227,7 @@ impl ProcessorBackend for ClapProcessor {
         steady_time: u64,
         out: &mut dyn FnMut(PluginEvent),
     ) -> Result<BlockResult, ProcessFailed> {
+        let transport = transport_event(transport)?;
         let frames = audio.frames();
         self.events.fill(events, self.dialect);
 
@@ -265,7 +260,6 @@ impl ProcessorBackend for ClapProcessor {
         self.inputs.aim(in_left, in_right);
         self.outputs.aim(out_left, out_right);
 
-        let transport = transport_event(transport);
         let status = {
             let _audio_call = AudioCall::enter();
             let started = self
@@ -355,5 +349,140 @@ impl ProcessorBackend for ClapProcessor {
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::*;
+    use crate::MeterAnchor;
+
+    #[test]
+    fn independently_converted_ticks_report_the_exact_native_downbeat() {
+        let transport = Transport {
+            playing: true,
+            tempo_bpm: 137.0,
+            position_beats: 3845.0 / 960.0,
+            position_seconds: 9.25,
+            numerator: 7,
+            denominator: 8,
+            meter_anchor: Some(MeterAnchor {
+                bar_origin_beats: 485.0 / 960.0,
+                bar_origin_index: 1,
+            }),
+        };
+        let event = transport_event(&transport).unwrap_or_else(|_| panic!("valid transport"));
+        assert_eq!(event.bar_start, BeatTime::from_float(3845.0 / 960.0));
+        assert_eq!(event.bar_number, 2);
+        assert_eq!(event.song_pos_beats, BeatTime::from_float(3845.0 / 960.0));
+        assert_eq!(event.song_pos_seconds, SecondsTime::from_float(9.25));
+        assert_eq!(event.tempo, 137.0);
+        assert_eq!(event.time_signature_numerator, 7);
+        assert_eq!(event.time_signature_denominator, 8);
+        assert!(event.flags.contains(TransportFlags::IS_PLAYING));
+    }
+
+    #[test]
+    fn native_bars_keep_positions_immediately_before_the_downbeat_in_the_prior_bar() {
+        let downbeat = 3845.0_f64 / 960.0;
+        for (beats, start, number) in [
+            (3844.0 / 960.0, 485.0 / 960.0, 1),
+            (3844.5 / 960.0, 485.0 / 960.0, 1),
+            (downbeat.next_down(), 485.0 / 960.0, 1),
+            (downbeat, 3845.0 / 960.0, 2),
+            (downbeat.next_up(), 3845.0 / 960.0, 2),
+            (3845.5 / 960.0, 3845.0 / 960.0, 2),
+            (7205.0 / 960.0, 7205.0 / 960.0, 3),
+        ] {
+            let event = transport_event(&Transport {
+                position_beats: beats,
+                numerator: 7,
+                denominator: 8,
+                meter_anchor: Some(MeterAnchor {
+                    bar_origin_beats: 485.0 / 960.0,
+                    bar_origin_index: 1,
+                }),
+                ..Transport::default()
+            })
+            .unwrap_or_else(|_| panic!("valid transport"));
+            assert_eq!(event.bar_start, BeatTime::from_float(start), "{beats}");
+            assert_eq!(event.bar_number, number, "{beats}");
+            assert_eq!(event.song_pos_beats, BeatTime::from_float(beats));
+        }
+    }
+
+    #[test]
+    fn native_bar_fields_follow_shortened_song_bars() {
+        let origin = 4001.0 / 960.0;
+        for (beats, bar_start, bar_number) in [
+            (origin, origin, 2),
+            (origin + 3.499, origin, 2),
+            (origin + 3.5, origin + 3.5, 3),
+            (origin + 7.125, origin + 7.0, 4),
+        ] {
+            let transport = Transport {
+                playing: true,
+                tempo_bpm: 137.0,
+                position_beats: beats,
+                position_seconds: 9.25,
+                numerator: 7,
+                denominator: 8,
+                meter_anchor: Some(MeterAnchor {
+                    bar_origin_beats: origin,
+                    bar_origin_index: 2,
+                }),
+            };
+            let event = transport_event(&transport).unwrap_or_else(|_| panic!("valid transport"));
+            assert_eq!(event.bar_start, BeatTime::from_float(bar_start));
+            assert_eq!(event.bar_number, bar_number);
+            assert_eq!(event.song_pos_beats, BeatTime::from_float(beats));
+            assert_eq!(event.song_pos_seconds, SecondsTime::from_float(9.25));
+            assert_eq!(event.tempo, 137.0);
+            assert_eq!(event.time_signature_numerator, 7);
+            assert_eq!(event.time_signature_denominator, 8);
+            assert!(event.flags.contains(TransportFlags::IS_PLAYING));
+        }
+    }
+
+    #[test]
+    fn native_scalar_pattern_transport_retains_beat_zero_origin() {
+        let event = transport_event(&Transport {
+            position_beats: 8.125,
+            ..Transport::default()
+        })
+        .unwrap_or_else(|_| panic!("valid scalar transport"));
+        assert_eq!(event.bar_start, BeatTime::from_int(8));
+        assert_eq!(event.bar_number, 2);
+        assert!(!event.flags.contains(TransportFlags::IS_PLAYING));
+    }
+
+    #[test]
+    fn invalid_anchor_refuses_native_transport_before_processing() {
+        for anchor in [
+            MeterAnchor {
+                bar_origin_beats: f64::NAN,
+                bar_origin_index: 0,
+            },
+            MeterAnchor {
+                bar_origin_beats: -1.0,
+                bar_origin_index: 0,
+            },
+            MeterAnchor {
+                bar_origin_beats: 1.0,
+                bar_origin_index: 0,
+            },
+            MeterAnchor {
+                bar_origin_beats: 0.0,
+                bar_origin_index: u32::MAX,
+            },
+        ] {
+            assert!(
+                transport_event(&Transport {
+                    meter_anchor: Some(anchor),
+                    ..Transport::default()
+                })
+                .is_err()
+            );
+        }
     }
 }

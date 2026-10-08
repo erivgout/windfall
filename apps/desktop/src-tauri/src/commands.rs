@@ -238,8 +238,14 @@ async fn recent_projects(session: State<'_, Session>) -> Result<Vec<String>, Str
 }
 
 #[tauri::command]
-fn transport_play(session: State<'_, Session>) -> Result<TransportState, String> {
-    session.transport_play()
+fn transport_play(
+    session: State<'_, Session>,
+    guard: Option<windfall_ipc::TimelinePlaybackState>,
+) -> Result<TransportState, String> {
+    match guard {
+        Some(guard) => session.timeline_transport_play(guard),
+        None => session.transport_play(),
+    }
 }
 
 #[tauri::command]
@@ -253,21 +259,52 @@ fn transport_toggle(session: State<'_, Session>) -> Result<TransportState, Strin
 }
 
 #[tauri::command]
-fn transport_seek(session: State<'_, Session>, tick: f64) {
-    session.transport_seek(tick);
+fn transport_seek(
+    session: State<'_, Session>,
+    tick: f64,
+    guard: Option<windfall_ipc::TimelinePlaybackState>,
+) -> Result<(), String> {
+    match guard {
+        Some(guard) => session.timeline_transport_seek(tick, guard),
+        None => {
+            session.transport_seek(tick);
+            Ok(())
+        }
+    }
 }
 
 #[tauri::command]
 fn transport_set(
     session: State<'_, Session>,
     patch: TransportPatch,
+    guard: Option<windfall_ipc::TimelinePlaybackState>,
 ) -> Result<TransportState, String> {
-    session.transport_set(patch)
+    match guard {
+        Some(guard) => session.timeline_transport_set(patch, guard),
+        None => session.transport_set(patch),
+    }
 }
 
 #[tauri::command]
 fn transport_state(session: State<'_, Session>) -> TransportState {
     session.transport_state()
+}
+
+#[tauri::command]
+fn timeline_state(session: State<'_, Session>) -> windfall_ipc::TimelinePlaybackState {
+    session.timeline_state()
+}
+
+#[tauri::command]
+fn timeline_region(
+    session: State<'_, Session>,
+    region: Option<windfall_project::TickRange>,
+    generation: u64,
+    revision: u64,
+    request: Option<u64>,
+    cancel: Option<windfall_ipc::TimelinePlaybackState>,
+) -> Result<windfall_ipc::TimelinePlaybackState, String> {
+    session.timeline_region_request(region, generation, revision, request, cancel)
 }
 
 #[tauri::command]
@@ -668,6 +705,8 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         transport_seek,
         transport_set,
         transport_state,
+        timeline_state,
+        timeline_region,
         realtime_subscribe,
         engine_status,
         engine_devices,

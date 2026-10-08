@@ -62,6 +62,15 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    timelineState: () => call("timeline_state"),
+    timelineRegion: (region, generation, revision, request, cancel) =>
+      call("timeline_region", {
+        region,
+        generation,
+        revision,
+        request,
+        cancel,
+      }),
     midiHardwareState: () => call("midi_hardware_state"),
     midiHardwareRefresh: () => call("midi_hardware_refresh"),
     midiHardwareConfigure: (settings) =>
@@ -132,11 +141,11 @@ export function createTauriBackend(): Backend {
         filters: MIDI_FILTER,
       }),
 
-    transportPlay: () => call("transport_play"),
+    transportPlay: (guard) => call("transport_play", { guard }),
     transportStop: () => call("transport_stop"),
     transportToggle: () => call("transport_toggle"),
-    transportSeek: (tick) => call("transport_seek", { tick }),
-    transportSet: (patch) => call("transport_set", { patch }),
+    transportSeek: (tick, guard) => call("transport_seek", { tick, guard }),
+    transportSet: (patch, guard) => call("transport_set", { patch, guard }),
     transportState: () => call("transport_state"),
 
     engineStatus: () => call("engine_status"),

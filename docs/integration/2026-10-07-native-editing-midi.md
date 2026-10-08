@@ -1124,3 +1124,102 @@ processor/Session/native integration windows. Real engine taps, source
 selection, analyzer/EQ/mixer views and native smoke remain later acceptance
 gates. The full project goal stays active, with the old alpha and collaborator
 invitation unchanged.
+
+## Delay and release foundation composition, 2026-10-08
+
+Root `6d0773804199faba65f866feda21b8c4ba9a6b9a` now includes E3's original
+`6326f883` and repair `42d58df4` as `849ae84e` and `7f8c3112`, and release
+foundation `67191069` and repair `477209ec` as `ad148e6f` and `6d077380`.
+All four source imports applied cleanly. The original isolated checkpoints
+remain immutable. E3 host admission, registry/editor integration and the
+remaining delay processors stay open.
+
+Fresh combined-root checks passed 132 DSP library tests, 26 release-profile
+delay-family cases with one existing optional timing ignore, and strict DSP
+all-target Clippy. The generator produced 174 bindings and their complete
+comparison passed. The first parent comparison invocation supplied two paths
+to a one-argument script; it exited at usage before the simulator build. The
+corrected comparison and remaining build/check steps then passed, without
+repeating the completed native tests. The actual simulator rebuild produced
+1,880,070 bytes, SHA-256
+`9283b92105d2d64577212143b3fa88de0fe4041c84ccfeb30d1be605366a8333`, with source
+input hash `38690b30beec5c57c7a723ee3b0933e640062ae40084a51185ee63ef71aeae89`.
+Freshness, workspace formatting and whitespace checks passed. Process 6604
+completed with exit zero. Six effect/parameter/simulator test files passed
+199 cases on that matching WASM; the automation fixture file separately
+passed all nine cases, including the 149-range/1,341-value inventory.
+
+The complete release foundation run passed all 56 tests in one invocation,
+with no failures or skips, followed by workflow and action-provenance checks.
+Process 86508 completed with exit zero; this parent run is distinct from the
+owner's earlier 55/56 run and separate corrected-fixture pass. The workflow
+is manual-dispatch only and was not dispatched. No installer, signature,
+upload, tag or new release was produced. The historical `buffers@0.1.1`
+bundled-tool license closure remains unresolved and candidate publication
+remains ineligible.
+
+T1's R5 review found an exact-downbeat arithmetic refusal at independent
+anchor 485/960 and position 3845/960. Source repair `3d2475c7` directly follows
+`c5448921`; owner-compiled RED/GREEN covers both concrete native ABI builders,
+with 33 focused host/engine/project tests passing. Fresh independent R6
+Standards and Spec reviews receive the complete prior brief and findings.
+M1 app source remains frozen at `e3cdbb3f` while the same owner repairs App R1
+registry bypass, Windows source-namespace authority and lost cleanup-recovery
+controls. The review's independently verified 14 Session tests do not exercise
+the two new failure triggers. Production analysis remains unavailable until
+an actual algorithm adapter is registered. Neither branch is imported into
+this root yet; isolated validation does not establish root composition.
+
+N4 found an inherited preparation-lock gap during production activation.
+Session publication calls `Controller::set_prepared_project` under document
+State; controller publication and attachment build `PlanState` under their
+own state mutex. That build creates fresh native factories synchronously.
+Static off-State `Controller::prepare_project` currently prepares Plan and
+sampler data only. Controller maintenance can also retire native garbage
+while guards are held. M1's zero-allocation foundation eligibility/ack calls
+and T1's meter gates do not prove this global work has moved off locks.
+The isolated `gpt/t3-project-preparation-p1` owner pinned doc-only proposal
+`07cdb24b` for whole-state off-lock preparation, actual Ledger/provider/revision/
+rate acceptance before musical commit, and explicit deferred retirement.
+An independent design audit checks late-heard route reservations, bounded
+storage, borrowed publication authority and panic/refusal retirement before
+the shared source grant. Production lock ownership remains unaccepted.
+
+Actual CI at `43e42983`, run 37748566795, passed all three binding jobs,
+parity, simulator freshness, and strict workspace Clippy on macOS/Linux.
+The UI job failed two cases: asynchronous menu readiness in the new rack
+test, and the existing synth detail-step assertion after automatic previews
+replace its held-note lane. Repair `87ebcb34` is imported as `d332801b`, retains
+every original assertion and selects explicit Steps when needed. Fresh parent
+process 82198 passed all 235 cases across eight files on the new root WASM;
+app typechecking and scoped test lint also passed.
+macOS realtime tests passed 12 and failed eight VST3 cases at the explicit
+unsupported bundle-entry path. Ubuntu's native realtime binary terminated
+with SIGSEGV after four reported CLAP passes. The new isolated VST3 portability
+owner reproduced the Linux failure in an unchanged single test and traced
+pthread cleanup into an unmapped Rust TLS callback registered by fixture
+thread-identity checks. A private native-identity differential survived unload;
+code-retention probes are diagnosis only. N4 froze fixture `71dbec11` and
+released only identity hooks to the portability owner. Original Ubuntu
+confirmation and macOS CFBundle implementation remain pending. No tests are
+skipped or weakened to describe them as platform success. Raw job logs are
+`C:/Temp/windfall-43-ui-ci.log`, `windfall-43-macos-ci.log` and
+`windfall-43-ubuntu-ci.log`. The final run passed Windows workspace formatting,
+strict Clippy and tests. Its app job was skipped; no native app acceptance
+comes from this run.
+
+T8 foundation `421bf5eb` passed two independent source reviews and is imported
+as `a0ec6372`. The optional timing-log label heuristic is assigned to the same
+owner; it is not a CPU-time measurement. Fresh root process 40292 passed 16
+analyzer cases with the optional timing case ignored, strict engine all-target
+Clippy, workspace formatting, the complete 174-binding comparison and current
+1,880,070-byte simulator check. Its log is
+`C:/Temp/windfall-root-t8-foundation-verification.log`. Seven selected release
+dependency/provenance cases passed after adding the engine's existing RustFFT
+dependency edge; the earlier complete 56-case release run is separate evidence.
+Actual audio tap wiring, native subscriptions and analyzer/EQ/mixer views stay
+open. The combined UI checks in this batch are 199 effects/document cases,
+nine automation cases and 235 rack/synth cases, all on the fresh root artifact.
+
+The goal and all 342 rows remain active. No additional parity row, native
+window/device result or installer acceptance is claimed by this batch.

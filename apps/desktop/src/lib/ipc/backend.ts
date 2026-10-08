@@ -64,6 +64,14 @@ export type AudioClipPlace = {
  * plain text that can be shown to the user.
  */
 export interface Backend {
+  timelineState(): Promise<import("@/bindings").TimelinePlaybackState>
+  timelineRegion(
+    region: import("@/bindings").TickRange | null,
+    generation: number,
+    revision: number,
+    request?: number,
+    cancel?: import("@/bindings").TimelinePlaybackState
+  ): Promise<import("@/bindings").TimelinePlaybackState>
   midiHardwareState(): Promise<import("@/bindings").MidiHardwareState>
   midiHardwareRefresh(): Promise<import("@/bindings").MidiHardwareState>
   midiHardwareConfigure(
@@ -150,11 +158,19 @@ export interface Backend {
   midiDiscard(token: number): Promise<void>
   exportMidi(path: string, options: MidiExportOptions): Promise<string>
 
-  transportPlay(): Promise<TransportState>
+  transportPlay(
+    guard?: import("@/bindings").TimelinePlaybackState
+  ): Promise<TransportState>
   transportStop(): Promise<TransportState>
   transportToggle(): Promise<TransportState>
-  transportSeek(tick: number): Promise<void>
-  transportSet(patch: TransportPatch): Promise<TransportState>
+  transportSeek(
+    tick: number,
+    guard?: import("@/bindings").TimelinePlaybackState
+  ): Promise<void>
+  transportSet(
+    patch: TransportPatch,
+    guard?: import("@/bindings").TimelinePlaybackState
+  ): Promise<TransportState>
   transportState(): Promise<TransportState>
 
   engineStatus(): Promise<EngineStatus>

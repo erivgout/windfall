@@ -99,6 +99,7 @@ pub struct Stem {
 /// the user as they are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StemError {
+    Timeline(String),
     SamplerPreparation(crate::sampler_processing::SamplerPreparationError),
     /// The master track was asked for as a stem.
     Master,
@@ -114,6 +115,7 @@ pub enum StemError {
 impl std::fmt::Display for StemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Timeline(error) => f.write_str(error),
             Self::SamplerPreparation(error) => std::fmt::Display::fmt(error, f),
             Self::Master => f.write_str(
                 "The master track cannot be a stem. Its sound is the mix, which can be exported with the stems.",
@@ -305,7 +307,10 @@ pub fn render_streaming_checked(
     options: &RenderOptions,
     sink: &mut dyn FnMut(&[f32]) -> bool,
     progress: &mut dyn FnMut(f32) -> bool,
-) -> Result<Streamed, crate::sampler_processing::SamplerPreparationError> {
+) -> Result<Streamed, crate::render::RenderError> {
+    options
+        .check_region()
+        .map_err(crate::render::RenderError::Timeline)?;
     let pool = pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {})?;
     let pass = Pass::new(compile(project, &pool), options, &[]);
     Ok(pass.run(None, &mut |_, block| sink(block), progress))
@@ -330,6 +335,7 @@ pub fn render_stems(
     sink: &mut dyn FnMut(usize, &[f32]) -> bool,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Result<Streamed, StemError> {
+    options.check_region().map_err(StemError::Timeline)?;
     let prepared_pool = pool
         .prepare_samplers(project, &mut || true, &mut |_, _, _| {})
         .map_err(StemError::SamplerPreparation)?;
@@ -574,7 +580,11 @@ impl Pass {
             PlayMode::Song => (1, plan.warp(f64::from(plan.song_end))),
         };
         let frames_per_tick = samples_per_tick(plan.tempo_bpm, f64::from(sample_rate));
-        let body_frames = (ticks * frames_per_tick).ceil() as usize;
+        let region = options.region.filter(|_| options.mode == PlayMode::Song);
+        let body_frames = region.map_or((ticks * frames_per_tick).ceil() as usize, |range| {
+            let (first, last) = crate::timeline::region_frames(&plan, range, sample_rate);
+            (last - first) as usize
+        });
         let tail_frames = if options.tail_secs.is_finite() {
             (f64::from(options.tail_secs.max(0.0)) * f64::from(sample_rate)).round() as usize
         } else {
@@ -589,7 +599,13 @@ impl Pass {
             pattern,
             loop_song: Some(false),
         });
-        if ticks > 0.0 {
+        if let Some(range) = region {
+            controller
+                .set_timeline_region(Some(range))
+                .expect("region checked before preparation");
+            controller.seek(f64::from(range.start));
+        }
+        if ticks > 0.0 || region.is_some() {
             controller.play_passes(passes);
         }
 

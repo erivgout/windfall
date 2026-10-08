@@ -92,6 +92,79 @@ impl Transaction<'_> {
 
     fn run(&mut self, command: Command) -> Result<String, CommandError> {
         let label = match command {
+            Command::AddMeterChange { tick, signature } => {
+                let id = self.allocate()?;
+                let mut timeline = self.project.playlist.timeline.clone();
+                timeline.meters.push(crate::MeterChange {
+                    id: crate::MeterChangeId(id),
+                    tick,
+                    signature,
+                });
+                self.set_timeline(timeline)?;
+                self.created.push(id);
+                "Add meter change"
+            }
+            Command::UpdateMeterChange {
+                id,
+                tick,
+                signature,
+            } => {
+                let mut timeline = self.project.playlist.timeline.clone();
+                let change = timeline
+                    .meters
+                    .iter_mut()
+                    .find(|m| m.id == id)
+                    .ok_or_else(|| CommandError::invalid("the meter change does not exist"))?;
+                *change = crate::MeterChange {
+                    id,
+                    tick,
+                    signature,
+                };
+                self.set_timeline(timeline)?;
+                "Change meter"
+            }
+            Command::RemoveMeterChange { id } => {
+                let mut timeline = self.project.playlist.timeline.clone();
+                if !timeline.meters.iter().any(|m| m.id == id) {
+                    return Err(CommandError::invalid("the meter change does not exist"));
+                }
+                timeline.meters.retain(|m| m.id != id);
+                self.set_timeline(timeline)?;
+                "Remove meter change"
+            }
+            Command::AddTimelineMarker { tick, name, kind } => {
+                let id = self.allocate()?;
+                let mut timeline = self.project.playlist.timeline.clone();
+                timeline.markers.push(crate::TimelineMarker {
+                    id: crate::TimelineMarkerId(id),
+                    tick,
+                    name,
+                    kind,
+                });
+                self.set_timeline(timeline)?;
+                self.created.push(id);
+                "Add timeline marker"
+            }
+            Command::UpdateTimelineMarker { marker } => {
+                let mut timeline = self.project.playlist.timeline.clone();
+                let current = timeline
+                    .markers
+                    .iter_mut()
+                    .find(|m| m.id == marker.id)
+                    .ok_or_else(|| CommandError::invalid("the marker does not exist"))?;
+                *current = marker;
+                self.set_timeline(timeline)?;
+                "Change timeline marker"
+            }
+            Command::RemoveTimelineMarker { id } => {
+                let mut timeline = self.project.playlist.timeline.clone();
+                if !timeline.markers.iter().any(|m| m.id == id) {
+                    return Err(CommandError::invalid("the marker does not exist"));
+                }
+                timeline.markers.retain(|m| m.id != id);
+                self.set_timeline(timeline)?;
+                "Remove timeline marker"
+            }
             Command::AddPluginInstrument { mut plugin } => {
                 plugin.validate().map_err(CommandError::invalid)?;
                 let first = self.created.len();
@@ -334,6 +407,19 @@ impl Transaction<'_> {
             old: self.project.plugins.clone(),
             new: plugins,
         }));
+    }
+
+    fn set_timeline(&mut self, mut timeline: crate::Timeline) -> Result<(), CommandError> {
+        timeline.meters.sort_by_key(|m| m.tick);
+        timeline.markers.sort_by_key(|m| (m.tick, m.id));
+        timeline
+            .check(self.project.settings.time_signature, self.project.next_id)
+            .map_err(CommandError::invalid)?;
+        self.push(Edit::Timeline(Change {
+            old: self.project.playlist.timeline.clone(),
+            new: timeline,
+        }));
+        Ok(())
     }
 
     fn update_settings(&mut self, patch: SettingsPatch) -> Result<Label, CommandError> {

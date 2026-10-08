@@ -78,6 +78,7 @@ pub struct Audio {
     ramp_remaining: usize,
     last: [f32; 2],
     health: Health,
+    completed_proof: Option<(u64, u64, u64)>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OfflineError {
@@ -127,6 +128,7 @@ impl Audio {
             ramp_remaining: 0,
             last: [0.0; 2],
             health: Health::default(),
+            completed_proof: None,
         };
         audio.begin_block();
         Ok(audio)
@@ -142,6 +144,14 @@ impl Audio {
     }
     pub fn desired_generation(&self) -> u64 {
         self.generation
+    }
+    /// Local collection intent, never evidence of native admission/processing.
+    pub fn collection_frontier(&self) -> (u64, u64, u64) {
+        (self.epoch, self.sequence, self.generation)
+    }
+    /// Only matching, timely COMPLETE output supplies this DSP proof.
+    pub fn completed_proof(&self) -> Option<(u64, u64, u64)> {
+        self.completed_proof
     }
     pub fn voices(&self) -> usize {
         self.held.iter().filter(|value| **value > 0.0).count()
@@ -311,6 +321,7 @@ impl Audio {
         self.available = false;
         self.transition = true;
         self.health.acknowledged_generation = 0;
+        self.completed_proof = None;
         self.signals
             .processed_generation
             .store(0, Ordering::Release);
@@ -367,6 +378,9 @@ impl Audio {
                         .saturating_add(u64::from(self.output.native_drops));
                     if self.output.processed_generation == 0 {
                         self.health.unknown_blocks = self.health.unknown_blocks.saturating_add(1);
+                    } else {
+                        self.completed_proof =
+                            Some((self.epoch, expected, self.output.processed_generation));
                     }
                     self.health.acknowledged_generation = self
                         .health
@@ -737,6 +751,45 @@ mod tests {
         }
     }
     #[test]
+    fn proof_getters_are_readonly_and_require_collection_of_matching_complete_output() {
+        let (mut audio, region) = make(Kind::Effect, 0);
+        let initial = audio.collection_frontier();
+        assert_eq!(initial, (1, 0, audio.desired_generation()));
+        assert_eq!(audio.collection_frontier(), initial);
+        assert_eq!(audio.completed_proof(), None);
+        assert!(audio.set_param(7, 0.75));
+        let desired = audio.desired_generation();
+        assert_eq!(audio.collection_frontier(), (1, 0, desired));
+        assert_eq!(audio.desired_generation(), desired);
+        audio.process(&mut [0.5; 64], &mut [0.5; 64]);
+        assert_eq!(audio.completed_proof(), None);
+        let mut input = InputBlock::new();
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        let output = OutputBlock {
+            epoch: input.epoch,
+            processed_generation: input.control_end,
+            ..OutputBlock::silent()
+        };
+        region.complete(slot, sequence, &output, OUTPUT_OK);
+        assert_eq!(audio.completed_proof(), None);
+        audio.process(&mut [0.5; 64], &mut [0.5; 64]);
+        assert_eq!(audio.completed_proof(), None);
+        audio.process(&mut [0.5; 64], &mut [0.5; 64]);
+        assert_eq!(audio.completed_proof(), Some((1, sequence, desired)));
+        let proof = audio.completed_proof();
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        let unknown = OutputBlock {
+            epoch: input.epoch,
+            ..OutputBlock::silent()
+        };
+        region.complete(slot, sequence, &unknown, OUTPUT_OK);
+        audio.process(&mut [0.5; 64], &mut [0.5; 64]);
+        assert_eq!(audio.completed_proof(), proof);
+        assert_eq!(audio.desired_generation(), desired);
+        audio.reset_timeline();
+        assert_eq!(audio.completed_proof(), None);
+    }
+    #[test]
     fn native_ack_requires_matching_complete_and_old_epoch_cannot_restore_audio() {
         let (mut audio, region) = make(Kind::Instrument, 0);
         assert!(audio.set_param(7, 0.75));
@@ -745,6 +798,7 @@ mod tests {
         let mut right = left;
         audio.process(&mut left, &mut right);
         assert_eq!(audio.health().acknowledged_generation, 0);
+        assert_eq!(audio.completed_proof(), None);
         let mut worker = InputBlock::new();
         let (slot, sequence) = region.take_input(&mut worker).unwrap().unwrap();
         let mut output = OutputBlock::silent();
@@ -758,6 +812,7 @@ mod tests {
             assert!(left.iter().all(|sample| *sample == 0.0));
         }
         assert_eq!(audio.health().acknowledged_generation, 0);
+        assert_eq!(audio.completed_proof(), None);
     }
     #[test]
     fn saturation_reserves_releases_and_retains_rejected_current_controls() {

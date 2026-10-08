@@ -198,14 +198,25 @@ pub fn export_song(project: &Project, options: &ExportOptions) -> Result<MidiSon
         }
     }
     let tempos = tempo_changes(project, length, options.tempo_step);
-    Ok(song(
+    let mut result = song(
         project,
         &project.settings.name,
         notes,
         tempos,
         length,
         options,
-    ))
+    );
+    for meter in &project.playlist.timeline.meters {
+        if meter.tick == 0 {
+            result.time_signatures.clear();
+        }
+        result.time_signatures.push(crate::TimeSignatureChange {
+            tick: meter.tick,
+            numerator: meter.signature.numerator,
+            denominator: meter.signature.denominator,
+        });
+    }
+    Ok(result)
 }
 
 /// The project's swing as the engine applies it, or none when the export

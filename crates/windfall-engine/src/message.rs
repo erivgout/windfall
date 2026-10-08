@@ -43,6 +43,7 @@ pub(crate) enum Message {
         sequence: u32,
     },
     Seek(f64),
+    SetRegion(Option<windfall_project::TickRange>),
     SetTransport {
         mode: PlayMode,
         pattern: PatternId,

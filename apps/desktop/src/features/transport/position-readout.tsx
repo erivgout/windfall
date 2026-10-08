@@ -4,6 +4,7 @@ import { songTempoMap } from "@/lib/automation/tempo-map"
 import { useProjectStore } from "@/lib/store/project"
 import { useRealtime } from "@/lib/store/realtime"
 import { useTransportStore } from "@/lib/store/transport"
+import { formatMusicalPosition, meterSegments } from "@/lib/timeline"
 import {
   formatClock,
   formatPosition,
@@ -28,19 +29,30 @@ export function PositionReadout() {
   useRealtime((frame) => {
     const project = useProjectStore.getState().project
     const { timeSignature, tempoBpm } = project.settings
-    setText(position.current, formatPosition(frame.tick, timeSignature))
+    const inSong = useTransportStore.getState().mode === "song"
+    const meters = project.playlist.timeline?.meters ?? []
+    setText(
+      position.current,
+      inSong
+        ? formatMusicalPosition(frame.tick, timeSignature, meters)
+        : formatPosition(frame.tick, timeSignature)
+    )
     // The song's clock follows the tempo automation, so the time it took
     // to get to a tick is summed along the curve. A pattern loops at the
     // stored tempo.
-    const seconds =
-      useTransportStore.getState().mode === "song"
-        ? songTempoMap(project).secondsAt(frame.tick)
-        : ticksToSeconds(frame.tick, tempoBpm)
+    const seconds = inSong
+      ? songTempoMap(project).secondsAt(frame.tick)
+      : ticksToSeconds(frame.tick, tempoBpm)
     setText(clock.current, formatClock(seconds))
 
     if (pulse.current) {
-      const beat = ticksPerBeat(timeSignature)
-      const intoBeat = (frame.tick % beat) / beat
+      const segment = inSong
+        ? meterSegments(timeSignature, meters).findLast(
+            (s) => s.start <= frame.tick
+          )
+        : undefined
+      const beat = ticksPerBeat(segment?.signature ?? timeSignature)
+      const intoBeat = ((frame.tick - (segment?.start ?? 0)) % beat) / beat
       const lit = frame.playing && intoBeat < 0.3
       pulse.current.style.opacity = lit ? String(1 - intoBeat * 2) : "0.18"
     }

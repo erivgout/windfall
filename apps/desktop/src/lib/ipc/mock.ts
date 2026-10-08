@@ -265,6 +265,43 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let doc = SimDocument.create(options.project ?? demoProject())
   let path: string | null = null
   let transport = new TransportSim(doc.project().patterns[0].id)
+  let timelineDocument = doc
+  let timelineGeneration = 1
+  let timelineRequest = 0
+  let timelinePlayRequest = 0
+  function timelineState() {
+    if (timelineDocument !== doc) {
+      timelineDocument = doc
+      timelineGeneration += 1
+    }
+    return {
+      request: timelineRequest,
+      generation: timelineGeneration,
+      revision: doc.snapshot(path).revision,
+      region: transport.region,
+      navigationOverflows: transport.navigationOverflows,
+    }
+  }
+  function checkTimelineGuard(
+    guard?: import("@/bindings").TimelinePlaybackState
+  ) {
+    if (!guard) return
+    const current = timelineState()
+    if (
+      guard.generation !== current.generation ||
+      guard.revision !== current.revision ||
+      !Number.isSafeInteger(guard.request) ||
+      guard.request <= 0 ||
+      guard.request !== current.request ||
+      !guard.region ||
+      !current.region ||
+      guard.region.start !== current.region.start ||
+      guard.region.end !== current.region.end
+    )
+      throw new Error(
+        "The project or timeline selection changed before playback could continue."
+      )
+  }
   let audioSettings = storedSettings({})
   let engine = describeStatus(audioSettings)
   let roots: BrowserRoot[] = [...defaultRoots(), ...storedBrowserRoots(storage)]
@@ -628,6 +665,44 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       throw new Error("Native editors require the Windows desktop app")
     },
 
+    timelineState: () => ipc(timelineState),
+    timelineRegion: (region, generation, revision, request, cancel) =>
+      ipc(() => {
+        const current = timelineState()
+        if (generation !== current.generation || revision !== current.revision)
+          throw new Error(
+            "The project changed before the timeline region was applied."
+          )
+        sim.call("timeline_range", 0, region)
+        request ??= timelineRequest + 1
+        if (!Number.isSafeInteger(request) || request <= timelineRequest)
+          throw new Error(
+            "The timeline request is stale or exceeds the exact request limit."
+          )
+        if (cancel) {
+          if (!Number.isSafeInteger(cancel.request) || cancel.request <= 0)
+            throw new Error(
+              "The cancelled timeline request exceeds the exact request limit."
+            )
+          if (
+            cancel.generation === current.generation &&
+            cancel.revision === current.revision &&
+            cancel.request === current.request &&
+            cancel.request === timelinePlayRequest &&
+            cancel.region &&
+            current.region &&
+            cancel.region.start === current.region.start &&
+            cancel.region.end === current.region.end
+          ) {
+            transport.stop()
+            timelinePlayRequest = 0
+            emitTransport()
+          }
+        }
+        transport.setRegion(region, doc.project())
+        timelineRequest = request
+        return timelineState()
+      }),
     documentSnapshot: () => ipc(() => doc.snapshot(path)),
     dispatch: (command, gesture) => ipc(() => dispatchNow(command, gesture)),
     undo: () =>
@@ -793,13 +868,16 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       }),
     recentProjects: () => ipc(() => recent()),
 
-    transportPlay: () =>
+    transportPlay: (guard) =>
       ipc(() => {
+        checkTimelineGuard(guard)
         startPlayback()
+        timelinePlayRequest = guard?.request ?? 0
         return emitTransport()
       }),
     transportStop: () =>
       ipc(() => {
+        timelinePlayRequest = 0
         transport.stop()
         return emitTransport()
       }),
@@ -807,11 +885,18 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       ipc(() => {
         if (transport.state.playing) transport.stop()
         else startPlayback()
+        timelinePlayRequest = 0
         return emitTransport()
       }),
-    transportSeek: (tick) => ipc(() => transport.seek(tick, doc.project())),
-    transportSet: (patch) =>
+    transportSeek: (tick, guard) =>
       ipc(() => {
+        checkTimelineGuard(guard)
+        if (!guard) timelinePlayRequest = 0
+        transport.seek(tick, doc.project())
+      }),
+    transportSet: (patch, guard) =>
+      ipc(() => {
+        checkTimelineGuard(guard)
         if (
           patch.pattern !== undefined &&
           !doc
@@ -820,6 +905,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
         ) {
           throw new Error(`pattern ${patch.pattern} does not exist`)
         }
+        if (!guard) timelinePlayRequest = 0
         transport.set(patch, doc.project())
         return emitTransport()
       }),
@@ -1077,6 +1163,24 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
     exportAudio: (exportOptions) =>
       ipc(() => {
+        if (exportOptions.region) {
+          if (exportOptions.mode !== "song")
+            throw new Error("A timeline export region requires song mode.")
+          sim.call("timeline_range", 0, exportOptions.region)
+        }
+        if (
+          exportOptions.regionGeneration !== undefined ||
+          exportOptions.regionRevision !== undefined
+        ) {
+          const current = timelineState()
+          if (
+            exportOptions.regionGeneration !== current.generation ||
+            exportOptions.regionRevision !== current.revision
+          )
+            throw new Error(
+              "The project changed before the selected region could be exported."
+            )
+        }
         if (
           doc
             .project()

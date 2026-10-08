@@ -34,6 +34,22 @@ pub struct TransportState {
     pub loop_song: bool,
 }
 
+/// Session-only timeline playback state; no musical edit or undo entry.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TimelinePlaybackState {
+    /// Transient, exact JS-safe monotonic publication number. Never wraps.
+    #[ts(type = "number")]
+    pub request: u64,
+    #[ts(type = "number")]
+    pub generation: u64,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub region: Option<windfall_project::TickRange>,
+    pub navigation_overflows: u32,
+}
+
 /// A change to the transport. `None` leaves a field alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -301,6 +317,17 @@ pub enum BitDepth {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ExportOptions {
+    /// Optional linear once-only song region; absent retains whole-song export.
+    #[serde(default)]
+    #[ts(optional)]
+    pub region: Option<windfall_project::TickRange>,
+    /// Optional selected-export source guard, checked before snapshot preparation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub region_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub region_revision: Option<u64>,
     /// Absolute path of the file to write. With `stems` no file of this
     /// name is written: for `Song.flac` the files are `Song - Mix.flac`,
     /// `Song - Bass.flac` and so on, in a folder `Song` beside it or,
@@ -348,6 +375,9 @@ impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             path: String::new(),
+            region: None,
+            region_generation: None,
+            region_revision: None,
             format: ExportFormat::Wav,
             bit_depth: BitDepth::Int24,
             sample_rate: 48_000,

@@ -68,7 +68,12 @@ impl IdIndex {
 
 #[derive(Debug)]
 pub(crate) struct Plan {
+    pub navigation: Vec<crate::timeline::NavigationPoint>,
     pub signature: windfall_project::TimeSignature,
+    pub meters: Result<
+        Vec<windfall_project::timeline::MeterSegment>,
+        windfall_project::timeline::MeterMapError,
+    >,
     pub plugins: Vec<windfall_project::PluginBinding>,
     pub plugin_factory: Option<std::sync::Arc<dyn crate::plugins::PluginFactory>>,
     pub tempo_bpm: f64,
@@ -549,7 +554,13 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let audio_clip_ids = IdIndex::new(audio_clips.iter().map(|clip| clip.id.0));
 
     let mut plan = Plan {
+        navigation: crate::timeline::compile(&project.playlist.timeline),
         signature: project.settings.time_signature,
+        meters: windfall_project::timeline::MeterMap::checked(
+            project.settings.time_signature,
+            &project.playlist.timeline.meters,
+        )
+        .map(|map| map.segments().to_vec()),
         plugins: project.plugins.clone(),
         plugin_factory: pool.plugin_factory.clone(),
         tempo_bpm,
@@ -570,7 +581,9 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         lanes: Vec::new(),
         tempo_map: None,
     };
-    plan.snapshot_native_owners();
+    if plan.meters.is_ok() {
+        plan.snapshot_native_owners();
+    }
     plan.link();
     plan.lanes = automation::compile(project, &plan);
     let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());

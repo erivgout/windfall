@@ -720,6 +720,21 @@ describe("playing a synth", () => {
     })
     await settle()
     expect(notesOf(SYNTH)).toHaveLength(4)
+    const thumbnail = screen.getByRole("button", {
+      name: `${SYNTH} note preview. Open in piano roll`,
+    })
+    expect(thumbnail).toBeInTheDocument()
+    expect(thumbnail.querySelector("[data-note-shapes]")).toBeInTheDocument()
+    expect(thumbnail).toHaveTextContent("4 notes in the pattern")
+    expect(
+      screen.queryByRole("group", { name: `${SYNTH} steps` })
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole("button", { name: `${SYNTH} row view` })
+    )
+    await userEvent.click(
+      await screen.findByRole("menuitemcheckbox", { name: /^Show steps/ })
+    )
     // Step 9 holds notes the grid cannot show as a plain step.
     expect(document.querySelector('[data-detail-step="8"]')).not.toBeNull()
 

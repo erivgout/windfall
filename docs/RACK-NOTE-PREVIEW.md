@@ -232,3 +232,39 @@ incremental SHA and final static/artifact checks are reported in the handoff.
 The earlier four-scale browser/playhead measurements above
 remain initial checkpoint evidence; they are not represented as a new physical
 Windows/native-window run. Geometry and all native artifacts are unchanged.
+
+## CI test follow-up after immutable fd62eb05
+
+The completed root `43e42983` UI job (run `37748566795`, job `113216258367`)
+reported **2 failed / 2575 passed tests**, **2 failed / 163 passed files**
+(2577 tests, 165 files total). This is read directly from the parent-downloaded
+`C:/Temp/windfall-43-ui-ci.log`, not a new CI execution in this owner worktree.
+
+Local RED on unchanged `fd62eb05`: the two selected cases yielded **1 failed /
+1 passed**; the complete eight-file focused baseline yielded **1 failed /
+234 passed**. The synth case reproduced the missing detail-dot assertion at
+line 724: the held chord correctly selects Automatic's thumbnail. The menu
+case passed in both local baseline runs; its intermittent synchronous-lookup
+failure is actual CI evidence, not claimed as a local reproduction.
+
+The new preview test now awaits `findByRole` for the real shared menu item
+before capturing its stale element and replacing the project. All its existing
+replacement/cancel/stale-element assertions remain. Only the specifically
+authorized synth case adds assertions for the actual four-note thumbnail and
+absence of step buttons, then chooses the canonical Show steps item through
+the real row menu. Every original four-note, detail-step 8, fill4 and shown-row
+assertion remains unchanged. No production code, delay, new mock, assertion
+weakening, fixture or artifact change is involved.
+
+Local GREEN: the same two selected cases passed **2/2**, then all **235/235
+tests in eight files passed**, using the original seven-file focused command
+above plus `src/features/channel-rack/synth.test.tsx`, with
+`--maxWorkers=2 --no-cache --configLoader=runner`. The selected runs used `-t`
+to filter 71 unrelated cases; the final full focused run filtered none.
+Both TypeScript projects, scoped ESLint/Prettier, diff check and assigned-artifact
+checks passed. This worktree still uses its original 174 bindings and
+1,881,168-byte WASM with the SHA/input hash recorded above. These results do
+not claim that artifact matches the parent's newer E3/root rebuild.
+
+The incremental SHA is reported in the owner handoff. Parent composition/CI
+rerun, native window verification and parity acceptance remain external gates.

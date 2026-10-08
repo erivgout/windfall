@@ -242,4 +242,77 @@ describe("simulated transport", () => {
     transport.stop()
     expect(transport.tick).toBe(0)
   })
+
+  it("mirrors skip, pause/resume, selected stop/loop precedence and bounded tiny loops", () => {
+    const project = buildProject(song(1920), (run) => {
+      run({
+        type: "addTimelineMarker",
+        tick: 13,
+        name: "Skip",
+        kind: { type: "skip", end: 31 },
+      })
+      run({
+        type: "addTimelineMarker",
+        tick: 53,
+        name: "Pause",
+        kind: { type: "pause" },
+      })
+      run({
+        type: "addTimelineMarker",
+        tick: 100,
+        name: "Loop",
+        kind: { type: "loop", end: 150 },
+      })
+    })
+    const transport = new TransportSim(1)
+    transport.set({ mode: "song" }, project)
+    transport.play(project)
+    transport.advance(project, 35 / 1920)
+    expect(transport.tick).toBe(53)
+    expect(transport.state.playing).toBe(false)
+    transport.play(project)
+    transport.advance(project, 7 / 1920)
+    expect(transport.tick).toBeCloseTo(60)
+    expect(transport.state.playing).toBe(true)
+    transport.seek(53, project)
+    transport.advance(project, 1 / 1920)
+    expect(transport.state.playing).toBe(false)
+    transport.setRegion({ start: 161, end: 177 }, project)
+    transport.seek(0, project)
+    transport.play(project)
+    transport.advance(project, 17 / 1920)
+    expect(transport.tick).toBe(177)
+    expect(transport.state.playing).toBe(false)
+    transport.set({ loopSong: true }, project)
+    transport.play(project)
+    transport.advance(project, 19 / 1920)
+    expect(transport.tick).toBeCloseTo(164)
+    transport.setRegion({ start: 1, end: 2 }, project)
+    transport.advance(project, 100 / 1920)
+    expect(transport.state.playing).toBe(false)
+    expect(transport.navigationOverflows).toBe(1)
+  })
+
+  it("pauses at the natural song end while an explicit range end wins equal boundaries", () => {
+    const project = buildProject(song(100), (run) => {
+      run({
+        type: "addTimelineMarker",
+        tick: 100,
+        name: "End pause",
+        kind: { type: "pause" },
+      })
+    })
+    const transport = new TransportSim(1)
+    transport.set({ mode: "song" }, project)
+    transport.play(project)
+    transport.advance(project, 101 / 1920)
+    expect(transport.tick).toBe(100)
+    expect(transport.state.playing).toBe(false)
+    transport.setRegion({ start: 90, end: 100 }, project)
+    transport.set({ loopSong: true }, project)
+    transport.play(project)
+    transport.advance(project, 13 / 1920)
+    expect(transport.tick).toBeCloseTo(93)
+    expect(transport.state.playing).toBe(true)
+  })
 })

@@ -5036,6 +5036,7 @@ dependencies = [
  "cpal",
  "midir",
  "rtrb",
+ "rustfft",
  "windfall-core",
  "windfall-dsp",
  "windfall-ipc",

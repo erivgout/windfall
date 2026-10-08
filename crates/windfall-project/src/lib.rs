@@ -16,7 +16,12 @@ pub mod patch;
 pub mod piano_tools;
 pub mod plugin;
 pub mod slicer;
+pub mod timeline;
 pub use plugin::*;
+pub use timeline::{
+    MAX_MARKER_NAME_BYTES, MAX_TIMELINE_ITEMS, MarkerKind, MeterChange, MeterChangeId, MeterMap,
+    MusicalPosition, TickRange, Timeline, TimelineMarker, TimelineMarkerId,
+};
 
 pub use automation::{AutomationRange, AutomationTaper, curve_shape, curve_value};
 pub use command::*;

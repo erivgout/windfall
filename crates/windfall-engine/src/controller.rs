@@ -58,6 +58,7 @@ struct Inner {
 }
 
 struct State {
+    region: Option<windfall_project::TickRange>,
     link: Option<Link>,
     /// The plan most recently compiled, kept to hand to a new processor.
     plan: Arc<Plan>,
@@ -109,6 +110,7 @@ impl Controller {
                 shared: Arc::new(Shared::new()),
                 sampler_error: Mutex::new(None),
                 state: Mutex::new(State {
+                    region: None,
                     link: None,
                     plan: Arc::new(Plan::empty()),
                     hosted: None,
@@ -199,6 +201,15 @@ impl Controller {
         project: &Project,
         pool: &SamplePool,
     ) -> Result<PreparedProject, crate::sampler_processing::SamplerPreparationError> {
+        windfall_project::timeline::MeterMap::checked(
+            project.settings.time_signature,
+            &project.playlist.timeline.meters,
+        )
+        .map_err(|_| {
+            crate::sampler_processing::SamplerPreparationError::Unsupported(
+                "Invalid song meter map; project preparation refused.",
+            )
+        })?;
         let pool = pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {})?;
         Ok(Self::compile_prepared_project(project, &pool))
     }
@@ -213,6 +224,9 @@ impl Controller {
 
     /// Installs a precompiled snapshot. The caller must verify it still matches the project.
     pub fn set_prepared_project(&self, project: &Project, prepared: PreparedProject) {
+        if self.refuse_invalid_meters(&prepared.plan) {
+            return;
+        }
         *self
             .inner
             .sampler_error
@@ -230,6 +244,9 @@ impl Controller {
     }
 
     pub(crate) fn set_plan(&self, mut plan: Plan) {
+        if self.refuse_invalid_meters(&plan) {
+            return;
+        }
         let mut state = self.lock();
         let held = state.hosted.as_ref().filter(|_| state.link.is_some());
         let Some(held) = held else {
@@ -248,6 +265,24 @@ impl Controller {
             state: Box::new(plan_state),
             plan,
         });
+    }
+
+    /// A failed immutable snapshot never replaces the installed project.
+    /// Called only by the control-side publication paths, before State.
+    fn refuse_invalid_meters(&self, plan: &Plan) -> bool {
+        if plan.meters.is_ok() {
+            return false;
+        }
+        *self
+            .inner
+            .sampler_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(
+            crate::sampler_processing::SamplerPreparationError::Unsupported(
+                "Invalid song meter map; project preparation refused.",
+            ),
+        );
+        true
     }
 
     /// Frames by which the project's instruments and effects delay the
@@ -310,6 +345,13 @@ impl Controller {
     pub fn seek(&self, tick: f64) {
         let tick = if tick.is_finite() { tick.max(0.0) } else { 0.0 };
         let mut state = self.lock();
+        let tick = if state.transport.mode == PlayMode::Song {
+            state
+                .region
+                .map_or(tick, |r| tick.clamp(f64::from(r.start), f64::from(r.end)))
+        } else {
+            tick
+        };
         // Shown at once, and kept for the next stream when none is open.
         self.inner.shared.set_tick(tick);
         self.inner.shared.set_start(tick);
@@ -343,6 +385,31 @@ impl Controller {
             playing: self.playing(&state),
             ..state.transport
         }
+    }
+
+    /// Session-only song region, preserved across stream replacement.
+    pub fn set_timeline_region(
+        &self,
+        region: Option<windfall_project::TickRange>,
+    ) -> Result<(), String> {
+        if let Some(range) = region {
+            range.check()?;
+        }
+        let mut state = self.lock();
+        state.region = region;
+        state.send(Message::SetRegion(region));
+        Ok(())
+    }
+
+    pub fn timeline_region(&self) -> Option<windfall_project::TickRange> {
+        self.lock().region
+    }
+
+    pub fn navigation_overflows(&self) -> u32 {
+        self.inner
+            .shared
+            .navigation_overflows
+            .load(Ordering::Relaxed)
     }
 
     /// Plays a note on a channel right away, as from the UI keyboard.
@@ -629,6 +696,7 @@ impl State {
     }
 
     fn send_transport(&mut self) {
+        self.send(Message::SetRegion(self.region));
         self.send(Message::SetTransport {
             mode: self.transport.mode,
             pattern: self.transport.pattern,
@@ -1242,5 +1310,202 @@ mod tests {
         let mut out = [0.0; 64];
         processor.process(&mut out);
         assert_eq!(out[..2], [0.25, 0.25]);
+    }
+
+    #[test]
+    fn timeline_invalid_meter_snapshots_are_refused_before_publication_and_native_ownership() {
+        use crate::plugins::{HostedEffect, HostedInstrument, PluginFactory};
+        use crate::sampler_processing::SamplerPreparationError;
+        use std::sync::atomic::AtomicUsize;
+        use windfall_project::timeline::MeterMapError;
+        use windfall_project::{
+            EffectId, EffectParams, EffectSlot, MeterChange, MeterChangeId, PluginBinding,
+            PluginTarget, TickRange, TimeSignature,
+        };
+
+        #[derive(Debug, Default)]
+        struct Counts {
+            snapshots: AtomicUsize,
+            preparations: AtomicUsize,
+            process: AtomicUsize,
+            drops: AtomicUsize,
+        }
+        struct Unit(Arc<Counts>);
+        impl Drop for Unit {
+            fn drop(&mut self) {
+                self.0.drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        impl HostedEffect for Unit {
+            fn process(&mut self, _: &mut [f32], _: &mut [f32]) {
+                self.0.process.fetch_add(1, Ordering::Relaxed);
+            }
+            fn set_param(&mut self, _: u32, _: f32) {}
+            fn set_tempo(&mut self, _: f32) {}
+            fn latency(&self) -> usize {
+                0
+            }
+            fn tail(&self) -> usize {
+                0
+            }
+        }
+        #[derive(Debug)]
+        struct Factory(Arc<Counts>);
+        impl PluginFactory for Factory {
+            fn provider_identity(&self) -> u64 {
+                self.0.snapshots.fetch_add(1, Ordering::Relaxed);
+                42
+            }
+            fn effect(
+                &self,
+                _: &PluginBinding,
+                _: u32,
+                _: usize,
+            ) -> Result<Box<dyn HostedEffect>, String> {
+                self.0.preparations.fetch_add(1, Ordering::Relaxed);
+                Ok(Box::new(Unit(self.0.clone())))
+            }
+            fn instrument(
+                &self,
+                _: &PluginBinding,
+                _: u32,
+                _: usize,
+            ) -> Result<Box<dyn HostedInstrument>, String> {
+                panic!("this project has no hosted instruments")
+            }
+        }
+        let counts = Arc::new(Counts::default());
+        let (mut project, mut pool) = clicks(&[0]);
+        pool.insert(
+            SampleId(900),
+            AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 24_000]),
+        );
+        pool.set_plugin_factory(Arc::new(Factory(counts.clone())));
+        project.mixer.tracks[0].effects.push(EffectSlot {
+            id: EffectId(950),
+            enabled: true,
+            mix: 1.0,
+            params: EffectParams::Limiter(Default::default()),
+        });
+        project.plugins.push(PluginBinding {
+            target: PluginTarget::Effect {
+                effect: EffectId(950),
+            },
+            format: "clap".into(),
+            path: "prepared-owner-probe".into(),
+            id: "0".into(),
+            name: "probe".into(),
+            state: Vec::new(),
+            parameters: Vec::new(),
+        });
+        let (mut processor, controller) = Processor::new(48_000);
+        controller.set_project(&project, &pool);
+        controller
+            .set_timeline_region(Some(TickRange {
+                start: 17,
+                end: 839,
+            }))
+            .unwrap();
+        controller.play();
+        processor.process(&mut [0.0; 2]);
+        let before_plan = controller.lock().plan.clone();
+        let before_transport = controller.transport();
+        let before_tick = controller.frame().tick;
+        let before_region = controller.timeline_region();
+        let before_counts = (
+            counts.snapshots.load(Ordering::Relaxed),
+            counts.preparations.load(Ordering::Relaxed),
+            counts.process.load(Ordering::Relaxed),
+        );
+        assert!(before_counts.0 > 0 && before_counts.1 > 0 && before_counts.2 > 0);
+
+        let mut invalid = project.clone();
+        invalid.patterns[0].id = PatternId(123_456);
+        invalid.settings.tempo_bpm = 300.0;
+        let error = SamplerPreparationError::Unsupported(
+            "Invalid song meter map; project preparation refused.",
+        );
+        for cause in [
+            MeterMapError::Numerator(0),
+            MeterMapError::Denominator(0),
+            MeterMapError::UnorderedOrOutOfBounds,
+        ] {
+            invalid.settings.time_signature = TimeSignature {
+                numerator: 4,
+                denominator: 4,
+            };
+            invalid.playlist.timeline.meters.clear();
+            match cause {
+                MeterMapError::Numerator(_) => invalid.settings.time_signature.numerator = 0,
+                MeterMapError::Denominator(_) => invalid.settings.time_signature.denominator = 0,
+                _ => {
+                    invalid.playlist.timeline.meters = vec![
+                        MeterChange {
+                            id: MeterChangeId(100_001),
+                            tick: 4001,
+                            signature: TimeSignature {
+                                numerator: 7,
+                                denominator: 8,
+                            },
+                        },
+                        MeterChange {
+                            id: MeterChangeId(100_002),
+                            tick: 4001,
+                            signature: TimeSignature {
+                                numerator: 3,
+                                denominator: 4,
+                            },
+                        },
+                    ]
+                }
+            }
+            assert!(
+                matches!(Controller::try_prepare_project(&invalid, &pool), Err(ref refused) if *refused == error)
+            );
+            let prepared = Controller::compile_prepared_project(&invalid, &pool);
+            assert!(matches!(prepared.plan.meters, Err(actual) if actual == cause));
+            controller.set_prepared_project(&invalid, prepared);
+            assert_eq!(controller.sampler_preparation_error(), Some(error.clone()));
+            controller.set_plan(compile(&invalid, &pool));
+            controller.set_project(&invalid, &pool);
+            assert_eq!(controller.sampler_preparation_error(), Some(error.clone()));
+            assert!(Arc::ptr_eq(&before_plan, &controller.lock().plan));
+            assert_eq!(controller.transport(), before_transport);
+            assert_eq!(controller.frame().tick, before_tick);
+            assert_eq!(controller.timeline_region(), before_region);
+            assert_eq!(
+                (
+                    counts.snapshots.load(Ordering::Relaxed),
+                    counts.preparations.load(Ordering::Relaxed),
+                    counts.process.load(Ordering::Relaxed)
+                ),
+                before_counts
+            );
+            assert_eq!(counts.drops.load(Ordering::Relaxed), 0);
+        }
+        let mut out = [0.0; 2];
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert_eq!(out, [0.25; 2]);
+        assert!(controller.transport().playing);
+        assert_eq!(counts.drops.load(Ordering::Relaxed), 0);
+        project.settings.time_signature = TimeSignature {
+            numerator: 3,
+            denominator: 4,
+        };
+        controller.set_project(&project, &pool);
+        assert_eq!(controller.sampler_preparation_error(), None);
+        assert!(!Arc::ptr_eq(&before_plan, &controller.lock().plan));
+        assert_eq!(controller.transport(), before_transport);
+        assert_eq!(controller.timeline_region(), before_region);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| processor.process(&mut out)),
+            0
+        );
+        assert_eq!(out, [0.25; 2]);
+        assert_eq!(counts.preparations.load(Ordering::Relaxed), before_counts.1);
+        assert_eq!(counts.drops.load(Ordering::Relaxed), 0);
     }
 }

@@ -22,7 +22,7 @@ pub const SILENT_PLAYLIST: &str = "Only automation clips would play, and they ma
 /// Why playing the song would make no sound, if it would not: there is no
 /// clip, every clip is muted or sits on a muted track, or the clips that
 /// are left are all automation, which moves controls and plays nothing.
-fn nothing_to_play(project: &Project) -> Option<&'static str> {
+pub(super) fn nothing_to_play(project: &Project) -> Option<&'static str> {
     let playlist = &project.playlist;
     if playlist.clips.is_empty() {
         return Some(EMPTY_PLAYLIST);
@@ -67,12 +67,15 @@ impl Session {
         {
             return Err(reason.to_owned());
         }
+        self.clear_timeline_play_owner(&state);
         self.controller().play();
         Ok(self.sync_transport())
     }
 
     /// Stops playback. The playhead returns to where playback started.
     pub fn transport_stop(&self) -> TransportState {
+        let state = self.state();
+        self.clear_timeline_play_owner(&state);
         self.controller().stop();
         self.sync_transport()
     }
@@ -91,6 +94,8 @@ impl Session {
         let Ok(_recording) = self.recording_idle() else {
             return;
         };
+        let state = self.state();
+        self.clear_timeline_play_owner(&state);
         self.controller().seek(tick);
     }
 
@@ -106,6 +111,7 @@ impl Session {
         {
             return Err(format!("pattern {} does not exist", pattern.0));
         }
+        self.clear_timeline_play_owner(&state);
         self.controller().set_transport(patch);
         Ok(self.sync_transport())
     }
@@ -127,6 +133,11 @@ impl Session {
     /// Tells the UI the transport state whether or not it changed, as after
     /// loading a project, when the UI starts over.
     pub(super) fn announce_transport(&self) -> TransportState {
+        // This authority is called after document replacement. Never carry a
+        // region with reused IDs/ticks into the replacement project.
+        self.controller()
+            .set_timeline_region(None)
+            .expect("clearing a region is valid");
         let mut told = lock(&self.inner.transport);
         let now = self.controller().transport();
         *told = now;

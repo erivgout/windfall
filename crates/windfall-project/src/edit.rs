@@ -109,6 +109,7 @@ impl PatternInfo {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Edit {
+    Timeline(Change<crate::Timeline>),
     Settings(Change<ProjectSettings>),
     Plugins(Change<Vec<crate::PluginBinding>>),
     Sample(ListEdit<SampleAsset>),
@@ -155,6 +156,7 @@ impl Edit {
     pub(crate) fn apply(&self, project: &mut Project, direction: Direction) {
         match self {
             Edit::Settings(change) => project.settings = change.result(direction).clone(),
+            Edit::Timeline(change) => project.playlist.timeline = change.result(direction).clone(),
             Edit::Plugins(change) => project.plugins = change.result(direction).clone(),
             Edit::Sample(edit) => edit.apply(&mut project.samples, direction),
             Edit::Channel(edit) => edit.apply(&mut project.channels, direction),
@@ -230,6 +232,7 @@ impl Edit {
         };
         match self {
             Edit::Settings(_) => touched.settings = true,
+            Edit::Timeline(_) => touched.playlist = true,
             Edit::Plugins(_) => touched.plugins = true,
             Edit::Sample(_) => touched.samples = true,
             Edit::Channel(_) | Edit::MoveChannel(_) | Edit::SetChannel(_) => {
@@ -278,6 +281,7 @@ impl Edit {
     pub(crate) fn is_identity(&self) -> bool {
         match self {
             Edit::Settings(change) => change.old == change.new,
+            Edit::Timeline(change) => change.old == change.new,
             Edit::Plugins(change) => change.old == change.new,
             Edit::SetChannel(change) => change.old == change.new,
             Edit::SetMixerTrack(change) => change.old == change.new,
@@ -303,6 +307,7 @@ impl Edit {
     fn absorb(&mut self, next: Edit) -> Result<(), Edit> {
         match (self, next) {
             (Edit::Settings(first), Edit::Settings(second)) => first.new = second.new,
+            (Edit::Timeline(first), Edit::Timeline(second)) => first.new = second.new,
             (Edit::Plugins(first), Edit::Plugins(second)) => first.new = second.new,
             (Edit::SetChannel(first), Edit::SetChannel(second))
                 if first.new.id == second.new.id =>

@@ -28,9 +28,22 @@ function fullProject() {
     clip: 0,
     audioClip: 0,
     automation: 0,
+    meter: 0,
+    marker: 0,
   }
   const base = demoProject()
   const project = buildProject(base, (run) => {
+    ;[ids.meter] = run({
+      type: "addMeterChange",
+      tick: 4001,
+      signature: { numerator: 7, denominator: 8 },
+    })
+    ;[ids.marker] = run({
+      type: "addTimelineMarker",
+      tick: 7400,
+      name: "Verse",
+      kind: { type: "named" },
+    })
     ids.sample = base.samples[0].id
     ids.channel = base.channels[0].id
     ;[ids.spareSample] = run({
@@ -144,6 +157,37 @@ type Ids = ReturnType<typeof fullProject>["ids"]
  * for a new entry when the Rust `Command` gains a variant.
  */
 const EVERY_COMMAND: { [Type in Command["type"]]: (ids: Ids) => Command } = {
+  addMeterChange: () => ({
+    type: "addMeterChange",
+    tick: 7400,
+    signature: { numerator: 3, denominator: 4 },
+  }),
+  updateMeterChange: (ids) => ({
+    type: "updateMeterChange",
+    id: ids.meter,
+    tick: 4003,
+    signature: { numerator: 3, denominator: 4 },
+  }),
+  removeMeterChange: (ids) => ({ type: "removeMeterChange", id: ids.meter }),
+  addTimelineMarker: () => ({
+    type: "addTimelineMarker",
+    tick: 5000,
+    name: "Pause",
+    kind: { type: "pause" },
+  }),
+  updateTimelineMarker: (ids) => ({
+    type: "updateTimelineMarker",
+    marker: {
+      id: ids.marker,
+      tick: 7401,
+      name: "Chorus",
+      kind: { type: "named" },
+    },
+  }),
+  removeTimelineMarker: (ids) => ({
+    type: "removeTimelineMarker",
+    id: ids.marker,
+  }),
   transformNotes: (ids) => ({
     type: "transformNotes",
     pattern: ids.pattern,

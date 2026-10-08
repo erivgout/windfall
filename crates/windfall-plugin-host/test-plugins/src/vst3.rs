@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        19
+        21
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..19).contains(&index) {
+        if info.is_null() || !(0..21).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -71,6 +71,8 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Bridge Unsupported Latency",
                         "VST3 Bridge Native Event Flood",
                         "VST3 Bridge Successful Native State Limit",
+                        "VST3 Bridge Controlled Process Error",
+                        "VST3 Bridge Deactivation Edit",
                     ][index as usize],
                 ),
             });
@@ -91,7 +93,7 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..19).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..21).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
@@ -105,9 +107,11 @@ impl IPluginFactoryTrait for Factory {
                 multi_params: class == cid(9),
                 bridge_delayed: class == cid(10)
                     || class == cid(11)
-                    || (13..19).any(|i| class == cid(i)),
+                    || (13..21).any(|i| class == cid(i)),
                 bridge_bad_latency: class == cid(16),
                 bridge_state_boundary: class == cid(18),
+                bridge_controlled_error: class == cid(19),
+                bridge_deactivation_edit: class == cid(20),
                 bridge_event_flood: class == cid(17),
                 bridge_capture_fault: if class == cid(13) {
                     crate::bridge_behaviors::CaptureFault::Exit
@@ -149,7 +153,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..19).contains(&index) {
+        if info.is_null() || !(0..21).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -179,6 +183,8 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Bridge Unsupported Latency",
                         "VST3 Bridge Native Event Flood",
                         "VST3 Bridge Successful Native State Limit",
+                        "VST3 Bridge Controlled Process Error",
+                        "VST3 Bridge Deactivation Edit",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -208,6 +214,8 @@ struct Component {
     bridge_hang: bool,
     bridge_bad_latency: bool,
     bridge_state_boundary: bool,
+    bridge_controlled_error: bool,
+    bridge_deactivation_edit: bool,
     bridge_event_flood: bool,
     bridge_capture_fault: crate::bridge_behaviors::CaptureFault,
     activations: std::sync::atomic::AtomicU32,
@@ -340,7 +348,7 @@ impl IComponentTrait for Component {
         if self.processing.load(std::sync::atomic::Ordering::Relaxed) {
             return kResultFalse;
         }
-        if state == 0 && self.notify {
+        if state == 0 && (self.notify || self.bridge_deactivation_edit) {
             if f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) == 0.625 {
                 self.gain
                     .store(0.375_f64.to_bits(), std::sync::atomic::Ordering::Relaxed);
@@ -647,6 +655,10 @@ impl IAudioProcessorTrait for Component {
                         }
                     }
                 }
+            }
+            if self.bridge_controlled_error && !crate::bridge_behaviors::controlled_process_ok(gain)
+            {
+                return kResultFalse;
             }
             if let Some(events) = &events {
                 for index in 0..unsafe { events.getEventCount() } {

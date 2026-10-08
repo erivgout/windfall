@@ -46,6 +46,44 @@ impl Project {
             ));
         }
         check_settings(self)?;
+        self.playlist
+            .timeline
+            .check(self.settings.time_signature, self.next_id)?;
+        let timeline_ids: HashSet<u32> = self
+            .playlist
+            .timeline
+            .meters
+            .iter()
+            .map(|m| m.id.0)
+            .chain(self.playlist.timeline.markers.iter().map(|m| m.id.0))
+            .collect();
+        let entity_ids = self
+            .samples
+            .iter()
+            .map(|s| s.id.0)
+            .chain(self.channels.iter().map(|c| c.id.0))
+            .chain(self.patterns.iter().map(|p| p.id.0))
+            .chain(
+                self.patterns
+                    .iter()
+                    .flat_map(|p| &p.lanes)
+                    .flat_map(|l| &l.notes)
+                    .map(|n| n.id.0),
+            )
+            .chain(self.mixer.tracks.iter().map(|t| t.id.0))
+            .chain(
+                self.mixer
+                    .tracks
+                    .iter()
+                    .flat_map(|t| &t.effects)
+                    .map(|e| e.id.0),
+            )
+            .chain(self.playlist.tracks.iter().map(|t| t.id.0))
+            .chain(self.playlist.clips.iter().map(|c| c.id.0))
+            .chain(self.automations.iter().map(|a| a.id.0));
+        if entity_ids.into_iter().any(|id| timeline_ids.contains(&id)) {
+            return Err("a timeline ID collides with another project entity".to_owned());
+        }
         check_samples(self)?;
         check_mixer(self)?;
         check_channels(self)?;

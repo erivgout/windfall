@@ -76,6 +76,7 @@ mod samples;
 mod slicer;
 #[cfg(test)]
 mod tests;
+mod timeline;
 mod transport;
 mod versions;
 
@@ -153,6 +154,10 @@ impl WeakSession {
 }
 
 struct Inner {
+    /// Transient timeline watermark, accessed under State and retained across replacement.
+    timeline_request: std::sync::atomic::AtomicU64,
+    /// Successful guarded Play owner; accessed only while State is held.
+    timeline_play_request: std::sync::atomic::AtomicU64,
     archive_job: Mutex<Option<Arc<AtomicBool>>>,
     midi_hardware: Mutex<Option<Arc<windfall_engine::midi_hardware::Runtime>>>,
     midi_configuring: Mutex<()>,
@@ -333,6 +338,8 @@ impl Session {
 
         Self {
             inner: Arc::new(Inner {
+                timeline_request: std::sync::atomic::AtomicU64::new(0),
+                timeline_play_request: std::sync::atomic::AtomicU64::new(0),
                 archive_job: Mutex::new(None),
                 midi_hardware: Mutex::new(None),
                 midi_configuring: Mutex::new(()),

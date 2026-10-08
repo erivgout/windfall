@@ -90,6 +90,61 @@ fn converted(p: &FlpProject) -> Conversion {
     );
     c
 }
+
+#[test]
+fn timeline_selected_arrangement_meters_and_named_markers_survive_actual_flp_bytes() {
+    let mut source = fixture(960);
+    source.arrangements[0].markers = vec![
+        TimeMarker {
+            position: 4001,
+            kind: 8,
+            numerator: Some(7),
+            denominator: Some(8),
+            ..Default::default()
+        },
+        TimeMarker {
+            position: 7400,
+            kind: 8,
+            numerator: Some(3),
+            denominator: Some(4),
+            ..Default::default()
+        },
+        TimeMarker {
+            position: 7400,
+            kind: 0,
+            name: Some("Chorus".into()),
+            ..Default::default()
+        },
+        TimeMarker {
+            position: 7500,
+            kind: 3,
+            name: Some("Unsupported FL navigation".into()),
+            ..Default::default()
+        },
+    ];
+    source.patterns[0].markers.push(TimeMarker {
+        position: 0,
+        kind: 8,
+        numerator: Some(5),
+        denominator: Some(4),
+        ..Default::default()
+    });
+    let converted = converted(&source);
+    let timeline = &converted.project.playlist.timeline;
+    assert_eq!(
+        timeline
+            .meters
+            .iter()
+            .map(|m| (m.tick, m.signature.numerator, m.signature.denominator))
+            .collect::<Vec<_>>(),
+        [(4001, 7, 8), (7400, 3, 4)]
+    );
+    assert_eq!(timeline.markers[0].name, "Chorus");
+    assert_eq!(timeline.markers[0].tick, 7400);
+    let report = format!("{:?}", converted.report);
+    assert!(report.contains("per-pattern meter maps"));
+    assert!(report.contains("marker kind 3"));
+}
 #[test]
 fn generated_notes_arrangement_and_paths_survive_every_requested_time_base() {
     for ppq in [96, 192, 384, 480, 960, 7] {
