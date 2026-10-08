@@ -445,10 +445,10 @@
       "summary": "Shows a thumbnail of a channel's piano roll notes in place of its step buttons.",
       "windfall_name": "Note preview in rack",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "A T3-bound implementation owns real per-lane note thumbnails in place of step buttons, with an explicit step view and accessible opening of the current piano-roll lane. Existing step-detail behavior remains tested in step view. Source delivery, shared-WASM UI checks, independent review and parent composition remain pending; no row closure yet."
     },
     {
       "id": "win-rack-send-to-piano-roll",

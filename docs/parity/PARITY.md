@@ -18,15 +18,15 @@ As of 2026-10-08. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 213 |
-| In progress | 59 |
+| Todo | 212 |
+| In progress | 60 |
 | Done | 68 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 12 | 8 | 2 | 1 |
-| Main windows | 113 | 48 | 20 | 44 | 1 |
+| Main windows | 113 | 47 | 21 | 44 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 63 | 15 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
@@ -38,7 +38,7 @@ As of 2026-10-08. Sources:
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
 | 1. Make a beat | 39 | 6 | 9 | 22 | 2 |
-| 2. Write a song | 99 | 41 | 24 | 34 | 0 |
+| 2. Write a song | 99 | 40 | 25 | 34 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
 | 5. The long tail | 129 | 117 | 12 | 0 | 0 |
@@ -90,7 +90,7 @@ As of 2026-10-08. Sources:
 | Cut and Cut-by groups | Cut groups | 1 | done |  |
 | Channel sampler: loop points and ping-pong loop | Sample looping | 1 | done | Persisted forward and ping-pong loops with inspector points relative to the trimmed sample, reverse-aware bounds, fractional boundary interpolation and note release. Undo/save/load, playback/export parity and zero callback allocations are tested. No hardware audio verification; details and limits are in docs/SAMPLER-LOOPS.md. |
 | Channel sampler: precomputed effects | Sample pre-processing | 1 | todo |  |
-| Mini piano roll preview | Note preview in rack | 2 | todo |  |
+| Mini piano roll preview | Note preview in rack | 2 | in-progress | A T3-bound implementation owns real per-lane note thumbnails in place of step buttons, with an explicit step view and accessible opening of the current piano-roll lane. Existing step-detail behavior remains tested in step view. Source delivery, shared-WASM UI checks, independent review and parent composition remain pending; no row closure yet. |
 | Send to Piano roll | Steps to notes | 2 | todo |  |
 | Channel settings: envelopes, LFOs and filter | Channel envelopes and LFOs | 2 | in-progress | Volume envelope on the sampler only. |
 | Channel settings: arpeggiator | Channel arpeggiator | 2 | todo |  |

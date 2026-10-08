@@ -899,3 +899,58 @@ track work in progress. M1's five foundation findings and N4's two R3 findings
 remain with their existing implementation owners. The matrix is still 342
 rows: 68 done, 59 in progress, 213 todo and two explicit exclusions. The full
 goal, immutable alpha release, and remaining platform/hardware gates remain.
+
+## 2026-10-08 verified serial filter handover and next source reviews
+
+The filter-clock investigation closed without a production change. All nine
+paths match an independent f64 serial recurrence over 1536 restore frames;
+maximum error is 6.519258e-9 and callback allocator/free counts are zero.
+The outgoing owner has 160 departure frames remaining, followed by a
+240-frame incoming fade. Full wet is frame 400. The original frame-256
+assertion was premature, and the fresh bass shelf's analytic pole also
+predicts its later state transient. `f7ae4583` corrects only the test to check
+all 1024 restoration frames, exact full wet from 400 and the analytically
+bounded always-wet endpoint from 768. Original movement and 2e-6 bounds
+remain. All six engine filter cases and strict engine checks now pass;
+`windfall-root-e1-serial-clock-green.log` exits zero. Four project and 70
+focused UI checks already passed on unchanged matching artifacts. Fresh
+separate E1 downstream standards/spec reviews are active at fixed `f7ae4583`.
+The three filter rows remain in progress pending those verdicts.
+
+T1 R3 found three documented standards issues: missing action invalidation
+on hydration, duplicated registry-backed menu entries and raw timeline
+entity IDs. Its specification axis found chained pending Plays hiding the
+live predecessor cancellation target and song-meter leakage into pattern
+plugin transport. All five are assigned to the same owner with narrow
+authorized hooks, numeric-JSON-preserving ID types and actual regressions.
+Release R1 found two nonblocking code-smell judgments separately from a P1
+platform-resource override bypass and P2 source-unbound SBOM declarations
+and edges. Both specification repairs and pinned upload-action provenance
+are with its owner. The separate reports and evidence distinctions are in
+`2026-10-08-review-rounds.md`. Neither delivery is integrated into root.
+
+E3 pure DSP `6326f883` supplies an eight-unit filtered echo bank and a real
+sixteen-band delay, with 128 library and 25 release tests reported passing.
+Its two independent reviews are active; registry, engine admission/tail
+aggregation, project controls and drawn editors remain closed. Prepared
+maximum-rate payloads are explicitly 614.4 MB and 49.2 MB, not a hidden
+shortened range. No full delay-row acceptance is claimed.
+
+M1 repair `f006ce1b` is directly atop `89d5ffbd`, with compiled RED/GREEN for
+all five findings, 37 analysis and 145 codec tests reported passing, and two
+existing ffmpeg-dependent tests ignored. Publication temporaries retain
+quotas through cleanup refusal; retained capacities and preparation peaks
+are charged; final eligibility/acknowledgement is borrowed/prepared with
+zero allocation/free; strict additive decode rejects encoded nonfinite PCM;
+Windows aliases are refused before writing. Existing decoding behavior and
+lock entries remain. Separate R2 reviews are active. Native Session apply,
+IPC/UI attachment and actual inference remain closed and unproven.
+
+A T3-bound rack-note-preview implementation at `f9a1d2ee` owns real lane
+thumbnails and accessible opening of the correct piano lane. Its view changes
+retain the existing step-detail assertions behind the explicit step view.
+There are no model/engine edits or new test results claimed yet. Its row now
+tracks implementation in progress: 68 done, 60 in progress, 212 todo and two
+exclusions out of 342. N4's startup-budget and wrapped-state repairs continue
+in its existing owner. Root is clean after checked commits; no new alpha,
+signature, installed bundle, full-project or hardware acceptance is claimed.
