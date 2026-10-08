@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        9
+        10
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..9).contains(&index) {
+        if info.is_null() || !(0..10).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -61,6 +61,7 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Deactivation Refusal",
                         "VST3 Native Dirty",
                         "VST3 Recovery Failure",
+                        "VST3 Parameter Sources",
                     ][index as usize],
                 ),
             });
@@ -81,7 +82,7 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..9).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..10).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
@@ -91,6 +92,7 @@ impl IPluginFactoryTrait for Factory {
                 refuse: class == cid(6),
                 notify: class == cid(7),
                 recovery_failure: class == cid(8),
+                multi_params: class == cid(9),
                 activations: std::sync::atomic::AtomicU32::new(0),
                 creator: std::thread::current().id(),
                 notified: std::sync::atomic::AtomicBool::new(false),
@@ -106,6 +108,9 @@ impl IPluginFactoryTrait for Factory {
                 active: std::sync::atomic::AtomicBool::new(false),
                 processing: std::sync::atomic::AtomicBool::new(false),
                 gain: std::sync::atomic::AtomicU64::new(0.5_f64.to_bits()),
+                extra: std::array::from_fn(|_| {
+                    std::sync::atomic::AtomicU64::new(0.5_f64.to_bits())
+                }),
                 meters: std::array::from_fn(|_| std::sync::atomic::AtomicU64::new(0)),
                 audio: std::cell::UnsafeCell::new(Audio::default()),
             })
@@ -118,7 +123,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..9).contains(&index) {
+        if info.is_null() || !(0..10).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -138,6 +143,7 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Deactivation Refusal",
                         "VST3 Native Dirty",
                         "VST3 Recovery Failure",
+                        "VST3 Parameter Sources",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -161,6 +167,7 @@ struct Component {
     refuse: bool,
     notify: bool,
     recovery_failure: bool,
+    multi_params: bool,
     activations: std::sync::atomic::AtomicU32,
     creator: std::thread::ThreadId,
     notified: std::sync::atomic::AtomicBool,
@@ -170,6 +177,7 @@ struct Component {
     active: std::sync::atomic::AtomicBool,
     processing: std::sync::atomic::AtomicBool,
     gain: std::sync::atomic::AtomicU64,
+    extra: [std::sync::atomic::AtomicU64; 2],
     meters: [std::sync::atomic::AtomicU64; 3],
     audio: std::cell::UnsafeCell<Audio>,
 }
@@ -318,6 +326,7 @@ struct Audio {
     configured: bool,
     held: [[bool; 128]; 16],
     held_count: usize,
+    extra: [f64; 2],
 }
 impl Default for Audio {
     fn default() -> Self {
@@ -328,6 +337,7 @@ impl Default for Audio {
             configured: false,
             held: [[false; 128]; 16],
             held_count: 0,
+            extra: [0.5; 2],
         }
     }
 }
@@ -514,7 +524,8 @@ impl IAudioProcessorTrait for Component {
                     else {
                         continue;
                     };
-                    if unsafe { queue.getParameterId() } != 7 {
+                    let id = unsafe { queue.getParameterId() };
+                    if id != 7 && !(self.multi_params && (8..=9).contains(&id)) {
                         continue;
                     }
                     for point in 0..unsafe { queue.getPointCount() } {
@@ -522,9 +533,15 @@ impl IAudioProcessorTrait for Component {
                         if unsafe { queue.getPoint(point, &mut offset, &mut value) } == kResultOk
                             && offset == frame
                         {
-                            gain = value;
-                            self.gain
-                                .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                            if id == 7 {
+                                gain = value;
+                                self.gain
+                                    .store(gain.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                            } else {
+                                audio.extra[(id - 8) as usize] = value;
+                                self.extra[(id - 8) as usize]
+                                    .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -577,6 +594,8 @@ impl IAudioProcessorTrait for Component {
                 unsafe {
                     out.add(frame as usize).write(if self.fault == 2 {
                         f32::NAN
+                    } else if self.multi_params && channel == 1 {
+                        audio.extra.iter().sum::<f64>() as f32
                     } else {
                         (input + synth) * (gain as f32 * 2.0)
                     });
@@ -600,29 +619,35 @@ impl IEditControllerTrait for Component {
         unsafe { self.write_state(state) }
     }
     unsafe fn getParameterCount(&self) -> i32 {
-        4
+        if self.multi_params { 6 } else { 4 }
     }
     unsafe fn getParameterInfo(&self, index: i32, info: *mut ParameterInfo) -> tresult {
-        if !(0..4).contains(&index) || info.is_null() {
+        if !(0..unsafe { self.getParameterCount() }).contains(&index) || info.is_null() {
             return kInvalidArgument;
         }
         let mut title = [0; 128];
-        for (s, c) in title
-            .iter_mut()
-            .zip(["Gain", "Tempo", "Playing", "Beats"][index as usize].encode_utf16())
-        {
+        for (s, c) in title.iter_mut().zip(
+            ["Gain", "Tempo", "Playing", "Beats", "Pending", "Editor"][index as usize]
+                .encode_utf16(),
+        ) {
             *s = c;
         }
         unsafe {
             info.write(ParameterInfo {
-                id: if index == 0 { 7 } else { 21 + index as u32 },
+                id: if index == 0 {
+                    7
+                } else if index >= 4 {
+                    4 + index as u32
+                } else {
+                    21 + index as u32
+                },
                 title,
                 shortTitle: title,
                 units: [0; 128],
                 stepCount: 0,
-                defaultNormalizedValue: if index == 0 { 0.5 } else { 0.0 },
+                defaultNormalizedValue: if index == 0 || index >= 4 { 0.5 } else { 0.0 },
                 unitId: 0,
-                flags: if index == 0 { 1 } else { 2 },
+                flags: if index == 0 || index >= 4 { 1 } else { 2 },
             });
         }
         kResultOk
@@ -630,6 +655,16 @@ impl IEditControllerTrait for Component {
     unsafe fn getParamStringByValue(&self, id: u32, value: f64, text: *mut String128) -> tresult {
         if id != 7 || text.is_null() {
             return kInvalidArgument;
+        }
+        // Deterministic editor gesture through the actual registered host
+        // handler. The audio probe changes only when its queued point processes.
+        if self.multi_params
+            && value == 0.9375
+            && let Some(handler) = unsafe { &*self.handler.get() }
+        {
+            unsafe {
+                handler.performEdit(9, 0.75);
+            }
         }
         let mut result = [0; 128];
         for (s, c) in result
@@ -670,6 +705,11 @@ impl IEditControllerTrait for Component {
         value * 0.5
     }
     unsafe fn getParamNormalized(&self, id: u32) -> f64 {
+        if self.multi_params && (8..=9).contains(&id) {
+            return f64::from_bits(
+                self.extra[(id - 8) as usize].load(std::sync::atomic::Ordering::Relaxed),
+            );
+        }
         if (22..=24).contains(&id) {
             return f64::from_bits(
                 self.meters[(id - 22) as usize].load(std::sync::atomic::Ordering::Relaxed),
@@ -678,6 +718,15 @@ impl IEditControllerTrait for Component {
         f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed))
     }
     unsafe fn setParamNormalized(&self, id: u32, mut value: f64) -> tresult {
+        if self.multi_params
+            && (8..=9).contains(&id)
+            && value.is_finite()
+            && (0.0..=1.0).contains(&value)
+        {
+            self.extra[(id - 8) as usize]
+                .store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            return kResultOk;
+        }
         if id != 7 || !value.is_finite() || !(0.0..=1.0).contains(&value) {
             return kInvalidArgument;
         }

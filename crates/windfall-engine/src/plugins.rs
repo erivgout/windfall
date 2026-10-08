@@ -1,7 +1,7 @@
 //! Control-side factory and prepared audio-only halves of hosted plugins.
 
 use std::collections::HashMap;
-use windfall_project::{PluginBinding, PluginTarget};
+use windfall_project::{PluginBinding, PluginParameter, PluginTarget};
 
 /// Musical position at the first frame of a processing block.
 #[derive(Debug, Clone, Copy)]
@@ -20,6 +20,11 @@ pub trait HostedEffect: Send {
     /// callback/block boundaries for stopped, bypassed and retiring slots too.
     /// Must not allocate, lock, wait, deactivate or destroy native objects.
     fn control_boundary(&mut self) {}
+    /// Observes document adoption even when cached values need no new control.
+    /// This is callback-local metadata only: no allocation, wait or native call.
+    /// Implementations must match the currently committed document values and
+    /// acknowledge processing separately, after actual native completion.
+    fn adopt_parameters(&mut self, _parameters: &[PluginParameter]) {}
     fn transport(&mut self, _transport: PluginTransport) {}
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
     fn set_param(&mut self, id: u32, value: f32);
@@ -180,6 +185,9 @@ impl ExternalEffect {
         slot
     }
     pub fn apply(&mut self, binding: &PluginBinding) {
+        if let Some(unit) = &mut self.unit {
+            unit.adopt_parameters(&binding.parameters);
+        }
         for (cached, param) in self.params.iter_mut().zip(&binding.parameters) {
             if cached.0 == param.id && cached.1 != param.value {
                 if let Some(unit) = &mut self.unit {
