@@ -95,6 +95,9 @@ export function attachGridInput(
   let scrollFrame = 0
   let stampCanceledByRightClick = false
 
+  const canRefresh = () =>
+    pointerInside || (frame.held && editor.hasPointerGesture)
+
   const showCursor = () => {
     element.style.cursor = pan
       ? "grabbing"
@@ -113,7 +116,7 @@ export function attachGridInput(
   // gesture is fed the same pointer position, which now means a new place.
   const autoScroll = () => {
     scrollFrame = 0
-    if (!editor.busy || !last) return
+    if (!editor.hasPointerGesture || !last) return
     const { width, height } = view.viewport
     const dx = edgeSpeed(last.x, width)
     const dy = edgeSpeed(last.y, height)
@@ -130,9 +133,11 @@ export function attachGridInput(
     if (pan) {
       pan = null
       showCursor()
-    } else if (editor.busy) {
+    } else if (editor.hasPointerGesture) {
       if (commit) editor.pointerUp(toInput(frame, event))
       else editor.cancel()
+    } else if (!commit) {
+      editor.cancel()
     }
     frame.release()
     if (!pointerInside) editor.pointerLeave()
@@ -144,7 +149,7 @@ export function attachGridInput(
   const onPointerDown = (event: PointerEvent) => {
     if (event.pointerType === "touch") return
     pointerInside = true
-    stampCanceledByRightClick = event.button === 2 && editor.stampState !== null
+    stampCanceledByRightClick = event.button === 2 && editor.hasStampChoice
     session.focusGrid()
     if (event.button === 1) {
       // Stops the browser's own middle-button scrolling.
@@ -160,12 +165,13 @@ export function attachGridInput(
     last = toInput(frame, event)
     pressed = last
     travelled = false
-    const intent = editor.pointerDown(
-      last,
-      event.button === 0 ? "left" : "right"
-    )
-    if (!editor.busy || intent?.kind === "menu") {
+    editor.pointerDown(last, event.button === 0 ? "left" : "right")
+    if (!editor.hasPointerGesture) {
+      stopAutoScroll()
       frame.release()
+      if (element.hasPointerCapture(event.pointerId)) {
+        element.releasePointerCapture(event.pointerId)
+      }
       return
     }
     element.setPointerCapture(event.pointerId)
@@ -186,7 +192,7 @@ export function attachGridInput(
       return
     }
     last = toInput(frame, event)
-    if (!pointerInside && !frame.held) {
+    if (!canRefresh()) {
       editor.pointerLeave()
       return
     }
@@ -209,7 +215,7 @@ export function attachGridInput(
 
   // Right-click deletes in every tool but Select, where it opens the menu.
   const onContextMenu = (event: MouseEvent) => {
-    if (stampCanceledByRightClick || editor.stampState) {
+    if (stampCanceledByRightClick || editor.hasStampChoice) {
       stampCanceledByRightClick = false
       editor.cancel()
       event.preventDefault()
@@ -230,12 +236,12 @@ export function attachGridInput(
       time: true,
       rows: true,
     })
-    if (last && (pointerInside || frame.held)) editor.pointerMove(last)
+    if (last && canRefresh()) editor.pointerMove(last)
   }
 
   // Ctrl and Shift change what a drag does, also while the mouse is still.
   const onModifier = (event: KeyboardEvent) => {
-    if (!last || !editor.busy || (!pointerInside && !frame.held)) return
+    if (!last || !editor.busy || !canRefresh()) return
     if (!["Control", "Shift", "Alt", "Meta"].includes(event.key)) return
     last = {
       ...last,
