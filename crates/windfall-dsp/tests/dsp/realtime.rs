@@ -5,10 +5,10 @@ use std::cell::Cell;
 
 use windfall_dsp::blocks::noise::Rng;
 use windfall_dsp::{
-    AnyEffect, AnyInstrument, BalanceParams, ChannelMuteParams, CompressorParams, DcBlockParams,
-    DelayParams, DistortionParams, EffectKind, EffectParams, EffectSlot, EqParams, InstrumentKind,
-    InstrumentParams, LimiterParams, PolarityParams, ReverbParams, SoftClipperParams,
-    StereoMatrixParams, SynthParams,
+    AnyEffect, AnyInstrument, BalanceParams, BassShelfParams, ChannelMuteParams, CompressorParams,
+    DcBlockParams, DelayParams, DistortionParams, EffectKind, EffectParams, EffectSlot, EqParams,
+    FastLowpassParams, InstrumentKind, InstrumentParams, LimiterParams, PolarityParams,
+    ReverbParams, SelectableFilterParams, SoftClipperParams, StereoMatrixParams, SynthParams,
 };
 
 use crate::support::{noise, random_params};
@@ -97,6 +97,13 @@ fn random_effect_params(kind: EffectKind, rng: &mut Rng) -> EffectParams {
             EffectParams::SoftClipper(random_params::<SoftClipperParams>(rng))
         }
         EffectKind::Distortion => EffectParams::Distortion(random_params::<DistortionParams>(rng)),
+        EffectKind::FastLowpass => {
+            EffectParams::FastLowpass(random_params::<FastLowpassParams>(rng))
+        }
+        EffectKind::SelectableFilter => {
+            EffectParams::SelectableFilter(random_params::<SelectableFilterParams>(rng))
+        }
+        EffectKind::BassShelf => EffectParams::BassShelf(random_params::<BassShelfParams>(rng)),
     }
 }
 
