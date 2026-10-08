@@ -470,3 +470,24 @@ loop/playback/export regions and region zoom. Full arrangements, linked tracks,
 grouping and per-pattern signatures remain separate required follow-ups. Its
 shared Rack/State/runtime and session source windows remain reserved to the
 active repair owners until narrow integration hooks are coordinated.
+
+The full UI check at `9b3001f4` finished with **2,450 passing tests across
+159 files**, then passed ESLint and production TypeScript/Vite build. Current
+native archive tests passed 13, project tests passed 308 and engine checks
+passed 49 sampler plus three source-pool and three bank-budget tests. Desktop
+test compilation succeeded; the root orchestration script initially selected
+the wrong Cargo target kind (`lib` instead of Tauri's `rlib`/`cdylib`/`staticlib`).
+Selection was corrected to the actual `windfall_desktop_lib` test target and
+the already-built executable is running directly, including native fixtures.
+No production change or repeated earlier test run was needed for this script
+correction. Later strict checks and fresh-binding comparison remain pending.
+
+Independent scaling round one found two P2 cases beyond the passing suite:
+200% scale collapses the browser tree, and independently capped canvas densities
+misalign large piano ruler/value layers. Both are assigned to the scaling owner
+with narrow browser-layout ownership coordinated separately from import work.
+Portable round three closed the prior collision/history reproductions, then
+source/model-traced historical output-path aliasing, local ZIP header/extent
+validation and a missing already-written-path error. The portable owner is
+checking real reachability/reader behavior and producing bounded regressions;
+no new exploit or Rust reproduction is claimed from the review's models.
