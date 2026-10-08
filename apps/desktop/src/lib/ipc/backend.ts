@@ -174,6 +174,8 @@ export interface Backend {
   transportState(): Promise<TransportState>
 
   engineStatus(): Promise<EngineStatus>
+  /** Desktop host resident bytes; excludes webviews/helpers. Null if unavailable. */
+  processMemory(): Promise<number | null>
   engineDevices(): Promise<AudioHost[]>
   engineConfigure(settings: AudioSettings): Promise<EngineStatus>
   /**

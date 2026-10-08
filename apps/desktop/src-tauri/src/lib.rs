@@ -12,6 +12,7 @@ pub mod events;
 pub mod library;
 pub mod paths;
 pub mod plugins;
+mod process_memory;
 pub mod samples;
 pub mod session;
 pub mod settings;

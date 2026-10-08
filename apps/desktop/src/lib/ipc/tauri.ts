@@ -149,6 +149,7 @@ export function createTauriBackend(): Backend {
     transportState: () => call("transport_state"),
 
     engineStatus: () => call("engine_status"),
+    processMemory: () => call("process_memory"),
     recordingInputs: () => call("recording_inputs"),
     recordingState: () => call("recording_state"),
     recordingStart: (source, start, track) =>

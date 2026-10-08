@@ -324,6 +324,12 @@ fn engine_status(session: State<'_, Session>) -> EngineStatus {
     session.engine_status()
 }
 
+/// OS accounting stays off the async runtime and outside document/audio locks.
+#[tauri::command]
+async fn process_memory() -> Result<Option<u64>, String> {
+    blocking(|| Ok(crate::process_memory::resident_bytes())).await
+}
+
 #[tauri::command]
 async fn engine_devices(session: State<'_, Session>) -> Result<Vec<AudioHost>, String> {
     let session = session.inner().clone();
@@ -709,6 +715,7 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         timeline_region,
         realtime_subscribe,
         engine_status,
+        process_memory,
         engine_devices,
         engine_settings,
         engine_configure,

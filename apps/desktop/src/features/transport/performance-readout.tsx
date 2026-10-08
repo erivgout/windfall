@@ -2,6 +2,7 @@ import { useRef } from "react"
 
 import { useHint } from "@/lib/store/hint"
 import { useRealtime } from "@/lib/store/realtime"
+import { MemoryReadout } from "./memory-readout"
 
 /** Text this small is unreadable if it changes every frame. */
 const REFRESH_MS = 250
@@ -51,6 +52,7 @@ export function PerformanceReadout() {
         </span>
       </span>
       <span ref={late} hidden className="text-warn" />
+      <MemoryReadout />
     </div>
   )
 }

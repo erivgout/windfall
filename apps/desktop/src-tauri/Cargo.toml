@@ -41,6 +41,14 @@ dunce = "1"
 same-file = "1.0.6"
 tempfile = "3"
 
+[target.'cfg(windows)'.dependencies]
+# MIT OR Apache-2.0. Existing locked package; current-process working set only.
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# MIT OR Apache-2.0. Existing locked package; native resident-memory query.
+libc = "0.2.190"
+
 [dev-dependencies]
 # MIT OR Apache-2.0.
 tempfile = "3"

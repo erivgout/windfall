@@ -912,6 +912,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
     transportState: () => ipc(() => transport.state),
 
     engineStatus: () => ipc(() => currentEngine()),
+    processMemory: async () => null,
     recordingInputs: async () => [],
     recordingState: async () => ({
       active: false,
