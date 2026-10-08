@@ -46,6 +46,14 @@ fn guarded_run(
     audio
 }
 
+/// The controller query never destroys native owners under a caller guard.
+/// Tests explicitly collect after their control/document work is complete.
+fn observe_and_retire(controller: &windfall_engine::Controller) {
+    controller.frame();
+    let mut retirement = windfall_engine::ProjectRetirement::default();
+    controller.take_retired(&mut retirement);
+}
+
 #[test]
 fn utility_effects_r3_departing_settled_limiter_keeps_its_compensation_splice() {
     let mut rig = Rig::new();
@@ -226,7 +234,7 @@ fn utility_effects_r3_fixed_stage_removal_before_and_after_matrices_is_allocatio
                         0
                     );
                     residual = residual.max(peak(&out[..2]));
-                    controller.frame();
+                    observe_and_retire(&controller);
                 }
                 for _ in 0..8 {
                     assert_eq!(
@@ -239,14 +247,14 @@ fn utility_effects_r3_fixed_stage_removal_before_and_after_matrices_is_allocatio
                     residual < 1e-6,
                     "fixed removal residual {residual}, hosted {hosted}, place {place}, enabled {enabled}"
                 );
-                controller.frame();
+                observe_and_retire(&controller);
                 controller.set_project(&rig.project, &rig.pool);
                 assert_eq!(
                     crate::realtime::allocator_calls(|| processor.process(&mut out)),
                     0
                 );
                 assert!(peak(&out) < 1e-6);
-                controller.frame();
+                observe_and_retire(&controller);
                 if hosted {
                     assert_eq!(
                         factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
@@ -262,7 +270,7 @@ fn utility_effects_r3_fixed_stage_removal_before_and_after_matrices_is_allocatio
                         crate::realtime::allocator_calls(|| processor.process(&mut out)),
                         0
                     );
-                    controller.frame();
+                    observe_and_retire(&controller);
                     assert_eq!(
                         factory
                             .0
@@ -295,7 +303,7 @@ fn utility_effects_r3_an_intervening_plan_preserves_the_departing_splices_actual
         rig.track_mut(unused).volume = if edit % 2 == 0 { 0.75 } else { 0.5 };
         controller.set_project(&rig.project, &rig.pool);
         audio.extend(guarded_run(&mut processor, 1, 1));
-        controller.frame();
+        observe_and_retire(&controller);
     }
     audio.extend(guarded_run(&mut processor, 1000, 29));
     let step = left(&audio)
@@ -339,7 +347,7 @@ fn utility_effects_r3_unheard_speculative_native_slots_retire_without_activation
         // has never contributed to audio and must not become a departing one.
         controller.set_project(&rig.project, &rig.pool);
         assert!(guarded_run(&mut processor, 7, 7).iter().all(|s| *s == 1.0));
-        controller.frame();
+        observe_and_retire(&controller);
         assert_eq!(controller.latency_frames(), 0);
     }
     assert_eq!(
@@ -396,12 +404,12 @@ fn utility_effects_r3_restored_native_id_uses_a_new_active_owner_not_a_retiring_
             .iter()
             .all(|s| *s == 1.0)
     );
-    controller.frame();
+    observe_and_retire(&controller);
     // A completed departure is omitted by the next control snapshot; its
     // native owner is destroyed when that old state is collected off RT.
     controller.set_project(&rig.project, &rig.pool);
     guarded_run(&mut processor, 137, 137);
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(
         factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
         2
@@ -469,10 +477,10 @@ fn r4_restore_tone(hosted: bool) {
         "restored tone step {step} at {at}, hosted {hosted}"
     );
     if hosted {
-        controller.frame();
+        observe_and_retire(&controller);
         controller.set_project(&rig.project, &rig.pool);
         guarded_run(&mut processor, 137, 137);
-        controller.frame();
+        observe_and_retire(&controller);
         assert_eq!(
             factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
             2
@@ -559,7 +567,7 @@ fn utility_effects_r4_repeated_restore_remove_tones_before_between_after_matrice
                 }
                 controller.set_project(&rig.project, &rig.pool);
                 audio.extend(guarded_run(&mut processor, frames, block));
-                controller.frame();
+                observe_and_retire(&controller);
             }
             let maximum = left(&audio[4000 * 2..])
                 .windows(2)
@@ -579,7 +587,7 @@ fn utility_effects_r4_repeated_restore_remove_tones_before_between_after_matrice
             assert!((audio[audio.len() - 2] - expected).abs() < 1e-6);
             controller.set_project(&rig.project, &rig.pool);
             guarded_run(&mut processor, 137, 137);
-            controller.frame();
+            observe_and_retire(&controller);
             if hosted {
                 let creates = factory.0.creates.load(std::sync::atomic::Ordering::Relaxed);
                 assert_eq!(
@@ -669,7 +677,7 @@ fn utility_effects_r4_restoration_keeps_serial_route_compensation_cancelling() {
                         residual < 1e-6,
                         "restore PDC residual {residual}, hosted {hosted}, place {place}, mix {mix}, enabled {enabled}, restore {restore}, frames {frames}"
                     );
-                    controller.frame();
+                    observe_and_retire(&controller);
                 }
             }
         }
@@ -718,10 +726,10 @@ fn utility_effects_r4_overlapping_restorations_keep_each_serial_splice_clock() {
         "overlapping restored serial clocks residual {residual}"
     );
     assert_eq!(controller.latency_frames(), 176);
-    controller.frame();
+    observe_and_retire(&controller);
     controller.set_project(&rig.project, &rig.pool);
     assert!(peak(&guarded_run(&mut processor, 137, 137)) < 1e-6);
-    controller.frame();
+    observe_and_retire(&controller);
     use std::sync::atomic::Ordering::Relaxed;
     assert_eq!(stats.creates.load(Relaxed), 2);
     assert_eq!(stats.owners[0].drops.load(Relaxed), 1);
@@ -942,10 +950,10 @@ fn utility_effects_r4_revised_native_restoration_routes_controls_and_automation_
         );
         assert_eq!(controller.latency_frames(), 160);
         assert_eq!(stats.owners[0].drops.load(Relaxed), 0);
-        controller.frame();
+        observe_and_retire(&controller);
         controller.set_project(&rig.project, &rig.pool);
         guarded_run(&mut processor, 137, 137);
-        controller.frame();
+        observe_and_retire(&controller);
         assert_eq!(stats.creates.load(Relaxed), 2);
         assert_eq!(stats.owners[0].drops.load(Relaxed), 1);
         assert_eq!(stats.owners[1].drops.load(Relaxed), 0);
@@ -984,7 +992,7 @@ fn utility_effects_r4_superseded_restores_cannot_accumulate_or_activate_native_o
         // outgoing lineage or inherit that owner's native authority.
         controller.set_project(&rig.project, &rig.pool);
         audio.extend(guarded_run(&mut processor, 1, 1));
-        controller.frame();
+        observe_and_retire(&controller);
         let count = stats.creates.load(Relaxed);
         let dropped: usize = stats
             .owners
@@ -1009,7 +1017,7 @@ fn utility_effects_r4_superseded_restores_cannot_accumulate_or_activate_native_o
     );
     controller.set_project(&rig.project, &rig.pool);
     guarded_run(&mut processor, 137, 137);
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(stats.creates.load(Relaxed), 41);
     assert!(
         stats.owners[..41]
@@ -1066,7 +1074,7 @@ fn r5_revision_only_restoration(cancel: bool, revision_frames: usize) {
         );
     }
     audio.extend(revised);
-    controller.frame();
+    observe_and_retire(&controller);
     let slot = rig.remove_effect(id);
     rig.project.plugins.clear();
     controller.set_project(&rig.project, &rig.pool);
@@ -1075,7 +1083,7 @@ fn r5_revision_only_restoration(cancel: bool, revision_frames: usize) {
     rig.project.plugins.push(binding);
     controller.set_project(&rig.project, &rig.pool);
     audio.extend(guarded_run(&mut processor, 1, 1));
-    controller.frame();
+    observe_and_retire(&controller);
     let count = stats.creates.load(Relaxed);
     let dropped: usize = stats
         .owners
@@ -1100,7 +1108,7 @@ fn r5_revision_only_restoration(cancel: bool, revision_frames: usize) {
     }
     controller.set_project(&rig.project, &rig.pool);
     guarded_run(&mut processor, 137, 137);
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(stats.creates.load(Relaxed), 4);
     assert!(
         stats.owners[..3]
@@ -1175,14 +1183,26 @@ fn utility_effects_r5_pending_revisions_keep_latency_changes_and_precompiled_pla
                 .latency_override
                 .store(if edit % 2 == 0 { 64 } else { 32 }, Relaxed);
             stats.revision.fetch_add(1, Relaxed);
-            controller.set_prepared_project(&rig.project, prepared);
+            let mut ready = controller
+                .preparation_snapshot()
+                .prepare(
+                    &rig.project,
+                    prepared.sampler_pool(),
+                    windfall_engine::ProjectPublicationIntent::Edit,
+                )
+                .expect("the restoration fixture has ready native units");
+            let mut retirement = controller
+                .publication(&mut ready)
+                .expect("the restoration fixture is still current")
+                .install();
+            controller.take_retired(&mut retirement);
             assert_eq!(rig.project, unchanged);
             let residual = peak(&guarded_run(&mut processor, 7, 1));
             assert!(
                 residual < 1e-6,
                 "pending revised latency residual {residual}, place {place}, edit {edit}"
             );
-            controller.frame();
+            observe_and_retire(&controller);
             let count = stats.creates.load(Relaxed);
             let dropped: usize = stats
                 .owners
@@ -1207,7 +1227,7 @@ fn utility_effects_r5_pending_revisions_keep_latency_changes_and_precompiled_pla
         assert!(peak(&guarded_run(&mut processor, 1000, 29)) < 1e-6);
         controller.set_project(&rig.project, &rig.pool);
         assert!(peak(&guarded_run(&mut processor, 137, 137)) < 1e-6);
-        controller.frame();
+        observe_and_retire(&controller);
         let count = stats.creates.load(Relaxed);
         assert_eq!(count, 11);
         assert!(
@@ -1255,7 +1275,7 @@ fn utility_effects_r5_superseded_revision_owners_never_process_or_join_departure
         controller.set_project(&rig.project, &rig.pool);
         assert_eq!(rig.project, unchanged);
         audio.extend(guarded_run(&mut processor, 1, 1));
-        controller.frame();
+        observe_and_retire(&controller);
         assert_eq!(stats.owners[superseded].processes.load(Relaxed), 0);
         assert_eq!(stats.owners[superseded].drops.load(Relaxed), 1);
         let count = stats.creates.load(Relaxed);
@@ -1274,7 +1294,7 @@ fn utility_effects_r5_superseded_revision_owners_never_process_or_join_departure
     assert!(step < 0.04, "repeated revision solo step {step}");
     controller.set_project(&rig.project, &rig.pool);
     guarded_run(&mut processor, 137, 137);
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(stats.creates.load(Relaxed), 42);
     assert!(
         stats.owners[..41]
@@ -1328,7 +1348,7 @@ fn utility_effects_r5_revised_native_id_moves_after_departure_without_new_owner_
             .iter()
             .all(|sample| *sample == 1.0)
     );
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(stats.creates.load(Relaxed), 3);
     assert_eq!(stats.owners[0].drops.load(Relaxed), 1);
     assert_eq!(stats.owners[1].drops.load(Relaxed), 1);
@@ -1373,7 +1393,7 @@ fn utility_effects_r3_prepared_native_revision_cannot_be_activated_as_a_departin
             .iter()
             .all(|s| *s == 1.0)
     );
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(
         factory.0.creates.load(std::sync::atomic::Ordering::Relaxed),
         2
@@ -1387,7 +1407,7 @@ fn utility_effects_r3_prepared_native_revision_cannot_be_activated_as_a_departin
     );
     controller.set_project(&rig.project, &rig.pool);
     guarded_run(&mut processor, 7, 7);
-    controller.frame();
+    observe_and_retire(&controller);
     assert_eq!(
         factory.0.drops.load(std::sync::atomic::Ordering::Relaxed),
         2
@@ -1531,7 +1551,7 @@ fn utility_effects_r3_repeated_reference_switches_keep_retained_input_unity() {
                 );
                 remaining -= count;
             }
-            controller.frame();
+            observe_and_retire(&controller);
         }
     }
 }
@@ -1965,7 +1985,7 @@ fn utility_effects_r2_sampler_matrix_and_hosted_delay_keep_pdc_and_plugin_owners
             controller.set_project(&rig.project, &rig.pool);
             assert_eq!(controller.latency_frames(), (ms * 48.0).round() as u32 + 32);
             residual = residual.max(checked(&mut processor, frames, block));
-            controller.frame();
+            observe_and_retire(&controller);
         }
         assert!(
             residual < 1e-6,
@@ -2024,7 +2044,7 @@ fn utility_effects_r2_causal_history_edits_splices_and_retirement_never_use_the_
         calls += crate::realtime::allocator_calls(|| processor.process(&mut out[..frames * 2]));
         assert!(out[..frames * 2].iter().all(|sample| sample.is_finite()));
         // Retired plans and their prepared paths are collected on the control side.
-        controller.frame();
+        observe_and_retire(&controller);
     }
     rig.remove_effect(upstream);
     rig.remove_effect(downstream);
@@ -2032,7 +2052,7 @@ fn utility_effects_r2_causal_history_edits_splices_and_retirement_never_use_the_
     for _ in 0..5 {
         calls += crate::realtime::allocator_calls(|| processor.process(&mut out));
     }
-    controller.frame();
+    observe_and_retire(&controller);
     controller.set_project(&rig.project, &rig.pool);
     calls += crate::realtime::allocator_calls(|| processor.process(&mut out));
     assert_eq!(

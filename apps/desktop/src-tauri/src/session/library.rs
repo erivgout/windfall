@@ -277,16 +277,17 @@ impl Session {
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
-        self.attach_audio_clip_import(import, place, false)
+        self.attach_audio_clip_import(import, place, None)
     }
     pub(super) fn attach_audio_clip_from_file(
         &self,
         path: &str,
         place: ClipPlace,
+        installed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_project(path)?;
-        // recording_stop already owns recording exclusion through attachment.
-        self.attach_audio_clip_import(import, place, true)
+        // recording_stop owns the finishing flag; its mutex is released during preparation.
+        self.attach_audio_clip_import(import, place, Some(installed))
     }
 
     pub fn browser_add_clip(
@@ -296,16 +297,16 @@ impl Session {
         token: LibraryFileToken,
     ) -> Result<DispatchResult, String> {
         let import = self.decode_for_browser(path, token)?;
-        self.attach_audio_clip_import(import, place, false)
+        self.attach_audio_clip_import(import, place, None)
     }
     fn attach_audio_clip_import(
         &self,
         import: Import,
         place: ClipPlace,
-        recording_owned: bool,
+        installed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<DispatchResult, String> {
         let name = paths::stem(&import.file);
-        self.dispatch_import(import, recording_owned, |state, path, sample, buffer| {
+        self.dispatch_import(import, installed, |state, path, sample, buffer| {
             let project = state.document.project();
             let next_id = if project.sample(sample).is_some() {
                 project.next_id
@@ -343,7 +344,7 @@ impl Session {
         place: ClipPlace,
     ) -> Result<DispatchResult, String> {
         let _recording = self.recording_idle()?;
-        let mut state = self.state();
+        let state = self.state();
         let project = state.document.project();
         let asset = project
             .sample(sample)
@@ -360,14 +361,10 @@ impl Session {
             label: Some("Add audio clip".to_owned()),
             commands,
         };
-        let applied = state
-            .document
-            .dispatch(batch, None)
-            .map_err(|error| error.to_string())?;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish(&mut state, &applied.touched),
-        })
+        let ticket = self.sample_edit_ticket(&state, batch, None, Vec::new())?;
+        drop(state);
+        drop(_recording);
+        self.finish_sample_edit(ticket)
     }
 
     fn roots(&self, user: &[String]) -> Vec<BrowserRoot> {
@@ -416,7 +413,7 @@ impl Session {
         then: impl FnOnce(SampleId) -> Command,
     ) -> Result<DispatchResult, String> {
         let name = paths::stem(&import.file);
-        self.dispatch_import(import, false, |_, path, sample, _| Command::Batch {
+        self.dispatch_import(import, None, |_, path, sample, _| Command::Batch {
             label: Some(label.to_owned()),
             commands: vec![Command::AddSample { name, path }, then(sample)],
         })
@@ -427,13 +424,11 @@ impl Session {
     fn dispatch_import(
         &self,
         import: Import,
-        recording_owned: bool,
+        installed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         build: impl FnOnce(&State, SamplePath, SampleId, &AudioBuffer) -> Command,
     ) -> Result<DispatchResult, String> {
         let (ticket, sample, directory) = {
-            let _recording = (!recording_owned)
-                .then(|| self.recording_idle())
-                .transpose()?;
+            let _recording = self.import_recording_guard(installed.is_some())?;
             let _library = import
                 .browser
                 .as_ref()
@@ -462,11 +457,15 @@ impl Session {
             // decode. Clip geometry and prepared banks use what will play.
             let source = state.pool.get(sample).unwrap_or(&import.buffer);
             let command = build(&state, path, sample, source);
-            let ticket =
+            let mut ticket =
                 self.sample_edit_ticket(&state, command, None, vec![(sample, source.clone())])?;
+            if let Some(installed) = &installed {
+                ticket = ticket.on_install(installed.clone());
+            }
             (ticket, sample, state.project_dir().map(Path::to_path_buf))
         };
-        let prepared = ticket.prepare()?;
+        let mut prepared = ticket.prepare()?;
+        let mut retirement = None;
         #[cfg(test)]
         self.pause("import:prepared");
         // Preparation may be slow. Repeat disk/root checks off State/audio
@@ -484,24 +483,47 @@ impl Session {
                 );
             }
         }
-        let _recording = (!recording_owned)
-            .then(|| self.recording_idle())
-            .transpose()?;
-        let _library = import
-            .browser
-            .as_ref()
-            .map(|token| self.inner.library.guard(token))
-            .transpose()?;
-        let mut state = self.state();
-        self.check_import_generation(&state, &import)?;
-        if state.project_dir() != directory.as_deref() {
-            return Err(
+        let result = {
+            let _recording = self.import_recording_guard(installed.is_some())?;
+            let _library = import
+                .browser
+                .as_ref()
+                .map(|token| self.inner.library.guard(token))
+                .transpose()?;
+            let mut state = self.state();
+            self.check_import_generation(&state, &import)?;
+            if state.project_dir() != directory.as_deref() {
+                return Err(
                 "The project folder changed while audio was being prepared. Try the import again."
                     .into(),
             );
+            }
+            self.check_loaded_import(&state, sample, &import.buffer, &import.file)?;
+            prepared.commit(&mut state, &mut retirement)
+        };
+        if let Some(retirement) = &mut retirement {
+            self.retire_project(retirement);
         }
-        self.check_loaded_import(&state, sample, &import.buffer, &import.file)?;
-        prepared.commit(&mut state)
+        result
+    }
+
+    fn import_recording_guard(
+        &self,
+        finishing: bool,
+    ) -> Result<std::sync::MutexGuard<'_, Option<super::recording::Take>>, String> {
+        if !finishing {
+            return self.recording_idle();
+        }
+        let guard = crate::sync::lock(&self.inner.recording);
+        if guard.is_some()
+            || !self
+                .inner
+                .recording_finishing
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("Recording completion ownership changed.".into());
+        }
+        Ok(guard)
     }
 
     fn check_import_generation(&self, state: &State, import: &Import) -> Result<(), String> {

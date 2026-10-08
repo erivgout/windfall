@@ -24,8 +24,9 @@
 //!    disk in the order their copies were taken; `configuring` is held while
 //!    the audio device is reopened. Nothing is held when either is taken,
 //!    and no thread holds both.
-//! 2. `state`, the document lock.
-//! 3. `transport`, the sample cache and the engine's controller, each for a
+//! 2. `recording`, before `state`, for capture exclusion and final admission.
+//! 3. `state`, the document lock.
+//! 4. `transport`, the sample cache and the engine's controller, each for a
 //!    moment, under `state` or alone.
 //!
 //! `preview` is held only around handing a preview to the controller.
@@ -35,17 +36,23 @@
 //!
 //! Who takes what:
 //!
-//! - Edits, undo and the transport: `state`, then `transport`.
+//! - Checked edits/history/imports: recording -> State for a snapshot, no
+//!   recording/State/controller guard during native/DSP preparation, then
+//!   recording -> State -> borrowed controller lease before Document mutation.
+//!   Ready install is infallible; candidate/old-state retirement follows guards.
+//! - Transport: `state`, then `transport`.
 //! - Save and backup (the autosave thread): `save`, then `state` to copy
 //!   the project, nothing but `save` while the file is written, then
 //!   `state` again; `settings` once `save` is released.
 //! - New and open: `state` to take a ticket, no lock while the file is read
-//!   and decoded, then `state` to swap the project in; `settings` after.
+//!   and decoded/prepared, then recording -> State -> ready lease to swap the
+//!   project in; retirement and `settings` after admission guards.
 //! - The sample loader, file imports and sample reload: no lock while
-//!   decoding, then `state`.
+//!   decoding/preparing, then recording -> State -> borrowed ready lease.
 //! - Export: `state` to copy the project, then no lock at all on its own
 //!   thread.
-//! - The realtime thread: `subscribers`, then `transport`, and once a second
+//! - The realtime thread: captures and releases bounded retirement alone, then
+//!   `subscribers`, then `transport`, and once a second
 //!   `status`. It never takes `state`, so no slow edit can stall the meters.
 //! - Reopening the audio device: `configuring` throughout, `settings`, then
 //!   `state` to hand the project to the new stream, then `status`.
@@ -257,18 +264,55 @@ impl State {
 
 impl Session {
     pub fn install_plugins(&self, manager: Arc<crate::plugins::PluginManager>) {
-        self.state()
-            .pool
-            .set_plugin_factory(manager.runtime.clone());
-        *lock(&self.inner.plugins) = Some(manager);
+        let old_pool = {
+            let mut state = self.state();
+            let old = state.pool.clone();
+            state.pool.set_plugin_factory(manager.runtime.clone());
+            old
+        };
+        let old_manager = lock(&self.inner.plugins).replace(manager);
+        drop(old_manager);
+        drop(old_pool);
     }
     pub fn refresh_plugins(&self) -> Result<(), String> {
-        let _recording = self.recording_idle()?;
-        let state = self.state();
-        if let Some(manager) = &*lock(&self.inner.plugins) {
-            manager.runtime.retry();
+        let runtime = lock(&self.inner.plugins)
+            .as_ref()
+            .map(|manager| manager.runtime.clone());
+        let staged = runtime.as_ref().map(|runtime| runtime.prepare_document());
+        let (project, mut pool, preparation) = {
+            let _recording = self.recording_idle()?;
+            let state = self.state();
+            (
+                state.document.project().clone(),
+                state.pool.clone(),
+                self.project_preparation(&state),
+            )
+        };
+        if let Some(staged) = &staged {
+            pool.set_plugin_factory(staged.clone());
         }
-        self.push_project(&state);
+        let mut prepared = preparation
+            .prepare(
+                &project,
+                &pool,
+                windfall_engine::ProjectPublicationIntent::Edit,
+            )
+            .map_err(|error| error.to_string())?;
+        let retirement;
+        {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            let pool = prepared.pool().clone();
+            let lease = prepared.publication(self, &state)?;
+            retirement = lease.install();
+            if let Some(staged) = &staged {
+                staged.install_document();
+            }
+            state.pool.install_sampler_preparation(&pool);
+            self.sync_transport();
+        }
+        let mut retirement = retirement;
+        self.retire_project(&mut retirement);
         Ok(())
     }
     /// Owns recording exclusion while native plugin control work runs.

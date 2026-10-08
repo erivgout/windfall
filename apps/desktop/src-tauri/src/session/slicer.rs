@@ -105,7 +105,7 @@ impl Session {
     }
 
     pub fn slice_apply(&self, token: u32, markers: Vec<u32>) -> Result<DispatchResult, String> {
-        let (review, mut document, pool) = {
+        let (review, mut document, pool, preparation) = {
             let _recording = self.recording_idle()?;
             let state = self.state();
             let review = state
@@ -114,7 +114,12 @@ impl Session {
                 .filter(|r| r.review.token == token)
                 .ok_or("This slice review expired. Analyze the clip again.")?;
             review.check(&state)?;
-            (review, state.document.clone(), state.pool.clone())
+            (
+                review,
+                state.document.clone(),
+                state.pool.clone(),
+                self.project_preparation(&state),
+            )
         };
         if markers.iter().any(|tick| {
             !review
@@ -136,41 +141,58 @@ impl Session {
         document
             .dispatch(command.clone(), None)
             .map_err(|e| e.to_string())?;
-        let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool)
+        let mut prepared = preparation
+            .prepare(
+                document.project(),
+                &pool,
+                windfall_engine::ProjectPublicationIntent::Edit,
+            )
             .map_err(|error| error.to_string())?;
+        let retirement;
         #[cfg(test)]
         self.pause("slice:prepared");
-        let _recording = self.recording_idle()?;
-        let mut state = self.state();
-        review.check(&state)?;
-        if state
-            .slice_review
-            .as_ref()
-            .is_none_or(|r| r.review.token != token)
-        {
-            return Err("This slice review expired. Analyze the clip again.".into());
-        }
-        // Other source reloads can invalidate the compiled playback plan too.
-        if state.pool.iter().any(|(id, now)| {
-            pool.get(id)
-                .is_none_or(|old| old.samples().as_ptr() != now.samples().as_ptr())
-        }) || pool.iter().any(|(id, old)| {
-            state
-                .pool
-                .get(id)
-                .is_none_or(|now| old.samples().as_ptr() != now.samples().as_ptr())
-        }) {
-            return Err("A source changed while slices were being prepared. Analyze again.".into());
-        }
-        let applied = state
-            .document
-            .dispatch(command, None)
-            .map_err(|e| e.to_string())?;
-        state.slice_review = None;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish_prepared(&mut state, &applied.touched, prepared),
-        })
+        let result = {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            review.check(&state)?;
+            if state
+                .slice_review
+                .as_ref()
+                .is_none_or(|r| r.review.token != token)
+            {
+                return Err("This slice review expired. Analyze the clip again.".into());
+            }
+            // Other source reloads can invalidate the compiled playback plan too.
+            if state.pool.iter().any(|(id, now)| {
+                pool.get(id)
+                    .is_none_or(|old| old.samples().as_ptr() != now.samples().as_ptr())
+            }) || pool.iter().any(|(id, old)| {
+                state
+                    .pool
+                    .get(id)
+                    .is_none_or(|now| old.samples().as_ptr() != now.samples().as_ptr())
+            }) {
+                return Err(
+                    "A source changed while slices were being prepared. Analyze again.".into(),
+                );
+            }
+            let pool = prepared.pool().clone();
+            let lease = prepared.publication(self, &state)?;
+            let applied = state
+                .document
+                .dispatch(command, None)
+                .map_err(|e| e.to_string())?;
+            self.commit_prepared_parameters(&state, &applied.touched);
+            retirement = lease.install();
+            state.slice_review = None;
+            Ok(DispatchResult {
+                created: applied.created,
+                patch: self.publish_prepared(&mut state, &applied.touched, &pool),
+            })
+        };
+        let mut retirement = retirement;
+        self.retire_project(&mut retirement);
+        result
     }
 
     pub fn slice_discard(&self, token: u32) {

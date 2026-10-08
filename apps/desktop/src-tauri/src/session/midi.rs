@@ -58,28 +58,41 @@ impl Session {
     /// Appends the reviewed plan as one checked undo step. Sample changes go
     /// through the ordinary pool loader, including factory drum mappings.
     pub fn import_midi(&self, token: u32) -> Result<DispatchResult, String> {
-        let _recording = self.recording_idle()?;
-        let mut state = self.state();
-        let prepared = state
-            .midi_import
-            .as_ref()
-            .filter(|p| p.token == token)
-            .ok_or("This MIDI preview has expired. Review the file again.")?;
-        if prepared.generation != state.generation {
-            return Err(PROJECT_REPLACED.to_owned());
+        let ticket = {
+            let _recording = self.recording_idle()?;
+            let state = self.state();
+            let reviewed = state
+                .midi_import
+                .as_ref()
+                .filter(|p| p.token == token)
+                .ok_or("This MIDI preview has expired. Review the file again.")?;
+            if reviewed.generation != state.generation {
+                return Err(PROJECT_REPLACED.to_owned());
+            }
+            let command = reviewed.plan.command(state.document.project());
+            let mut trial = state.document.clone();
+            trial
+                .dispatch(command.clone(), None)
+                .map_err(|error| error.to_string())?;
+            trial.project().check().map_err(|error| error.to_string())?;
+            self.sample_edit_ticket(&state, command, None, Vec::new())?
+        };
+        let mut prepared = ticket.prepare()?;
+        let mut retirement = None;
+        let result = {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            if state.midi_import.as_ref().is_none_or(|p| p.token != token) {
+                return Err("This MIDI preview has expired. Review the file again.".into());
+            }
+            let result = prepared.commit(&mut state, &mut retirement)?;
+            state.midi_import = None;
+            result
+        };
+        if let Some(retirement) = &mut retirement {
+            self.retire_project(retirement);
         }
-        let command = prepared.plan.command(state.document.project());
-        let mut trial = state.document.clone();
-        let applied = trial
-            .dispatch(command, None)
-            .map_err(|error| error.to_string())?;
-        trial.project().check().map_err(|error| error.to_string())?;
-        state.document = trial;
-        state.midi_import = None;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish(&mut state, &applied.touched),
-        })
+        Ok(result)
     }
 
     /// Releases a cancelled review without changing the project.

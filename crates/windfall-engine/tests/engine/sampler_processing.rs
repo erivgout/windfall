@@ -337,6 +337,9 @@ fn sampler_reload_evicts_cache_but_old_voice_bank_stays_charged_until_control_re
     controller.note_off(channel, 60);
     run(&mut processor, 1000, 31);
     controller.transport();
+    let mut retirement = windfall_engine::ProjectRetirement::default();
+    controller.take_retired(&mut retirement);
+    drop(retirement);
     assert_eq!(rig.pool.sampler_retained_bytes(), one);
     controller.note_on(channel, 60, 1.0);
     assert!(

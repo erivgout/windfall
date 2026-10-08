@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windfall_core::{AudioBuffer, samples_per_tick};
-use windfall_engine::{Controller, audio_edit};
+use windfall_engine::audio_edit;
 use windfall_ipc::{AudioEditOperation, AudioEditPreview, AudioEditRequest};
 use windfall_project::{
     AutomationTarget, Clip, ClipContent, ClipId, ClipInit, Command, DispatchResult, MAX_SONG_TICKS,
@@ -153,7 +153,7 @@ impl Session {
             .as_ref()
             .filter(|p| p.token == request.token)
             .ok_or("This audio editor has expired. Reopen it.")?;
-        let (mut document, mut pool, generation, edits) = {
+        let (mut document, mut pool, generation, edits, preparation) = {
             let _recording = self.recording_idle()?;
             let state = self.state();
             if !prepared.valid(&state) {
@@ -164,6 +164,7 @@ impl Session {
                 state.pool.clone(),
                 state.generation,
                 state.edits,
+                self.project_preparation(&state),
             )
         };
         let output = audio_edit::edit(
@@ -274,39 +275,51 @@ impl Session {
             .dispatch(command.clone(), None)
             .map_err(|e| e.to_string())?;
         pool.insert(sample, decoded.clone());
-        let plan = Controller::prepare_project(document.project(), &pool)
+        let mut plan = preparation
+            .prepare(
+                document.project(),
+                &pool,
+                windfall_engine::ProjectPublicationIntent::Edit,
+            )
             .map_err(|error| error.to_string())?;
+        let retirement;
         #[cfg(test)]
         self.pause("audio-editor:prepared");
-        let _recording = self.recording_idle()?;
-        let mut state = self.state();
-        if state.generation != generation
-            || state.edits != edits
-            || !prepared.valid(&state)
-            || state
-                .pool
-                .iter()
-                .any(|(id, now)| pool.get(id).is_none_or(|old| !same_audio(now, old)))
-            || pool.iter().any(|(id, old)| {
-                id != sample && state.pool.get(id).is_none_or(|now| !same_audio(now, old))
-            })
-        {
-            return Err(STALE.into());
-        }
-        let applied = state
-            .document
-            .dispatch(command, None)
-            .map_err(|e| e.to_string())?;
-        state.pool.insert(sample, decoded);
-        state.loaded.insert(sample);
-        state.failed.remove(&sample);
-        let result = DispatchResult {
-            created: applied.created,
-            patch: self.publish_prepared(&mut state, &applied.touched, plan),
+        let result = {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            if state.generation != generation
+                || state.edits != edits
+                || !prepared.valid(&state)
+                || state
+                    .pool
+                    .iter()
+                    .any(|(id, now)| pool.get(id).is_none_or(|old| !same_audio(now, old)))
+                || pool.iter().any(|(id, old)| {
+                    id != sample && state.pool.get(id).is_none_or(|now| !same_audio(now, old))
+                })
+            {
+                return Err(STALE.into());
+            }
+            let pool = plan.pool().clone();
+            let lease = plan.publication(self, &state)?;
+            let applied = state
+                .document
+                .dispatch(command, None)
+                .map_err(|e| e.to_string())?;
+            self.commit_prepared_parameters(&state, &applied.touched);
+            retirement = lease.install();
+            state.pool.insert(sample, decoded);
+            state.loaded.insert(sample);
+            state.failed.remove(&sample);
+            owned.0 = PathBuf::new(); // Doc + exact ready install now own the persistent source
+            DispatchResult {
+                created: applied.created,
+                patch: self.publish_prepared(&mut state, &applied.touched, &pool),
+            }
         };
-        owned.0 = PathBuf::new(); // successful installation owns the persistent file
-        drop(state);
-        drop(_recording);
+        let mut retirement = retirement;
+        self.retire_project(&mut retirement);
         editor.prepared = None;
         Ok(result)
     }

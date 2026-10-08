@@ -18,9 +18,9 @@ use crate::state::PlanState;
 /// Messages the control side can have waiting for the audio thread.
 pub(crate) const MESSAGE_CAPACITY: usize = 1024;
 
-/// Room for retired values. Handling one message retires at most two, and
-/// the control side empties this queue before it sends, so it cannot fill
-/// up while the control side keeps talking.
+/// Room for retired values. Handling one message retires at most two. The
+/// control side explicitly captures garbage into an outer retirement carrier;
+/// a full queue delays serial message adoption until that collection happens.
 pub(crate) const GARBAGE_CAPACITY: usize = 4 * MESSAGE_CAPACITY;
 
 /// Free garbage slots the audio thread wants before it takes a message.

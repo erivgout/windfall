@@ -7,7 +7,7 @@ impl Session {
         drop(self.recording_idle()?);
         let mut targets = Vec::new();
         clip_targets(&command, &mut targets)?;
-        let (mut document, pool, generation, edits, replacements, loading) = {
+        let (mut document, pool, generation, edits, replacements, loading, preparation) = {
             let state = self.state();
             (
                 state.document.clone(),
@@ -16,6 +16,7 @@ impl Session {
                 state.edits,
                 state.replacements,
                 state.loading.clone(),
+                self.project_preparation(&state),
             )
         };
         document
@@ -40,32 +41,49 @@ impl Session {
                 })?;
             }
         }
-        let prepared = windfall_engine::Controller::prepare_project(document.project(), &pool)
+        let mut prepared = preparation
+            .prepare(
+                document.project(),
+                &pool,
+                windfall_engine::ProjectPublicationIntent::Edit,
+            )
             .map_err(|error| error.to_string())?;
+        let retirement;
         #[cfg(test)]
         self.pause("clip:prepared");
-        let _recording = self.recording_idle()?;
-        let mut state = self.state();
-        if state.generation != generation
-            || state.edits != edits
-            || state.replacements != replacements
-        {
-            return Err(
-                "The project changed while audio was being prepared. Try again.".to_owned(),
-            );
-        }
-        // A reload can replace the source without editing the document.
-        if !pool.same_sources(&state.pool) || state.loading != loading {
-            return Err("The sample changed while audio was being prepared. Try again.".to_owned());
-        }
-        let applied = state
-            .document
-            .dispatch(command, None)
-            .map_err(|e| e.to_string())?;
-        Ok(DispatchResult {
-            created: applied.created,
-            patch: self.publish_prepared(&mut state, &applied.touched, prepared),
-        })
+        let result = {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            if state.generation != generation
+                || state.edits != edits
+                || state.replacements != replacements
+            {
+                return Err(
+                    "The project changed while audio was being prepared. Try again.".to_owned(),
+                );
+            }
+            // A reload can replace the source without editing the document.
+            if !pool.same_sources(&state.pool) || state.loading != loading {
+                return Err(
+                    "The sample changed while audio was being prepared. Try again.".to_owned(),
+                );
+            }
+            let pool = prepared.pool().clone();
+            let lease = prepared.publication(self, &state)?;
+            let applied = state
+                .document
+                .dispatch(command, None)
+                .map_err(|e| e.to_string())?;
+            self.commit_prepared_parameters(&state, &applied.touched);
+            retirement = lease.install();
+            Ok(DispatchResult {
+                created: applied.created,
+                patch: self.publish_prepared(&mut state, &applied.touched, &pool),
+            })
+        };
+        let mut retirement = retirement;
+        self.retire_project(&mut retirement);
+        result
     }
     pub fn detect_clip_tempo(&self, sample: SampleId) -> Result<Vec<ClipTempoCandidate>, String> {
         let audio = self
@@ -128,8 +146,8 @@ impl Session {
         }
     }
     fn refresh_clip_plan(&self) {
-        loop {
-            let (project, pool, generation, edits, replacements) = {
+        for _ in 0..8 {
+            let (project, pool, generation, edits, replacements, preparation) = {
                 let state = self.state();
                 (
                     state.document.project().clone(),
@@ -137,6 +155,7 @@ impl Session {
                     state.generation,
                     state.edits,
                     state.replacements,
+                    self.project_preparation(&state),
                 )
             };
             if pool.needs_sampler_preparation(&project) {
@@ -149,7 +168,11 @@ impl Session {
                 self.push_project(&state);
                 return;
             }
-            let prepared = match windfall_engine::Controller::prepare_project(&project, &pool) {
+            let mut prepared = match preparation.prepare(
+                &project,
+                &pool,
+                windfall_engine::ProjectPublicationIntent::Edit,
+            ) {
                 Ok(prepared) => prepared,
                 Err(error) => {
                     self.emit(crate::events::Event::ProjectWarnings(vec![
@@ -163,25 +186,52 @@ impl Session {
             };
             #[cfg(test)]
             self.pause("clip:background-prepared");
-            let mut state = self.state();
-            if state.generation != generation
-                || state.edits != edits
-                || state.replacements != replacements
-                || !state.pool.same_sources(&pool)
+            let retirement;
             {
-                continue;
+                let _recording = match self.recording_idle() {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        self.emit(crate::events::Event::ProjectWarnings(vec![
+                            error.to_string(),
+                        ]));
+                        break;
+                    }
+                };
+                let mut state = self.state();
+                if state.generation != generation
+                    || state.edits != edits
+                    || state.replacements != replacements
+                    || !state.pool.same_sources(&pool)
+                {
+                    continue;
+                }
+                let pool = prepared.pool().clone();
+                let lease = match prepared.publication(self, &state) {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        self.emit(crate::events::Event::ProjectWarnings(vec![
+                            error.to_string(),
+                        ]));
+                        break;
+                    }
+                };
+                retirement = lease.install();
+                state.pool.install_sampler_preparation(&pool);
+                self.sync_transport();
+                // Clear under state, so an edit after installation can queue the next job.
+                self.inner
+                    .preparing_clips
+                    .store(false, std::sync::atomic::Ordering::Release);
             }
-            state
-                .pool
-                .install_sampler_preparation(prepared.sampler_pool());
-            self.controller()
-                .set_prepared_project(state.document.project(), prepared);
-            self.sync_transport();
-            // Clear under state, so an edit after installation can queue the next job.
-            self.inner
-                .preparing_clips
-                .store(false, std::sync::atomic::Ordering::Release);
+            let mut retirement = retirement;
+            self.retire_project(&mut retirement);
             return;
         }
+        self.inner
+            .preparing_clips
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.emit(crate::events::Event::ProjectWarnings(vec![
+            "Project audio preparation was refused or superseded. Reload samples to retry.".into(),
+        ]));
     }
 }

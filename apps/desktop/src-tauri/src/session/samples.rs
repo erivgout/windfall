@@ -83,16 +83,6 @@ fn decode(cache: &SampleCache, file: &Path) -> Result<AudioBuffer, String> {
 }
 
 impl Session {
-    /// Brings the pool in line with the project after an edit that touched
-    /// its samples: drops what is gone and loads what is new.
-    ///
-    /// Runs under the session lock, so it only takes audio that is already
-    /// decoded. Files not seen before are decoded on another thread, and
-    /// their channels are silent until that is done.
-    pub(super) fn sync_samples(&self, state: &mut State) {
-        self.sync_sample_sources(state, None);
-    }
-
     /// A prepared publication must attach the exact handles it compiled, never
     /// fetch a newer cache entry between validation and plan installation.
     pub(super) fn sync_prepared_samples(&self, state: &mut State, prepared: &SamplePool) {
@@ -252,36 +242,114 @@ impl Session {
         #[cfg(test)]
         self.pause("samples:decoded");
 
-        let mut state = self.state();
         let missing = |state: &State| u32::try_from(state.failed.len()).unwrap_or(u32::MAX);
-        if state.generation != generation {
-            return missing(&state);
-        }
-        let mut changed = false;
-        for (id, result) in results {
-            state.loading.remove(&id);
-            // The edit that added the sample may have been undone meanwhile.
-            if state.document.project().sample(id).is_none() {
-                continue;
-            }
-            match result {
-                Ok(buffer) => {
-                    state.pool.insert(id, buffer);
-                    state.loaded.insert(id);
+        for _ in 0..8 {
+            let (project, mut pool, preparation) = {
+                let state = self.state();
+                if state.generation != generation {
+                    return missing(&state);
+                }
+                (
+                    state.document.project().clone(),
+                    state.pool.clone(),
+                    self.project_preparation(&state),
+                )
+            };
+            let mut changed = false;
+            for (id, result) in &results {
+                if project.sample(*id).is_some()
+                    && let Ok(buffer) = result
+                {
+                    pool.insert(*id, buffer.clone());
                     changed = true;
                 }
-                Err(warning) => {
-                    state.failed.insert(id);
-                    warnings.push(warning);
+            }
+            let prepared = if changed || push {
+                match preparation.prepare(
+                    &project,
+                    &pool,
+                    windfall_engine::ProjectPublicationIntent::Edit,
+                ) {
+                    Ok(ready) => Some(ready),
+                    Err(error) => {
+                        warnings.push(error.to_string());
+                        break;
+                    }
+                }
+            } else {
+                None
+            };
+            let mut prepared = prepared;
+            let mut retirement = None;
+            let count = {
+                let _recording = match self.recording_idle() {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        warnings.push(error.to_string());
+                        break;
+                    }
+                };
+                let mut state = self.state();
+                if state.generation != generation {
+                    return missing(&state);
+                }
+                if let Some(prepared) = &mut prepared {
+                    let pool = prepared.pool().clone();
+                    let lease = match prepared.publication(self, &state) {
+                        Ok(lease) => lease,
+                        Err(error) => {
+                            warnings.push(error.to_string());
+                            continue;
+                        }
+                    };
+                    retirement = Some(lease.install());
+                    state.pool = pool;
+                }
+                for (id, result) in &results {
+                    state.loading.remove(id);
+                    if state.document.project().sample(*id).is_none() {
+                        continue;
+                    }
+                    match result {
+                        Ok(_) => {
+                            state.loaded.insert(*id);
+                            state.failed.remove(id);
+                        }
+                        Err(warning) => {
+                            state.failed.insert(*id);
+                            warnings.push(warning.clone());
+                        }
+                    }
+                }
+                self.sync_transport();
+                missing(&state)
+            };
+            if let Some(retirement) = &mut retirement {
+                self.retire_project(retirement);
+            }
+            if !warnings.is_empty() {
+                self.emit(Event::ProjectWarnings(warnings));
+            }
+            return count;
+        }
+        // Refusal leaves the old pool/plan untouched. Release only this load's
+        // pending flags, making a visible failed load eligible for manual retry.
+        let count = {
+            let mut state = self.state();
+            if state.generation != generation {
+                return missing(&state);
+            }
+            for (id, _) in &results {
+                state.loading.remove(id);
+                if state.document.project().sample(*id).is_some() {
+                    state.failed.insert(*id);
                 }
             }
-        }
-        if changed || push {
-            self.push_project(&state);
-        }
-        if !warnings.is_empty() {
-            self.emit(Event::ProjectWarnings(warnings));
-        }
-        missing(&state)
+            missing(&state)
+        };
+        warnings
+            .push("Sample publication was refused or superseded. Reload samples to retry.".into());
+        self.emit(Event::ProjectWarnings(warnings));
+        count
     }
 }

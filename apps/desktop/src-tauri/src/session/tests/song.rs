@@ -956,9 +956,11 @@ fn uncached_clip_publications_prepare_off_lock_and_install_the_latest_edit() {
         .add_audio_clip_from_file(&factory_file("Bass/Bass Sub.wav"), new_tracks(0))
         .unwrap();
     let clip = *added.created.last().unwrap();
-    let hold = session.hold("clip:background-prepared");
-    session.dispatch(spectral_command(clip), None).unwrap();
+    let before = session.document_snapshot();
+    let hold = session.hold("sampler:prepared");
+    let work = session.background(move |session| session.dispatch(spectral_command(clip), None));
     hold.wait();
+    assert_eq!(session.document_snapshot(), before);
     session
         .dispatch(
             Command::UpdateAudioClips {
@@ -973,7 +975,16 @@ fn uncached_clip_publications_prepare_off_lock_and_install_the_latest_edit() {
             None,
         )
         .unwrap();
+    let edited = session.document_snapshot();
     hold.release();
+    assert!(
+        work.join()
+            .unwrap()
+            .unwrap_err()
+            .contains("project changed")
+    );
+    assert_eq!(session.document_snapshot(), edited);
+    session.dispatch(spectral_command(clip), None).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while session
         .inner

@@ -65,6 +65,9 @@ pub(super) enum Refusal {
     Edited,
     Cancelled,
     SamplerPreparation,
+    NativePreparation,
+    ProjectPreparation,
+    EngineChanged,
 }
 
 impl Refusal {
@@ -73,8 +76,17 @@ impl Refusal {
     pub(super) fn message(self, what: &str) -> String {
         match self {
             Refusal::Cancelled => "Project archive cancelled.".into(),
-            Refusal::SamplerPreparation => format!(
-                "{what}: sampler preparation failed. Reduce its duration/key range or let retained voices retire; see the project warning."
+            Refusal::SamplerPreparation => {
+                format!("{what}: sampler preparation failed; see the project warning.")
+            }
+            Refusal::NativePreparation => {
+                format!("{what}: native plugin preparation failed; see the project warning.")
+            }
+            Refusal::ProjectPreparation => {
+                format!("{what}: project preparation failed; see the project warning.")
+            }
+            Refusal::EngineChanged => format!(
+                "{what}: engine readiness changed before publication. Try again; see the project warning."
             ),
             Refusal::Recording => "Stop or cancel recording before replacing the project.".into(),
             Refusal::Superseded => {
@@ -430,27 +442,14 @@ impl Session {
         if let Some(staged) = &staged {
             decoded.pool.set_plugin_factory(staged.clone());
         }
-        decoded.pool.share_sampler_budget(&self.state().pool);
-        let prepared =
-            windfall_engine::Controller::prepare_project(document.project(), &decoded.pool)
-                .map_err(|error| {
-                    self.emit(Event::ProjectWarnings(vec![error.to_string()]));
-                    Refusal::SamplerPreparation
-                })?;
-        #[cfg(test)]
-        if ticket.cancelled.is_some() {
-            self.pause("archive:install");
-        }
-        #[cfg(test)]
-        self.pause("sampler:install-prepared");
-        let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
-        let mut state = self.state();
-        if ticket
-            .cancelled
-            .as_ref()
-            .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+        let (baseline_pool, preparation) = {
+            let state = self.state();
+            (state.pool.clone(), self.project_preparation(&state))
+        };
+        if staged.is_none()
+            && let Some(factory) = baseline_pool.plugin_factory()
         {
-            return Err(Refusal::Cancelled);
+            decoded.pool.set_plugin_factory(factory);
         }
         if state.replacements != ticket.request || state.generation != ticket.generation {
             return Err(Refusal::Superseded);
@@ -467,8 +466,6 @@ impl Session {
         let transport = match played {
             Some(played) => TransportPatch {
                 mode: Some(played.mode),
-                // A pattern the project does not have is one a hand-edited
-                // file made up.
                 pattern: played
                     .pattern
                     .filter(|id| project.pattern(*id).is_some())
@@ -481,13 +478,31 @@ impl Session {
                 loop_song: None,
             },
         };
+        let mut prepared = preparation
+            .prepare(
+                project,
+                &decoded.pool,
+                windfall_engine::ProjectPublicationIntent::Replace { transport },
+            )
+            .map_err(|error| {
+                let refusal = match &error {
+                    windfall_engine::ProjectPreparationError::Sampler(_) => {
+                        Refusal::SamplerPreparation
+                    }
+                    windfall_engine::ProjectPreparationError::Native { .. } => {
+                        Refusal::NativePreparation
+                    }
+                    _ => Refusal::ProjectPreparation,
+                };
+                self.emit(Event::ProjectWarnings(vec![error.to_string()]));
+                refusal
+            })?;
+        let preparation_pool = prepared.pool().clone();
+        decoded.pool.install_sampler_preparation(prepared.pool());
         if let Some(runtime) = runtime {
             decoded.pool.set_plugin_factory(runtime);
         }
-        decoded
-            .pool
-            .install_sampler_preparation(prepared.sampler_pool());
-        *state = State {
+        let mut candidate = Some(State {
             midi_target: None,
             document,
             path: save_to,
@@ -496,11 +511,11 @@ impl Session {
             loaded: decoded.loaded,
             loading: HashSet::new(),
             failed: decoded.failed,
-            generation: state.generation + 1,
+            generation: 0,
             edits: 0,
-            replacements: state.replacements,
+            replacements: 0,
             midi_import: None,
-            midi_ticket: state.midi_ticket,
+            midi_ticket: 0,
             slice_review: None,
             slice_ticket: state.slice_ticket,
         };
@@ -509,16 +524,118 @@ impl Session {
         if let Some(staged) = staged {
             staged.install_document();
         }
-        controller.set_transport(transport);
-        controller.seek(0.0);
-
-        let snapshot = state.document.snapshot(state.path_text());
-        self.emit(Event::ProjectLoaded(snapshot.clone()));
-        self.announce_transport();
-        if !decoded.warnings.is_empty() {
-            self.emit(Event::ProjectWarnings(decoded.warnings));
+        #[cfg(test)]
+        self.pause("sampler:install-prepared");
+        for attempt in 0..8 {
+            let mut next = None;
+            let admitted = {
+                let _recording = self.recording_idle().map_err(|_| Refusal::Recording)?;
+                let mut state = self.state();
+                if ticket
+                    .cancelled
+                    .as_ref()
+                    .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
+                {
+                    return Err(Refusal::Cancelled);
+                }
+                if state.replacements != ticket.request || state.generation != ticket.generation {
+                    return Err(Refusal::Superseded);
+                }
+                if state.edits != ticket.edits {
+                    return Err(Refusal::Edited);
+                }
+                let generation = state.generation.checked_add(1).ok_or(Refusal::Superseded)?;
+                let publication = match prepared.publication(self, &state) {
+                    Ok(lease) => {
+                        let mut candidate = candidate.take().expect("uncommitted replacement");
+                        candidate.generation = generation;
+                        candidate.replacements = state.replacements;
+                        candidate.midi_ticket = state.midi_ticket;
+                        candidate.slice_ticket = state.slice_ticket;
+                        old_state = Some(std::mem::replace(&mut *state, candidate));
+                        retirement = Some(lease.install());
+                        if let Some(staged) = &staged {
+                            staged.install_document();
+                        }
+                        let snapshot = state.document.snapshot(state.path_text());
+                        self.emit(Event::ProjectLoaded(snapshot.clone()));
+                        self.announce_transport();
+                        if !decoded.warnings.is_empty() {
+                            self.emit(Event::ProjectWarnings(std::mem::take(
+                                &mut decoded.warnings,
+                            )));
+                        }
+                        Ok(snapshot)
+                    }
+                    Err(error) => Err(error),
+                };
+                match publication {
+                    Ok(snapshot) => Some(snapshot),
+                    Err(error) => {
+                        // A source reload/background ready publication does not
+                        // edit this document. Recapture only the same immutable
+                        // stream/provider environment, never install a stale token.
+                        if attempt < 7 {
+                            next = prepared.refresh(self, &state, &error);
+                        }
+                        self.emit(Event::ProjectWarnings(vec![error.to_string()]));
+                        if next.is_none() {
+                            if attempt == 7 {
+                                self.emit(Event::ProjectWarnings(vec![
+                                    "Replacement audio readiness retry limit (8 attempts) reached; project unchanged.".into(),
+                                ]));
+                            }
+                            return Err(Refusal::EngineChanged);
+                        }
+                        None
+                    }
+                }
+            };
+            if let Some(snapshot) = admitted {
+                // Outer owners survive all guards, also during panic unwinding.
+                drop(old_state);
+                if let Some(retirement) = &mut retirement {
+                    self.retire_project(retirement);
+                }
+                return Ok(snapshot);
+            }
+            // A refused candidate cannot be selected/captured. Drop it before
+            // starting any fresh native constructor, outside every guard.
+            drop(prepared);
+            self.emit(Event::ProjectWarnings(vec![
+                "The source snapshot refreshed; retrying replacement audio preparation.".into(),
+            ]));
+            prepared = next
+                .expect("retry admitted")
+                .prepare(
+                    candidate
+                        .as_ref()
+                        .expect("uncommitted replacement")
+                        .document
+                        .project(),
+                    &preparation_pool,
+                    windfall_engine::ProjectPublicationIntent::Replace { transport },
+                )
+                .map_err(|error| {
+                    let refusal = match &error {
+                        windfall_engine::ProjectPreparationError::Sampler(_) => {
+                            Refusal::SamplerPreparation
+                        }
+                        windfall_engine::ProjectPreparationError::Native { .. } => {
+                            Refusal::NativePreparation
+                        }
+                        _ => Refusal::ProjectPreparation,
+                    };
+                    self.emit(Event::ProjectWarnings(vec![error.to_string()]));
+                    refusal
+                })?;
+            candidate
+                .as_mut()
+                .expect("uncommitted replacement")
+                .pool
+                .install_sampler_preparation(prepared.pool());
         }
-        Ok(snapshot)
+        unreachable!("bounded replacement retry returns on its eighth attempt")
     }
 }
 

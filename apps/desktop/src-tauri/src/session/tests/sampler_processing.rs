@@ -477,9 +477,12 @@ fn sampler_processing_export_snapshot_retains_a_charged_bank_after_live_cache_ev
             None,
         )
         .unwrap();
+    let mut retirement = windfall_engine::ProjectRetirement::default();
     for _ in 0..8 {
         rig.run(256);
         rig.session.controller().transport();
+        rig.session.controller().take_retired(&mut retirement);
+        retirement.clear();
     }
     assert_eq!(rig.session.state().pool.sampler_retained_bytes(), retained);
     hold.release();
@@ -911,7 +914,8 @@ fn sampler_r1_candidate_budget_noop_and_success_publish_atomically_with_exact_so
                 .sample_edit_ticket(&state, command, None, vec![(sample, audio.clone())])
                 .unwrap()
         };
-        let prepared = ticket.prepare(); // neither State nor recording is acquired by the helper
+        let mut prepared = ticket.prepare(); // neither State nor recording is acquired by the helper
+        let mut retirement = None;
         assert_eq!(rig.session.document_snapshot(), before);
         assert!(rig.session.state().pool.same_sources(&original));
         if mode == "budget" {
@@ -919,7 +923,11 @@ fn sampler_r1_candidate_budget_noop_and_success_publish_atomically_with_exact_so
         } else {
             let _recording = rig.session.recording_idle().unwrap();
             let mut state = rig.session.state();
-            prepared.unwrap().commit(&mut state).unwrap();
+            prepared
+                .as_mut()
+                .unwrap()
+                .commit(&mut state, &mut retirement)
+                .unwrap();
             if mode == "success" {
                 assert_eq!(state.pool.get(sample).unwrap().identity(), audio.identity());
                 assert!(state.loaded.contains(&sample));
@@ -988,7 +996,8 @@ fn sampler_r1_candidate_guards_validate_the_original_map_and_pending_loads_befor
                 .sample_edit_ticket(&state, command, None, Vec::new())
                 .unwrap()
         };
-        let prepared = ticket.prepare().unwrap();
+        let mut prepared = ticket.prepare().unwrap();
+        let mut retirement = None;
         {
             let mut state = rig.session.state();
             let id = state.document.project().channels[0]
@@ -1024,7 +1033,10 @@ fn sampler_r1_candidate_guards_validate_the_original_map_and_pending_loads_befor
         let pool = rig.session.state().pool.clone();
         let _recording = rig.session.recording_idle().unwrap();
         let mut state = rig.session.state();
-        assert!(prepared.commit(&mut state).is_err(), "{change}");
+        assert!(
+            prepared.commit(&mut state, &mut retirement).is_err(),
+            "{change}"
+        );
         assert!(state.pool.same_sources(&pool));
         drop(state);
         assert_eq!(rig.session.document_snapshot(), before);
@@ -1131,9 +1143,12 @@ fn pending_load_publication(publication: &str) {
                     )
                     .unwrap()
             };
-            let prepared = ticket.prepare().unwrap();
+            let mut prepared = ticket.prepare().unwrap();
+            let mut retirement = None;
             let _recording = rig.session.recording_idle().unwrap();
-            prepared.commit(&mut rig.session.state()).unwrap();
+            prepared
+                .commit(&mut rig.session.state(), &mut retirement)
+                .unwrap();
         }
         "history" => {
             rig.session
@@ -1273,13 +1288,16 @@ fn settled_assignment_recovery(spectral: bool) {
             .sample_edit_ticket(&state, batch, None, vec![(sample, decoded.clone())])
             .unwrap()
     };
-    let prepared = ticket.prepare().unwrap();
+    let mut prepared = ticket.prepare().unwrap();
+    let mut retirement = None;
     assert_eq!(rig.session.document_snapshot(), before);
     assert!(rig.session.state().pool.same_sources(&original));
     assert!(rig.session.state().failed.contains(&sample));
     {
         let _recording = rig.session.recording_idle().unwrap();
-        prepared.commit(&mut rig.session.state()).unwrap();
+        prepared
+            .commit(&mut rig.session.state(), &mut retirement)
+            .unwrap();
     }
     assert_eq!(rig.session.document_snapshot(), before);
     let expected = {
@@ -1528,11 +1546,12 @@ fn sampler_r2_noop_recovery_ignores_unassigned_overlays_and_existing_empty_handl
                 )],
             )
             .unwrap();
-        let prepared = ticket.prepare().unwrap();
+        let mut prepared = ticket.prepare().unwrap();
+        let mut retirement = None;
         {
             let _recording = rig.session.recording_idle().unwrap();
             let mut state = rig.session.state();
-            prepared.commit(&mut state).unwrap();
+            prepared.commit(&mut state, &mut retirement).unwrap();
             assert!(state.pool.same_sources(&pool));
             assert_eq!(state.failed, failed);
             assert_eq!(state.loaded, loaded);
@@ -1581,11 +1600,12 @@ fn sampler_r2_noop_recovery_leaves_an_assigned_pending_decoder_in_control() {
             )
             .unwrap()
     };
-    let prepared = ticket.prepare().unwrap();
+    let mut prepared = ticket.prepare().unwrap();
+    let mut retirement = None;
     {
         let _recording = rig.session.recording_idle().unwrap();
         let mut state = rig.session.state();
-        prepared.commit(&mut state).unwrap();
+        prepared.commit(&mut state, &mut retirement).unwrap();
         assert!(state.loading.contains(&sample));
         assert!(!state.pool.contains(sample));
         assert!(!state.loaded.contains(&sample));

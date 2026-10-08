@@ -85,7 +85,7 @@ impl Drop for Take {
 impl Session {
     pub(super) fn recording_idle(&self) -> Result<MutexGuard<'_, Option<Take>>, String> {
         let take = lock(&self.inner.recording);
-        if take.is_some() {
+        if take.is_some() || self.inner.recording_finishing.load(Ordering::Acquire) {
             return Err("Stop or cancel recording first.".into());
         }
         Ok(take)
@@ -335,7 +335,8 @@ impl Session {
         Ok(self.recording_state())
     }
     pub fn recording_cancel(&self) {
-        lock(&self.inner.recording).take();
+        let take = lock(&self.inner.recording).take();
+        drop(take);
     }
     pub fn recording_stop(&self) -> Result<DispatchResult, String> {
         self.recording_stop_with_selection(None)
