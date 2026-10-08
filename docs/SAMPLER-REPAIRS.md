@@ -191,10 +191,24 @@ counts, retained old-voice bank retirement, and supported/unsupported range plus
 bit-identical export. Callback allocations, reallocations and frees remain zero.
 Their logs are `target/n1-r2-engine-{identity,callback,retirement,range}.log`.
 
-Final closure of the new shared P2 requires the browser owner to integrate the
-tested source-only helper commit and run both actual ordinary/checked recovery
-routes against it. No protocol, schema or artifact regeneration is required for
-this helper-only repair. No full UI/workspace loop is rerun for this change.
+The browser owner confirmed composed closure of the shared recovery P2 after
+cherry-picking helper `25ca8b0360eca45897e79273ff80392c1ae539f5` as
+`c515e453e228c5a90c0a2e3f2ee21142dd1735c1`. All **35 native library tests** passed,
+including the six actual ordinary/checked tape, spectral and budget-refusal
+cases that compiled RED before the helper. Those fixtures perform real
+save/New/Open and settled decoder failure, then restore the WAV. They verify
+the exact recovered handle, cleared failure, unchanged full snapshot, edits and
+redo, supported keys, nonzero playback and bit-identical runtime/export output.
+All 51 earlier prepared-import race cases and pending reload/redo remained GREEN.
+
+This composed evidence was executed and reported by the browser owner, separately
+from the sampler-worktree checks above: **62 scoped native tests**, **268 UI
+tests** and strict desktop all-target Clippy passed. The report describes the
+composed state after the helper cherry-pick; the browser's final source commit
+was still pending when this evidence was recorded. No library routing or helper
+source changes were needed for those recovery tests. No protocol, schema or
+artifact regeneration is required for this helper-only repair. No full
+UI/workspace loop was rerun in the sampler worktree for this change.
 
 No DSP algorithm, prepared range policy, callback allocation path, tape geometry,
 plugin runtime/provider, archive format, MIDI panic policy or generated bindings
