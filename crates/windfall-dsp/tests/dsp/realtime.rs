@@ -3,6 +3,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use windfall_dsp::LofiParams;
 use windfall_dsp::blocks::noise::Rng;
 use windfall_dsp::{
     AnyEffect, AnyInstrument, BalanceParams, BassShelfParams, ChannelMuteParams, CompressorParams,
@@ -104,6 +105,7 @@ fn random_effect_params(kind: EffectKind, rng: &mut Rng) -> EffectParams {
             EffectParams::SelectableFilter(random_params::<SelectableFilterParams>(rng))
         }
         EffectKind::BassShelf => EffectParams::BassShelf(random_params::<BassShelfParams>(rng)),
+        EffectKind::Lofi => EffectParams::Lofi(random_params::<LofiParams>(rng)),
     }
 }
 

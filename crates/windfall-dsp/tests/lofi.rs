@@ -7,6 +7,7 @@ use std::hint::black_box;
 use std::time::Instant;
 use ts_rs::TS;
 use windfall_dsp::lofi::{LOFI_MAX_RATIO, Lofi, LofiParams};
+use windfall_dsp::{AnyEffect, EffectKind, EffectParams, EffectSlot, FilterPlacement, RunRelation};
 use windfall_dsp::{Effect, ParamKind, ParamSet};
 
 thread_local! {
@@ -118,6 +119,13 @@ fn parameter_api_defaults_indices_json_ts_and_sanitization() {
         "filter",
         "mix",
         "outputDb",
+        "preserveMs",
+        "replaceMs",
+        "runRelation",
+        "replacementValue",
+        "replacement",
+        "resonance",
+        "placement",
     ];
     let defaults = LofiParams::default();
     let json = serde_json::to_value(defaults).unwrap();
@@ -135,7 +143,11 @@ fn parameter_api_defaults_indices_json_ts_and_sanitization() {
         assert_eq!(info.id, ids[index]);
         assert_eq!(LofiParams::index_of(info.id), Some(index));
         assert_eq!(defaults.get(index), Some(info.default));
-        assert_eq!(json[info.id].as_f64().unwrap() as f32, info.default);
+        if info.kind == ParamKind::Choice {
+            assert_eq!(json[info.id], info.choices[info.default as usize].value);
+        } else {
+            assert_eq!(json[info.id].as_f64().unwrap() as f32, info.default);
+        }
         assert!(ts.contains(info.id), "missing TS field {}: {ts}", info.id);
         let mut p = defaults;
         for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -152,8 +164,8 @@ fn parameter_api_defaults_indices_json_ts_and_sanitization() {
         }
     }
     let mut p = defaults;
-    assert!(!p.set(9, 0.0));
-    assert_eq!(p.get(9), None);
+    assert!(!p.set(16, 0.0));
+    assert_eq!(p.get(16), None);
     assert_eq!(LofiParams::index_of("missing"), None);
     p.bits = 0;
     p.mix = f32::NAN;
@@ -553,6 +565,323 @@ fn rate_reduction_has_measurable_unfiltered_aliases() {
 }
 
 #[test]
+fn timed_preserve_replacement_relationships_values_zero_runs_and_hold_order() {
+    for (relation, replaced) in [
+        (RunRelation::Independent, 2),
+        (RunRelation::Equal, 3),
+        (RunRelation::Double, 6),
+        (RunRelation::Half, 2),
+    ] {
+        for value in [0.0, 0.25, 1.0] {
+            let p = LofiParams {
+                preserve_ms: 3.0,
+                replace_ms: 2.0,
+                run_relation: relation,
+                replacement_value: value,
+                replacement: 1.0,
+                ..LofiParams::neutral()
+            };
+            let input = vec![0.5; 100_003];
+            let expected: Vec<f32> = (0..input.len())
+                .map(|n| if n % (3 + replaced) < 3 { 0.5 } else { value })
+                .collect();
+            for block in [1, 7, 64, 137, 512] {
+                assert_eq!(
+                    render(p, 1000.0, &input, block),
+                    expected,
+                    "relation={relation:?} value={value} block={block}"
+                );
+            }
+            let held = render(
+                LofiParams {
+                    rate_ratio: 4.0,
+                    ..p
+                },
+                1000.0,
+                &input,
+                137,
+            );
+            assert!(
+                held.iter()
+                    .enumerate()
+                    .all(|(n, y)| *y == expected[n / 4 * 4]),
+                "replacement precedes capture"
+            );
+        }
+    }
+    for (preserve, replace, expected) in [(0.0, 0.0, 0.5), (3.0, 0.0, 0.5), (0.0, 2.0, 0.25)] {
+        let p = LofiParams {
+            preserve_ms: preserve,
+            replace_ms: replace,
+            replacement_value: 0.25,
+            replacement: 1.0,
+            ..LofiParams::neutral()
+        };
+        assert_eq!(render(p, 1000.0, &[0.5; 64], 7), [expected; 64]);
+    }
+    let p = LofiParams {
+        preserve_ms: 0.0,
+        replace_ms: 3.0,
+        replacement_value: 0.8,
+        replacement: 0.5,
+        ..LofiParams::neutral()
+    };
+    assert_eq!(render(p, 1000.0, &[0.2; 32], 1), [0.5; 32]);
+    let mut input = vec![0.0; 1024];
+    input[0] = 0.2;
+    let output = render(
+        LofiParams {
+            replacement: 1.0,
+            ..p
+        },
+        1000.0,
+        &input,
+        7,
+    );
+    assert_eq!(&output[..3], &[0.8; 3]);
+    assert!(
+        output[3..].iter().all(|x| *x == 0.0),
+        "activity window must end"
+    );
+    assert!(
+        render(p, 1000.0, &[0.0; 1024], 137)
+            .iter()
+            .all(|x| *x == 0.0),
+        "idle silence must not synthesize DC"
+    );
+    for rate in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+        let p = LofiParams {
+            preserve_ms: 1_000.0,
+            run_relation: RunRelation::Double,
+            replacement: 1.0,
+            replacement_value: 0.3,
+            ..LofiParams::neutral()
+        };
+        let input = vec![0.5; (rate * 3.0) as usize + 1];
+        let output = render(p, rate, &input, 137);
+        assert!(output[..rate as usize].iter().all(|x| *x == 0.5));
+        assert!(
+            output[rate as usize..(rate * 3.0) as usize]
+                .iter()
+                .all(|x| *x == 0.3)
+        );
+        assert_eq!(*output.last().unwrap(), 0.5);
+    }
+}
+
+// Bilinear expansion of H(s)=w0²/(s²+w0*s/Q+w0²), independently
+// evaluated using x/y delays, rather than product integrator histories.
+struct ResonantReference {
+    b: [f64; 3],
+    a: [f64; 3],
+    x: [f64; 2],
+    y: [f64; 2],
+}
+impl ResonantReference {
+    fn new(p: LofiParams, rate: f32) -> Self {
+        let fs = effective_rate(rate);
+        let g = (std::f64::consts::PI * f64::from(p.cutoff_hz).min(0.45 * fs) / fs).tan();
+        let q = std::f64::consts::FRAC_1_SQRT_2
+            + (4.0 - std::f64::consts::FRAC_1_SQRT_2) * f64::from(p.resonance);
+        let d = 1.0 + g / q + g * g;
+        Self {
+            b: [g * g / d, 2.0 * g * g / d, g * g / d],
+            a: [1.0, 2.0 * (g * g - 1.0) / d, (1.0 - g / q + g * g) / d],
+            x: [0.0; 2],
+            y: [0.0; 2],
+        }
+    }
+    fn tick(&mut self, x: f64) -> f64 {
+        let y = self.b[0] * x + self.b[1] * self.x[0] + self.b[2] * self.x[1]
+            - self.a[1] * self.y[0]
+            - self.a[2] * self.y[1];
+        self.x = [x, self.x[0]];
+        self.y = [y, self.y[0]];
+        y
+    }
+    fn response(&self, hz: f64, fs: f64) -> (f64, f64) {
+        let w = TAU * hz / fs;
+        let z = |c: [f64; 3]| {
+            (
+                c[0] + c[1] * w.cos() + c[2] * (2.0 * w).cos(),
+                -c[1] * w.sin() - c[2] * (2.0 * w).sin(),
+            )
+        };
+        let (br, bi) = z(self.b);
+        let (ar, ai) = z(self.a);
+        let norm = ar * ar + ai * ai;
+        ((br * ar + bi * ai) / norm, (bi * ar - br * ai) / norm)
+    }
+}
+
+#[test]
+fn resonance_matches_independent_impulse_spectra_dc_and_stability_reference() {
+    for rate in [1.0, 44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+        for cutoff in [20.0, 1_000.0, 20_000.0] {
+            for resonance in [0.25, 0.75, 1.0] {
+                let p = LofiParams {
+                    cutoff_hz: cutoff,
+                    resonance,
+                    filter: 1.0,
+                    ..LofiParams::neutral()
+                };
+                let mut reference = ResonantReference::new(p, rate);
+                let radius = reference.a[2].sqrt();
+                let count = (25.0 / -radius.ln()).ceil() as usize + 128;
+                let mut input = vec![0.0; count];
+                input[0] = 0.1;
+                let output = render(p, rate, &input, 137);
+                let pole = filter_pole(cutoff, rate);
+                let alpha = 1.0 - pole;
+                for (n, &y) in output.iter().enumerate() {
+                    let legacy = 0.1 * alpha * alpha * (n + 1) as f64 * pole.powi(n as i32);
+                    let expected = legacy * (1.0 - f64::from(resonance))
+                        + reference.tick(f64::from(input[n])) * f64::from(resonance);
+                    assert!(
+                        (f64::from(y) - expected).abs() < 3.0e-6,
+                        "resonant impulse rate={rate} cutoff={cutoff} res={resonance} n={n} got={y} ref={expected}"
+                    );
+                    assert!(y.is_finite() && y.abs() < 1.0);
+                }
+                let dc: f64 = output.iter().map(|x| f64::from(*x)).sum();
+                assert!(
+                    (dc - 0.1).abs() < 2.0e-5,
+                    "resonant DC rate={rate} cutoff={cutoff}: {dc}"
+                );
+                for hz in [
+                    f64::from(cutoff).min(0.45 * effective_rate(rate)),
+                    effective_rate(rate) * 0.1,
+                ] {
+                    let (rr, ri) = reference.response(hz, effective_rate(rate));
+                    let w = TAU * hz / effective_rate(rate);
+                    let (ar, ai) = (1.0 - pole * w.cos(), pole * w.sin());
+                    let denom = (ar * ar + ai * ai).powi(2);
+                    let (lr, li) = (
+                        alpha * alpha * (ar * ar - ai * ai) / denom,
+                        -alpha * alpha * 2.0 * ar * ai / denom,
+                    );
+                    let r = f64::from(resonance);
+                    let (er, ei) = (
+                        0.1 * (lr * (1.0 - r) + rr * r),
+                        0.1 * (li * (1.0 - r) + ri * r),
+                    );
+                    let (yr, yi) = spectral(&output, hz, effective_rate(rate));
+                    assert!(
+                        (yr - er).hypot(yi - ei) < 3.0e-5,
+                        "resonant spectrum rate={rate} cutoff={cutoff} res={resonance} hz={hz}"
+                    );
+                    if resonance == 1.0 && hz == f64::from(cutoff) {
+                        assert!(yr.hypot(yi) > 0.399, "real resonance peak missing");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pre_post_placement_has_distinct_measured_order_and_original_reference() {
+    let input = noise(87654, 8192);
+    let mut results = Vec::new();
+    for placement in [FilterPlacement::Pre, FilterPlacement::Post] {
+        let p = LofiParams {
+            bits: 3,
+            quantize: 1.0,
+            cutoff_hz: 800.0,
+            filter: 1.0,
+            resonance: 1.0,
+            placement,
+            ..LofiParams::neutral()
+        };
+        let output = render(p, 48_000.0, &input, 137);
+        let mut filter = ResonantReference::new(p, 48_000.0);
+        for (&x, &y) in input.iter().zip(&output) {
+            let expected = if placement == FilterPlacement::Pre {
+                nearest(filter.tick(f64::from(x)), p.bits)
+            } else {
+                filter.tick(nearest(f64::from(x), p.bits))
+            };
+            assert!(
+                (f64::from(y) - expected).abs() < 3.0e-6,
+                "placement={placement:?} got={y} ref={expected}"
+            );
+        }
+        results.push(output);
+    }
+    assert!(
+        results[0]
+            .iter()
+            .zip(&results[1])
+            .any(|(a, b)| (*a - *b).abs() > 0.1)
+    );
+}
+
+#[test]
+fn published_registry_slot_and_all_new_control_automation_are_realtime_safe() {
+    let kind = EffectKind::Lofi;
+    assert_eq!(kind as usize, 15);
+    assert_eq!(serde_json::to_value(kind).unwrap(), "lofi");
+    assert_eq!(EffectKind::ALL.last(), Some(&kind));
+    assert_eq!(kind.name(), LofiParams::NAME);
+    assert_eq!(kind.descriptors(), LofiParams::descriptors());
+    assert_eq!(kind.max_latency_samples(192_000.0), 0);
+    let params = kind.default_params();
+    assert_eq!(serde_json::to_value(params).unwrap()["type"], "lofi");
+    let mut slot = EffectSlot::new(AnyEffect::new(&params));
+    slot.prepare(48_000.0, 1);
+    let mut l = [0.3];
+    let mut r = [-0.3];
+    let calls = guarded(|| {
+        for n in 0..4096 {
+            let mut p = LofiParams::neutral();
+            for (index, info) in LofiParams::descriptors().iter().enumerate() {
+                p.set(
+                    index,
+                    if (n + index) % 3 == 0 {
+                        info.max
+                    } else {
+                        info.min
+                    },
+                );
+            }
+            assert!(slot.set_params(&EffectParams::Lofi(p)));
+            slot.set_enabled(n % 17 != 0);
+            slot.set_mix((n % 7) as f32 / 6.0);
+            if n % 113 == 0 {
+                slot.reset();
+            }
+            l = [0.3];
+            r = [-0.3];
+            slot.process(&mut l, &mut r);
+            assert!(l[0].is_finite() && r[0].is_finite());
+        }
+    });
+    assert_eq!(calls, [0; 4]);
+    assert!(!slot.set_params(&EffectKind::Eq.default_params()));
+    slot.reset();
+    slot.set_enabled(false);
+    l = [2.0];
+    r = [-2.0];
+    slot.process(&mut l, &mut r);
+    assert_eq!(l, [2.0]);
+    assert_eq!(r, [-2.0]);
+    let signal = noise(45343, 8192);
+    let p = LofiParams {
+        replacement: 0.6,
+        replacement_value: 0.2,
+        preserve_ms: 2.0,
+        replace_ms: 1.0,
+        resonance: 0.8,
+        placement: FilterPlacement::Pre,
+        ..LofiParams::default()
+    };
+    let reference = render(p, 48_000.0, &signal, 1);
+    for block in [7, 64, 137, 512] {
+        assert_eq!(render(p, 48_000.0, &signal, block), reference);
+    }
+}
+
+#[test]
 fn smoothing_noops_fast_retargets_empty_reset_and_step_bounds() {
     let mut effect = prepared(LofiParams::neutral(), 48_000.0);
     effect.process(&mut [], &mut []);
@@ -641,6 +970,111 @@ fn smoothing_noops_fast_retargets_empty_reset_and_step_bounds() {
     fresh.process(&mut c, &mut d);
     assert_eq!(a, c);
     assert_eq!(b, d);
+}
+
+#[test]
+fn all_published_controls_retarget_reset_noop_and_partition_identically() {
+    let run = |block: usize, noops: bool| {
+        let mut effect = prepared(LofiParams::default(), 48_000.0);
+        let mut params = LofiParams::default();
+        let mut left = noise(556677, 16_384);
+        let mut right = noise(987654, left.len());
+        let mut frame = 0;
+        while frame < left.len() {
+            if frame % 23 == 0 {
+                let event = frame / 23;
+                let index = event % 16;
+                let info = &LofiParams::descriptors()[index];
+                params.set(
+                    index,
+                    if event / 16 % 2 == 0 {
+                        info.min
+                    } else {
+                        info.max
+                    },
+                );
+                effect.set_params(&params);
+            }
+            if frame == 2990 {
+                effect.reset();
+            }
+            if noops {
+                effect.set_params(&params);
+                effect.process(&mut [], &mut []);
+                effect.set_tempo(87.0);
+            }
+            let next = ((frame / 23 + 1) * 23).min(if frame < 2990 { 2990 } else { left.len() });
+            let end = (frame + block).min(next).min(left.len());
+            effect.process(&mut left[frame..end], &mut right[frame..end]);
+            frame = end;
+        }
+        assert!(
+            left.iter()
+                .chain(&right)
+                .all(|x| x.is_finite() && x.abs() < 64.0)
+        );
+        (left, right)
+    };
+    let reference = run(1, false);
+    for block in [1, 7, 64, 137, 512] {
+        for noops in [false, true] {
+            assert_eq!(run(block, noops), reference);
+        }
+    }
+}
+
+#[test]
+fn maximum_replacement_cycle_resonance_tail_and_channel_activity_are_finite() {
+    for rate in [1.0, 44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+        for placement in [FilterPlacement::Pre, FilterPlacement::Post] {
+            let params = LofiParams {
+                rate_ratio: 64.0,
+                preserve_ms: 1000.0,
+                run_relation: RunRelation::Double,
+                replacement: 1.0,
+                replacement_value: 1.0,
+                cutoff_hz: 20.0,
+                filter: 1.0,
+                resonance: 1.0,
+                placement,
+                ..LofiParams::neutral()
+            };
+            let mut effect = prepared(params, rate);
+            let tail = effect.tail_samples();
+            let mut left = [0.5];
+            let mut right = [0.0];
+            effect.process(&mut left, &mut right);
+            let mut frames = 1;
+            let mut peak = left[0].abs();
+            while frames < tail + 137 {
+                let count = (tail + 137 - frames).min(137);
+                let mut l = [0.0; 137];
+                let mut r = [0.0; 137];
+                effect.process(&mut l[..count], &mut r[..count]);
+                assert!(l[..count].iter().all(|x| x.is_finite()));
+                assert!(
+                    r[..count].iter().all(|x| *x == 0.0),
+                    "silent channel was armed"
+                );
+                peak = l[..count].iter().fold(peak, |a, b| a.max(b.abs()));
+                frames += count;
+                if frames >= tail {
+                    assert!(
+                        l[count - 1].abs() < 1e-6,
+                        "rate={rate} placement={placement:?} tail={tail}"
+                    );
+                }
+            }
+            // At the artificial 1 Hz rate, a 64-frame hold can outlast the
+            // entire three-frame activity window before another capture.
+            assert!(peak > 0.0 && peak < 4.0);
+            if rate >= 44_100.0 {
+                assert!(peak >= 0.5);
+            }
+            assert_eq!(effect.tail_samples(), tail);
+            assert_eq!(effect.gap_samples(), tail);
+        }
+    }
 }
 
 #[test]
@@ -923,9 +1357,16 @@ fn scoped_cpu_throughput() {
             let start = Instant::now();
             for n in 0..iterations {
                 if automate {
-                    let index = n % 9;
+                    let index = n % LofiParams::descriptors().len();
                     let info = &LofiParams::descriptors()[index];
-                    p.set(index, if n % 2 == 0 { info.min } else { info.max });
+                    p.set(
+                        index,
+                        if n / LofiParams::descriptors().len() % 2 == 0 {
+                            info.min
+                        } else {
+                            info.max
+                        },
+                    );
                     effect.set_params(black_box(&p));
                 }
                 l.copy_from_slice(&source_l);

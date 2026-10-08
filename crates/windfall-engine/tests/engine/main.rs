@@ -7,6 +7,7 @@ mod device;
 mod effects;
 mod filter_family;
 mod instruments;
+mod lofi;
 mod mixer;
 mod realtime;
 mod rendering;

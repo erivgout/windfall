@@ -85,6 +85,7 @@ pub use filter_family::{
 };
 pub use instrument::{AnyInstrument, Instrument, InstrumentKind, InstrumentParams};
 pub use limiter::{Limiter, LimiterParams};
+pub use lofi::{FilterPlacement, Lofi, LofiParams, RunRelation};
 pub use param::{ParamChoice, ParamInfo, ParamKind, ParamScale, ParamSet, ParamUnit};
 pub use polarity::{Polarity, PolarityParams};
 pub use reverb::{Reverb, ReverbParams};
