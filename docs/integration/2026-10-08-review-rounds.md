@@ -586,3 +586,104 @@ heuristic is assigned to the same owner in a source-only follow-up. Root import
 `a0ec6372` has separate fresh 16-case native verification and strict checks;
 reviewers did not execute those tests. No product tap, view or parity closure is
 inferred from either source verdict.
+
+# Timeline R6
+
+Fixed source: `3d2475c74fba88fcb4314f7ebc614708e76e9e6f`, direct parent
+`c5448921960ead05d0f0d4846fc627fbcf035fc6`. Fresh reviewers received the original
+bounded timeline brief, all five prior rounds and the retained composition gates.
+
+## Standards
+
+Fixed HEAD: `3d2475c74fba88fcb4314f7ebc614708e76e9e6f`
+
+Verified parent: `c5448921960ead05d0f0d4846fc627fbcf035fc6`
+
+**Findings:** No new hard documented-rule breaches or actionable optional baseline smells in the fixed R6 diff. The shared host helper uses bounded arithmetic and observable refusal, with no source-visible allocation/free, lock, wait, or I/O. Both native ABI builders consume it; public anchor fields and legacy scalar behavior remain unchanged.
+
+The acknowledged whole-composition P1 preparation/retirement-under-guards objection remains open. R6 neither changes nor resolves that path.
+
+**Performed checks/provenance:** Verified HEAD, parent, single-commit log, complete six-file diff, clean worktree before and after, and passing `git diff --check`. Read architecture, plan, relevant roadmap contracts, timeline evidence, checked project meter conversion, engine forwarding, native builders, and added assertions. All five changed Rust file hashes match the documented source hashes.
+
+Source review only: no tests, binaries, Cargo/build/generation, or UI runs. The documented 33 passing tests remain owner-reported evidence. Worktree unchanged.
+
+## Spec
+
+Reviewed fixed HEAD `3d2475c74fba88fcb4314f7ebc614708e76e9e6f`, parent `c5448921960ead05d0f0d4846fc627fbcf035fc6`.
+
+**R6 findings:** No new spec failures found in the fixed diff. Source tracing supports the R5 repair: canonical absolute tick boundaries distinguish `next_down`, exact and `next_up`; noncanonical anchors use fused boundaries with a final half-open check. Tick/index overflow and collapsed boundaries refuse. Scalar negative bars and `Transport::advance` retain their prior behavior. Engine Song anchors, Pattern scalar transport, and concrete CLAP/VST3 field construction remain consistent.
+
+**Inherited P1 remains unresolved:** With an attached stream, valid project publication still calls `PlanState::build` while holding the Controller guard at [controller.rs:260](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-timeline-regions/crates/windfall-engine/src/controller.rs:260), reached through document-state publication at [edit.rs:317](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-timeline-regions/apps/desktop/src-tauri/src/session/edit.rs:317). This retains the objection against the roadmap requirement: “Build processors, FFT plans, samples, shared memory and routing plans away from audio/document locks.” Meter refusal gates do not resolve it.
+
+**Checks/provenance:** Verified HEAD, parent, commit log, fixed diff, architecture/plan/roadmap, review history, checked meter producer, host arithmetic and native adapters. `git diff --check` passed; the worktree remains clean and unchanged.
+
+Source review only: no Cargo/build/generation/UI or binary execution. Inspected available executable/source hashes and fingerprint metadata, but did not establish the complete dependency provenance required for execution. Owner-reported tests are not reviewer-executed evidence. N4 and combined-root acceptance remain separate gates.
+
+Both source axes are clean for the incremental native-bar repair. The owner’s
+33 focused host/engine/project passes remain distinct from source-only reviewer
+checks. T1 is still outside root; N4 ABI3/runtime forwarding and whole-state
+preparation must compose before root native/artifact acceptance. No additional
+parity or platform claim follows from the source verdicts.
+
+# Project preparation P1 design R1
+
+Proposal-only pin: `07cdb24b5628ae79ae56c7933df26a050abfe1ce`, direct parent
+`6d077380`. The independent design audit received the original off-lock/native
+readiness and deferred-retirement contract, T1/N4/M1/utility constraints, and
+four explicit answers. It did not execute tests or grant source implementation.
+
+**Recommendation: hold the shared source grant for `07cdb24b`.** The shared-row clarification is feasible in principle, but four concrete design/grant conditions remain unresolved. These concern the proposed implementation, not shipped failures.
+
+1. **Separate physical storage from generation identities.** Ten restored slots can require 20 physical rows but 30 possible identities: outgoing `g0`, captured active `g1`, fresh `g2`. The clarification addresses that arithmetic; the immutable proposal still calls `U` the unique-generation union. Specify the row-to-alternative mapping and how subsequent publications resolve an earlier reservation without treating provisional choice as actual native evidence. See [proposal:406–448](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:406), [active indexing](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/plan.rs:425), and [Ledger identity](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/state.rs:366). **Proof needed:** queue successive revisions, advance through outgoing completion and first audible insertion after lease acceptance, preserve active indexes, and refuse any required third source before Document commit.
+
+2. **Define selected-only history semantics, including inherited capacity.** Processing selected stages alone is insufficient. Existing history logic uses physical `stages.is_empty()`, suffix lengths, prefix order, and retained-stage scans. Inactive union entries could therefore suppress scalar promotion, choose the wrong predecessor, or double-count a suffix. A late `g0 → g1` choice during an unfinished tap transition must use an ordered selected view on both sides of history transfer. Each destination must also preserve inherited ring/tap capacity; [tap transfer currently clamps](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-dsp/src/blocks/tap_crossfade.rs:117). See [proposal:436–482](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:436) and [Compensation history](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/rack.rs:1012). **Proof needed:** explicit history-selection rules plus unchanged R3 short-history/reference-switch and R4/R5 cancellation/continuity cases, with adoption delayed after acceptance and zero callback allocation/free.
+
+3. **The four-operation interface lacks publication intent.** `prepare(project, pool)` cannot distinguish an ordinary edit from New/Open or receive its saved transport patch, yet `install()` must publish the appropriate reserved envelope. Transport requests may change while preparation stalls. Specify one owned intent input, bind current sequence-dependent fields before issuing the lease, and preserve replacement ordering without recursive Controller calls. See [proposed interface](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:64), [message reservation](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:508), and [existing replacement publication](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/apps/desktop/src-tauri/src/session/files.rs:461). **Proof needed:** late play/stop/seek, pattern removal, full queues, and consumer interleaving between pushes; refusal leaves musical state unchanged.
+
+4. **The requested grant omits the fallible device adapter.** Production still obtains a `Processor` through infallible [device.rs:724](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/device.rs:724). The proposal requires `try_attach`, but its [engine file window](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:674) omits `device.rs`. Add a serialized adapter window or name its owner. **Proof needed:** constructor error, failed CPAL attempt, same-rate retry, suspend/reopen, and full-ring/backlog retirement, including last-reference destructors checking that all relevant guards are free.
+
+I found no additional design blocker in borrowed refusal ownership or the private `None → Unavailable` / `Some → Err` distinction. Poison/unwind and last-reference destruction still require integration evidence; the intended guarantees alone do not establish them.
+
+Read-only audit completed at the fixed pin. No files changed, imports, builds, tests, or nested agents.
+
+The same preparation owner has a doc-only incremental response window for all
+four conditions. Publication preserves the existing serial callback semantics;
+queue capacity or a batched tail does not guarantee one-callback transaction
+processing. Source construction, device adapter and processor changes remain
+ungranted until the revised interface and ownership proof are reviewed.
+
+# M1 app repair R2 and new CI observation
+
+Immutable app repair `9243f20f` directly follows `e3cdbb3f`. Owner execution
+reports 20 desktop cases (16 Session, one namespace-cap and three existing
+slicer), 11 IPC checks and 41 UI cases. The namespace repair was compiled
+against a real Windows junction retarget, and its ordinary-parent test rejected
+write/rename while handles lived and permitted rename after retirement. Retained
+recovery controls survive dismissal, selection and actual project replacement;
+no restored entry gains review/apply authority. Both fresh App R2 review tasks
+have the original foundation/application briefs, all findings and responses.
+These results are owner evidence pending independent review and root composition.
+
+Standards R2 subsequently found one remaining documented lifecycle breach:
+project replacement invalidates the registry but leaves the old dialog target
+and source capture alive, reopening a stale panel and blocking a new open action.
+The trigger is source-traced, not a proven stale native Apply. The same owner
+has the report; `9243f20f` remains frozen while Spec R2 completes. Cleanup
+recovery identities must survive independently of that discarded dialog target.
+
+New CI at pushed `290f0313`, run 37756198700, failed macOS at analysis
+`r1_high_capacity_valid_manifest_is_charged_queued_running_and_ready`:
+`running_heap >= retained` failed, with 29 other analysis cases passing. This
+run did not reach the earlier VST3 failure; those observations are separate.
+The owner is diagnosing whole-process heap measurement versus concurrent test
+lifetimes in excluded diagnostics while `9243f20f` stays frozen. No assertion
+bound, test or source accounting policy is weakened to claim success. Raw log:
+`C:/Temp/windfall-290-macos-ci.log`.
+
+The same push also produced release-workflow validation failure 37756196886
+with zero jobs/check-runs; no development candidate was dispatched or built.
+The local workflow contract/full fixture suite had passed, so the release owner
+is diagnosing missing GitHub parser/semantic validation coverage in its narrow
+workflow/checker/test window. License, signing, resource and publication gates
+remain intact. The root source batch remains committed and the full project
+remains active.
