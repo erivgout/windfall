@@ -1,12 +1,15 @@
 import type { Channel } from "@/bindings"
 import { INSTRUMENT_KINDS, instrumentDescriptor } from "@/features/params"
 import {
+  getAppState,
   invalidateActionsOn,
   registry,
+  runAction,
   type Action,
   type AppState,
 } from "@/lib/actions"
 import { instrumentParams } from "@/lib/channel-source"
+import { getProjectGeneration, onProjectReplaced } from "@/lib/store/replaced"
 import { selectedPatternId } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 
@@ -30,7 +33,11 @@ import {
   toggleMute,
   toggleSolo,
 } from "./channel-ops"
-import { useRackStore } from "./rack-store"
+import {
+  focusNotePreviewTarget,
+  selectedNotePreviewLane,
+} from "./note-preview-target"
+import { rackNoteView, useRackStore, type RackNoteView } from "./rack-store"
 import { matchingPreset, SYNTH_PRESETS } from "./synth/presets"
 
 /** The palette section, and menu, of the built-in instrument sounds. */
@@ -38,6 +45,41 @@ export const SOUNDS_SECTION = "Sounds"
 
 export const LENGTH_PRESETS = [16, 32, 48, 64]
 export const FILL_INTERVALS = [2, 4, 8]
+
+export const NOTE_VIEW_ACTION_IDS = [
+  "channelRack.noteView.auto",
+  "channelRack.noteView.steps",
+  "channelRack.noteView.notes",
+] as const
+export const OPEN_NOTE_PREVIEW_ACTION = "channelRack.openPianoRoll"
+
+const NOTE_VIEW_ACTIONS: Action[] = (
+  [
+    ["auto", "Automatic steps or notes", "Mod+Alt+1"],
+    ["steps", "Show steps", "Mod+Alt+2"],
+    ["notes", "Show notes", "Mod+Alt+3"],
+  ] satisfies [RackNoteView, string, string][]
+).map(([view, title, defaultShortcut], index) => ({
+  id: NOTE_VIEW_ACTION_IDS[index],
+  title,
+  defaultShortcut,
+  section: "Channels",
+  scope: "channelRack",
+  keywords: "row view note preview thumbnail piano roll step buttons",
+  enabled: (state) => selectedNotePreviewLane(state) !== null,
+  whyDisabled: () => "Select a channel in a pattern",
+  checked: (state) => {
+    const lane = selectedNotePreviewLane(state)
+    return lane !== null && rackNoteView(useRackStore.getState(), lane) === view
+  },
+  run: () => {
+    const lane = selectedNotePreviewLane(getAppState())
+    if (!lane) return
+    const target = { ...lane, generation: getProjectGeneration() }
+    useRackStore.getState().setNoteView(lane, view)
+    focusNotePreviewTarget(target)
+  },
+}))
 
 function selected(state: AppState): Channel | undefined {
   return state.document.project.channels.find(
@@ -141,6 +183,18 @@ const SYNTH_SOUND_ACTIONS = SYNTH_PRESETS.filter(
  * belong to the rack: they work while it has the keyboard.
  */
 export const CHANNEL_RACK_ACTIONS: Action[] = [
+  ...NOTE_VIEW_ACTIONS,
+  {
+    id: OPEN_NOTE_PREVIEW_ACTION,
+    title: "Open in piano roll",
+    section: "Channels",
+    scope: "channelRack",
+    keywords: "row note preview thumbnail edit notes",
+    standsFor: () => "view.pianoRoll",
+    enabled: (state) => selectedNotePreviewLane(state) !== null,
+    whyDisabled: () => "Select a channel in a pattern",
+    run: () => runAction("view.pianoRoll"),
+  },
   {
     id: "channel.addFromFile",
     title: "Add channel from an audio file…",
@@ -332,7 +386,11 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
 export function registerChannelRackActions(): () => void {
   const stops = [
     registry.register(CHANNEL_RACK_ACTIONS),
-    invalidateActionsOn(useRackStore, (state) => [state.inspectorOpen]),
+    invalidateActionsOn(useRackStore, (state) => [
+      state.inspectorOpen,
+      state.noteViews,
+    ]),
+    onProjectReplaced(() => registry.invalidate()),
   ]
   return () => {
     for (const stop of stops) stop()

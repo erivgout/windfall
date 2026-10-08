@@ -68,8 +68,9 @@ provide the shared horizontal coordinate system. The SVG's button has no border
 inset. The ruler and thumbnail cursors use the same ticks-per-step and rack
 pitch. No new pixel-to-note input conversion is introduced.
 
-The only existing product seams changed are the row's step-area rendering and
-the rack's transient view state/cleanup. Channel button, mute/solo/mix/routing,
+The existing product seams changed are the row's step-area rendering,
+the rack's transient view state/cleanup and its scoped action registration.
+Channel button, mute/solo/mix/routing,
 sample drop, reorder, step commands, rack grid/ruler, piano editor/session,
 scaling, Rust/project model, engine, IPC, generated types and WASM are unchanged.
 No new dependencies or proprietary assets are used.
@@ -101,7 +102,7 @@ coordinates rejected by the document; they do not replace UI verification.
 
 ## Validation and browser evidence
 
-Final focused run: **7 files, 187 tests passed**, two workers:
+Initial `ea2f36dd` checkpoint run: **7 files, 187 tests passed**, two workers:
 
 ```text
 node node_modules/vitest/vitest.mjs run
@@ -152,3 +153,82 @@ integrated checks remain before parity acceptance. Native desktop smoke/focus
 verification remains an external gate. The owned Vite process is stopped before
 handoff. No push, PR, release, version, root README/parity or shared checkpoint
 change is part of this delivery.
+
+## R1 standards response (incremental checkpoint after immutable ea2f36dd)
+
+R1 spec review found no actionable defect and independently ran 80 actual-WASM
+tests. That result belongs to the reviewer, not this follow-up's execution.
+Both standards P2 findings are addressed in the next source-only checkpoint;
+the parent owns a new full-context R2 review on both axes and parity acceptance.
+
+**Registry:** `ARCHITECTURE.md` requires “Every user action is a named entry in
+the action registry” and “Every label (menus, palette, tooltips, context menus)
+shows the key an action has in its own scope.” The three row-view choices now
+have canonical `channelRack` actions, with titles, checked/enabled state,
+disabled reasons and default shortcuts Ctrl+Alt+1/2/3 (Mod uses Cmd on macOS).
+The guarded `channelRack.openPianoRoll` entry delegates to `view.pianoRoll`;
+`standsFor` reveals that existing action's configured key (Alt+3, or F7 in the
+FL preset). There is no duplicate shortcut map or menu-title table.
+`ActionMenuItem` renders the row dropdown. Choice/replacement invalidation
+joins the registry's existing project/transport/selection subscriptions.
+
+**Thumbnail context menu:** the same standard requires menus “on every thing
+with actions of its own” and says “the innermost one opens.” `ContextActions`
+now wraps the actual thumbnail. Its target-bound inline entries derive all
+titles, shortcut hints, checked state and disabled reasons from registered
+actions, then execute those registry ids. This uses the existing inline-entry
+contract for the thing clicked; it does not add action metadata. Right-click
+retains ordinary rack pointer/focus row selection, opens only this inner menu,
+and performs no primary navigation, transport or history write. Context
+commands execute after close, so opening the existing piano session keeps its
+grid focus.
+
+**Target/focus lifetime:** `note-preview-target.ts` binds only selection and
+lifetime to canonical metadata. Every captured command validates generation,
+current pattern and channel before selection and execution, including deferred
+context commands. Disabled reasons distinguish a changed project/pattern and
+deleted targets. Dropdown capture validates before `ActionMenuItem` runs its
+canonical id. Palette/keymap commands use the current selected lane. One frame
+after a view command restores focus into the replacement step/thumbnail control;
+it rechecks the captured document/lane and current channel selection. This
+prevents queued focus from selecting a successor document's reused id or
+overriding a later user selection. It is unrelated to realtime playback.
+
+**Optional Primitive Obsession concern:** addressed within the owned scope.
+Callers pass typed `NotePreviewLane` identity. Key encoding is private to
+`rack-store.ts`, and each stored choice retains typed lane identity; deletion
+cleanup no longer decodes strings. All of it remains transient and excluded
+from persisted preferences/projects.
+
+Only the previously added Show steps lookup in the approved legacy test changes
+to `menuitemcheckbox` with an anchored title match, reflecting the shared
+component's checked role and shortcut-inclusive accessible name. Every original
+dot, accessible-label and lit-step assertion and every other old-test line is
+unchanged. New tests check actual registry/palette discovery, configured keys in
+both presets, scoped key execution, checked-state invalidation, click/Enter
+context execution, exact mounted piano focus, stale menus and deferred focus
+after pattern switch/New/Open/deletion/selection changes. All document operations
+continue to use the assigned actual Rust WASM and mirror.
+
+Fresh T3 inspection on the follow-up source at port 1549 confirmed one inner
+context menu with the canonical keys and current-view tick. Thumbnail SVG and
+ordinary step rows retained exactly matching left/width coordinates. Fresh-load
+Ctrl+Alt+2/3 restored focus to step 1/the thumbnail; context-menu Enter opened
+pattern 1/channel 30 and focused Note grid, with project/history identity and
+dirty state unchanged. The initial hot reload retained old registered function
+closures; this focus check was repeated after a full reload with the current
+registered run functions. A saved, inspected screenshot of the final menu is
+`C:/Users/ewhee/.t3/userdata/browser-artifacts/browser-screenshot-127-0-0-1-muz8fscm-20f768e4.png`.
+
+Fresh follow-up execution: the same seven focused files passed **201/201 tests**
+with `--maxWorkers=2 --no-cache --configLoader=runner`, including 14 additional
+registry/context/focus cases. An intermediate focus-timing test recursively
+replayed background realtime frames and exhausted its worker; its timing control
+now holds only the focus callback and leaves realtime frames running normally.
+One intermediate run reached the legacy synchronous menu lookup before menu
+mount; its approved lookup was retained and passed in the final full run. There
+are no retries, skips or weakened original assertions in the source. The exact
+incremental SHA and final static/artifact checks are reported in the handoff.
+The earlier four-scale browser/playhead measurements above
+remain initial checkpoint evidence; they are not represented as a new physical
+Windows/native-window run. Geometry and all native artifacts are unchanged.

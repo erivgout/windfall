@@ -8,58 +8,119 @@ import {
 } from "react"
 
 import type { ChannelId, Note, PatternId } from "@/bindings"
+import { ActionMenuItem } from "@/components/action-menu-item"
+import { ContextActions, type ContextItem } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { runAction } from "@/lib/actions"
+import {
+  disabledReason,
+  getAppState,
+  isChecked,
+  isEnabled,
+  registry,
+  shortcutLabel,
+  useAction,
+  useActions,
+  useAppState,
+  useShortcutLabel,
+} from "@/lib/actions"
 import { useHint } from "@/lib/store/hint"
-import { useProjectStore } from "@/lib/store/project"
 import { usePlayhead } from "@/lib/store/realtime"
 import {
   getProjectGeneration,
   useProjectGeneration,
 } from "@/lib/store/replaced"
-import { selectedPatternId } from "@/lib/store/selectors"
 import { useTransportStore } from "@/lib/store/transport"
-import { useUiStore } from "@/lib/store/ui"
 import { TICKS_PER_STEP } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
+import { NOTE_VIEW_ACTION_IDS, OPEN_NOTE_PREVIEW_ACTION } from "./actions"
 import { pitches } from "./layout"
 import {
   needsNotePreview,
   notePreviewGeometry,
   previewSteps,
 } from "./note-preview-geometry"
-import { useRackStore, type RackNoteView } from "./rack-store"
+import {
+  notePreviewActionForTarget,
+  notePreviewTargetReason,
+  prepareNotePreviewTarget,
+  runNotePreviewAction,
+  type NotePreviewTarget,
+} from "./note-preview-target"
+import { rackNoteView, useRackStore } from "./rack-store"
 
-type Target = { pattern: PatternId; channel: ChannelId; generation: number }
+const ROW_ACTION_IDS = [...NOTE_VIEW_ACTION_IDS, OPEN_NOTE_PREVIEW_ACTION]
 
-function current(target: Target): boolean {
-  const { project } = useProjectStore.getState()
+/** No async transport change: only the lane currently shown may navigate. */
+function open(target: NotePreviewTarget) {
+  const action = registry.get(OPEN_NOTE_PREVIEW_ACTION)
+  if (action) void runNotePreviewAction(target, action)
+}
+
+function contextItems(target: NotePreviewTarget): ContextItem[] {
+  const state = getAppState()
+  return ROW_ACTION_IDS.flatMap((id) => {
+    const action = registry.get(id)
+    if (!action) return []
+    const bound = notePreviewActionForTarget(action, target)
+    return [
+      {
+        title: action.title,
+        shortcut: shortcutLabel(id),
+        disabled: !isEnabled(bound, state),
+        reason: disabledReason(bound, state),
+        checked: action.checked ? isChecked(bound, state) : undefined,
+        afterClose: true,
+        run: () => runNotePreviewAction(target, action),
+      },
+    ]
+  })
+}
+
+function RowActionItems({ target }: { target: NotePreviewTarget }) {
+  const actions = useActions()
+  const state = useAppState()
   return (
-    target.generation === getProjectGeneration() &&
-    selectedPatternId(project, useTransportStore.getState().pattern) ===
-      target.pattern &&
-    project.channels.some((item) => item.id === target.channel)
+    <DropdownMenuGroup
+      onClickCapture={(event) => {
+        if (
+          !(event.target instanceof Element) ||
+          !event.target.closest('[role^="menuitem"]')
+        )
+          return
+        if (!prepareNotePreviewTarget(target)) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+      }}
+    >
+      <DropdownMenuLabel>Row view</DropdownMenuLabel>
+      {ROW_ACTION_IDS.map((id) => {
+        const action = actions.find((item) => item.id === id)
+        return (
+          action && (
+            <ActionMenuItem
+              key={id}
+              action={notePreviewActionForTarget(action, target)}
+              state={state}
+              inset
+            />
+          )
+        )
+      })}
+    </DropdownMenuGroup>
   )
 }
 
-/** No async transport change: only the lane currently shown may navigate. */
-function open(target: Target) {
-  if (!current(target)) return
-  useUiStore.getState().selectChannel(target.channel)
-  void runAction("view.pianoRoll")
-}
-
 type PreviewProps = {
-  target: Target
+  target: NotePreviewTarget
   name: string
   notes: readonly Note[] | undefined
   lengthSteps: number
@@ -75,11 +136,13 @@ const NotePreview = memo(function NotePreview({
   color,
   quiet,
 }: PreviewProps) {
+  const openAction = useAction(OPEN_NOTE_PREVIEW_ACTION)
+  const openShortcut = useShortcutLabel(OPEN_NOTE_PREVIEW_ACTION)
   const geometry = useMemo(
     () => notePreviewGeometry(notes, lengthSteps),
     [notes, lengthSteps]
   )
-  const pressed = useRef<Target | null>(null)
+  const pressed = useRef<NotePreviewTarget | null>(null)
   const caret = useRef<HTMLSpanElement>(null)
   const mounted = useRef(false)
   useEffect(() => {
@@ -153,58 +216,60 @@ const NotePreview = memo(function NotePreview({
       className="h-5.5 shrink-0"
       style={{ width: pitches(previewSteps(lengthSteps)) }}
     >
-      <Button
-        variant="ghost"
-        className={cn(
-          "relative h-full w-full overflow-hidden rounded-[3px] border-0 p-0",
-          quiet && "opacity-40"
-        )}
-        style={{ backgroundColor: "var(--wf-step-off)" }}
-        tabIndex={0}
-        data-slot="rack-note-preview"
-        aria-label={`${name} note preview. Open in piano roll`}
-        title={description}
-        onKeyDown={onKeyDown}
-        onPointerDown={(event) => {
-          pressed.current = event.button === 0 ? target : null
-        }}
-        onPointerCancel={() => {
-          pressed.current = null
-        }}
-        onClick={(event) => {
-          const captured = event.detail > 0 ? pressed.current : target
-          pressed.current = null
-          if (mounted.current && captured) open(captured)
-        }}
-        {...hint}
-      >
-        <svg
-          aria-hidden
-          viewBox={`0 0 ${geometry.width} ${geometry.height}`}
-          preserveAspectRatio="none"
-          style={{ width: "100%", height: "100%" }}
+      <ContextActions items={() => contextItems(target)}>
+        <Button
+          variant="ghost"
+          className={cn(
+            "relative h-full w-full overflow-hidden rounded-[3px] border-0 p-0",
+            quiet && "opacity-40"
+          )}
+          style={{ backgroundColor: "var(--wf-step-off)" }}
+          tabIndex={0}
+          data-slot="rack-note-preview"
+          aria-label={`${name} note preview. ${openAction?.title ?? ""}`}
+          title={`${description}. ${openAction?.title ?? ""}${openShortcut ? ` (${openShortcut})` : ""}`}
+          onKeyDown={onKeyDown}
+          onPointerDown={(event) => {
+            pressed.current = event.button === 0 ? target : null
+          }}
+          onPointerCancel={() => {
+            pressed.current = null
+          }}
+          onClick={(event) => {
+            const captured = event.detail > 0 ? pressed.current : target
+            pressed.current = null
+            if (mounted.current && captured) open(captured)
+          }}
+          {...hint}
         >
-          <path
-            data-note-shapes
-            d={geometry.path}
-            fill={color}
-            fillRule="nonzero"
+          <svg
+            aria-hidden
+            viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+            preserveAspectRatio="none"
+            style={{ width: "100%", height: "100%" }}
+          >
+            <path
+              data-note-shapes
+              d={geometry.path}
+              fill={color}
+              fillRule="nonzero"
+            />
+          </svg>
+          <span className="sr-only">{description}</span>
+          <span
+            ref={caret}
+            aria-hidden
+            data-slot="rack-note-playhead"
+            className="pointer-events-none absolute inset-y-0 w-px bg-(--wf-playhead)"
+            style={{ visibility: "hidden" }}
           />
-        </svg>
-        <span className="sr-only">{description}</span>
-        <span
-          ref={caret}
-          aria-hidden
-          data-slot="rack-note-playhead"
-          className="pointer-events-none absolute inset-y-0 w-px bg-(--wf-playhead)"
-          style={{ visibility: "hidden" }}
-        />
-        {geometry.count === 0 && (
-          <span className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-            No notes in this pattern
-          </span>
-        )}
-      </Button>
+          {geometry.count === 0 && (
+            <span className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+              No notes in this pattern
+            </span>
+          )}
+        </Button>
+      </ContextActions>
     </div>
   )
 })
@@ -226,7 +291,9 @@ export function RackNoteArea({
 }) {
   const generation = useProjectGeneration()
   const key = `${pattern}:${channel}`
-  const choice = useRackStore((state) => state.noteViews[key] ?? "auto")
+  const choice = useRackStore((state) =>
+    rackNoteView(state, { pattern, channel })
+  )
   const automatic = useMemo(() => needsNotePreview(notes), [notes])
   const showNotes = choice === "notes" || (choice === "auto" && automatic)
   const target = useMemo(
@@ -234,11 +301,6 @@ export function RackNoteArea({
     [pattern, channel, generation]
   )
   const focus = useRef<HTMLDivElement>(null)
-
-  function choose(view: RackNoteView) {
-    if (!current(target)) return
-    useRackStore.getState().setNoteView(key, view)
-  }
 
   // Menu finalFocus follows the new control when changing view unmounts the old.
   return (
@@ -274,37 +336,14 @@ export function RackNoteArea({
         <DropdownMenuContent
           align="end"
           finalFocus={() =>
-            focus.current?.querySelector<HTMLElement>(
-              '[data-slot="step-grid"] button[tabindex="0"]'
-            ) ?? false
+            notePreviewTargetReason(target)
+              ? false
+              : (focus.current?.querySelector<HTMLElement>(
+                  '[data-slot="step-grid"] button[tabindex="0"]'
+                ) ?? false)
           }
         >
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Row view</DropdownMenuLabel>
-            {(
-              [
-                ["auto", "Automatic steps or notes"],
-                ["steps", "Show steps"],
-                ["notes", "Show notes"],
-              ] as const
-            ).map(([view, label]) => (
-              <DropdownMenuItem
-                key={view}
-                onClick={() => choose(view)}
-                aria-label={`${label}${choice === view ? ", current view" : ""}`}
-              >
-                {label}
-                {choice === view && (
-                  <span aria-hidden className="ml-auto">
-                    ✓
-                  </span>
-                )}
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuItem onClick={() => open(target)}>
-              Open in piano roll
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
+          <RowActionItems target={target} />
         </DropdownMenuContent>
       </DropdownMenu>
     </>

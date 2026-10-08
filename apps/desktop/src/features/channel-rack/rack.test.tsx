@@ -131,7 +131,9 @@ describe("rows", () => {
       screen.queryByRole("group", { name: "Kick steps" })
     ).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Kick row view" }))
-    await userEvent.click(screen.getByRole("menuitem", { name: "Show steps" }))
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: /^Show steps/ })
+    )
     const row = stepGrid("Kick").parentElement!
     const marked = [...row.querySelectorAll("[data-detail-step]")].map((mark) =>
       mark.getAttribute("data-detail-step")
