@@ -115,7 +115,8 @@ pub(crate) fn params_of(kind: Kind) -> &'static [ParamDef] {
         | Kind::BridgeBadLatency
         | Kind::BridgeEventFlood
         | Kind::BridgeIgnoredStreamError
-        | Kind::BridgeStateBoundary => &GAIN_PARAMS[..1],
+        | Kind::BridgeStateBoundary
+        | Kind::BridgeControlledProcessError => &GAIN_PARAMS[..1],
         Kind::Sine | Kind::MidiSine => SINE_PARAMS,
         _ => &[],
     }
@@ -561,6 +562,7 @@ unsafe extern "C" fn latency_get(plugin: *const clap_plugin) -> u32 {
             | Kind::BridgeEventFlood
             | Kind::BridgeIgnoredStreamError
             | Kind::BridgeStateBoundary
+            | Kind::BridgeControlledProcessError
     ) {
         crate::bridge_behaviors::DELAY as u32
     } else {
@@ -618,6 +620,7 @@ pub(crate) fn get(kind: Kind, id: &CStr) -> *const c_void {
                 | Kind::BridgeEventFlood
                 | Kind::BridgeIgnoredStreamError
                 | Kind::BridgeStateBoundary
+                | Kind::BridgeControlledProcessError
         )
     {
         &raw const STATE as *const c_void
@@ -636,6 +639,7 @@ pub(crate) fn get(kind: Kind, id: &CStr) -> *const c_void {
                 | Kind::BridgeEventFlood
                 | Kind::BridgeIgnoredStreamError
                 | Kind::BridgeStateBoundary
+                | Kind::BridgeControlledProcessError
         )
     {
         &raw const LATENCY as *const c_void
