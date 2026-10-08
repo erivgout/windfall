@@ -1192,7 +1192,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Selected playback/loop/export ranges are integrated with native request ordering, source/revision guards, ordinary-transport supersession and reload/cancellation recovery. Native WAV/PDC/tail and buffered/stream/stem checks pass. The composed local UI suite passed; current CI found one asynchronous hydration-menu lookup under repair. Native window/device, P1 publication and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
+      "notes": "Selected playback/loop/export ranges are integrated with native request ordering, source/revision guards, ordinary-transport supersession and reload/cancellation recovery. Native WAV/PDC/tail and buffered/stream/stem checks pass. The composed local UI suite passed. The asynchronous hydration-menu lookup repair passed both independent reviews and 64 focused combined-source tests; fresh CI remains pending. Native window/device, P1 publication and final parity acceptance remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md."
     },
     {
       "id": "win-playlist-audio-clip-fades",

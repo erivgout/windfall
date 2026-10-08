@@ -1109,3 +1109,83 @@ The owner is restoring that exact policy in the granted Plan window. Paired same
 The T3-owned GPT-6.1-Sol implementation child is bound to `gpt/t3-pitch-analysis-m3` at exact base `7027569f`, in its separate worktree. Its narrow window is the new monophonic pitch module/tests/contract, one module export, and one dependency/reference to the already-locked `rustfft 6.4.1`. The early worker-only contract uses checked borrowed PCM, exact frame ranges/origins, explicit channel selection, measured F0/voicing/segments and visible resource/cancellation refusal. The cached dependency checksum/license was verified by the owner. No source checkpoint or signal-quality acceptance is claimed yet.
 
 Session/job/UI registration, editable pitch/timing proposals, correction/harmony, tuner, warp editor and M3 parity closure remain open. M1 foundation acceptance does not imply acceptance of its excluded app or the P1 publication path.
+
+# Terminal CI results for `7027569f`
+
+The earlier observation above is superseded by the terminal result: [CI run 37766014784](https://github.com/erivgout/windfall/actions/runs/37766014784) failed. Ubuntu Rust, simulator freshness, parity and all three platform binding jobs passed. The UI, macOS Rust and Windows Rust jobs failed; the app job was skipped, so it supplies no app acceptance evidence.
+
+The Windows raw log `C:/Temp/windfall-702-windows-ci.log` records the bridge executable at **26 passed / one failed / one ignored subprocess role** (6.76 s). The sole failure is `vst3_capture_does_not_relabel_dsp_proof_after_a_reset_without_processing`: the second capture after reset returned `"capture timeline ownership changed"` at `tests/bridge.rs:1386`. The test requires epoch 2 with zero processed-generation proof and zero acknowledgement before any subsequent DSP. No native hang was established; compilation accounts for the earlier long job duration. The same bridge owner has a read-only diagnosis window on the reset/control/header/native-epoch ordering. No retry, assertion relaxation or cause is assumed.
+
+Windows separately passed the desktop executable **314 tests** and the analysis integration executable **30 tests**. The macOS eight unsupported VST3 bundle failures and the UI lookup failure recorded above remain the actual remote failures. The Linux identity repair is confirmed by the Ubuntu job; macOS bundle lifecycle and the Windows reset/capture mechanism still require repair and fresh remote verification.
+
+# Timeline asynchronous hydration lookup review R1
+
+Immutable owner pin `393cc39ebfd8ddea9f416ab4a38175fa2785d51f`, direct parent `aa6c55b6`. The parent imported only this two-path repair as `20e58627d1cc9430bd86f026508d56d3121a5abc`.
+
+## Standards
+
+**Standards: 0 new documented breaches; 0 new baseline-smell findings.**
+
+Reviewed `aa6c55b6138d34257d73bb55a4e5c30cc6b6deb5...393cc39ebfd8ddea9f416ab4a38175fa2785d51f`: one commit, exactly two paths.
+
+The change at [timeline-hydration.test.tsx:79](C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src/features/playlist/timeline-hydration.test.tsx:79) only replaces the synchronous lookup with `await findByRole`. The exact role/name, default timeout, single trigger/Clear clicks, and every assertion remain unchanged. Registry-backed menu execution and canonical backend assertions remain consistent with `docs/ARCHITECTURE.md:430,437,448`.
+
+Performed read-only checks: resolved both pins; inspected the diff/log, complete pinned timeline document, supplied standards, shared control/dropdown/action code, test setup, dependency lock, and relevant ledger history at fixed `fd4ad940`. Blob comparison confirms the control, dropdown and lock match root `7027569f`. The raw CI log confirms the closed trigger, failing lookup and **1 failed/2661 passed tests**; its SHA-256 matches the document.
+
+Base UI implementation code is unvendored in the pinned Git tree. Its animation-frame trace therefore remains owner-reported source evidence; the locked **1.8.0** dependency was independently checked.
+
+The owner’s baseline **4/4 pass**, subsequent **64/64 passes** and strict checks remain owner execution evidence. The parent’s two complete local UI passes remain distinct from the remote failure. I executed no tests, builds or generators.
+
+Earlier findings/responses—including the inherited nonblocking validator-duplication judgment—remain intact. Fresh combined CI, P1 preparation/retirement under guards, N4 production activation, native/plugin/platform acceptance and all deferred T1 requirements remain open. No roadmap row or phase of the full **0–7/342-row** goal closes through this review.
+
+## Spec
+
+**Spec: 0 new findings. Accept the bounded repair at `393cc39e`.** Verified `aa6c55b6...393cc39e`: one commit, exactly two paths.
+
+At [timeline-hydration.test.tsx:79](C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src/features/playlist/timeline-hydration.test.tsx:79), `await findByRole` waits for the same exact Clear role/name with the default timeout. Both single clicks and every hydration, range-label, enablement, backend-clear, selection and returned-focus assertion remain unchanged. No production behavior or scope expansion appears.
+
+The raw CI log’s SHA-256 matches the document. It confirms the synchronous lookup failure, closed Timeline trigger and totals of **1 failed/171 passed files; 1 failed/2661 passed tests**. The deferred-opening explanation is consistent with the supplied Base UI trace and uncontrolled app wiring; callback timing is explicitly not claimed as instrumented.
+
+[The evidence record](C:/Users/ewhee/.t3/projects/windfall/docs/TIMELINE-REGIONS.md:984) correctly separates the passing local **4/4 baseline**, owner-reported **64/64 focused checks**, and earlier root full-suite passes from the remote failure. Validation-only root WASM is identified as **1,982,055 bytes**, hash `d1a3aa6b…`; own-source typecheck used **179 cached bindings**, distinct from root’s **183**.
+
+Read-only checks covered resolved pins, diff/log, complete pinned timeline document, specified spec sources, prior ledger contexts, relevant controls/store/registry/dropdown/lock/configuration, CI evidence and `git diff --check`. No edits, builds, tests, generators, imports or nested reviewers occurred. Dependency internals are absent from pinned Git objects; their trace remains supplied evidence.
+
+Fresh combined-root/artifact and CI verification remain required. P1 preparation/retirement under guards, N4 production activation, native/platform acceptance and retained T1 work remain open. Prior findings/responses stay intact; this repair closes no roadmap row or phases 0–7/342-row goal.
+
+The parent subsequently executed the four focused hydration/Add/lifetime/reload files on the combined source: **64 passed / four files**, 12.14 s (`C:/Temp/windfall-root-timeline-393-focused.log`). Root `pnpm typecheck`, scoped ESLint and changed-test Prettier checks passed. Simulator freshness remains current at **1,982,055 bytes**, SHA-256 `d1a3aa6b1d4b908b160ed77fc88c4ee82fa1ec8bad7206ee0e715e5ed27e51a3`, source inputs `732414a3bad9f213c17a4791f5bb3301caa4e5f6e1b8beb04f8e5fc3c180ea59`. No new full UI or Rust execution is attributed to this one-line increment. Fresh CI verification remains pending; the separate macOS and Windows failures remain unresolved.
+
+# Monophonic pitch foundation review R1
+
+Immutable owner pin `60327573326a27ebdf000588e0ff0a7239ec30c0`, direct base `7027569f`, six authorized paths. This source is **not imported**. The worker-only foundation implements checked borrowed PCM, explicit channel selection, exact integer range/origin, pitch/voicing/segments and resource/cancellation refusal. Owner execution reports 51 ordinary tests and an explicitly invoked long resource case; those are not parent execution or real-vocal quality evidence.
+
+## Standards
+
+Standards review of `7027569f...60327573`: **0 hard violations; 1 optional finding.**
+
+- **Optional — possible Duplicated Code:** [pitch.rs:603](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-analysis/src/pitch.rs:603) and [pitch.rs:639](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-analysis/src/pitch.rs:639) repeat the raw squared-difference formula, `E[w] + E[w+k] - E[k] - 2*correlation[k]/N`. A private helper would keep interpolation and difference calculation aligned during future numerical changes. Preserve the existing finite/negative-roundoff checks. This is a maintainability judgment, not a demonstrated defect.
+
+The module satisfies the reviewed interface and locality requirements: checked preparation, immutable borrowed input, integer frame coordinates, explicit channel selection, bounded work/output, complete-result construction, and reusable scratch after failure. The resource formulas include scratch and RustFFT plan-construction transients; the documented infallible-constructor allocation limitation remains.
+
+The dependency change stays within scope. Cached RustFFT 6.4.1 source, checksum, MIT/Apache texts and notice information agree with [PITCH-ANALYSIS.md:96](C:/Users/ewhee/.t3/projects/windfall/docs/PITCH-ANALYSIS.md:96), satisfying the dependency-license rule in [ARCHITECTURE.md:462](C:/Users/ewhee/.t3/projects/windfall/docs/ARCHITECTURE.md:462). The lock diff adds only the analysis crate’s existing RustFFT reference.
+
+I considered all three documented initial failures. Raw-difference interpolation follows the cited bias correction in [YIN §II.E](https://www.ee.columbia.edu/~dpwe/papers/deChevK02-yin.pdf); the boundary test uses authored transition coordinates, and range refusal inspects shorter lags. These checks do not establish real-vocal quality.
+
+Read-only checks covered ancestry, commit log, the six-path diff, complete module/tests/document, and pinned public `Work`/`CapturedInput`/`AudioShape` APIs. No edits, builds, tests, generation, imports or agents were run. P1/R2 attachment gates and the remaining M3 editor, correction, warp and listening requirements remain open.
+
+## Spec
+
+Spec review: **1 finding (P2)** at `60327573326a27ebdf000588e0ff0a7239ec30c0`, against `7027569f8b466242a75faf327381e6ac44c88d28`.
+
+- **[P2] Apply the threshold to interpolated CMND trough depth.** `crates/windfall-analysis/src/pitch.rs:630–657` requires a sampled CMND value below threshold before interpolation. For supported 8 kHz / 50–1000 Hz settings, a noiseless **941.17647 Hz fundamental plus a second harmonic at 1.2× its amplitude** has an 8.5-sample period. Its sampled first trough exceeds the default 0.15 threshold; lag 17 repeats exactly. By source/math inspection, the detector therefore selects approximately **470.6 Hz with confidence near 1**, an octave error. This conflicts with the requested “musically useful detection” and “calibrated notes/harmonics … octave traps.” [YIN II.E](https://www.ee.columbia.edu/~dpwe/papers/deChevK02-yin.pdf) uses interpolated CMND minimum depth for selection, then raw-difference interpolation for the period. The harmonic fixtures at `tests/pitch_analysis.rs:161–180` use only 48 kHz and miss this case. Add low-rate fixtures with fractional sample periods and correct trough acceptance.
+
+The fixed-window FFT difference calculation, integer coordinates, stereo policy, validation, checked budgets, reuse and complete-result error handling otherwise appear consistent with the foundation contract. No scope expansion found.
+
+Foundation acceptance should await this correction. Full M3 editor/warp/correction work and real-vocal/broader-platform evidence remain open, as documented at `docs/PITCH-ANALYSIS.md:118–125,236–238`.
+
+Read-only review covered the complete six-path change, pinned public APIs/specs and relevant primary sources. No edits, builds, tests, generation, handoff, imports or nested agents; owner-reported green tests were not treated as independent proof.
+
+The same implementation owner has a narrow correction window in `pitch.rs`, its authored tests and `PITCH-ANALYSIS.md`, retaining `60327573` unchanged. It must reproduce the 8 kHz fractional-period harmonic octave error, correct interpolated CMND trough acceptance while retaining raw-difference period interpolation, and test a bounded low-rate/range/threshold grid without widening signal assertions. A separately tested incremental pin and a new full-context independent review are required before integration. The optional raw-difference duplication cleanup may accompany that numerical correction only within these owned paths. Session/job/UI registration, real-vocal evidence, pitch editing/correction/warp/tuner, and all P1/M1 composition gates remain open; no parity status or counter changes.
+
+# Namespace prototype remains isolated
+
+M1's next granted artifact window is only three excluded standalone diagnostic source/build/plan files and an ordinary non-elevated MSVC/Windows-SDK compilation. Execution of SYSTEM/medium roles, actors, namespace objects, privilege changes and CI dispatch is not granted. The proposed experiment requires an externally approved disposable environment and explicit verified tokens; local object probes do not establish global/local DOS namespace authority. Production `SourceFile`, its 65/1,105 handle caps, and the excluded app source remain unchanged.
