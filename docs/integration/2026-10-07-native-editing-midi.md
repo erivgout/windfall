@@ -401,3 +401,72 @@ executed native reproductions. The runtime owner is producing compiled regressio
 and repairs, with the shared runtime/parameter fixture window reserved. N4 can
 continue its new modules, module export and existing Windows mapping API features;
 production runtime/helper routing remains deferred until those repairs land.
+
+## Rhythm acceptance and transactional source follow-ups
+
+The rhythm batch at `7f70315c` passed 13 archive, 306 project and 109 host
+tests, plus 257 desktop tests before one test-only default-target assumption
+failed. The scanner fixture path was corrected in `101c096e`; that exact test
+passed with `CARGO_TARGET_DIR` unset. Scoped strict Clippy, workspace formatting
+and an independent comparison of all 170 fresh binding files then passed.
+The affected UI batch passed 536 tests in 29 files, ESLint and production build.
+This records the initial 257 desktop passes and subsequent single-test result,
+not a second full 258-test run. Logs are the local temporary
+`windfall-root-rhythm-combined-native.log`, `windfall-root-rhythm-native-resume.log`
+and `windfall-root-rhythm-combined-ui.log`.
+
+Actual T3 preview interaction verified Flam changes four selected notes to
+eight, and one Undo restores four. Invalid Before placement at tick zero
+leaves history and dirty state unchanged. Combined acceptance and clean
+independent rhythm review close Chop, Arpeggiate, Flam and Rhythm reshaper.
+Parity now records 68 done, 50 in progress, 222 todo and two won't-do rows,
+retaining all 342 requirements. Native hardware audio was not exercised.
+
+Sampler repairs `3f2a70f9`/`fcbd0599` and composed transactional import routing
+`6538722c` were cherry-picked as `499c16a6`, `5a3e76dc` and `282b62a3`.
+Portable save repair `dc57588a` was cherry-picked as `e9fdcb70`, preserving
+both archive cancellation and sampler preparation/install guards. Application
+scaling `f418da57` was cherry-picked as `9b3001f4`; its full parity row remains
+in progress because native third-party editor scaling is still required.
+
+Independent sampler round two closes the original four cases and passed 22
+sampler-filter tests plus the 51-case import barrier on the existing composed
+binary. It source-traced a new P2, independently confirmed by browser round
+three: an identical import cannot attach a restored settled missing source
+because its musical command is a no-op. The helper owner is repairing guarded
+runtime attachment; the import owner is adding ordinary/checked real-file
+regressions. History, dirty state, exact held sources and pending-loader
+ownership must remain unchanged except for successful runtime source recovery.
+
+Browser round three also reproduced a P1 through actual picker/New/Open flow
+functions: opening another project while a rack/replacement file picker is
+pending lets its result start an import in the new project. The browser owner
+is adding action-entry generation guards and four corresponding regressions.
+The review also source-traced case-sensitive cache provenance falsely refusing
+unchanged Windows path aliases; the browser owner is adding native casing and
+cache-eviction regressions while retaining file identity/length/timestamp guards.
+Portable round three and scaling round one reviews are running at their fixed
+commits. Root combined native/session checks, including the real CLAP archive
+fixture, and the full UI suite are running at `9b3001f4`.
+
+Runtime round four compiled RED reproduced both new capture-adoption and native
+point-overflow cases. Its first GREEN has passed all four real CLAP/VST3 effect
+and instrument capture/save/reopen roles and native point regressions with zero
+guarded callback allocations, reallocations and frees. Final focused checks and
+source delivery remain pending. Stamp round three and utility round three
+findings remain assigned to their existing owners. No new source push, tag,
+release or asset replacement has occurred in this batch.
+
+Regeneration after the additive project history helpers rebuilt the document
+WASM successfully. Its binary remains exactly 1,863,302 bytes; its source hash
+record was updated, and `check-sim.mjs` passed. Independent fresh comparison of
+the complete binding inventory follows the current native checks. Application
+scaling preview navigation confirmed the clean demo at 100%; a subsequent click
+timed out and the tool explicitly reported no automation host. No new root
+125/200% interaction or physical-window proof is claimed from that attempt.
+
+The next isolated T3 owner has started T1 meter maps, timeline markers, selected
+loop/playback/export regions and region zoom. Full arrangements, linked tracks,
+grouping and per-pattern signatures remain separate required follow-ups. Its
+shared Rack/State/runtime and session source windows remain reserved to the
+active repair owners until narrow integration hooks are coordinated.

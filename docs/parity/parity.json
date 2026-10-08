@@ -793,10 +793,10 @@
       "summary": "Cuts long notes into shorter pieces by grid or by a slicing pattern.",
       "windfall_name": "Chop",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Selected notes split at absolute grid boundaries or a bounded user-authored repeating tick/gate/velocity pattern, preserving partial edges and atomic undo. Custom-pattern implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. Revision-gap and selection recovery remain guarded. See docs/PIANO-RHYTHM.md and docs/DOCUMENT-REPLIES.md."
+      "notes": "Selected notes split at absolute grid boundaries or a bounded user-authored repeating tick/gate/velocity pattern, preserving partial edges and atomic undo. Custom-pattern implementation, independent rhythm review and combined artifact/native/UI acceptance passed. Revision-gap and selection recovery remain guarded. See docs/PIANO-RHYTHM.md and docs/DOCUMENT-REPLIES.md."
     },
     {
       "id": "win-piano-glue",
@@ -817,10 +817,10 @@
       "summary": "Rewrites selected chords as arpeggio patterns.",
       "windfall_name": "Arpeggiate",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Selected equal-onset chords become bounded ascending, descending or alternating arpeggios with explicit rate, gate, octave and duration/repetition controls. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md."
+      "notes": "Selected equal-onset chords become bounded ascending, descending or alternating arpeggios with explicit rate, gate, octave and duration/repetition controls. Implementation, independent rhythm review and combined artifact/native/UI acceptance passed. See docs/PIANO-RHYTHM.md."
     },
     {
       "id": "win-piano-strum",
@@ -841,10 +841,10 @@
       "summary": "Adds a close double hit to selected notes for a drum flam.",
       "windfall_name": "Flam",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Selected notes gain bounded grace hits before or after the original, with explicit interval and velocity controls and one undo step. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md."
+      "notes": "Selected notes gain bounded grace hits before or after the original, with explicit interval and velocity controls and one undo step. Implementation, independent rhythm review and combined artifact/native/UI acceptance passed. See docs/PIANO-RHYTHM.md."
     },
     {
       "id": "win-piano-claw",
@@ -853,10 +853,10 @@
       "summary": "Removes, adds or shifts notes at intervals to turn a regular rhythm into a new one.",
       "windfall_name": "Rhythm reshaper",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Bounded Euclidean interval cells remove, add or shift selected notes with phase/period controls, duplicate suppression and atomic undo. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md."
+      "notes": "Bounded Euclidean interval cells remove, add or shift selected notes with phase/period controls, duplicate suppression and atomic undo. Implementation, independent rhythm review and combined artifact/native/UI acceptance passed. See docs/PIANO-RHYTHM.md."
     },
     {
       "id": "win-piano-limit",

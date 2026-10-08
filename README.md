@@ -14,7 +14,7 @@ The Windows app supports live MIDI input with sustain, an explicit audition chan
 
 Selected audio clips can be trimmed, extracted, normalized, reversed, faded, silenced or cut in the native audio editor. Edits create a new WAV and one undo step. Reviewed grid/transient slicing creates clips linked to the original source; playable slice mapping remains unfinished. See `docs/AUDIO-EDITOR.md` and `docs/SLICER.md`.
 
-The piano roll includes selected-note quantize, legato/staccato, grid and custom-pattern chop, compatible glue, arpeggiate, flam, rhythm reshaping, strum, time/pitch flip, pitch-range and velocity tools with atomic undo. Independent rhythm review passed; combined integration checks are in progress. Opt-in scale guidance and pitch snap accompany one-click chord/scale stamps; the latest cancellation repairs await review. The transport includes reviewed tap tempo. Portamento and further piano tools remain unfinished. See `docs/PIANO-TOOLS.md`, `docs/PIANO-RHYTHM.md`, `docs/PIANO-SCALES.md` and `docs/TAP-TEMPO.md`.
+The piano roll includes selected-note quantize, legato/staccato, grid and custom-pattern chop, compatible glue, arpeggiate, flam, rhythm reshaping, strum, time/pitch flip, pitch-range and velocity tools with atomic undo. Independent rhythm review and combined native/UI/artifact checks passed. Opt-in scale guidance and pitch snap accompany one-click chord/scale stamps; delayed-choice cancellation repairs remain in progress. The transport includes reviewed tap tempo. Portamento and further piano tools remain unfinished. See `docs/PIANO-TOOLS.md`, `docs/PIANO-RHYTHM.md`, `docs/PIANO-SCALES.md` and `docs/TAP-TEMPO.md`.
 
 The sample browser indexes bounded folder trees, searches paths with Boolean and wildcard queries, and stores local favorites and tags. Refreshed file imports use checked source tokens. Delayed-import and changed-source repair work is still in progress. See `docs/BROWSER-LIBRARY.md`.
 
@@ -26,7 +26,9 @@ The Windows app hosts CLAP and VST3 instruments and effects with a plugin manage
 
 Microphone/line recording writes a take to an ordinary audio clip with undo and project persistence. Input must match the output sample rate; monitoring, automatic latency alignment and hardware microphone verification remain unfinished. See `docs/RECORDING.md`.
 
-Native file actions include portable ZIP projects with project, plugin-state and audio assets, plus collision-safe numbered project publication. Bounded archive-parser and final numbered destination repairs are integrated. Concurrent carried-audio publication and history-only sample preservation remain under repair. See `docs/PORTABLE-PROJECTS.md` and `docs/PORTABLE-REPAIRS.md`.
+Native file actions include portable ZIP projects with project, plugin-state and audio assets, plus collision-safe numbered project publication. Bounded archive-parser, final numbered destination, concurrent carried-audio publication and exact history-source repairs are integrated; independent review and combined native checks remain in progress. See `docs/PORTABLE-PROJECTS.md` and `docs/PORTABLE-REPAIRS.md`.
+
+Settings provides persisted 75–200% application scaling with shared canvas and input coordinates. Combined checks and independent review remain in progress; native third-party editor scaling remains unfinished. See `docs/UI-SCALING.md`.
 
 ## Run it
 
