@@ -462,6 +462,16 @@ impl Ledger {
     }
 }
 
+impl Ledger {
+    /// Identity recorded when the current native owner was prepared or reused.
+    /// Departing owners are deliberately excluded from active adoption.
+    pub fn native_identity(&self, effect: EffectId) -> Option<u64> {
+        self.plugins
+            .get(&windfall_project::PluginTarget::Effect { effect })
+            .map(|(identity, _)| *identity)
+    }
+}
+
 /// How far behind each track's signal is.
 struct Layout {
     /// Frames by which the input of each track is behind.
@@ -737,6 +747,52 @@ impl Layout {
         {
             path.clear();
         }
+    }
+
+    /// Factor a reference transfer into the incoming prefix and the serial
+    /// stages still needed. Fixed instrument/plugin prefixes can be removed
+    /// by their length. Distinct varying branches have no causal inverse;
+    /// those retain scalar PDC, as do paths beyond the one-second host bound.
+    fn compensation_path(
+        &self,
+        to: usize,
+        input: &[DelayStage],
+        delay: usize,
+        most: usize,
+    ) -> Vec<DelayStage> {
+        let reference = &self.arrival_path[to];
+        let mut path = if reference.starts_with(input) {
+            reference[input.len()..].to_vec()
+        } else if input
+            .iter()
+            .all(|stage| !stage.matrix && stage.maximum == stage.delay)
+        {
+            let mut remove: usize = input.iter().map(|stage| stage.delay).sum();
+            let mut path = reference.clone();
+            for stage in &mut path {
+                if stage.matrix || stage.maximum != stage.delay {
+                    break;
+                }
+                let taken = remove.min(stage.delay);
+                stage.delay -= taken;
+                stage.maximum -= taken;
+                remove -= taken;
+            }
+            if remove > 0 {
+                return Vec::new();
+            }
+            path.retain(|stage| stage.maximum > 0);
+            path
+        } else {
+            return Vec::new();
+        };
+        if !path.iter().any(|stage| stage.matrix)
+            || path.iter().map(|stage| stage.delay).sum::<usize>() != delay
+            || path.iter().map(|stage| stage.maximum).sum::<usize>() > most
+        {
+            path.clear();
+        }
+        path
     }
 }
 
@@ -1601,6 +1657,10 @@ impl PlanState {
                     );
                 }
             }
+        }
+
+        for unit in self.chains.iter().flatten().flatten() {
+            wait = wait.max(unit.insertion_wait());
         }
 
         for (index, channel) in plan.channels.iter().enumerate() {
