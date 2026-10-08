@@ -12,7 +12,8 @@ use windows_sys::Win32::Security::Cryptography::{
 };
 
 const MAGIC: &[u8; 4] = b"WFAH";
-const VERSION: u32 = 2;
+// Hello3 commits to the ABI4 reset authority contract before any Load disclosure.
+const VERSION: u32 = 3;
 const HELLO_BYTES: usize = 40;
 const BOOT_MAGIC: &[u8; 4] = b"WFAP";
 const BOOT_VERSION: u32 = 1;
@@ -381,5 +382,7 @@ mod tests {
         assert!(!key.matches(&hello));
         hello[4..8].copy_from_slice(&1u32.to_le_bytes());
         assert!(!key.matches(&hello)); // Old helper cannot disclose/receive Load.
+        hello[4..8].copy_from_slice(&2u32.to_le_bytes());
+        assert!(!key.matches(&hello)); // ABI3 helper must not receive Load either.
     }
 }

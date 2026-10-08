@@ -61,6 +61,33 @@ impl Drop for Native {
     }
 }
 impl Native {
+    fn adopt_timeline(&mut self) -> io::Result<u64> {
+        let epoch = self.region.timeline_epoch().map_err(error)?;
+        if epoch < self.epoch {
+            return Err(error("mapped timeline authority regressed"));
+        }
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            self.sequence = None;
+            self.notes_uncertain = true;
+        }
+        Ok(epoch)
+    }
+    /// This check admits an owner turn, not native controls or DSP proof. A
+    /// subsequent host reset cannot revoke a native turn already admitted here.
+    fn admit_input(&mut self, epoch: u64) -> io::Result<bool> {
+        let current = self.adopt_timeline()?;
+        if epoch == 0 || epoch > u64::from(u32::MAX) || epoch > current {
+            return Err(error("invalid input timeline ownership"));
+        }
+        Ok(epoch == current)
+    }
+    fn check_capture_epoch(&mut self, epoch: u64) -> io::Result<()> {
+        if self.adopt_timeline()? != epoch {
+            return Err(error("capture timeline ownership changed"));
+        }
+        Ok(())
+    }
     fn activate(&mut self) -> io::Result<()> {
         let mut processor = self
             .instance
@@ -247,8 +274,9 @@ impl Native {
             // acknowledging its generation, including desired releases.
             self.notes_uncertain = true;
         }
-        self.epoch = input.epoch;
-        self.sequence = Some(sequence);
+        if self.adopt_timeline()? == input.epoch {
+            self.sequence = Some(sequence);
+        }
         if !good_audio {
             return Err(error("native plugin emitted nonfinite samples"));
         }
@@ -270,9 +298,32 @@ impl Native {
         generation: u64,
         pending: &[ControlParameter],
     ) -> io::Result<(Vec<u8>, Vec<ControlParameter>, u64, u64)> {
-        if epoch == 0 || generation == 0 || (epoch != self.epoch && self.sequence.is_some()) {
+        self.capture_with_checkpoint(epoch, generation, pending, || {})
+    }
+    fn capture_with_checkpoint(
+        &mut self,
+        epoch: u64,
+        generation: u64,
+        pending: &[ControlParameter],
+        checkpoint: impl FnOnce(),
+    ) -> io::Result<(Vec<u8>, Vec<ControlParameter>, u64, u64)> {
+        self.check_capture_epoch(epoch)?;
+        if generation == 0 {
             return Err(error("capture timeline ownership changed"));
         }
+        let result = self.capture_current(epoch, generation, pending, checkpoint);
+        // This check is after VST3 recovery, including native save refusal.
+        // A request can never establish timeline ownership by itself.
+        self.check_capture_epoch(epoch)?;
+        result
+    }
+    fn capture_current(
+        &mut self,
+        epoch: u64,
+        generation: u64,
+        pending: &[ControlParameter],
+        checkpoint: impl FnOnce(),
+    ) -> io::Result<(Vec<u8>, Vec<ControlParameter>, u64, u64)> {
         // Sequence continuity can be cleared by capture; DSP proof remains
         // bound to the epoch of the last actual native block.
         let processed = if epoch == self.processed_epoch {
@@ -322,6 +373,7 @@ impl Native {
             {
                 return Err(error("native capture parameter values are malformed"));
             }
+            checkpoint();
             return Ok((state, values, processed, 0));
         }
         self.deactivate()?;
@@ -369,6 +421,7 @@ impl Native {
         })();
         // Recovery is mandatory even when capture fails. Refusal leaves the
         // exact processor owned here; supervisor can terminate this process.
+        checkpoint();
         let recovery = self.activate();
         self.sequence = None;
         match (result, recovery) {
@@ -581,6 +634,7 @@ fn run(address: SocketAddr) -> io::Result<()> {
     let mut input = InputBlock::new();
     let mut output = OutputBlock::silent();
     loop {
+        native.adopt_timeline()?;
         if let Some(packet) = decoder.poll(&mut socket)? {
             if packet.owner != load.owner {
                 return Err(error("stale helper control owner"));
@@ -672,26 +726,31 @@ fn run(address: SocketAddr) -> io::Result<()> {
                 _ => return Err(error("unsupported helper control request")),
             }
             reply(&mut socket, &response)?;
+            native.adopt_timeline()?;
         }
         let mut worked = false;
         if let Some((slot, sequence)) = native.region.take_input(&mut input).map_err(error)? {
             worked = true;
-            let result = native.process(sequence, &input, &mut output);
-            if result.is_err() {
-                native.region.latch_helper_failure();
-            }
-            native.region.complete(
-                slot,
-                sequence,
-                &output,
-                if result.is_ok() {
-                    OUTPUT_OK
+            let result = native.admit_input(input.epoch).and_then(|admitted| {
+                if admitted {
+                    native.process(sequence, &input, &mut output).map(|()| true)
                 } else {
-                    OUTPUT_FAILED
-                },
-            );
-            result?;
+                    Ok(false)
+                }
+            });
+            match result {
+                Ok(false) => native.region.retire_input(slot).map_err(error)?,
+                Ok(true) => native.region.complete(slot, sequence, &output, OUTPUT_OK),
+                Err(error_value) => {
+                    native.region.latch_helper_failure();
+                    native
+                        .region
+                        .complete(slot, sequence, &output, OUTPUT_FAILED);
+                    return Err(error_value);
+                }
+            }
         }
+        native.adopt_timeline()?;
         native.instance.idle(&mut |notification| {
             if matches!(
                 notification,
@@ -702,6 +761,7 @@ fn run(address: SocketAddr) -> io::Result<()> {
                 native.dirty = true;
             }
         });
+        native.adopt_timeline()?;
         native.region.owner_completed().map_err(error)?;
         if !worked {
             std::thread::sleep(Duration::from_micros(200));
@@ -727,5 +787,225 @@ mod tests {
         assert!(dropped_evidence(u32::MAX - 65_536, u32::MAX - 65_536).is_err());
         assert!(dropped_evidence(u32::MAX - 65_537, u32::MAX - 65_536).is_err());
         assert!(dropped_evidence(100, 0).is_err());
+    }
+
+    fn with_native(
+        format: &str,
+        test: impl FnOnce(&mut Native, &mut super::super::adapter::Audio, ParameterSpec),
+    ) {
+        static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let folder = std::env::temp_dir().join(format!(
+            "windfall-reset-owner-turn-{}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(format!("fixture.{format}"));
+        // Like the explicit native sticky-writer unit, these owner-turn tests
+        // require a separately built fixture and never start nested Cargo.
+        let source =
+            std::env::var_os("WINDFALL_BRIDGE_FIXTURE").expect("explicit native fixture path");
+        std::fs::copy(source, &path).unwrap();
+        let host = PluginHost::windfall();
+        let module = host.load(&path).unwrap();
+        let mut instance = module
+            .create(if format == "clap" {
+                "org.windfall.test.gain"
+            } else {
+                "00000000000000000000000000000001"
+            })
+            .unwrap();
+        assert!(instance.set_param(7, 0.5));
+        let mut processor = instance.activate(48_000.0, 64).unwrap();
+        processor.set_realtime(false);
+        let region = Region::initialize(
+            super::super::slots::LocalWords::new(),
+            Config {
+                identity: Identity {
+                    session: 1,
+                    token: 2,
+                    revision: 3,
+                    binding: 4,
+                },
+                sample_rate: 48_000,
+                block: 64,
+                native_latency: processor.latency_samples() as usize,
+                kind: Kind::Effect,
+            },
+        )
+        .unwrap();
+        let spec = ParameterSpec {
+            id: 7,
+            min: 0.0,
+            max: if format == "clap" { 2.0 } else { 1.0 },
+            value: 0.5,
+            read_only: false,
+            stepped: false,
+        };
+        let mut native = Native {
+            processor: Some(processor),
+            instance,
+            region: region.clone(),
+            parameters: vec![spec],
+            host_values: BTreeMap::from([(7, 0.5)]),
+            uncertain: BTreeSet::new(),
+            notes_uncertain: false,
+            sequence: None,
+            epoch: 1,
+            processed_generation: 0,
+            processed_epoch: 0,
+            offline: true,
+            dirty: false,
+        };
+        let mut audio = super::super::adapter::Audio::new(
+            region.clone(),
+            Arc::new(super::super::adapter::Signals::default()),
+            &[spec],
+        )
+        .unwrap();
+        test(&mut native, &mut audio, spec);
+        drop(audio);
+        drop(native);
+        drop(module);
+        drop(host);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(folder).unwrap();
+    }
+    #[test]
+    #[ignore = "requires explicitly built WINDFALL_BRIDGE_FIXTURE; runs no nested Cargo"]
+    fn reset_capture_accepts_current_authority_after_an_old_native_owner_turn() {
+        with_native("vst3", |native, audio, spec| {
+            let region = native.region.clone();
+            let mut input = InputBlock::new();
+            let mut output = OutputBlock::silent();
+            for _ in 0..3 {
+                audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+                let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+                assert!(native.admit_input(input.epoch).unwrap());
+                native.process(sequence, &input, &mut output).unwrap();
+                region.complete(slot, sequence, &output, OUTPUT_OK);
+            }
+            assert_eq!(audio.health().acknowledged_generation, 1);
+            audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+            assert_eq!(native.capture(1, 1, &[spec.into()]).unwrap().2, 1);
+            let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+            assert!(native.admit_input(input.epoch).unwrap());
+            // This owner turn is admitted before reset, then really calls native
+            // processing after it. No scheduler sleeps or fixture changes are used.
+            audio.reset_timeline();
+            native.process(sequence, &input, &mut output).unwrap();
+            region.complete(slot, sequence, &output, OUTPUT_OK);
+            assert_eq!(native.processed_epoch, 1);
+            let second = native.capture(2, 1, &[spec.into()]).unwrap();
+            assert_eq!(second.2, 0);
+            assert_eq!(audio.health().acknowledged_generation, 0);
+            assert_eq!(native.epoch, 2);
+            assert_eq!(native.sequence, None);
+            assert_eq!(region.timeline_epoch(), Ok(2));
+            assert_eq!(region.owner_completions(), 0);
+        });
+    }
+    #[test]
+    #[ignore = "requires explicitly built WINDFALL_BRIDGE_FIXTURE; runs no nested Cargo"]
+    fn repeated_resets_fence_old_turns_and_stale_capture_without_new_dsp() {
+        for format in ["clap", "vst3"] {
+            with_native(format, |native, audio, spec| {
+                let region = native.region.clone();
+                let mut input = InputBlock::new();
+                let mut output = OutputBlock::silent();
+                audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+                let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+                assert!(native.admit_input(input.epoch).unwrap());
+                audio.reset_timeline();
+                audio.reset_timeline();
+                native.process(sequence, &input, &mut output).unwrap();
+                region.complete(slot, sequence, &output, OUTPUT_OK);
+                assert_eq!(output.epoch, 1);
+                assert_eq!(native.processed_epoch, 1);
+                assert_eq!(native.epoch, 3);
+                for epoch in [0, 1, 2, 4, u64::MAX] {
+                    assert!(native.capture(epoch, 1, &[spec.into()]).is_err());
+                }
+                assert_eq!(native.capture(3, 1, &[spec.into()]).unwrap().2, 0);
+                assert_eq!(region.timeline_epoch(), Ok(3));
+                assert_eq!(region.owner_completions(), 0);
+                for _ in 0..4 {
+                    audio.process(&mut [0.0; 64], &mut [0.0; 64]);
+                }
+                assert_eq!(audio.health().acknowledged_generation, 0);
+                assert_eq!(audio.completed_proof(), None);
+                assert_eq!(audio.desired_generation(), 1);
+            });
+        }
+    }
+    #[test]
+    #[ignore = "requires explicitly built WINDFALL_BRIDGE_FIXTURE; runs no nested Cargo"]
+    fn stale_claim_retirement_is_not_native_processing_or_liveness() {
+        for format in ["clap", "vst3"] {
+            with_native(format, |native, audio, spec| {
+                let region = native.region.clone();
+                audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+                let mut input = InputBlock::new();
+                let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+                audio.reset_timeline(); // Claimed, but not yet owner-turn admitted.
+                assert!(!native.admit_input(input.epoch).unwrap());
+                region.retire_input(slot).unwrap();
+                assert_eq!(region.busy_sequence(), None);
+                assert!(!region.output_finished(sequence));
+                assert_eq!(region.owner_completions(), 0);
+                assert_eq!(native.processed_epoch, 0);
+                assert_eq!(native.processed_generation, 0);
+                assert_eq!(native.capture(2, 1, &[spec.into()]).unwrap().2, 0);
+                assert_eq!(audio.desired_generation(), 1);
+                assert!(!native.region.helper_failed());
+            });
+        }
+    }
+    #[test]
+    #[ignore = "requires explicitly built WINDFALL_BRIDGE_FIXTURE; runs no nested Cargo"]
+    fn reset_during_native_capture_recovers_then_refuses_and_later_processing_works() {
+        for format in ["clap", "vst3"] {
+            with_native(format, |native, audio, spec| {
+                let result =
+                    native.capture_with_checkpoint(1, 1, &[spec.into()], || audio.reset_timeline());
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "capture timeline ownership changed"
+                );
+                assert!(native.processor.is_some(), "{format} recovery was skipped");
+                assert_eq!(native.epoch, 2);
+                assert_eq!(native.processed_epoch, 0);
+                assert_eq!(native.capture(2, 1, &[spec.into()]).unwrap().2, 0);
+                let mut input = InputBlock::new();
+                let mut output = OutputBlock::silent();
+                audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+                let (slot, sequence) = native.region.take_input(&mut input).unwrap().unwrap();
+                assert!(native.admit_input(input.epoch).unwrap());
+                input.controls_complete = false;
+                native.process(sequence, &input, &mut output).unwrap();
+                native.region.complete(slot, sequence, &output, OUTPUT_OK);
+                assert_eq!(native.capture(2, 1, &[spec.into()]).unwrap().2, 0);
+                audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+                let (slot, sequence) = native.region.take_input(&mut input).unwrap().unwrap();
+                assert!(native.admit_input(input.epoch).unwrap());
+                native.process(sequence, &input, &mut output).unwrap();
+                native.region.complete(slot, sequence, &output, OUTPUT_OK);
+                assert_eq!(native.capture(2, 1, &[spec.into()]).unwrap().2, 1);
+                assert_eq!(audio.health().acknowledged_generation, 0); // Not collected yet.
+            });
+        }
+    }
+    #[test]
+    #[ignore = "requires explicitly built WINDFALL_BRIDGE_FIXTURE; runs no nested Cargo"]
+    fn native_authority_regression_and_future_inputs_fail_closed() {
+        with_native("vst3", |native, audio, _| {
+            assert!(native.admit_input(0).is_err());
+            assert!(native.admit_input(2).is_err());
+            assert!(native.admit_input(u64::MAX).is_err());
+            native.epoch = 2; // Last observation was newer than the corrupted header.
+            assert!(native.adopt_timeline().is_err());
+            assert_eq!(native.processed_generation, 0);
+            assert_eq!(audio.health().acknowledged_generation, 0);
+        });
     }
 }

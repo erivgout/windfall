@@ -94,6 +94,7 @@ struct Inner {
     status: Arc<Mutex<Status>>,
     signals: Arc<Signals>,
     owner: Owner,
+    region: Region,
     last_state: Mutex<Option<(u64, Captured)>>,
 }
 impl Inner {
@@ -206,6 +207,7 @@ impl Control {
         pending: &[ParameterSpec],
         timeout: Duration,
     ) -> Result<Captured, String> {
+        self.check_capture_epoch(epoch)?;
         let packet = self.call(
             Message::Capture {
                 epoch,
@@ -214,6 +216,7 @@ impl Control {
             },
             timeout,
         )?;
+        self.check_capture_epoch(epoch)?;
         let captured = match packet.body {
             Message::Captured {
                 epoch: reply_epoch,
@@ -242,21 +245,37 @@ impl Control {
             Message::Error { message } => return Err(message),
             _ => return Err("stale or unsupported native capture response".into()),
         };
-        self.publish_state(packet.request, captured.clone());
+        self.publish_state(packet.request, captured.clone())?;
         Ok(captured)
     }
-    fn publish_state(&self, request: u64, captured: Captured) {
+    fn check_capture_epoch(&self, epoch: u64) -> Result<(), String> {
+        if self
+            .0
+            .region
+            .timeline_epoch()
+            .map_err(|error| error.to_string())?
+            != epoch
+        {
+            return Err("capture timeline ownership changed".into());
+        }
+        Ok(())
+    }
+    fn publish_state(&self, request: u64, captured: Captured) -> Result<(), String> {
         let mut latest = self
             .0
             .last_state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        // Successful capture linearizes at this Acquire under the cache lock.
+        // A subsequent reset does not relabel this explicitly stamped state.
+        self.check_capture_epoch(captured.epoch)?;
         if latest
             .as_ref()
             .is_none_or(|(previous, _)| request > *previous)
         {
             *latest = Some((request, captured));
         }
+        Ok(())
     }
     pub fn editor(&self, open: bool) -> Result<(), String> {
         let packet = self.call(Message::Editor { open }, Duration::from_secs(2))?;
@@ -511,6 +530,7 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
     let (jobs, incoming) = mpsc::sync_channel(8);
     let worker_status = status.clone();
     let worker_signals = signals.clone();
+    let control_region = region.clone();
     let worker = std::thread::Builder::new()
         .name("plugin-bridge-supervisor".into())
         .spawn(move || {
@@ -545,6 +565,7 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
             status,
             signals,
             owner,
+            region: control_region,
             last_state: Mutex::new(None),
         })),
         audio,
@@ -741,10 +762,9 @@ mod tests {
         assert!(!watchdog.stalled(1, true, now + limit * 21, limit));
         assert!(watchdog.stalled(1, false, now + limit * 22, limit));
     }
-    #[test]
-    fn reversed_caller_publication_cannot_replace_a_newer_capture() {
+    fn test_control() -> Control {
         let (jobs, _incoming) = mpsc::sync_channel(8);
-        let control = Control(Arc::new(Inner {
+        Control(Arc::new(Inner {
             jobs,
             worker: Mutex::new(None),
             status: Arc::new(Mutex::new(Status::default())),
@@ -755,8 +775,91 @@ mod tests {
                 revision: 3,
                 binding: 4,
             },
+            region: Region::initialize(
+                super::super::slots::LocalWords::new(),
+                Config {
+                    identity: Identity {
+                        session: 1,
+                        token: 2,
+                        revision: 3,
+                        binding: 4,
+                    },
+                    sample_rate: 48_000,
+                    block: 64,
+                    native_latency: 0,
+                    kind: super::super::protocol::Kind::Effect,
+                },
+            )
+            .unwrap(),
             last_state: Mutex::new(None),
-        }));
+        }))
+    }
+    fn captured(value: f64, epoch: u64) -> Captured {
+        Captured {
+            state: crate::PluginState::native(&value.to_le_bytes()).into_bytes(),
+            parameters: vec![],
+            processed_generation: 1,
+            reconciled_generation: 0,
+            epoch,
+        }
+    }
+    #[test]
+    fn reset_after_helper_reply_refuses_stale_cache_publication() {
+        let control = test_control();
+        let old = captured(0.25, 1);
+        control.publish_state(1, old.clone()).unwrap();
+        // Caller has a valid helper reply; reset precedes the final host check.
+        control.0.region.publish_timeline_epoch(1, 2).unwrap();
+        assert!(control.check_capture_epoch(1).is_err());
+        assert!(control.publish_state(2, captured(0.75, 1)).is_err());
+        assert_eq!(control.last_valid_state().unwrap().state, old.state);
+        for epoch in [0, 1, 3, u64::MAX] {
+            assert!(
+                control
+                    .capture(epoch, 1, &[], Duration::from_secs(1))
+                    .is_err()
+            );
+        }
+        assert_eq!(control.0.region.timeline_epoch(), Ok(2));
+    }
+    #[test]
+    fn reset_during_cache_lock_wait_refuses_older_caller_without_replacing_state() {
+        let control = test_control();
+        let old = captured(0.25, 1);
+        control.publish_state(1, old.clone()).unwrap();
+        let lock = control.0.last_state.lock().unwrap();
+        let gate = Arc::new(Barrier::new(2));
+        let other = control.clone();
+        let other_gate = gate.clone();
+        let caller = std::thread::spawn(move || {
+            other.check_capture_epoch(1).unwrap(); // Reply-side check succeeds.
+            other_gate.wait();
+            other.publish_state(2, captured(0.75, 1))
+        });
+        gate.wait();
+        control.0.region.publish_timeline_epoch(1, 2).unwrap();
+        drop(lock);
+        assert!(caller.join().unwrap().is_err());
+        assert_eq!(control.last_valid_state().unwrap().state, old.state);
+    }
+    #[test]
+    fn capture_before_reset_retains_its_old_epoch_without_relabeling_the_cache() {
+        let control = test_control();
+        control.publish_state(1, captured(0.5, 1)).unwrap();
+        control.0.region.publish_timeline_epoch(1, 2).unwrap();
+        assert_eq!(control.last_valid_state().unwrap().epoch, 1);
+        let mut current = captured(0.75, 2);
+        current.processed_generation = 0;
+        control.publish_state(2, current.clone()).unwrap();
+        assert!(control.publish_state(3, captured(0.25, 1)).is_err());
+        let cached = control.last_valid_state().unwrap();
+        assert_eq!(cached.epoch, 2);
+        assert_eq!(cached.processed_generation, 0);
+        assert_eq!(cached.state, current.state);
+    }
+    #[test]
+    fn reversed_caller_publication_cannot_replace_a_newer_capture() {
+        let control = test_control();
         let captured = |value: f64| Captured {
             state: crate::PluginState::native(&value.to_le_bytes()).into_bytes(),
             parameters: vec![],
@@ -772,10 +875,10 @@ mod tests {
         let caller = std::thread::spawn(move || {
             other_gate.wait(); // Caller A received request1, then pauses.
             other_gate.wait(); // Caller B has published request2.
-            other.publish_state(1, old);
+            other.publish_state(1, old).unwrap();
         });
         gate.wait();
-        control.publish_state(2, newer.clone());
+        control.publish_state(2, newer.clone()).unwrap();
         gate.wait();
         caller.join().unwrap();
         assert_eq!(control.last_valid_state().unwrap().state, newer.state);

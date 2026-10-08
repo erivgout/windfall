@@ -46,15 +46,27 @@ impl Region {
         for cell in storage.words() {
             cell.store(0, Ordering::Relaxed);
         }
-        for (cell, word) in storage.words()[..HEADER_WORDS].iter().zip(header) {
-            cell.store(word.to_le(), Ordering::Relaxed);
+        for (index, (cell, word)) in storage.words()[..HEADER_WORDS]
+            .iter()
+            .zip(header)
+            .enumerate()
+        {
+            if index != TIMELINE_EPOCH {
+                cell.store(word.to_le(), Ordering::Relaxed);
+            }
         }
+        // The first nonzero authority is this Release, not an earlier relaxed
+        // copy of the same value that attach could otherwise acquire.
+        storage.words()[TIMELINE_EPOCH].store(1u32.to_le(), Ordering::Release);
         Ok(Self { storage, config })
     }
     /// Check the entire exact header before loading native code.
     pub fn attach(storage: Arc<dyn WordStorage>, expected: Config) -> Result<Self, ProtocolError> {
         if storage.words().len() != REGION_WORDS {
             return Err(ProtocolError::Layout);
+        }
+        if u32::from_le(storage.words()[TIMELINE_EPOCH].load(Ordering::Acquire)) != 1 {
+            return Err(ProtocolError::Sequence);
         }
         let header = std::array::from_fn::<_, HEADER_WORDS, _>(|index| {
             u32::from_le(storage.words()[index].load(Ordering::Relaxed))
@@ -75,6 +87,49 @@ impl Region {
         self.storage.words()[11].store((native_latency as u32).to_le(), Ordering::Release);
         self.config = config;
         Ok(())
+    }
+    pub(super) fn timeline_epoch(&self) -> Result<u64, ProtocolError> {
+        let epoch = u32::from_le(self.storage.words()[TIMELINE_EPOCH].load(Ordering::Acquire));
+        if epoch == 0 || self.helper_failed() {
+            return Err(ProtocolError::Sequence);
+        }
+        Ok(u64::from(epoch))
+    }
+    /// Sole audio publisher, one attempt. Called after local proof invalidation
+    /// and before any new-epoch READY. Never changes the helper's slot ownership.
+    pub(super) fn publish_timeline_epoch(
+        &self,
+        previous: u64,
+        next: u64,
+    ) -> Result<(), ProtocolError> {
+        let previous = u32::try_from(previous).map_err(|_| ProtocolError::Sequence)?;
+        let next = u32::try_from(next).map_err(|_| ProtocolError::Sequence)?;
+        if previous == 0 || previous.checked_add(1) != Some(next) || self.helper_failed() {
+            return Err(ProtocolError::Sequence);
+        }
+        self.storage.words()[TIMELINE_EPOCH]
+            .compare_exchange(
+                previous.to_le(),
+                next.to_le(),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map(|_| ())
+            .map_err(|_| ProtocolError::Sequence)
+    }
+    /// Helper-only return of a claimed stale input, after its last payload read.
+    /// No native call, DONE, liveness increment or DSP proof is implied.
+    #[cfg(any(windows, test))]
+    pub(super) fn retire_input(&self, slot: usize) -> Result<(), ProtocolError> {
+        self.state(slot)
+            .compare_exchange(
+                HELPER_WRITE.to_le(),
+                EMPTY.to_le(),
+                Ordering::Release,
+                Ordering::Relaxed,
+            )
+            .map(|_| ())
+            .map_err(|_| ProtocolError::Sequence)
     }
     fn offset(slot: usize, offset: usize) -> usize {
         HEADER_WORDS + slot * SLOT_WORDS + offset
@@ -133,7 +188,10 @@ impl Region {
         }
     }
     pub fn submit(&self, sequence: u64, block: &InputBlock) -> bool {
-        if block.parameter_count > PARAM_CAPACITY || block.event_count > EVENT_CAPACITY {
+        if block.parameter_count > PARAM_CAPACITY
+            || block.event_count > EVENT_CAPACITY
+            || self.timeline_epoch() != Ok(block.epoch)
+        {
             return false;
         }
         let Ok(transport) = encode_transport(block.transport) else {
@@ -269,7 +327,10 @@ impl Region {
         block.control_start = self.sequence(slot, CONTROL_START);
         block.control_end = self.sequence(slot, CONTROL_END);
         block.controls_complete = self.get(slot, FLAGS) == 0;
-        if block.epoch == 0 || block.control_start > block.control_end {
+        if block.epoch == 0
+            || block.epoch > u64::from(u32::MAX)
+            || block.control_start > block.control_end
+        {
             return Err(ProtocolError::Sequence);
         }
         Ok(())
@@ -490,6 +551,73 @@ mod tests {
         assert_eq!(region.owner_completions(), u32::MAX);
         assert_eq!(region.owner_completed(), Err(ProtocolError::Sequence));
         assert_eq!(region.owner_completions(), u32::MAX);
+    }
+    #[test]
+    fn reset_header_layout_initialization_and_publication_are_disjoint() {
+        let region = region();
+        assert_eq!(TIMELINE_EPOCH * 4, 112);
+        assert_eq!(OWNER_COMPLETIONS * 4, 108);
+        assert_eq!((TRANSPORT, EPOCH, REPLY_IDENTITY), (16, 30, 32));
+        assert_eq!(
+            (HEADER_WORDS * 4, SLOT_WORDS * 4, REGION_BYTES),
+            (256, 85_824, 343_552)
+        );
+        let before: Vec<_> = region
+            .storage
+            .words()
+            .iter()
+            .map(|cell| cell.load(Ordering::Relaxed))
+            .collect();
+        region.publish_timeline_epoch(1, 2).unwrap();
+        assert_eq!(region.timeline_epoch(), Ok(2));
+        for (index, (word, previous)) in region.storage.words().iter().zip(before).enumerate() {
+            if index != TIMELINE_EPOCH {
+                assert_eq!(word.load(Ordering::Relaxed), previous, "word {index}");
+            }
+        }
+        assert_eq!(region.owner_completions(), 0);
+        assert!(Region::attach(region.storage.clone(), region.config).is_err()); // No hot reattach.
+        let input = InputBlock {
+            epoch: 2,
+            ..InputBlock::new()
+        };
+        assert!(region.submit(1, &input));
+        let mut received = InputBlock::new();
+        assert!(region.take_input(&mut received).unwrap().is_some());
+        assert_eq!(received.epoch, 2);
+        assert_eq!(received.transport, input.transport);
+    }
+    #[test]
+    fn authority_cas_mismatch_zero_and_rollover_never_publish_a_new_epoch() {
+        let region = region();
+        assert!(region.publish_timeline_epoch(0, 1).is_err());
+        assert!(region.publish_timeline_epoch(1, 3).is_err());
+        assert!(region.publish_timeline_epoch(2, 3).is_err());
+        assert_eq!(region.timeline_epoch(), Ok(1));
+        region.storage.words()[TIMELINE_EPOCH].store(u32::MAX.to_le(), Ordering::Release);
+        assert!(
+            region
+                .publish_timeline_epoch(u64::from(u32::MAX), u64::from(u32::MAX) + 1)
+                .is_err()
+        );
+        assert_eq!(region.timeline_epoch(), Ok(u64::from(u32::MAX)));
+        region.storage.words()[TIMELINE_EPOCH].store(0, Ordering::Release);
+        assert!(region.timeline_epoch().is_err());
+        assert!(!region.submit(0, &InputBlock::new()));
+    }
+    #[test]
+    fn helper_alone_retires_claimed_stale_input_without_done_or_liveness() {
+        let region = region();
+        assert!(region.submit(0, &InputBlock::new()));
+        let (slot, _) = region.take_input(&mut InputBlock::new()).unwrap().unwrap();
+        region.discard_before(100);
+        region.publish_timeline_epoch(1, 2).unwrap();
+        assert_eq!(region.busy_sequence(), Some(0));
+        region.retire_input(slot).unwrap();
+        assert_eq!(region.busy_sequence(), None);
+        assert!(!region.output_finished(0));
+        assert_eq!(region.owner_completions(), 0);
+        assert!(region.retire_input(slot).is_err()); // Cannot take another owner's state.
     }
     #[test]
     fn claimed_late_slot_is_not_reused_and_matching_output_roundtrips() {

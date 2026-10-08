@@ -4,6 +4,108 @@ Design proposal for N4, based on `71a0b76f`. Implementation and measured results
 will be recorded below as they become available. This document does not close
 the bridge or native editor parity rows.
 
+## ABI4 authoritative reset repair (current host contract)
+
+This host-only increment follows immutable `6b228e12`. It does not import or
+activate the frozen production facade, change native fixture/thread identity,
+or close P1 off-lock preparation/retirement or the full meter-render precheck.
+The older ABI2/ABI3 sections below retain their historical evidence; mapping
+ABI4 and Hello3 now supersede their reset/startup compatibility contracts.
+
+The actual Windows CI failures were the unchanged second-capture oracle in
+`vst3_capture_does_not_relabel_dsp_proof_after_a_reset_without_processing`:
+root702 run37766014784/job113273753509 (6.76s), then root427 run37770742963
+(6.79s), both27 real bridge cases with26PASS/1FAIL and one auth subprocess role.
+The failure was `capture timeline ownership changed` after a host reset with no
+new DSP. The root427 raw log SHA256 is
+`a426ee5da407973a569ed7b6f6a6c2c6e373d0f1f774266fe41f41150850c79a`.
+Root125 run37775910822 independently repeated26PASS/1FAIL/1role at the same
+line1386 before this repair was integrated. Raw log
+`C:/Temp/windfall-125-windows-ci.log` has verified SHA256
+`5f788bd632b3d3d524c9adc55ea0703859ef833977cad3327812716fd1ddc237`.
+This is external pre-fix provenance, separate from the owner-run GREEN below.
+
+An old HELPER_WRITE/native owner turn cannot be revoked by discarding READY/DONE.
+It could finish after capture1/reset2 and legitimately restore native continuity
+under epoch1. The old mapping did not publish host reset authority. A new
+deterministic private owner-turn regression, using real VST3 native processing,
+compiled RED at the exact ownership error (0.03s), then GREEN (0.02s). That
+in-process test proves the ordering mechanism; the original separate-process
+test independently passed unchanged (0.11s). No retry, delay, skip or oracle
+relaxation obtains the result.
+
+ABI4 adds header word28/byte112, a nonzero LE AtomicU32 timeline epoch, initially1.
+After initialization only the sole Audio endpoint publishes it. Header word27
+remains the independent owner-completion/liveness counter. Header length256B,
+slot length85,824B and total mapping343,552B stay fixed. Slot transport16..29,
+input epoch30/31 and reply identity32..39 stay disjoint and unchanged. Existing
+u64 slot/control epochs are bounded to the nonzero u32 domain; no split-word
+authority, Rust layout or native pointer is published.
+
+Initialization Release-publishes1 off realtime; attach Acquires it and validates
+the entire exact header before native loading. Reset checks local/header epoch
+and counter bounds, invalidates local audio/COMPLETE proof/health acknowledgement,
+prepares the new local block, discards only reclaimable READY/DONE, then performs
+one strong AcqRel CAS. This final operation linearizes reset; new READY follows.
+Overflow/corruption/CAS disagreement clears proof and latches failure without
+wrap or clamp; only fresh-map restart restores availability. Current callback
+authority is also checked before collecting output. This uses no callback wait,
+lock, allocation/free, IO, clock, native call or resource retirement.
+
+The helper Acquires/adopts authority around control/audio/idle turns. Adoption
+invalidates continuity/held-note certainty without acknowledging native DSP.
+Old admitted native work may finish and publish only old-tagged output/proof;
+it cannot write the header or roll current metadata backward. A stale claimed
+input not yet owner-turn admitted is released by its helper through a single
+HELPER_WRITE->EMPTY Release CAS, with no DONE, native call or completion-counter
+advance. Actual matching nonempty complete/no-drop DSP alone updates the separate
+processed_epoch. Returned idle remains liveness evidence only.
+
+Capture checks exact authority before native state work and after CLAP capture
+or mandatory VST3 reactivation, including refusal recovery. The host checks
+before enqueue, after reply and finally under its existing cache mutex. Reset
+before that final Acquire refuses publication and retains the prior cache;
+reset afterward leaves the successful result explicitly stamped with its old
+epoch. Request-ID monotonic fencing remains. Native state/current controls and
+pending committed intent keep their accepted separation. Reset, note snapshot,
+adoption, capture and inactive reconciliation do not manufacture DSP proof.
+
+Hello3 retains the40B WFAH/key record and rejects correctly keyed Hello1/2 before
+any Load metadata. WFAP56B/version1/remaining startup budget and WFCB1 stay fixed.
+Actual child-process tests assert zero disclosure for both old Hellos; an
+authenticated new helper rejects ABI1/2/3 maps with no Ready and exit70. Exact
+Region attach precedes native load in the helper. Existing eight-candidate
+fairness, private key handling, deadlines, cancellation and reap rules remain.
+Separate process containment is not a security sandbox.
+
+The full ordering/layout/race matrix and diagnostic receipts are in
+[process-bridge-reset-diagnosis.md](process-bridge-reset-diagnosis.md). Executed
+checks so far:76 host library cases (including every explicitly built native
+unit),31 bridge process cases plus its exercised subprocess role, and20 realtime
+cases. Existing note-only overflow, incomplete-epoch proof, state bounds,
+backpressure48MiB, capture faults, watchdog, no-drop and dry/silent oracles passed.
+The320-call bridge guard recorded zero allocation/free calls, maximum4us and
+average1us in this headless run; added corrupt/reset/late-output guards also
+recorded zero calls. These are wall times, not a device deadline or CPU claim.
+Persistent failure is tested to finish its existing64-frame transition without
+restarting that ramp on each callback. Strict all-feature/all-target host Clippy
+passed. No desktop/engine/native fixture/state/Cargo source changed.
+
+Final post-audit timings were0.37s for all76 library cases and6.48s for the31
+process cases. Initialization keeps authority zero until its first Release1;
+there is no earlier relaxed1 for attach to acquire. Formatting and whitespace
+checks passed, the original process test body is identical to6b, and the host-only
+patch applies cleanly to copied exact root702 sources without production19f.
+
+The five native owner-turn units follow the existing sticky-writer explicit
+fixture convention and never build via nested Cargo. Mandatory full verification
+with separately built `WINDFALL_BRIDGE_FIXTURE`, jobs1 and a private target is:
+`cargo test -p windfall-plugin-host --lib -- --include-ignored --test-threads=1`.
+All76 ran; none were omitted from this evidence. Normal library tests need no
+fixture environment. Packaging, licensed corpus, device/editor and other-platform
+bridge acceptance remain open; production preparation and meter gates remain
+separate from this repair.
+
 The owner has since advanced its worktree baseline to `7f70315c` (including
 `19caf872`) at the parent's direction. The parent approved the proposed 2B
 schedule and host-library edit window. Shared fixture classes10+ have a narrow

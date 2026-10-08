@@ -1,8 +1,8 @@
-//! Explicit version-three words. These offsets, not Rust object layouts, are the ABI.
+//! Explicit version-four words. These offsets, not Rust object layouts, are the ABI.
 
 use crate::{HostEvent, Transport};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const DEFAULT_BLOCK: usize = 256;
 pub const MAGIC: u32 = u32::from_le_bytes(*b"WFBR");
 pub const SLOT_COUNT: usize = 4;
@@ -13,6 +13,7 @@ pub const PARAM_CAPACITY: usize = 4096;
 pub const HEADER_WORDS: usize = 64;
 pub const HELPER_FAILURE: usize = 26;
 pub const OWNER_COMPLETIONS: usize = 27;
+pub const TIMELINE_EPOCH: usize = 28;
 pub const META_WORDS: usize = 64;
 pub const INPUT: usize = META_WORDS;
 pub const OUTPUT: usize = INPUT + MAX_BLOCK * 2;
@@ -152,9 +153,10 @@ impl Config {
         words[16..24].copy_from_slice(&self.identity.encode());
         words[24] = NOTES as u32;
         words[25] = PARAMETERS as u32;
+        words[TIMELINE_EPOCH] = 1;
         Ok(words)
     }
-    /// Accept only the exact v3 layout; never trust a peer-provided offset.
+    /// Startup only: exact v4 layout and initial epoch; never trust peer offsets.
     pub fn from_header(words: &[u32], mapped_bytes: usize) -> Result<Self, ProtocolError> {
         if words.len() != HEADER_WORDS || mapped_bytes != REGION_BYTES {
             return Err(ProtocolError::Layout);
@@ -410,11 +412,12 @@ mod tests {
         assert_eq!(SLOT_WORDS * 4 % 64, 0);
     }
     #[test]
-    fn mapping_v1_v2_never_downgrade_the_v3_anchor_contract() {
+    fn mapping_v1_v2_v3_never_downgrade_the_v4_reset_contract() {
         let mut header = config().header().unwrap();
-        assert_eq!(header[1], 3);
+        assert_eq!(header[1], 4);
         assert_eq!(header[OWNER_COMPLETIONS], 0);
-        for version in [1, 2] {
+        assert_eq!(header[TIMELINE_EPOCH], 1);
+        for version in [1, 2, 3] {
             header[1] = version;
             assert_eq!(
                 Config::from_header(&header, REGION_BYTES),

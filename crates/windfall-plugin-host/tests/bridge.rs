@@ -433,16 +433,41 @@ impl Drop for TestChild {
 #[ignore = "subprocess role used by the authentication regression"]
 fn auth_impostor_client_process() {
     let endpoint = std::env::var("WINDFALL_TEST_AUTH_ENDPOINT").unwrap();
+    if let Ok(version) = std::env::var("WINDFALL_TEST_OLD_HELLO") {
+        let version: u32 = version.parse().unwrap();
+        assert!(matches!(version, 1 | 2));
+        let mut bootstrap = [0u8; 56];
+        std::io::stdin().read_exact(&mut bootstrap).unwrap();
+        assert_eq!(&bootstrap[..4], b"WFAP");
+        let mut socket = std::net::TcpStream::connect(&endpoint).unwrap();
+        let mut hello = [0u8; 40];
+        hello[..4].copy_from_slice(b"WFAH");
+        hello[4..8].copy_from_slice(&version.to_le_bytes());
+        hello[8..].copy_from_slice(&bootstrap[8..40]); // Correct private child key.
+        bootstrap.fill(0);
+        socket.write_all(&hello).unwrap();
+        hello.fill(0);
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut bytes = [0u8; 1024];
+        match socket.read(&mut bytes) {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            result => panic!("old authenticated helper received metadata: {result:?}"),
+        }
+        return;
+    }
     let mut stalled: Vec<_> = (0..8)
         .map(|_| std::net::TcpStream::connect(&endpoint).unwrap())
         .collect();
     let mut wrong = std::net::TcpStream::connect(&endpoint).unwrap();
     let mut hello = [0u8; 40];
     hello[..4].copy_from_slice(b"WFAH");
-    hello[4..8].copy_from_slice(&2u32.to_le_bytes());
+    hello[4..8].copy_from_slice(&3u32.to_le_bytes());
     wrong.write_all(&hello).unwrap();
     let mut old = std::net::TcpStream::connect(&endpoint).unwrap();
-    hello[4..8].copy_from_slice(&1u32.to_le_bytes());
+    hello[4..8].copy_from_slice(&2u32.to_le_bytes());
     old.write_all(&hello).unwrap();
     println!("CONNECTED");
     std::io::stdout().flush().unwrap();
@@ -1389,6 +1414,266 @@ fn vst3_capture_does_not_relabel_dsp_proof_after_a_reset_without_processing() {
     assert_eq!(audio.health().acknowledged_generation, 0);
     drop(audio);
     drop(control);
+}
+
+#[test]
+fn previous_authenticated_helper_hellos_are_closed_before_any_load_metadata() {
+    use std::process::{Command, Stdio};
+    use windfall_plugin_host::bridge::auth;
+    for version in [1, 2] {
+        let key = auth::Key::generate().unwrap();
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut child = TestChild(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "auth_impostor_client_process",
+                    "--nocapture",
+                ])
+                .env(
+                    "WINDFALL_TEST_AUTH_ENDPOINT",
+                    listener.local_addr().unwrap().to_string(),
+                )
+                .env("WINDFALL_TEST_OLD_HELLO", version.to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        key.write_to_child(&mut child.0, 1, deadline, None).unwrap();
+        assert!(auth::accept(&listener, &mut child.0, &key, deadline, None).is_err());
+        let status = child.finish(false);
+        let mut failure = String::new();
+        child
+            .0
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut failure)
+            .unwrap();
+        assert!(
+            status.success(),
+            "Hello{version} disclosed metadata or failed its child assertion: {failure}"
+        );
+    }
+}
+
+#[test]
+fn authenticated_new_helper_refuses_old_mapping_abis_before_native_activation() {
+    use std::process::{Command, Stdio};
+    use windfall_plugin_host::bridge::{
+        auth,
+        control::{Message, Packet},
+        mapping::Mapping,
+        protocol::TIMELINE_EPOCH,
+        slots::WordStorage,
+    };
+    for (version, epoch) in [(1, 0), (2, 0), (3, 0), (3, 1)] {
+        let settings = options(
+            "clap",
+            common::GAIN,
+            Kind::Effect,
+            vec![gain("clap")],
+            Duration::from_secs(2),
+        );
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let name = format!(
+            "Local\\Windfall-Audio-{:016x}-{:016x}",
+            settings.config.identity.session, settings.config.identity.token
+        );
+        let storage = Mapping::create(&name).unwrap();
+        let _region = Region::initialize(storage.clone(), settings.config).unwrap();
+        storage.words()[1].store(u32::to_le(version), Ordering::Release);
+        storage.words()[TIMELINE_EPOCH].store(u32::to_le(epoch), Ordering::Release);
+        let key = auth::Key::generate().unwrap();
+        let mut child = TestChild(
+            Command::new(&settings.helper)
+                .args([
+                    "--windfall-audio-helper",
+                    &listener.local_addr().unwrap().to_string(),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        key.write_to_child(
+            &mut child.0,
+            settings.config.identity.session,
+            deadline,
+            None,
+        )
+        .unwrap();
+        let mut socket = auth::accept(&listener, &mut child.0, &key, deadline, None).unwrap();
+        socket.set_nonblocking(false).unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        Packet::new(
+            1,
+            settings.config.identity.into(),
+            Message::Load {
+                mapping: name,
+                settings: settings.config.into(),
+                path: settings.plugin.to_string_lossy().into_owned(),
+                id: settings.id,
+                format: settings.format,
+                approved_binary: settings.approved_binary,
+                parameters: settings.parameters.into_iter().map(Into::into).collect(),
+                offline: true,
+            },
+        )
+        .write(&mut socket)
+        .unwrap();
+        let mut reply = Vec::new();
+        socket.read_to_end(&mut reply).unwrap();
+        assert!(reply.is_empty(), "old map received an activation reply");
+        assert_eq!(child.finish(false).code(), Some(70));
+    }
+}
+
+#[test]
+fn real_helpers_capture_repeated_resets_without_dsp_and_refuse_stale_or_future_epochs() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            "org.windfall.test.bridge-delayed".into()
+        } else {
+            vst_id(10)
+        };
+        let mut settings = options(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_secs(2),
+        );
+        settings.offline = true;
+        let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+        audio
+            .process_offline(
+                &mut [0.25; 256],
+                &mut [0.25; 256],
+                Instant::now() + Duration::from_secs(2),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(
+            control
+                .capture(1, 1, &[gain(format)], Duration::from_secs(2))
+                .unwrap()
+                .processed_generation,
+            1
+        );
+        let desired = audio.desired_generation();
+        for epoch in 2..=5 {
+            assert_eq!(guarded(|| audio.reset_timeline()), 0);
+            assert_eq!(audio.desired_generation(), desired);
+            assert_eq!(audio.completed_proof(), None);
+            assert_eq!(audio.health().acknowledged_generation, 0);
+            for invalid in [epoch - 1, epoch + 1] {
+                assert!(
+                    control
+                        .capture(invalid, desired, &[gain(format)], Duration::from_secs(2))
+                        .is_err()
+                );
+            }
+            let current = control
+                .capture(epoch, desired, &[gain(format)], Duration::from_secs(2))
+                .unwrap();
+            assert_eq!((current.epoch, current.processed_generation), (epoch, 0));
+            assert_eq!(control.last_valid_state().unwrap().epoch, epoch);
+        }
+        audio
+            .process_offline(
+                &mut [0.25; 256],
+                &mut [0.25; 256],
+                Instant::now() + Duration::from_secs(2),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_eq!(
+            control
+                .capture(5, desired, &[gain(format)], Duration::from_secs(2))
+                .unwrap()
+                .processed_generation,
+            desired
+        );
+        assert_eq!(guarded(|| audio.reset_timeline()), 0);
+        assert!(audio.note_on(60, 0.5)); // Actual new intent, collected but unsubmitted.
+        let pending = control
+            .capture(
+                6,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        assert_eq!(pending.processed_generation, 0);
+        assert_eq!(audio.health().acknowledged_generation, 0);
+        assert!(control.terminate().reaped);
+    }
+}
+
+#[test]
+fn corrupt_reset_authority_and_late_output_have_zero_callback_allocator_calls() {
+    use windfall_plugin_host::bridge::{
+        protocol::{OUTPUT_OK, TIMELINE_EPOCH},
+        slots::{InputBlock, OutputBlock, WordStorage},
+    };
+    for corrupt in [0, 1, u32::MAX] {
+        let storage = LocalWords::new();
+        let config = Config {
+            identity: Identity {
+                session: 1,
+                token: 2,
+                revision: 3,
+                binding: 4,
+            },
+            sample_rate: 48_000,
+            block: 64,
+            native_latency: 0,
+            kind: Kind::Instrument,
+        };
+        let region = Region::initialize(storage.clone(), config).unwrap();
+        let signals = Arc::new(Signals::default());
+        let mut audio = Audio::new(region.clone(), signals.clone(), &[]).unwrap();
+        assert_eq!(guarded(|| audio.process(&mut [0.0; 64], &mut [0.0; 64])), 0);
+        let mut input = InputBlock::new();
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        let late = OutputBlock {
+            epoch: 1,
+            processed_generation: 1,
+            left: [1.0; 512],
+            right: [1.0; 512],
+            native_drops: 0,
+        };
+        assert_eq!(guarded(|| audio.reset_timeline()), 0);
+        region.complete(slot, sequence, &late, OUTPUT_OK);
+        storage.words()[TIMELINE_EPOCH].store(corrupt.to_le(), Ordering::Release);
+        assert_eq!(guarded(|| audio.reset_timeline()), 0);
+        assert!(signals.failed.load(Ordering::Acquire));
+        for count in [1, 7, 64, 480, 512] {
+            let mut left = [0.0; 512];
+            let mut right = left;
+            assert_eq!(
+                guarded(|| audio.process(&mut left[..count], &mut right[..count])),
+                0
+            );
+            assert!(left.iter().chain(&right).all(|sample| *sample == 0.0));
+        }
+        assert_eq!(audio.health().acknowledged_generation, 0);
+        assert_eq!(audio.completed_proof(), None);
+    }
 }
 
 #[test]
