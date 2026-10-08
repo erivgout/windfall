@@ -284,6 +284,22 @@ impl EffectUnit {
         }
     }
 
+    pub fn is_departure_source(&self) -> bool {
+        self.heard && !matches!(self.splice, Splice::Gone)
+    }
+
+    pub fn keeps_memory(&self) -> bool {
+        !matches!(self.splice, Splice::Gone)
+    }
+
+    pub fn owns_generation(&self, life: &std::sync::Arc<EffectLife>) -> bool {
+        std::sync::Arc::ptr_eq(&self.life, life)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.life.generation
+    }
+
     /// Prime with the post-departure input before joining a restored id.
     pub fn wait_for_departure(&mut self, remaining: u32) {
         if let Splice::In { wait, .. } = &mut self.splice {
@@ -950,9 +966,28 @@ struct CompensationStage {
 pub(crate) struct Compensation {
     line: CompensationLine,
     stages: Box<[CompensationStage]>,
+    selected: usize,
 }
 
 impl Compensation {
+    pub fn reserved_payload(capacity: usize, stages: usize) -> Option<usize> {
+        let length = capacity.checked_add(1)?.checked_next_power_of_two()?;
+        // TapCrossfade's private Tap has the same usize/f32 storage and
+        // alignment as this pair; its reserved universe is length taps.
+        let samples = length.checked_mul(std::mem::size_of::<Frame>())?;
+        let taps = length.checked_mul(std::mem::size_of::<(usize, f32)>())?;
+        let line = samples
+            .checked_add(taps)?
+            .checked_add(std::mem::size_of::<CompensationLine>())?;
+        line.checked_mul(stages.checked_add(1)?)?
+            .checked_add(
+                stages.checked_mul(
+                    std::mem::size_of::<CompensationStage>()
+                        .checked_sub(std::mem::size_of::<CompensationLine>())?,
+                )?,
+            )?
+            .checked_add(std::mem::size_of::<Self>())
+    }
     pub fn new(max_delay: usize, delay: usize) -> Self {
         Self::with_path(max_delay, delay, &[], false)
     }
@@ -970,11 +1005,83 @@ impl Compensation {
                     ),
                 })
                 .collect(),
+            selected: path.len(),
+        }
+    }
+
+    /// Every stage bank can inherit the aggregate or any selected predecessor
+    /// stage, including its complete tap universe. Inactive bank entries never
+    /// participate in processing, history, suffix or scalar promotion.
+    pub fn reserved(maximum: usize, path: &[DelayStage], stages: usize) -> Self {
+        let empty = DelayStage {
+            key: windfall_project::PluginTarget::Effect {
+                effect: windfall_project::EffectId(0),
+            },
+            generation: 0,
+            delay: 0,
+            maximum: 0,
+            readiness: 0,
+            wait: 0,
+            matrix: false,
+            leaving: false,
+        };
+        Self {
+            line: CompensationLine::new(maximum, 0),
+            stages: (0..stages)
+                .map(|index| CompensationStage {
+                    spec: path.get(index).copied().unwrap_or(empty),
+                    line: CompensationLine::new(maximum, 0),
+                })
+                .collect(),
+            selected: path.len(),
+        }
+    }
+
+    pub fn history_capacity(&self) -> usize {
+        self.stages.iter().fold(self.capacity(), |capacity, stage| {
+            capacity.max(stage.line.capacity())
+        })
+    }
+
+    pub fn has_memory(&self) -> bool {
+        self.selected > 0 || self.line.delay > 0 || self.line.fade.longest_delay() > 0
+    }
+
+    pub fn select_path(&mut self, path: &[DelayStage]) {
+        assert!(
+            path.len() <= self.stages.len(),
+            "prepared stage bank is complete"
+        );
+        self.selected = path.len();
+        for (stage, spec) in self.stages.iter_mut().zip(path) {
+            stage.spec = *spec;
         }
     }
 
     pub fn capacity(&self) -> usize {
         self.line.capacity()
+    }
+
+    pub fn with_history_capacity(
+        maximum: usize,
+        delay: usize,
+        path: &[DelayStage],
+        sounding: bool,
+    ) -> Self {
+        Self {
+            line: CompensationLine::new(maximum, delay),
+            stages: path
+                .iter()
+                .map(|spec| CompensationStage {
+                    spec: *spec,
+                    line: CompensationLine::new(
+                        maximum.max(spec.maximum),
+                        if sounding { 0 } else { spec.delay },
+                    ),
+                })
+                .collect(),
+            selected: path.len(),
+        }
     }
 
     pub fn retarget(&mut self, delay: usize, fade_frames: u32, wait: u32) {
@@ -1014,21 +1121,19 @@ impl Compensation {
         // Promote settled scalar compensation when a matrix joins an
         // existing fixed-delay route. Reconstruct each fixed stage's input
         // from raw history, including the delay of preceding fixed stages.
-        let fixed: usize = self
-            .stages
+        let fixed: usize = self.stages[..self.selected]
             .iter()
             .filter(|stage| !stage.spec.matrix)
             .map(|stage| stage.spec.delay)
             .sum();
-        let promote = other.stages.is_empty()
-            && other.line.fade.remaining() == 0
-            && fixed == other.line.delay;
+        let promote =
+            other.selected == 0 && other.line.fade.remaining() == 0 && fixed == other.line.delay;
         let mut prefix = 0;
-        for index in 0..self.stages.len() {
-            let (prefix_stages, rest) = self.stages.split_at_mut(index);
+        for index in 0..self.selected {
+            let (prefix_stages, rest) = self.stages[..self.selected].split_at_mut(index);
             let (stage, following) = rest.split_first_mut().unwrap();
             let retained = || {
-                other.stages.iter().filter(|before| {
+                other.stages[..other.selected].iter().filter(|before| {
                     !(before.spec.leaving && before.line.fade.longest_delay() == 0)
                 })
             };
@@ -1038,8 +1143,7 @@ impl Compensation {
                 && retained()
                     .zip(following.iter())
                     .all(|(before, after)| before.spec.same_line(&after.spec));
-            if let Some(before) = other
-                .stages
+            if let Some(before) = other.stages[..other.selected]
                 .iter()
                 .find(|before| stage.spec.same_line(&before.spec))
             {
@@ -1066,8 +1170,7 @@ impl Compensation {
                 if stage.line.fade.longest_delay() > stage.line.valid {
                     // Aggregate metadata can be ahead of a queued matrix
                     // edit. Never adopt a tap with unavailable raw history.
-                    let audible = other
-                        .stages
+                    let audible = other.stages[..other.selected]
                         .iter()
                         .map(|stage| stage.line.fade.longest_delay())
                         .sum::<usize>();
@@ -1078,7 +1181,7 @@ impl Compensation {
     }
 
     pub fn process(&mut self, block: &mut [Frame]) {
-        if self.stages.is_empty() {
+        if self.selected == 0 {
             self.line.process(block);
         } else {
             // Keep the aggregate raw history without replacing stage input.
@@ -1086,7 +1189,7 @@ impl Compensation {
                 self.line.ring[self.line.write] = *frame;
                 self.line.advance();
             }
-            for stage in &mut self.stages {
+            for stage in &mut self.stages[..self.selected] {
                 stage.line.process(block);
             }
         }
@@ -1099,6 +1202,83 @@ mod tests {
 
     fn ramp(frames: usize) -> Vec<Frame> {
         (0..frames).map(|n| [n as f32, -(n as f32)]).collect()
+    }
+
+    fn stage(generation: u64, maximum: usize, delay: usize) -> DelayStage {
+        DelayStage {
+            key: windfall_project::PluginTarget::Effect {
+                effect: windfall_project::EffectId(generation as u32),
+            },
+            generation,
+            maximum,
+            delay,
+            readiness: delay,
+            wait: 0,
+            matrix: true,
+            leaving: false,
+        }
+    }
+
+    #[test]
+    fn p1_selected_history_preserves_inherited_taps_and_ignores_inactive_rows() {
+        let path = [stage(1, 255, 127), stage(2, 255, 63)];
+        let mut before = Compensation::with_history_capacity(255, 190, &path, false);
+        before.process(&mut ramp(1000));
+        let changed = [stage(1, 255, 191), stage(2, 255, 111)];
+        before.retarget_path(302, &changed, 240, 0);
+        before.process(&mut ramp(7));
+        before.retarget_path(50, &[stage(1, 255, 33), stage(2, 255, 17)], 240, 0);
+        before.process(&mut ramp(13));
+        let inherited = before.history_capacity();
+        let mut after = Compensation::reserved(inherited, &changed, 8);
+        after.select_path(&changed);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| after.take_history(&before)),
+            0
+        );
+        for index in 0..2 {
+            assert_eq!(
+                after.stages[index].line.fade.longest_delay(),
+                before.stages[index].line.fade.longest_delay()
+            );
+            assert_eq!(
+                after.stages[index].line.fade.remaining(),
+                before.stages[index].line.fade.remaining()
+            );
+            assert_eq!(
+                after.stages[index]
+                    .line
+                    .fade
+                    .read(|delay| (delay * delay) as f32),
+                before.stages[index]
+                    .line
+                    .fade
+                    .read(|delay| (delay * delay) as f32)
+            );
+            assert!(after.stages[index].line.capacity() >= before.stages[index].line.capacity());
+        }
+        // A physical bank with no selected stages behaves exactly like scalar
+        // compensation, including promotion and an unfinished inherited fade.
+        after.select_path(&[]);
+        let mut scalar = Compensation::new(inherited, 0);
+        scalar.take_history(&before);
+        after.take_history(&before);
+        let mut actual = ramp(137);
+        let mut expected = actual.clone();
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| after.process(&mut actual)),
+            0
+        );
+        scalar.process(&mut expected);
+        assert_eq!(actual, expected);
+        assert_eq!(after.selected, 0);
+        assert_eq!(after.stages.len(), 8);
+    }
+
+    #[test]
+    fn p1_reserved_payload_has_visible_size_overflow() {
+        assert_eq!(Compensation::reserved_payload(usize::MAX, 1), None);
+        assert_eq!(Compensation::reserved_payload(16, usize::MAX), None);
     }
 
     #[test]

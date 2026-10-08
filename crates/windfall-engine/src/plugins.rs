@@ -54,6 +54,8 @@ pub trait HostedInstrument: HostedEffect {
 pub trait PluginFactory: Send + Sync + std::fmt::Debug {
     /// Stable provider identity; clones sharing one native owner should override
     /// this with the identity of that shared owner. Plans retain their factory.
+    /// Publication reads this metadata under its short admission guard: it must
+    /// not perform IO, allocate, lock, wait, service native code or read a clock.
     fn provider_identity(&self) -> u64 {
         std::ptr::from_ref(self) as *const () as usize as u64
     }
@@ -62,6 +64,8 @@ pub trait PluginFactory: Send + Sync + std::fmt::Debug {
         None
     }
     /// Changes when an explicit retry or plugin restart requires fresh instances.
+    /// Like provider_identity, this is a bounded metadata read. Staged factories
+    /// report their preparation revision, separately from installed revision.
     fn revision(&self) -> u64 {
         0
     }
@@ -107,21 +111,26 @@ pub(crate) fn identity(binding: &PluginBinding) -> u64 {
     hash.finish()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativePreparationError {
+    pub target: PluginTarget,
+    pub reason: String,
+}
+
+type PreparedPlugins = (
+    HashMap<PluginTarget, PreparedPlugin>,
+    HashMap<PluginTarget, (u64, usize)>,
+);
+
 pub(crate) fn prepare(
     plan: &crate::plan::Plan,
     sample_rate: u32,
     known: &HashMap<PluginTarget, (u64, usize)>,
-) -> (
-    HashMap<PluginTarget, PreparedPlugin>,
-    HashMap<PluginTarget, (u64, usize)>,
-) {
+) -> Result<PreparedPlugins, NativePreparationError> {
     let mut units = HashMap::new();
     let mut records = HashMap::new();
     for binding in &plan.plugins {
-        let identity = identity(binding)
-            ^ plan.plugin_factory.as_ref().map_or(0, |factory| {
-                factory.revision().rotate_left(17) ^ factory.provider_identity()
-            });
+        let identity = identity(binding) ^ plan.factory_stamp.map_or(0, |stamp| stamp.identity());
         if let Some(&(before, latency)) = known.get(&binding.target)
             && before == identity
         {
@@ -129,25 +138,47 @@ pub(crate) fn prepare(
             continue;
         }
         let unit = match binding.target {
-            PluginTarget::Effect { .. } => {
-                PreparedPlugin::Effect(plan.plugin_factory.as_ref().and_then(|factory| {
-                    factory
-                        .effect(binding, sample_rate, crate::mixer::MAX_BLOCK)
-                        .ok()
-                }))
-            }
-            PluginTarget::Instrument { .. } => {
-                PreparedPlugin::Instrument(plan.plugin_factory.as_ref().and_then(|factory| {
-                    factory
-                        .instrument(binding, sample_rate, crate::mixer::MAX_BLOCK)
-                        .ok()
-                }))
-            }
+            PluginTarget::Effect { .. } => PreparedPlugin::Effect(
+                plan.plugin_factory
+                    .as_ref()
+                    .map(|factory| factory.effect(binding, sample_rate, crate::mixer::MAX_BLOCK))
+                    .transpose()
+                    .map_err(|reason| NativePreparationError {
+                        target: binding.target,
+                        reason,
+                    })?,
+            ),
+            PluginTarget::Instrument { .. } => PreparedPlugin::Instrument(
+                plan.plugin_factory
+                    .as_ref()
+                    .map(|factory| {
+                        factory.instrument(binding, sample_rate, crate::mixer::MAX_BLOCK)
+                    })
+                    .transpose()
+                    .map_err(|reason| NativePreparationError {
+                        target: binding.target,
+                        reason,
+                    })?,
+            ),
         };
-        records.insert(binding.target, (identity, unit.latency()));
+        // The native unit must report its actual negotiated latency. Refuse an
+        // unrepresentable/unbounded dry-history allocation before constructing
+        // its engine facade; never clamp latency or call it Unavailable.
+        let latency = unit.latency();
+        if crate::rack::Compensation::reserved_payload(latency, 0)
+            .is_none_or(|bytes| bytes > 256 * 1024 * 1024)
+        {
+            return Err(NativePreparationError {
+                target: binding.target,
+                reason: format!("Native latency {latency} exceeds prepared dry-history capacity."),
+            });
+        }
+        if plan.plugin_factory.is_some() {
+            records.insert(binding.target, (identity, latency));
+        }
         units.insert(binding.target, unit);
     }
-    (units, records)
+    Ok((units, records))
 }
 
 /// A plugin slot with a latency-matched dry path and smoothed wet mix.

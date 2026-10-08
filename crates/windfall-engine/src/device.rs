@@ -367,8 +367,15 @@ impl<B: Backend, C: Fn() -> Instant> Supervisor<B, C> {
         self.settings = settings;
         self.recovery.cancel();
         // The old stream goes first: its device may be the one wanted next.
+        let closing = match self.controller.begin_close(true) {
+            Ok(closing) => closing,
+            Err(reason) => {
+                *lock(&self.status) = stopped(&self.settings, reason.to_string());
+                return;
+            }
+        };
         self.stream = None;
-        self.controller.suspend();
+        self.controller.finish_close(closing);
         if let Err(failure) = self.open() {
             *lock(&self.status) = failure;
         }
@@ -377,8 +384,15 @@ impl<B: Backend, C: Fn() -> Instant> Supervisor<B, C> {
     /// Checks on the stream and makes any try at reopening that is due.
     fn poll(&mut self) {
         if let Some(fault) = self.stream.as_mut().and_then(Running::fault) {
+            let closing = match self.controller.begin_close(false) {
+                Ok(closing) => closing,
+                Err(reason) => {
+                    *lock(&self.status) = stopped(&self.settings, reason.to_string());
+                    return;
+                }
+            };
             self.stream = None;
-            self.controller.detach();
+            self.controller.finish_close(closing);
             let mut status = lock(&self.status);
             status.running = false;
             status.error = Some(if fault.recoverable {
@@ -427,6 +441,15 @@ impl<B: Backend, C: Fn() -> Instant> Supervisor<B, C> {
                 report.error = Some(reason);
                 Err(report)
             }
+        }
+    }
+}
+
+impl<B: Backend, C: Fn() -> Instant> Drop for Supervisor<B, C> {
+    fn drop(&mut self) {
+        if let Ok(closing) = self.controller.begin_close(false) {
+            self.stream = None;
+            self.controller.finish_close(closing);
         }
     }
 }
@@ -618,12 +641,13 @@ fn open(
 
     let mut last_error = String::new();
     for (config, buffer) in attempts {
-        let (stream, faults) = match build(&device, config, buffer, controller) {
+        let (stream, faults, admission) = match build(&device, config, buffer, controller) {
             Ok(built) => built,
-            Err(error) => {
+            Err(BuildFailure::Driver(error)) => {
                 last_error = error;
                 continue;
             }
+            Err(BuildFailure::Preparation(error)) => return Err(error.to_string()),
         };
         let buffer_frames = stream.buffer_size().ok().or(buffer).unwrap_or(0);
         report.running = true;
@@ -632,9 +656,10 @@ fn open(
         report.latency_ms = latency_ms(buffer_frames, config.sample_rate());
         report.error = None;
         controller.shared().begin_stream();
-        stream
+        let started = stream
             .play()
-            .map_err(|error| format!("could not start the stream on \"{name}\": {error}"))?;
+            .map_err(|error| format!("could not start the stream on \"{name}\": {error}"));
+        let stream = finish_start(controller, admission, stream, started)?;
         return Ok(CpalStream {
             _stream: stream,
             faults,
@@ -705,30 +730,107 @@ fn fit_buffer(frames: u32, supported: &SupportedBufferSize) -> u32 {
     .max(1)
 }
 
+enum BuildFailure {
+    Preparation(crate::ProjectPreparationError),
+    Driver(String),
+}
+
+/// Starting remains fenced until the driver confirms playback. On failure,
+/// fence Closing before dropping the stream's processor, then retire queues.
+fn finish_start<S>(
+    controller: &Controller,
+    admission: crate::project_preparation::AttachmentAdmission,
+    stream: S,
+    started: Result<(), String>,
+) -> Result<S, String> {
+    let result = started.and_then(|()| {
+        controller
+            .complete_attachment(admission)
+            .map_err(|error| error.to_string())
+    });
+    match result {
+        Ok(()) => Ok(stream),
+        Err(error) => {
+            let closing = controller
+                .begin_close(false)
+                .map_err(|reason| reason.to_string())?;
+            drop(stream);
+            controller.finish_close(closing);
+            Err(error)
+        }
+    }
+}
+
+/// At most three genuinely fresh snapshots, independent of device-format
+/// fallback. Startup/native failure is fatal; only identity drift is retried.
+fn prepared_attachment(
+    controller: &Controller,
+    rate: u32,
+) -> Result<
+    (
+        Processor,
+        crate::project_preparation::AttachmentAdmission,
+        crate::ProjectRetirement,
+    ),
+    crate::ProjectPreparationError,
+> {
+    let mut last = crate::ProjectPreparationError::IdentityChanged;
+    for _ in 0..3 {
+        match controller.try_attach(rate, crate::project_preparation::AttachmentMode::Device) {
+            Ok(attached) => return Ok(attached),
+            Err(
+                error @ (crate::ProjectPreparationError::IdentityChanged
+                | crate::ProjectPreparationError::Publication(
+                    crate::PublicationRefusal::StalePlan
+                    | crate::PublicationRefusal::StaleStream
+                    | crate::PublicationRefusal::StaleFactory,
+                )),
+            ) => last = error,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(crate::ProjectPreparationError::AttachmentRetries {
+        attempts: 3,
+        reason: Box::new(last),
+    })
+}
+
 fn build(
     device: &cpal::Device,
     config: SupportedStreamConfig,
     buffer: Option<u32>,
     controller: &Controller,
-) -> Result<(cpal::Stream, FaultInbox), String> {
+) -> Result<
+    (
+        cpal::Stream,
+        FaultInbox,
+        crate::project_preparation::AttachmentAdmission,
+    ),
+    BuildFailure,
+> {
     let format = config.sample_format();
     if !writable(format) {
-        return Err(format!("the sample format {format} is not supported"));
+        return Err(BuildFailure::Driver(format!(
+            "the sample format {format} is not supported"
+        )));
     }
     let stream_config = StreamConfig {
         channels: config.channels(),
         sample_rate: config.sample_rate(),
         buffer_size: buffer.map_or(BufferSize::Default, BufferSize::Fixed),
     };
+    let (processor, admission, retirement) =
+        prepared_attachment(controller, config.sample_rate()).map_err(BuildFailure::Preparation)?;
+    drop(retirement);
     let mut feeder = Feeder {
-        processor: controller.attach(config.sample_rate()),
+        processor,
         shared: controller.shared().clone(),
         channels: usize::from(config.channels()),
         scratch: vec![[0.0; 2]; MAX_BLOCK].into_boxed_slice(),
         coverage: Coverage::new(config.sample_rate()),
     };
     let (mut reporter, faults) = fault_channel(controller.shared().clone());
-    device
+    let built = device
         .build_output_stream_raw(
             stream_config,
             format,
@@ -736,8 +838,16 @@ fn build(
             move |error: cpal::Error| reporter.report(error),
             Some(OPEN_TIMEOUT),
         )
-        .map(|stream| (stream, faults))
-        .map_err(|error| error.to_string())
+        .map(|stream| (stream, faults, admission));
+    match built {
+        Ok(stream) => Ok(stream),
+        Err(error) => {
+            // CPAL has dropped its failed Feeder before returning. Starting
+            // fenced document publication throughout that destruction.
+            controller.detach();
+            Err(BuildFailure::Driver(error.to_string()))
+        }
+    }
 }
 
 /// True for the sample formats [`Feeder::fill`] can write.
@@ -950,6 +1060,206 @@ mod tests {
     use crate::pool::SamplePool;
     use crate::test_alloc::allocator_calls;
 
+    #[derive(Debug, Default)]
+    struct PreparationProbe {
+        revision: std::sync::atomic::AtomicU64,
+        made: std::sync::atomic::AtomicUsize,
+        dropped: std::sync::atomic::AtomicUsize,
+        drift: std::sync::atomic::AtomicBool,
+        fail: std::sync::atomic::AtomicBool,
+        external: Mutex<()>,
+    }
+
+    struct PreparationFactory {
+        probe: Arc<PreparationProbe>,
+        controller: std::sync::Weak<Controller>,
+    }
+    impl std::fmt::Debug for PreparationFactory {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("PreparationFactory")
+        }
+    }
+    struct PreparedUnit {
+        probe: Arc<PreparationProbe>,
+        controller: std::sync::Weak<Controller>,
+    }
+    impl crate::plugins::HostedEffect for PreparedUnit {
+        fn process(&mut self, _: &mut [f32], _: &mut [f32]) {}
+        fn set_param(&mut self, _: u32, _: f32) {}
+        fn set_tempo(&mut self, _: f32) {}
+        fn latency(&self) -> usize {
+            37
+        }
+        fn tail(&self) -> usize {
+            0
+        }
+    }
+    impl Drop for PreparedUnit {
+        fn drop(&mut self) {
+            use std::sync::atomic::Ordering::Relaxed;
+            assert!(self.probe.external.try_lock().is_ok());
+            if let Some(controller) = self.controller.upgrade() {
+                // Both calls must finish while the destructor runs. The
+                // controller recovers poisoned guards without draining owners.
+                controller.transport();
+                controller.frame();
+            }
+            self.probe.dropped.fetch_add(1, Relaxed);
+        }
+    }
+    impl crate::plugins::PluginFactory for PreparationFactory {
+        fn provider_identity(&self) -> u64 {
+            Arc::as_ptr(&self.probe) as usize as u64
+        }
+        fn revision(&self) -> u64 {
+            self.probe
+                .revision
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }
+        fn effect(
+            &self,
+            _: &windfall_project::PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn crate::plugins::HostedEffect>, String> {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.probe.made.fetch_add(1, Relaxed);
+            if self.probe.fail.load(Relaxed) {
+                return Err("startup failed".into());
+            }
+            if self.probe.drift.load(Relaxed) {
+                self.probe.revision.fetch_add(1, Relaxed);
+            }
+            Ok(Box::new(PreparedUnit {
+                probe: self.probe.clone(),
+                controller: self.controller.clone(),
+            }))
+        }
+        fn instrument(
+            &self,
+            _: &windfall_project::PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn crate::plugins::HostedInstrument>, String> {
+            Err("effects only".into())
+        }
+    }
+
+    fn native_attachment() -> (Arc<Controller>, Arc<PreparationProbe>) {
+        use windfall_project::{Command, Document, EffectId, PluginBinding, PluginTarget, TrackId};
+        let controller = Arc::new(Controller::new());
+        let probe = Arc::new(PreparationProbe::default());
+        let mut project = Document::new(Project::new("device readiness"));
+        project
+            .dispatch(
+                Command::AddPluginEffect {
+                    track: TrackId(0),
+                    plugin: PluginBinding {
+                        target: PluginTarget::Effect {
+                            effect: EffectId(0),
+                        },
+                        format: "clap".into(),
+                        path: "p1-device.clap".into(),
+                        id: "device".into(),
+                        name: "device".into(),
+                        state: vec![],
+                        parameters: vec![],
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        let mut pool = SamplePool::new();
+        pool.set_plugin_factory(Arc::new(PreparationFactory {
+            probe: probe.clone(),
+            controller: Arc::downgrade(&controller),
+        }));
+        controller.set_project(project.project(), &pool);
+        (controller, probe)
+    }
+
+    #[test]
+    fn p1_device_startup_error_is_fatal_and_identity_drift_exhausts_three_fresh_attempts() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (controller, probe) = native_attachment();
+        probe.fail.store(true, Relaxed);
+        assert!(matches!(
+            prepared_attachment(&controller, 48_000),
+            Err(crate::ProjectPreparationError::Native { .. })
+        ));
+        assert_eq!(probe.made.load(Relaxed), 1);
+        probe.fail.store(false, Relaxed);
+        probe.drift.store(true, Relaxed);
+        assert!(matches!(
+            prepared_attachment(&controller, 48_000),
+            Err(crate::ProjectPreparationError::AttachmentRetries { attempts: 3, .. })
+        ));
+        assert_eq!(probe.made.load(Relaxed), 4);
+        assert_eq!(probe.dropped.load(Relaxed), 3);
+        probe.drift.store(false, Relaxed);
+        let (processor, admission, retirement) = prepared_attachment(&controller, 48_000).unwrap();
+        drop(retirement);
+        let processor = finish_start(&controller, admission, processor, Ok(())).unwrap();
+        let closing = controller.begin_close(false).unwrap();
+        drop(processor);
+        controller.finish_close(closing);
+        assert_eq!(probe.dropped.load(Relaxed), 4);
+    }
+
+    #[test]
+    fn p1_device_failed_build_play_and_same_rate_reopen_retire_outside_guards() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (controller, probe) = native_attachment();
+        // A failed driver's build owns and destroys the processor before
+        // returning Err, exactly as build_output_stream_raw's consumed closure.
+        let (processor, _, retirement) = prepared_attachment(&controller, 48_000).unwrap();
+        drop(retirement);
+        assert!(matches!(
+            controller.preparation_snapshot().prepare(
+                &Project::new("blocked"),
+                &SamplePool::new(),
+                crate::ProjectPublicationIntent::Edit
+            ),
+            Err(crate::ProjectPreparationError::StreamTransitioning)
+        ));
+        drop(processor);
+        controller.detach();
+        assert_eq!(probe.dropped.load(Relaxed), 1);
+        let (processor, admission, retirement) = prepared_attachment(&controller, 48_000).unwrap();
+        drop(retirement);
+        assert!(
+            finish_start(
+                &controller,
+                admission,
+                processor,
+                Err("driver play failed".into())
+            )
+            .is_err()
+        );
+        assert_eq!(probe.dropped.load(Relaxed), 2);
+        let (mut processor, admission, retirement) =
+            prepared_attachment(&controller, 48_000).unwrap();
+        drop(retirement);
+        controller.complete_attachment(admission).unwrap();
+        controller.play();
+        assert_eq!(allocator_calls(|| processor.process(&mut [0.0; 2])), 0);
+        let closing = controller.begin_close(true).unwrap();
+        drop(processor);
+        controller.finish_close(closing);
+        assert_eq!(probe.dropped.load(Relaxed), 3);
+        let (mut reopened, admission, retirement) =
+            prepared_attachment(&controller, 48_000).unwrap();
+        drop(retirement);
+        controller.complete_attachment(admission).unwrap();
+        assert_eq!(allocator_calls(|| reopened.process(&mut [0.0; 2])), 0);
+        assert!(controller.frame().playing);
+        let closing = controller.begin_close(false).unwrap();
+        drop(reopened);
+        controller.finish_close(closing);
+        assert_eq!(probe.made.load(Relaxed), 4);
+        assert_eq!(probe.dropped.load(Relaxed), 4);
+    }
+
     /// What a scripted backend is to do, and what was asked of it.
     #[derive(Default)]
     struct Script {
@@ -992,8 +1302,13 @@ mod tests {
             report.host = "Scripted".to_owned();
             // As with a real device, the processor exists before it is known
             // whether the stream will start.
-            let processor = self.controller.attach(48_000);
+            let (processor, admission, retirement) =
+                prepared_attachment(&self.controller, 48_000).map_err(|error| error.to_string())?;
+            drop(retirement);
             script.outcomes.pop_front().unwrap_or(Ok(()))?;
+            self.controller
+                .complete_attachment(admission)
+                .map_err(|error| error.to_string())?;
             report.running = true;
             report.sample_rate = 48_000;
             report.error = None;

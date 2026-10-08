@@ -40,7 +40,7 @@ const FULL_SWING_DELAY_TICKS: f64 = TICKS_PER_STEP as f64 / 3.0;
 pub(crate) const FALLBACK_LOOP_TICKS: u32 = DEFAULT_PATTERN_STEPS * TICKS_PER_STEP;
 
 /// Maps ids to positions in one of the plan's lists.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct IdIndex {
     /// `(id, position)` sorted by id.
     entries: Vec<(u32, u32)>,
@@ -66,7 +66,7 @@ impl IdIndex {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Plan {
     pub navigation: Vec<crate::timeline::NavigationPoint>,
     pub signature: windfall_project::TimeSignature,
@@ -76,6 +76,7 @@ pub(crate) struct Plan {
     >,
     pub plugins: Vec<windfall_project::PluginBinding>,
     pub plugin_factory: Option<std::sync::Arc<dyn crate::plugins::PluginFactory>>,
+    pub factory_stamp: Option<crate::project_preparation::FactoryStamp>,
     pub tempo_bpm: f64,
     /// Channel rack order.
     pub channels: Vec<PlanChannel>,
@@ -105,13 +106,13 @@ pub(crate) struct Plan {
     /// End of the last clip on the playlist in ticks, muted clips included.
     pub song_end: u32,
     /// What automation does to each of its targets along the song.
-    pub lanes: Vec<Lane>,
+    pub lanes: Arc<[Lane]>,
     /// How long the song takes to get to each of its ticks, when
     /// automation moves the tempo. `None` when the tempo is steady.
     pub tempo_map: Option<TempoMap>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanChannel {
     pub id: ChannelId,
     /// Index of the mixer track the channel plays into.
@@ -132,7 +133,7 @@ pub(crate) struct PlanChannel {
     pub leaving: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanSampler {
     pub sample: Option<AudioBuffer>,
     pub bank: Option<std::sync::Arc<crate::sampler_processing::SamplerBank>>,
@@ -153,7 +154,7 @@ pub(crate) struct PlanSampler {
     pub cut_group: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanPattern {
     pub id: PatternId,
     /// Loop length in ticks, at least one step.
@@ -176,7 +177,7 @@ pub(crate) struct NoteEvent {
     pub pan: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanTrack {
     pub id: TrackId,
     /// Fader gain, or zero when mute or solo silences the track.
@@ -213,6 +214,7 @@ impl Default for EffectLife {
 }
 
 impl EffectLife {
+    #[cfg(test)]
     pub fn heard(&self) -> bool {
         self.progress.load(Ordering::Acquire) == 1
     }
@@ -243,9 +245,61 @@ pub(crate) struct PlanEffect {
     /// A restored id waits for this audible departure before its fresh
     /// owner joins. Progress only; never a native-owner handle or lineage.
     pub after: Option<Arc<EffectLife>>,
+    pub departure: Option<Arc<DepartureReservation>>,
+    pub after_departure: Option<Arc<DepartureReservation>>,
 }
 
+/// Two possible generations share one outgoing physical rack row. The choice
+/// is evidence only after the audio thread has taken the actual predecessor.
 #[derive(Debug)]
+pub(crate) struct DepartureReservation {
+    pub sources: [Option<DepartureSource>; 2],
+    choice: AtomicU8,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DepartureSource {
+    pub effect: EffectId,
+    pub life: Arc<EffectLife>,
+    pub params: EffectParams,
+    pub enabled: bool,
+    pub mix: f32,
+    pub native: Option<(u64, usize)>,
+}
+
+impl DepartureReservation {
+    pub fn possible(&self) -> impl Iterator<Item = &DepartureSource> {
+        let choice = self.choice.load(Ordering::Acquire);
+        self.sources
+            .iter()
+            .enumerate()
+            .filter_map(move |(index, source)| {
+                source
+                    .as_ref()
+                    .filter(|_| choice == 0 || choice == index as u8 + 2)
+            })
+    }
+
+    pub fn adopted(&self, source: Option<usize>) {
+        self.choice
+            .store(source.map_or(1, |index| index as u8 + 2), Ordering::Release);
+    }
+
+    pub fn selected(&self) -> Option<&DepartureSource> {
+        let choice = self.choice.load(Ordering::Acquire);
+        choice
+            .checked_sub(2)
+            .and_then(|index| self.sources.get(index as usize)?.as_ref())
+    }
+}
+
+impl PlanEffect {
+    pub fn native_identity(&self) -> Option<u64> {
+        self.native_owner
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PlanEdge {
     /// Index of the receiving track.
     pub target: usize,
@@ -257,7 +311,7 @@ pub(crate) struct PlanEdge {
     pub slot: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanClip {
     pub start: u32,
     pub end: u32,
@@ -272,7 +326,7 @@ pub(crate) struct PlanClip {
 }
 
 /// An audio clip: a sample that plays straight onto the timeline.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanAudioClip {
     pub id: ClipId,
     pub start: u32,
@@ -302,9 +356,9 @@ pub(crate) struct PlanAudioClip {
 
 impl Plan {
     pub(crate) fn snapshot_native_owners(&mut self) {
-        let provider = self.plugin_factory.as_ref().map_or(0, |factory| {
-            factory.revision().rotate_left(17) ^ factory.provider_identity()
-        });
+        self.factory_stamp =
+            crate::project_preparation::FactoryStamp::capture(&self.plugin_factory);
+        let provider = self.factory_stamp.map_or(0, |stamp| stamp.identity());
         for effect in self.tracks.iter_mut().flat_map(|track| &mut track.effects) {
             if !effect.leaving {
                 let key = windfall_project::PluginTarget::Effect { effect: effect.id };
@@ -315,6 +369,25 @@ impl Plan {
                     .map(|binding| crate::plugins::identity(binding) ^ provider);
             }
         }
+    }
+
+    /// A fresh stream has no departing/history owners from the stopped one.
+    /// Cloning compiled assets/curves and rebuilding indices happens off guards.
+    pub fn for_attachment(&self) -> Self {
+        let mut plan = self.clone();
+        plan.channels.retain(|channel| !channel.leaving);
+        for track in &mut plan.tracks {
+            track.effects.retain(|effect| !effect.leaving);
+            for effect in &mut track.effects {
+                effect.life = Arc::new(EffectLife::default());
+                effect.after = None;
+                effect.departure = None;
+                effect.after_departure = None;
+            }
+        }
+        plan.snapshot_native_owners();
+        plan.link();
+        plan
     }
 
     /// What plays before a project is set: nothing, through a master track
@@ -339,15 +412,11 @@ impl Plan {
     ///
     /// A track that is gone takes its effects with it at once: there is
     /// nowhere left for them to be heard.
+    #[cfg(test)]
     pub fn keep_leaving(&mut self, previous: &Plan, prepared: Option<&crate::state::Ledger>) {
         // Refresh on installation too: precompilation may precede a retry.
         // Never query the old plan's mutable factory for its past revision.
         self.snapshot_native_owners();
-        let same_factory = match (&self.plugin_factory, &previous.plugin_factory) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
         // Progress follows a retained identity across track moves as well.
         // A restored departing id gets a fresh marker and owner preparation.
         for effect in self.tracks.iter_mut().flat_map(|track| &mut track.effects) {
@@ -362,10 +431,7 @@ impl Plan {
             // querying the previous factory now would observe its new revision.
             let before_native =
                 prepared.map_or(before.native_owner, |held| held.native_identity(effect.id));
-            if effect.params.kind() == before.params.kind()
-                && native == before_native
-                && (native.is_none() || same_factory)
-            {
+            if effect.params.kind() == before.params.kind() && native == before_native {
                 effect.life = before.life.clone();
                 effect.after = before.after.as_ref().filter(|life| life.heard()).cloned();
             }
@@ -424,6 +490,157 @@ impl Plan {
             });
         }
         self.link();
+    }
+
+    /// Reserve the entire late-heard universe before native construction. No
+    /// provisional selection is used as actual preparation/history evidence.
+    pub fn reserve_departures(
+        &mut self,
+        previous: &Plan,
+        held: &crate::state::Ledger,
+    ) -> Result<(), crate::project_preparation::ProjectPreparationError> {
+        use crate::project_preparation::ProjectPreparationError;
+        for effect in self.tracks.iter_mut().flat_map(|track| &mut track.effects) {
+            if let Some(index) = previous.effect_ids.get(effect.id.0) {
+                let (track, place) = previous.effect_places[index];
+                let before = &previous.tracks[track].effects[place];
+                if held.reuses_effect(effect, before, held.sample_rate) {
+                    effect.life = before.life.clone();
+                }
+            }
+        }
+        let retained: HashSet<u64> = self
+            .tracks
+            .iter()
+            .flat_map(|track| &track.effects)
+            .map(|effect| effect.life.generation)
+            .collect();
+        for track in &mut self.tracks {
+            let Some(old_index) = previous.track_ids.get(track.id.0) else {
+                continue;
+            };
+            let mut at = 0;
+            let mut rows: Vec<(EffectId, Vec<DepartureSource>, usize)> = Vec::new();
+            for before in &previous.tracks[old_index].effects {
+                let kept = track
+                    .effects
+                    .iter()
+                    .position(|effect| !effect.leaving && effect.id == before.id);
+                let retained = retained.contains(&before.life.generation);
+                let mut sources = Vec::new();
+                if let Some(reservation) = &before.departure {
+                    sources.extend(
+                        reservation
+                            .possible()
+                            .filter(|source| source.life.progress.load(Ordering::Acquire) != 2)
+                            .cloned(),
+                    );
+                } else if !retained && self.effect_ids.get(before.id.0).is_none() {
+                    // Preserve existing replacement semantics: an active id
+                    // whose native identity/kind changes is replaced directly,
+                    // not newly promoted into the outgoing chain. Existing
+                    // outgoing reservations still retain their actual owners.
+                    // Even an unheard active generation may first sound before
+                    // adoption. Finished departures alone can be excluded.
+                    if !before.leaving || before.life.progress.load(Ordering::Acquire) != 2 {
+                        sources.push(DepartureSource {
+                            effect: before.id,
+                            life: before.life.clone(),
+                            params: before.params,
+                            enabled: before.enabled,
+                            mix: before.mix,
+                            native: held.generation_native(before.id, before.life.generation),
+                        });
+                    }
+                }
+                if !sources.is_empty() {
+                    if let Some((_, existing, _)) =
+                        rows.iter_mut().find(|(id, _, _)| *id == before.id)
+                    {
+                        for source in sources {
+                            if !existing
+                                .iter()
+                                .any(|old| Arc::ptr_eq(&old.life, &source.life))
+                            {
+                                existing.push(source);
+                            }
+                        }
+                        if existing.len() > 2 {
+                            return Err(ProjectPreparationError::UnresolvedProgress);
+                        }
+                    } else {
+                        rows.push((before.id, sources, at));
+                    }
+                }
+                if let Some(kept) = kept {
+                    at = at.max(kept + 1);
+                }
+            }
+            // Insert in old serial order; active indexing is rebuilt afterwards.
+            for (inserted, (id, sources, anchor)) in rows.into_iter().enumerate() {
+                let first = &sources[0];
+                let row = PlanEffect {
+                    id,
+                    params: first.params,
+                    enabled: first.enabled,
+                    mix: first.mix,
+                    leaving: true,
+                    life: first.life.clone(),
+                    native_owner: first.native.map(|record| record.0),
+                    after: None,
+                    departure: None,
+                    after_departure: None,
+                };
+                let mut iterator = sources.into_iter();
+                let reservation = Arc::new(DepartureReservation {
+                    sources: [iterator.next(), iterator.next()],
+                    choice: AtomicU8::new(0),
+                });
+                if let Some(active) = track
+                    .effects
+                    .iter_mut()
+                    .find(|effect| !effect.leaving && effect.id == id)
+                {
+                    active.after_departure = Some(reservation.clone());
+                }
+                let index = track
+                    .effects
+                    .iter()
+                    .position(|effect| !effect.leaving && effect.id == id)
+                    .unwrap_or((anchor + inserted).min(track.effects.len()));
+                track.effects.insert(
+                    index,
+                    PlanEffect {
+                        departure: Some(reservation),
+                        ..row
+                    },
+                );
+            }
+            if track.effects.len() > 2 * MAX_EFFECT_SLOTS {
+                return Err(ProjectPreparationError::UnresolvedProgress);
+            }
+        }
+        for channel in &previous.channels {
+            if let Some(instrument) = channel.instrument.filter(|_| !channel.leaving)
+                && self.channel_ids.get(channel.id.0).is_none()
+            {
+                self.channels.push(PlanChannel {
+                    id: channel.id,
+                    track: self
+                        .track_ids
+                        .get(previous.tracks[channel.track].id.0)
+                        .unwrap_or(0),
+                    gain: channel.gain,
+                    audible: channel.audible,
+                    pan: channel.pan,
+                    sampler: PlanSampler::silent(),
+                    instrument: Some(instrument),
+                    leaving: true,
+                });
+            }
+        }
+        self.link();
+        Ok(())
     }
 
     /// Works out the lists that follow from the channels and the chains.
@@ -563,6 +780,9 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         .map(|map| map.segments().to_vec()),
         plugins: project.plugins.clone(),
         plugin_factory: pool.plugin_factory.clone(),
+        // T1 refuses invalid meter maps before any provider metadata access.
+        // snapshot_native_owners below fills this only for a valid plan.
+        factory_stamp: None,
         tempo_bpm,
         channels,
         channel_ids,
@@ -578,14 +798,14 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         audio_clips,
         audio_clip_ids,
         song_end,
-        lanes: Vec::new(),
+        lanes: Arc::from([]),
         tempo_map: None,
     };
     if plan.meters.is_ok() {
         plan.snapshot_native_owners();
     }
     plan.link();
-    plan.lanes = automation::compile(project, &plan);
+    plan.lanes = automation::compile(project, &plan).into();
     let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());
     plan.tempo_map = tempo_lane.map(|lane| TempoMap::new(lane, tempo_bpm, f64::from(song_end)));
     plan
@@ -958,6 +1178,8 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
                     life: Arc::new(EffectLife::default()),
                     native_owner: None,
                     after: None,
+                    departure: None,
+                    after_departure: None,
                 })
                 .collect();
             PlanTrack {

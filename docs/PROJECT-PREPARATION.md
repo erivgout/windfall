@@ -1074,3 +1074,165 @@ individual graph cases are reported green, including CLAP/VST3 latency 561
 after stripping latency beginning at 1024 with bit-equal chunk partitions.
 Those are N4's results awaiting its full checks/source pin. They are not P1 test
 runs or parent-composed acceptance of this still-unimplemented locking change.
+
+## Stage1 engine implementation provenance
+
+This section records the granted engine implementation, not production P1
+acceptance. The original proposal pins `07cdb24b5628ae79ae56c7933df26a050abfe1ce`
+and `7519e5eddfc33cebdc498cbad263df1aee218b3a` remain immutable in history. The
+original base is `6d0773804199faba65f866feda21b8c4ba9a6b9a`. The sole authorized
+prerequisite import was `abd044dd0f332a07cd996315d640ddf0ac417479`, merged locally
+as `937891439e4c9f268ddfa5cd91c1b7c6a9d4e8ff`. No other owner branch was imported.
+
+The engine API is now `Controller::preparation_snapshot`, owned
+`PreparationSnapshot::prepare(project,pool,intent)`, borrowed
+`Controller::publication(&mut ready)`, and `lease.install() -> ProjectRetirement`.
+`take_retired(&mut outer)` is explicit. The new implementation is a child module
+of Controller, so its lease can guard existing private controller state without
+exposing that state or introducing another mutex. The sampler pool accessor is
+borrowed; callers must keep the token and returned retirement outside their
+document/recording guard scopes. Refusal does not consume or destroy the token.
+
+Snapshots retain the current Plan and actual Ledger Arcs, plan/stream counters,
+stream phase and old installed factory stamp. Work builds the entire PlanState,
+DSP/native units, dry histories, route banks, processor storage and message/carrier
+envelopes off controller guards. No native constructor is moved into an async
+placeholder. Provider identity/revision are documented bounded metadata reads.
+Factory `None` retains unavailable bindings without a native-ready Ledger record;
+constructor `Err` returns Native. A different factory Arc with the same provider,
+revision and rate retains the actual generation and owner. A staged revision is
+compared separately from the old installed factory and actual held Ledger.
+
+Admission validates exact controller/Plan identity, plan and stream generations,
+phase/endpoints and both factory stamps. It binds late transport fields and
+reserves actual producer slots before mutation; a nonempty existing backlog also
+refuses. The sole producer remains mutex-guarded and the consumer can only add
+space. Edit emits SetPlan and, when necessary, the repaired pattern transport.
+Replace emits Stop -> SetPlan -> SetTransport -> Seek(0) in that exact order.
+The initialized messages are pushed serially. They can be adopted in different
+callbacks under existing garbage headroom. No callback transaction was added.
+
+Installation moves displaced Plan/Ledger/snapshot ownership into the carrier
+that remains in the caller's borrowed token until the controller guard is
+released. A cancelled or unwinding lease restores its initialized envelope and
+leaves all native ownership with the outer token. Queries and lock acquisition
+never drain garbage. `take_retired` captures at most the remaining preallocated
+4096 entries and leaves additional owners in the existing ring. Attach/close move
+one whole link and the actual existing backlog container outward. This does not
+bound the legacy backlog globally or add a separate retirement queue.
+
+Departures are physical rows with at most two flat source alternatives. A
+restored active row is separate: P20 can represent G30 across ten slots. Repeated
+pending publications flatten alternatives and reuse actual Ledger generations.
+A third unresolved removal source refuses before constructors and admission.
+Same-ID active revision/kind replacement follows existing `Plan::keep_leaving`:
+it supersedes the active owner directly and retains existing outgoing definitions;
+it does not turn every changed active generation into another departure. Actual
+callback units choose the source at takeover, preferring an audible outgoing
+owner and preserving its remainder, then a heard active owner, otherwise None.
+No native constructor or capture selection occurs in this choice. A subsequent
+edit observes AdoptedNone rather than promoting provisional source metadata.
+
+Compensation banks use an ordered selected prefix for process, empty/scalar
+promotion, prefix/suffix scans and history transfer. Inactive physical rows never
+participate. A global held maximum capacity conservatively certifies every
+destination/stage's inherited ring and tap universe. New conditional banks use
+H=max(held capacity,sample rate), K=P+I stages and D=T+E+I destinations. The
+checked 256 MiB reservation calculation includes line/sample/tap payload,
+physical stage envelopes, `(2T+D)*K` route specs, flat reservation envelopes/Arc
+counters, layout numeric and Vec storage, destination/carrier envelopes, 4096
+garbage entries and four initialized messages. Path reservation uses reserve_exact.
+It is a conservative route/alternative reservation bound, not total Rust RSS,
+ordinary project/processor metadata, other DSP workspaces or helper-process
+memory. Those existing preparations still run off guards. Overflow is SizeOverflow;
+an excessive determinable reservation is MemoryLimit before constructors.
+Repeated handoffs use the held maximum rather than summing prior reservations.
+
+Native dry history uses negotiated latency. A native route exceeding the existing
+one-second cross-track compensation bound returns explicit Unsupported before
+publication; it does not silently clamp that latency or change the old plan,
+clock or owners. Native dry-history size overflow/limit is a distinct native
+preparation failure. Neither rule invents a helper latency or hardware deadline.
+
+The device adapter prepares off guards and admits Starting, then completes the
+exact stream identity only after driver build/play succeeds. Closing fences
+publication before dropping the old stream, and endpoint/backlog retirement
+follows processor shutdown. Identity drift retries at most three fresh snapshots;
+native startup failure is fatal and is not a format fallback. Scripted backend
+tests now use this fallible attachment route. Existing offline infallible adapters
+remain a separate N4 composition obligation; they panic explicitly on preparation
+failure rather than installing a missing unit as ready.
+
+### Initial regressions and authorized test migrations
+
+The initial reservation policy wrongly added changed same-ID active generations
+to departures. It failed the unchanged R3 prepared-native-revision process count
+(expected 30, observed 65) and R5 superseded-owner process count (expected 0,
+observed 1). The Plan-window correction described above fixes both. They were
+rerun individually with exact test names and both passed, then all 42 utility
+cases passed with original owner/process/drop/signal/latency/allocation assertions.
+No tolerance, timing, skip or ignore was added.
+
+An early provider-stamp read also failed T1's unchanged invalid-meter metadata
+count assertion. Convenience preparation now validates meters before capturing
+provider metadata; compile starts with no factory stamp and fills it only for a
+valid map. T1's gate/helper, typed meter Result and Unsupported message remain.
+The invalid-map refusal/old-plan/transport/native-owner/healthy-retry test passes.
+
+Utility test-only migration is limited to the granted
+`tests/engine/utility_effects.rs`: the attached static preparation publication in
+`utility_effects_r5_pending_revisions_keep_latency_changes_and_precompiled_plans_bounded`
+uses snapshot preparation with Edit and a borrowed lease; all 33 standalone
+frame/native-drop observations use `observe_and_retire`. The helper returns from
+frame before creating/capturing/destroying its outer carrier. Controller's owned
+R6 setup similarly uses `r6_publish_ready` at its two attached publication sites
+and `r6_collect` at retirement observations. Detached precompiled/late-revision
+setup remains legacy; R6 signal/owner/revision/allocator assertions are unchanged.
+State's retained-owner test registers the actual generation through
+reserve_departures before its second build; its original assertions are unchanged.
+
+The first full engine run passed lib 130/130 and integration 280/281. Its sole
+failure was
+`sampler_reload_evicts_cache_but_old_voice_bank_stays_charged_until_control_retirement`:
+the old second standalone transport query implicitly collected garbage and the
+new accessor correctly retained both 12448 charged bytes instead of the asserted 6224. The parent granted exactly three lines after the second transport query
+following run(1000,31): create ProjectRetirement, take_retired, drop the outer
+carrier before the unchanged one-bank assertion. The earlier transport query
+after run(500,13), which must retain both banks, is untouched. No other sampler
+test or production sampler/cache source changed. The exact migrated case passes.
+
+### Verification scope and remaining composition gates
+
+The final engine runs use scripts/msvc-env.sh, one Cargo job,
+target/p1-native and task-local target/p1-native/ts-exports. Focused readiness
+proofs cover blocked constructors and concurrent control queries, stalled plan/
+stream/rate/factory changes, actual-Ledger reuse versus staged revisions,
+P20/G30/third-source refusal, delayed outgoing/first-heard/None selection,
+selected history and inherited taps, late Edit/Replace transport, queue capacity,
+memory/size/counter refusal, cancellation/poison/unwind/full retirement, native
+failure/unavailability, bounded stale attachment retries and same-rate reopen.
+Native fixture destructors check external document and recording mutex freedom
+and controller mutex freedom. These are engine-owned fixtures, not actual Session
+or helper-process integration proof. Device failure schedules model driver
+build/play outcomes and consumed processor closures; they do not test CPAL
+hardware or establish confirmed native helper joins.
+
+Final source verification: lib 131/131 and engine integration 281/281, including
+all 42 utility cases, all 18 P1 readiness proofs, all four R6 cases, sampler cases
+and current T1 engine cases. Strict engine all-targets Clippy, owned Rust formatting,
+document Prettier and diff/scope checks must pass before this source is frozen.
+The initial strict run found five ordinary Clippy issues in new engine code;
+they were fixed without lint suppressions or assertion changes.
+
+Stage2 is still closed. Production Session edit/helper/import/New/Open/plugin
+refresh and M1 borrowed eligibility/install/artifact acknowledgement have not
+been converted. Attached static set_prepared_project explicitly reports
+Unsupported("Attached project publication requires an engine readiness token.")
+and leaves the engine plan installed; it has no native-under-lock fallback.
+set_project is documented for callers outside document/recording guards.
+Session's existing musical commit/error adapters and realtime retirement worker
+must be composed before activation. N4 render/stems/factory/error-channel/helper
+lifetime/capture integration remains its owner window. No UI artifacts, parity,
+release, hardware deadline, listening or other-platform acceptance is claimed.
+This checkpoint establishes the engine contract for review, not closure of the
+production locking finding or global desktop compatibility.

@@ -19,7 +19,15 @@ use crate::processor::Processor;
 use crate::shared::Shared;
 use crate::state::{Ledger, PlanState};
 
-/// An immutable project compiled on a worker, ready for a short installation.
+#[path = "project_preparation.rs"]
+pub(crate) mod preparation;
+pub use preparation::{
+    PreparationSnapshot, PreparedPublication, ProjectPreparationError, ProjectPublicationIntent,
+    ProjectPublicationLease, ProjectRetirement, PublicationRefusal,
+};
+
+/// An immutable compiled project and prepared sampler pool. Attached native
+/// readiness additionally requires a captured engine preparation snapshot.
 pub struct PreparedProject {
     plan: Plan,
     sampler_pool: SamplePool,
@@ -55,6 +63,7 @@ struct Inner {
     shared: Arc<Shared>,
     state: Mutex<State>,
     sampler_error: Mutex<Option<crate::sampler_processing::SamplerPreparationError>>,
+    preparation_error: Mutex<Option<ProjectPreparationError>>,
 }
 
 struct State {
@@ -65,7 +74,10 @@ struct State {
     /// What the attached processor holds once it has taken `plan`: which
     /// effects and instruments, how long its delay lines are, its meters.
     /// `None` while no processor is attached.
-    hosted: Option<Ledger>,
+    hosted: Option<Arc<Ledger>>,
+    plan_generation: u64,
+    stream_generation: u64,
+    stream_phase: preparation::StreamPhase,
     /// The transport as last requested. `playing` here is what was asked
     /// for; the audio thread has the final say once it has caught up.
     transport: TransportState,
@@ -109,11 +121,15 @@ impl Controller {
             inner: Arc::new(Inner {
                 shared: Arc::new(Shared::new()),
                 sampler_error: Mutex::new(None),
+                preparation_error: Mutex::new(None),
                 state: Mutex::new(State {
                     region: None,
                     link: None,
                     plan: Arc::new(Plan::empty()),
                     hosted: None,
+                    plan_generation: 0,
+                    stream_generation: 0,
+                    stream_phase: preparation::StreamPhase::Detached,
                     transport: TransportState {
                         playing: false,
                         mode: PlayMode::Pattern,
@@ -150,17 +166,61 @@ impl Controller {
     /// Samples missing from `pool` leave their channels silent. If the
     /// transport's pattern is not in the project, the transport moves to the
     /// project's first pattern.
+    /// Call outside document/recording guards: preparation and retirement run
+    /// on this caller's thread. Guarded document edits use borrowed publication.
     pub fn set_project(&self, project: &Project, pool: &SamplePool) {
-        match Self::prepare_project(project, pool) {
-            Ok(prepared) => {
-                self.set_prepared_project(project, prepared);
+        // T1's invalid-meter precheck precedes even bounded provider metadata
+        // reads, so a refused convenience edit leaves native owners untouched.
+        let result = Self::try_prepare_project(project, pool)
+            .map_err(ProjectPreparationError::Sampler)
+            .and_then(|prepared| {
+                self.preparation_snapshot()
+                    .prepare_compiled(prepared, ProjectPublicationIntent::Edit)
+            });
+        self.publish_convenience(result);
+    }
+
+    fn publish_convenience(&self, result: Result<PreparedPublication, ProjectPreparationError>) {
+        match result {
+            Ok(mut prepared) => {
+                let mut retirement = None;
+                let result = match self.publication(&mut prepared) {
+                    Ok(lease) => {
+                        retirement = Some(lease.install());
+                        Ok(())
+                    }
+                    Err(reason) => Err(ProjectPreparationError::Publication(reason)),
+                };
+                if let Err(error) = result {
+                    self.latch_preparation_error(error);
+                } else {
+                    *self
+                        .inner
+                        .sampler_error
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = None;
+                    *self
+                        .inner
+                        .preparation_error
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = None;
+                }
+                if let Some(retirement) = &mut retirement {
+                    self.take_retired(retirement);
+                }
+                // Both the candidate and retired native owners drop after the
+                // publication guard has gone. Production Session adoption of
+                // the borrowed interface is the separate stage2 integration.
             }
             Err(error) => {
-                *self
-                    .inner
-                    .sampler_error
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(error);
+                if let ProjectPreparationError::Sampler(sampler) = &error {
+                    *self
+                        .inner
+                        .sampler_error
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = Some(sampler.clone());
+                }
+                self.latch_preparation_error(error);
             }
         }
     }
@@ -227,44 +287,31 @@ impl Controller {
         if self.refuse_invalid_meters(&prepared.plan) {
             return;
         }
-        *self
-            .inner
-            .sampler_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-        self.set_plan(prepared.plan);
-        let mut state = self.lock();
-        let pattern = state.transport.pattern;
-        if project.pattern(pattern).is_none()
-            && let Some(first) = project.patterns.first()
-        {
-            state.transport.pattern = first.id;
-            state.send_transport();
+        let snapshot = self.preparation_snapshot();
+        if snapshot.is_attached() {
+            self.latch_preparation_error(ProjectPreparationError::Unsupported(
+                "Attached project publication requires an engine readiness token.",
+            ));
+            return;
         }
+        let _ = project;
+        self.publish_convenience(
+            snapshot.prepare_compiled(prepared, ProjectPublicationIntent::Edit),
+        );
     }
 
-    pub(crate) fn set_plan(&self, mut plan: Plan) {
+    pub(crate) fn set_plan(&self, plan: Plan) {
         if self.refuse_invalid_meters(&plan) {
             return;
         }
-        let mut state = self.lock();
-        let held = state.hosted.as_ref().filter(|_| state.link.is_some());
-        let Some(held) = held else {
-            // With no stream there is nobody to tell: the next processor
-            // starts out on the plan kept here.
-            plan.snapshot_native_owners();
-            state.plan = Arc::new(plan);
-            return;
-        };
-        plan.keep_leaving(&state.plan, Some(held));
-        let plan = Arc::new(plan);
-        let (plan_state, hosted) = PlanState::build(&plan, held.sample_rate, Some(held));
-        state.hosted = Some(hosted);
-        state.plan = plan.clone();
-        state.send(Message::SetPlan {
-            state: Box::new(plan_state),
+        let prepared = PreparedProject {
             plan,
-        });
+            sampler_pool: SamplePool::new(),
+        };
+        self.publish_convenience(
+            self.preparation_snapshot()
+                .prepare_compiled(prepared, ProjectPublicationIntent::Edit),
+        );
     }
 
     /// A failed immutable snapshot never replaces the installed project.
@@ -573,91 +620,24 @@ impl Controller {
     /// could not be built and another kind is tried: the processor made
     /// last is the one that counts.
     pub(crate) fn attach(&self, sample_rate: u32) -> Processor {
-        let (message_tx, message_rx) = RingBuffer::new(MESSAGE_CAPACITY);
-        let (garbage_tx, garbage_rx) = RingBuffer::new(GARBAGE_CAPACITY);
-        let shared = self.inner.shared.clone();
-
-        let mut state = self.lock();
-        self.panic_hardware();
-        // Every effect and instrument is built anew, prepared for this
-        // stream's sample rate. What the last stream ran went with it.
-        // The returned ledger freezes the identities actually prepared,
-        // including revisions changed since this plan was installed.
-        let (plan_state, hosted) = PlanState::build(&state.plan, sample_rate, None);
-        let processor = Processor::with_queues(
-            sample_rate,
-            state.plan.clone(),
-            Box::new(plan_state),
-            state.output_gain,
-            message_rx,
-            garbage_tx,
-            shared,
-        );
-        state.hosted = Some(hosted);
-        state.link = Some(Link {
-            messages: message_tx,
-            garbage: garbage_rx,
-        });
-        state.backlog.clear();
-        // What the last stream's processor published about its automation
-        // is not true of this one, which has yet to play anything.
-        self.inner.shared.publish_automated(std::iter::empty());
-        state.send_transport();
-
-        let shared = &self.inner.shared;
-        // Where stop returns to is not where the playhead was when the last
-        // stream went away, so the two travel separately.
-        state.send(Message::Seek(shared.start()));
-        if state.resume {
-            state.transport.playing = true;
-            state.sequence = state.sequence.wrapping_add(1);
-            let sequence = state.sequence;
-            state.send(Message::Play {
-                sequence,
-                passes: None,
-                from: Some(shared.tick()),
-            });
-        } else {
-            state.transport.playing = false;
-            shared.publish_transport(state.sequence, false);
-        }
+        let (processor, _, retirement) = self
+            .try_attach(sample_rate, preparation::AttachmentMode::Independent)
+            .expect("processor attachment requires successful off-lock preparation");
+        drop(retirement);
         processor
     }
 
-    /// Lets go of the processor of a stream that is being replaced on
-    /// purpose. If the transport was playing, the processor of the next
-    /// stream carries on from where the playhead is now.
+    #[cfg(test)]
     pub(crate) fn suspend(&self) {
-        let mut state = self.lock();
-        self.panic_hardware();
-        state.resume = self.playing(&state);
-        state.link = None;
-        state.hosted = None;
-        state.backlog.clear();
-        let shared = &self.inner.shared;
-        shared.publish_position(shared.tick(), shared.start(), 0);
-        shared.publish_clips(0, 0);
+        let token = self.begin_close(true).expect("stream generation exhausted");
+        self.finish_close(token);
     }
 
-    /// Forgets the processor after its stream failed, or after no stream
-    /// could be opened, so requests stop queueing up for it. Playback is
-    /// over: the transport reads stopped and the playhead goes back to
-    /// where playback started.
-    ///
-    /// This frees whatever was still queued for the processor, so it is for
-    /// the control side only.
     pub(crate) fn detach(&self) {
-        let mut state = self.lock();
-        self.panic_hardware();
-        state.link = None;
-        state.hosted = None;
-        state.backlog.clear();
-        state.resume = false;
-        state.transport.playing = false;
-        let shared = &self.inner.shared;
-        shared.publish_transport(state.sequence, false);
-        shared.publish_position(shared.start(), shared.start(), 0);
-        shared.publish_clips(0, 0);
+        let token = self
+            .begin_close(false)
+            .expect("stream generation exhausted");
+        self.finish_close(token);
     }
 
     /// Whether the transport is playing: the audio thread's word once it
@@ -704,15 +684,17 @@ impl State {
         });
     }
 
-    /// Drops what the audio thread handed back, then moves waiting messages
-    /// into the queue while there is room. Every call into the controller
-    /// does this, so memory is freed here rather than on the audio thread.
+    /// Moves waiting messages
+    /// into the queue while there is room. Retirement is explicit: queries
+    /// under an external document guard must never free native owners.
     fn maintain(&mut self) {
         let Some(link) = &mut self.link else {
             return;
         };
-        while link.garbage.pop().is_ok() {}
-        while let Some(message) = self.backlog.pop_front() {
+        for _ in 0..MESSAGE_CAPACITY {
+            let Some(message) = self.backlog.pop_front() else {
+                break;
+            };
             if let Err(PushError::Full(message)) = link.messages.push(message) {
                 self.backlog.push_front(message);
                 break;
@@ -923,6 +905,21 @@ mod tests {
         pool.set_plugin_factory(Arc::new(R6Factory(stats.clone())));
         (project, pool, stats)
     }
+    fn r6_collect(controller: &Controller) {
+        controller.frame();
+        let mut retirement = ProjectRetirement::default();
+        controller.take_retired(&mut retirement);
+    }
+
+    fn r6_publish_ready(controller: &Controller, prepared: PreparedProject) {
+        let mut ready = controller
+            .preparation_snapshot()
+            .prepare_compiled(prepared, ProjectPublicationIntent::Edit)
+            .unwrap();
+        let mut retirement = controller.publication(&mut ready).unwrap().install();
+        controller.take_retired(&mut retirement);
+    }
+
     fn r6_audio(processor: &mut Processor, frames: usize, block: usize) -> Vec<f32> {
         let mut audio = vec![0.0; frames * 2];
         for out in audio.chunks_mut(block * 2) {
@@ -982,14 +979,14 @@ mod tests {
             stats.processes[0].load(Ordering::Relaxed) > before,
             "running native owner stopped processing"
         );
-        controller.frame();
+        r6_collect(&controller);
         assert_eq!(stats.creates.load(Ordering::Relaxed), 1);
         assert_eq!(stats.drops[0].load(Ordering::Relaxed), 0);
         for block in [7, 137, 1] {
             let before = stats.processes[0].load(Ordering::Relaxed);
             if block == 137 {
-                controller.set_prepared_project(
-                    &project,
+                r6_publish_ready(
+                    &controller,
                     Controller::prepare_project(&project, &pool)
                         .expect("the detached fixture prepares successfully"),
                 );
@@ -1002,7 +999,7 @@ mod tests {
             }
             assert!(stats.processes[0].load(Ordering::Relaxed) > before);
             assert_eq!(controller.latency_frames(), 80);
-            controller.frame();
+            r6_collect(&controller);
             assert_eq!(stats.creates.load(Ordering::Relaxed), 1);
             assert_eq!(stats.drops[0].load(Ordering::Relaxed), 0);
         }
@@ -1015,7 +1012,7 @@ mod tests {
         }
         controller.set_project(&project, &pool);
         r6_audio(&mut processor, 137, 137);
-        controller.frame();
+        r6_collect(&controller);
         assert_eq!(stats.drops[0].load(Ordering::Relaxed), 1);
         assert_eq!(controller.latency_frames(), 48);
     }
@@ -1056,7 +1053,7 @@ mod tests {
         let adopted = r6_audio(&mut processor, 1000, 7);
         assert!(adopted.iter().all(|sample| sample.abs() < 1e-6));
         assert!(stats.processes[1].load(Ordering::Relaxed) > before);
-        controller.frame();
+        r6_collect(&controller);
         assert_eq!(controller.latency_frames(), 80);
         assert_eq!(stats.creates.load(Ordering::Relaxed), 2);
         assert_eq!(stats.drops[1].load(Ordering::Relaxed), 0);
@@ -1070,15 +1067,15 @@ mod tests {
         assert!(resumed.iter().all(|sample| sample.abs() < 1e-6));
         assert_eq!(stats.prepared_revision[2].load(Ordering::Relaxed), 3);
         let before = stats.processes[2].load(Ordering::Relaxed);
-        controller.set_prepared_project(
-            &project,
+        r6_publish_ready(
+            &controller,
             Controller::prepare_project(&project, &pool)
                 .expect("the detached fixture prepares successfully"),
         );
         let adopted = r6_audio(&mut processor, 1000, 1);
         assert!(adopted.iter().all(|sample| sample.abs() < 1e-6));
         assert!(stats.processes[2].load(Ordering::Relaxed) > before);
-        controller.frame();
+        r6_collect(&controller);
         assert_eq!(controller.latency_frames(), 80);
         assert_eq!(stats.creates.load(Ordering::Relaxed), 3);
         assert_eq!(stats.drops[2].load(Ordering::Relaxed), 0);

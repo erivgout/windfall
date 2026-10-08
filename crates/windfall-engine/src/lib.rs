@@ -121,6 +121,7 @@ mod automation;
 mod clip_processing;
 mod clips;
 mod controller;
+pub(crate) use controller::preparation as project_preparation;
 mod device;
 mod message;
 pub mod midi_hardware;
@@ -145,7 +146,11 @@ mod test_alloc;
 mod voice;
 
 pub use clips::MAX_AUDIO_CLIPS;
-pub use controller::{Controller, PreparedProject, StreamStats};
+pub use controller::{
+    Controller, PreparationSnapshot, PreparedProject, PreparedPublication, ProjectPreparationError,
+    ProjectPublicationIntent, ProjectPublicationLease, ProjectRetirement, PublicationRefusal,
+    StreamStats,
+};
 pub use device::Engine;
 pub use pool::SamplePool;
 pub use processor::Processor;
