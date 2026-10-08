@@ -573,6 +573,7 @@ impl Processor {
                     self.sequencer.take_jump();
                     self.chase_clips();
                     self.hold = None;
+                    self.hold_if_stopped(f64::from(destination));
                     self.landed = true;
                 }
             }

@@ -22,7 +22,7 @@ pub const SILENT_PLAYLIST: &str = "Only automation clips would play, and they ma
 /// Why playing the song would make no sound, if it would not: there is no
 /// clip, every clip is muted or sits on a muted track, or the clips that
 /// are left are all automation, which moves controls and plays nothing.
-fn nothing_to_play(project: &Project) -> Option<&'static str> {
+pub(super) fn nothing_to_play(project: &Project) -> Option<&'static str> {
     let playlist = &project.playlist;
     if playlist.clips.is_empty() {
         return Some(EMPTY_PLAYLIST);

@@ -39,6 +39,9 @@ pub struct TransportState {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TimelinePlaybackState {
+    /// Transient, exact JS-safe monotonic publication number. Never wraps.
+    #[ts(type = "number")]
+    pub request: u64,
     #[ts(type = "number")]
     pub generation: u64,
     #[ts(type = "number")]
