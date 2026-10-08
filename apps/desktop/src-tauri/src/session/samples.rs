@@ -90,6 +90,16 @@ impl Session {
     /// decoded. Files not seen before are decoded on another thread, and
     /// their channels are silent until that is done.
     pub(super) fn sync_samples(&self, state: &mut State) {
+        self.sync_sample_sources(state, None);
+    }
+
+    /// A prepared publication must attach the exact handles it compiled, never
+    /// fetch a newer cache entry between validation and plan installation.
+    pub(super) fn sync_prepared_samples(&self, state: &mut State, prepared: &SamplePool) {
+        self.sync_sample_sources(state, Some(prepared));
+    }
+
+    fn sync_sample_sources(&self, state: &mut State, prepared: Option<&SamplePool>) {
         let State {
             document,
             sample_dir,
@@ -113,6 +123,15 @@ impl Session {
         });
         failed.retain(|id| wanted.contains(id));
 
+        if let Some(prepared) = prepared {
+            for (id, audio) in prepared.iter().filter(|(id, _)| wanted.contains(id)) {
+                pool.insert(id, audio.clone());
+                loaded.insert(id);
+                loading.remove(&id);
+                failed.remove(&id);
+            }
+        }
+
         let mut warnings = Vec::new();
         let mut pending = Vec::new();
         for sample in &project.samples {
@@ -125,7 +144,13 @@ impl Session {
                     failed.insert(id);
                     warnings.push(warning);
                 }
-                Ok(file) => match self.inner.cache.peek(&file) {
+                // Unresolved prepared sources load later, then publish their own
+                // guarded banks. No unprepared cache attachment enters this plan.
+                Ok(file) => match prepared
+                    .is_none()
+                    .then(|| self.inner.cache.peek(&file))
+                    .flatten()
+                {
                     Some(buffer) => {
                         pool.insert(id, buffer);
                         loaded.insert(id);
