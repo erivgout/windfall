@@ -11,3 +11,5 @@
 *.aif binary
 *.aifc binary
 *.wasm binary
+# Preserve ts-rs output byte-for-byte; generated types contain line-end spaces.
+apps/desktop/src/bindings/** whitespace=-blank-at-eol

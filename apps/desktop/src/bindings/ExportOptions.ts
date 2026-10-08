@@ -4,8 +4,17 @@ import type { ExportFormat } from "./ExportFormat";
 import type { ExportStems } from "./ExportStems";
 import type { Mp3Settings } from "./Mp3Settings";
 import type { PlayMode } from "./PlayMode";
+import type { TickRange } from "./TickRange";
 
 export type ExportOptions = { 
+/**
+ * Optional linear once-only song region; absent retains whole-song export.
+ */
+region?: TickRange, 
+/**
+ * Optional selected-export source guard, checked before snapshot preparation.
+ */
+regionGeneration?: number, regionRevision?: number, 
 /**
  * Absolute path of the file to write. With `stems` no file of this
  * name is written: for `Song.flac` the files are `Song - Mix.flac`,

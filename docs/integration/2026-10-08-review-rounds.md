@@ -687,3 +687,301 @@ is diagnosing missing GitHub parser/semantic validation coverage in its narrow
 workflow/checker/test window. License, signing, resource and publication gates
 remain intact. The root source batch remains committed and the full project
 remains active.
+
+# M1 app R2 independent axes
+
+Pin `9243f20f4db79a78e9bdac75fb309d405d855ef7`, direct parent `e3cdbb3f`. Both reports are source-only; prior owner execution is separate. The same owner has a narrow incremental repair window for both triggers.
+
+## Standards
+
+Reviewed **`9243f20f4db79a78e9bdac75fb309d405d855ef7`**, direct parent **`e3cdbb3f7d04f5024350e10e5044b9ba09249890`**. Standards axis, source-only.
+
+**One P2 documented breach:** project replacement retains the old dialog capture. In [actions.ts:284](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-analysis-jobs-m1/apps/desktop/src/features/analysis/actions.ts:284), `registerAnalysisActions` handles replacement only with `registry.invalidate()`. It leaves `useAnalysisDialog.target` holding the previous generation, clip ID and source capture. Consequently, inspector remount reopens the stale dialog, while `analysis.open` remains disabled as “Analysis is already open.”
+
+This violates [ARCHITECTURE.md:449](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-analysis-jobs-m1/docs/ARCHITECTURE.md:449): “anything kept by id outside the project … is dropped when another project takes the place of the open one.” Clear the dialog target/capture on replacement while preserving the intentionally process-local cleanup records. This trigger was source-traced, **not executed**; it does not demonstrate stale native Apply.
+
+No additional documented breaches identified. Source inspection supports actual startup registration/disposal, registry invalidation, retained-ID recovery routing, removal only after native forget, and namespace-handle retirement outside final guards. No optional smell findings raised.
+
+The inherited **global P1 engine-preparation/installation objection remains open**, explicitly documented and unchanged by this increment.
+
+**Performed checks and provenance:** verified checkout, full HEAD/direct-parent SHAs, expected single-commit log, requested diff, architecture/plan/roadmap, full Analysis/AppR1 documentation, retained application seams and foundation89/f006 contracts. `git diff --check` passed; foundation and codec sources match f006. Worktree was clean before and after.
+
+No source/git mutations, imports, builds, generation, UI tests, native executables, WASM execution or nested agents. Owner-reported **20 desktop / 11 IPC / 41 UI** checks remain owner evidence; none were independently rerun here.
+
+## Spec
+
+Reviewed **`9243f20f4db79a78e9bdac75fb309d405d855ef7`**, verified as the direct child of `e3cdbb3f7d04f5024350e10e5044b9ba09249890`. **Source-only review.**
+
+**P2 — Remappable drive letters bypass the namespace guard.** [source_namespace.rs:93](C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-analysis-jobs-m1/apps/desktop/src-tauri/src/session/analysis_jobs/source_namespace.rs:93) accepts every Disk/VerbatimDisk prefix and protects filesystem directories, without establishing authority over the drive mapping. This leaves the requirement to pin namespace “components from root to leaf” partial.
+
+Concrete trigger: capture through a substituted `Z:\source.wav`, then remap `Z:` to another ordinary directory after apply’s hash/identity check, at `analysis:prepared`. Retained handles still protect the old objects; the final canonical check compares unchanged document metadata and loaded AudioIdentity, allowing dispatch despite the pathname resolving elsewhere. Windows drive mappings are mutable links in the object namespace, separate from filesystem sharing protection. [Microsoft’s DefineDosDevice documentation](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-definedosdevicew) supports this distinction. Refuse remappable aliases or establish authority over their resolved namespace. **This is a source/platform-contract inference; I did not execute the trigger.**
+
+No additional concrete registry or recovery defect found by source tracing. Reservations precede submit; removal follows successful native forget; recovery commands do not restore apply authority. Documented conservative input refusals are not findings.
+
+**Known global P1 remains open:** final publication still reaches `set_plan → PlanState::build` after Document dispatch under guards. This increment documents that limitation and does not repair it or establish full M1 closure.
+
+**Performed checks/provenance:** read-only SHA/parent/log/diff verification, baseline/foundation contract inspection, requested documentation and changed-path tracing, `git diff --check`, and initial/final clean-worktree checks. Confirmed reserved foundation/codec/IPC/Controller/State/edit/dependency files are unchanged. No binaries, WASM, builds, generation, UI tests, imports, mutations, or nested agents ran. Owner execution counts remain owner evidence.
+
+The dialog capture must be discarded on replacement while cleanup records remain recoverable. The drive-mapping trigger requires actual Windows reproduction and authoritative namespace policy; repeated path queries alone do not pin a mutable mapping. No Controller/native readiness authority follows from this review.
+
+# Native fixture and ABI3 prerequisite review R1
+
+Pin `1fa5a16d...0c1a1664`, exactly fixture increment `71dbec11` and ABI3/read-only metadata increment `0c1a1664`. Neither activates the production bridge. Both axes received the original N4 contract, all six R1, three R2 and two R3 findings/responses and unresolved preparation/T1 obligations.
+
+## Standards
+
+Source inspection only: reviewed exactly `1fa5a16d...0c1a1664` and its two commits. I ran no builds or tests; reported pass counts remain owner evidence.
+
+**Documented standards:** No breaches found in the changed hunks against pinned `docs/ARCHITECTURE.md`, including realtime allocation/locking/blocking and ownership rules. No new material leaf regression identified.
+
+**Optional baseline heuristics:**
+
+- **P3 — Possible Data Clumps / Primitive Obsession**, `crates/windfall-plugin-host/src/bridge/adapter.rs:81,149–154`: both getters expose `(u64, u64, u64)`, although collection intent and completed DSP proof have different meanings. Named, allocation-free `Copy` structs would identify epoch, sequence and desired/processed generation and reduce accidental interchange. This concerns the local API; explicit primitive wire words remain appropriate.
+- **P3 — Possible Duplicated Code**, `crates/windfall-plugin-host/test-plugins/src/vst3.rs:74–75,186–187`: the new class names are duplicated between `getClassInfo` and `getClassInfo2`, while class count `21` is repeated across admission checks. This extends an existing maintenance smell. A shared immutable descriptor table could supply names and count while preserving class IDs and behavior.
+
+The acknowledged P1 concerning native construction/retirement under State/controller guards remains unresolved and outside this leaf. This review does not accept full N4 or its external verification gates.
+
+## Spec
+
+**Source inspection — SPEC:** No new concrete findings in `1fa5a16d...0c1a1664` (exactly `71dbec11` and `0c1a1664`).
+
+The source matches the bounded leaf contract:
+
+- ABI3 transport occupies words 16–29, epoch 30–31, and reply identity 32–39. Anchor validation and ABI1/2 rejection match `docs/plugins/process-bridge.md:550–560`.
+- Desktop forwarding preserves the optional anchor and absolute transport fields.
+- `collection_frontier()` is read-only. `completed_proof()` is populated after matching successful output collection, retains earlier proof across unknown output, and clears on normal reset, matching the rule at `docs/plugins/process-bridge.md:562–568`.
+- Class19 returns native processing failure at gain ≥0.75. Class20 applies the 0.625→0.375 deactivation edit while retaining the implemented 37-frame delay. Earlier class predicates remain unchanged.
+
+The acknowledged preparation/retirement-under-guards P1 remains unresolved. This review does not close full N4 or its production, editor, installer, device, licensed-corpus, or other-platform gates.
+
+No reviewer builds or tests were run; the reported test results remain owner evidence.
+
+Optional getter tuple and fixture-table smells do not block this leaf. Production draft `19f6ddc2` is separately frozen and under new independent review. It remains outside root; P1 and checked meter/render composition remain activation gates.
+
+# Ordered timeline and prerequisite composition
+
+Root now contains T1's immutable source sequence `3ba8b13c`, `401939d4`, `e9febc2c`, `ed4ad871`, `e0809d0e`, `59c8f7f3`, `a8e33f20`, `94e168ae`, `c5448921`, `3d2475c7`, followed by only N4 `71dbec11` and `0c1a1664`. Root source pin: `c0fcabea7b369bfcc86ca31146d198c8ffc1d496`. Duplicate metadata integration `1fa5a16d` and N4 local merge `02072c81` were not imported.
+
+One VST3 conflict retained the entire existing R4 point-refusal/readback/recovery regression and added T1's separate concrete ProcessContext meter tests. Existing parameter/event clears and drop reporting remain. Other imports applied cleanly. Native checks and matching generated artifacts/UI remain required before push; no parity row or P1 gate closes through composition alone.
+
+The first root native run passed all FLP targets, but MIDI property round trips failed two cases: an old single-signature oracle and a real second-trip end-duration divergence. The same timeline owner has a MIDI-only incremental repair window retaining all note, tempo, history and byte-idempotence checks. The generated failing seed was retained outside source in `C:/Temp/windfall-t1-root-midi-round-trip-regressions.txt`; the automatic source seed change was restored. Independent engine/host checks continue.
+
+# Completed CI observation at pushed 290f0313
+
+Actual [run 37756198700](https://github.com/erivgout/windfall/actions/runs/37756198700) is terminal. UI passed **165 files / 2577 tests**; all three binding jobs, WASM freshness and parity passed. The app job was skipped because Rust jobs failed.
+
+- macOS: analysis high-capacity heap test failed at line 514, `running_heap >= retained`; 29 passed / one failed / zero ignored.
+- Ubuntu: the same case failed its queued heap assertion at line 523, also 29 passed / one failed / zero ignored. Neither reached the previously observed VST3 failures.
+- Windows: analyzer quota tests failed `InstanceLimit` at line 709 and installation count two instead of one at line 635; 14 passed / two failed / one existing optional timing ignore.
+
+Raw logs: `C:/Temp/windfall-290-{macos,ubuntu,windows,ui}-ci.log`. These are distinct from earlier serial local passes. M1's controlled unrelated 16 MiB retirement reproduced a false global heap delta while manifest buffers and correct charges remained live. Its one-file test-only subprocess isolation checkpoint `760568ca` preserves every original numerical assertion and is under independent review. T8 has a diagnosis-only window for controlled concurrent quota contention; no quota/assertion/CI scheduling policy has been weakened.
+
+Release validation [37756196886](https://github.com/erivgout/windfall/actions/runs/37756196886) had zero jobs. Job-level `env` uses `${{ runner.temp }}`, outside the [official context availability](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability) for that key. The exact remote parser message is unavailable: this is a concrete documented violation and likely cause, not a quoted GitHub diagnosis. The release owner has a narrow workflow/checker repair window. No candidate was dispatched or published.
+
+# Analysis heap-test isolation review R1
+
+Pin `760568ca210035364f4cf2e6143bec63de59d908`, direct parent `9243f20f`. One path, 31 additions. Both source reviewers received the original quota/retention/final-seam contract, remote failures, controlled diagnostics and exact narrow grant.
+
+## Standards
+
+**Standards: 0 findings.** No documented breach of `docs/ARCHITECTURE.md` or actionable code-smell finding.
+
+**Spec: 0 findings.** The helper at `crates/windfall-analysis/tests/analysis_jobs.rs:486` and guards at lines 511 and 1494 satisfy the authorized test-local isolation repair:
+
+- Both literal `--exact` filters match one unconditional, nonignored top-level test in the same executable, so the pinned source introduces no zero-test success path.
+- The case-specific child marker terminates recursion. A wrong-case inherited marker triggers isolation with the correct marker.
+- Child output is captured and forwarded before checking exit status. Assertion failure, abnormal termination or launch failure fails the parent.
+- `current_exe()` and separate command arguments avoid shell quoting assumptions on Windows and Unix. Serialization applies only inside each child; native worker execution remains intact.
+
+Performed source checks: verified `760568ca` has direct parent `9243f20f`; inspected the exact diff, allocator, fixture, test bodies, Cargo harness configuration, architecture contract and baseline `ANALYSIS-JOBS.md`. The diff contains one changed path and 31 additions. Removing precisely the helper and two guards **in memory reproduced the original 66,309-byte source exactly**, preserving every numerical assertion and production call, including the 24 MiB cap, manifest capacities, retirement and one/sixteen-output zero-allocation/free checks.
+
+No tests or builds were executed. Reported suite, fault-injection, Clippy and formatting results remain owner evidence; this review does not establish macOS/Linux runtime behavior or close the acknowledged P1/App R2 issues.
+
+## Spec
+
+**Standards: 0 findings. Spec: 0 findings.** No actionable defect found in the pinned, source-only repair.
+
+Performed checks against immutable `9243f20…760568ca`:
+
+- Confirmed the direct parent and exact scope: one file, 31 additions, zero deletions.
+- At `analysis_jobs.rs:486`, the child uses the current executable directly. Its case-specific environment marker prevents recursion and wrong-case bypass without changing the parent environment.
+- At lines 511 and 1494, both exact filters match top-level, unignored tests using Cargo’s default harness. No zero-test success path was identified at this revision.
+- The parent captures and prints both output streams, then requires child success. Spawn errors and unsuccessful exits fail the parent.
+- Programmatically removing the helper and two guards restored **the exact base Git blob**, `6fbe5dc66e3325c8717ea7e8de89870fbd0e763a`. Every original assertion and production call remains unchanged, including capacities, the 24 MiB cap, retirement, and one/sixteen-output allocation/free guards.
+- Reviewed `docs/ARCHITECTURE.md`, base `docs/ANALYSIS-JOBS.md`, fixture provenance, Cargo configuration, and CI. Isolation affects only the two child cases; native worker execution remains intact.
+
+Portability and failure propagation are source conclusions. I ran no tests, builds, installs, edits, or nested agents. Owner-reported execution evidence was not independently reproduced, and exact macOS/Linux schedules remain unobserved. The acknowledged P1 and App R2 gates remain outside this repair.
+
+No numerical assertion or production code changed. Owner default-parallel 30-case and deliberate child-failure execution is distinct from source-only reviewer evidence. Corrected remote macOS/Linux behavior remains pending fresh CI.
+
+# Production bridge draft R1
+
+Frozen `19f6ddc2f866ea3cdcdc19a106f802019796bb7a`, direct parent `0c1a1664`. Both axes received the original N4 and all repair context. This draft remains outside root, gated by P1 and full meter/render precheck composition.
+
+## Standards
+
+Standards review of `0c1a1664...19f6ddc2`: **0 new documented-rule violations; 2 optional P3 concerns.** Locations refer to the pinned revision.
+
+- **P3 — possible Duplicated Code:** `apps/desktop/src-tauri/src/plugins/runtime.rs:1762,1888`. Effect and instrument factories repeat bridge construction, offline-error latching and manager-error recording. Extract that shared preparation/result handling; retain the distinct trait-object conversions.
+- **P3 — possible Feature Envy:** `plugins/runtime.rs:104` and `plugins/bridge.rs:291,306`. The new bridge requires exposing eight `ParameterControl` fields and directly implements reset/acknowledgement atomic writes. Narrow methods on `ParameterControl` would keep its generation-publication rules together.
+
+These are heuristic judgments, not breaches of `docs/ARCHITECTURE.md`. Inspection was read-only, using immutable Git objects; no builds or tests were executed.
+
+The acknowledged guarded-construction/retirement P1 remains unaccepted. This review does not approve production activation, close full N4, or waive the separate T1 composition precondition.
+
+## Spec
+
+**SPEC: one new P1 finding** in frozen range `0c1a1664…19f6ddc2`.
+
+**P1 — Capture can revert settled parameters to launch-time values.** In [bridge.rs:88](C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src-tauri/src/plugins/bridge.rs:88), capture clones the original parameter specs and updates values only for unsettled/pending controls.
+
+Concrete trigger: launch at gain **0.5**, commit and receive COMPLETE acknowledgement for **0.625**, then queue an unprocessed note. Capture now has `desired_generation > processed_generation`, but the settled gain’s transmitted spec remains **0.5**. The helper’s reconciliation path consequently returns **0.5** as CLAP companion metadata ([helper.rs:310](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-plugin-host/src/bridge/helper.rs:310)); VST3 can additionally write **0.5** into native state ([helper.rs:330](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-plugin-host/src/bridge/helper.rs:330)). This can corrupt saved parameters/state despite gain having been acknowledged.
+
+Requirement: [process-bridge.md:567](C:/Users/ewhee/.t3/projects/windfall/docs/plugins/process-bridge.md:567) states, “Capture retains committed pending intent separately from actual native bytes and inactive reconciliation.” Initialize every transmitted spec from its current control snapshot before applying pending-document overrides.
+
+This is a source trace, not an executed reproduction. The acknowledged preparation/retirement P1 and missing T1 composition remain open; this review does not accept production activation or full N4.
+
+The capture finding is source-traced, not reviewer-executed. The same owner has a narrow bridge-capture/appended-native-regression/docs repair window. Transmitted specs must use current control values before matching pending-document overrides. No fixture, state ABI, native-thread, engine or P1 source grant follows.
+
+# Invalid-meter and owner-metadata composition
+
+The unchanged new Controller refusal regression failed on root: provider-identity snapshots increased from three to five while constructors/process/drop counts stayed unchanged. Accepted utility R5/R6 snapshots native-owner metadata during Plan compilation; the isolated timeline branch lacks that hook. Root's three-line integration guard snapshots native metadata only when typed `Plan.meters` is valid. Invalid plans retain their exact error and publication refusal; valid owner/revision/generation behavior is unchanged. No assertion was weakened. Full engine suites passed after the guard; host/desktop checks continue.
+
+# Preparation proposal R2
+
+Doc-only `7519e5eddfc33cebdc498cbad263df1aee218b3a` directly follows `07cdb24b`. It addresses physical rows versus possible generations, ordered selected-history views/inherited capacities, owned edit/replacement intent with serial callback semantics, and fallible device lifecycle fences. A new independent design audit has the original brief, full R1 findings and revised response. No source grant or P1 acceptance follows from the document.
+
+# Imported test-only repair
+
+Root imported only M1 `760568ca` as `abd044dd`, after clean source verdicts on both axes. App `9243f20f`/`e3cdbb3f` were not imported. The invalid-meter identity guard is separately committed as `7354fc4b`. Matching source bytes in completed native binaries are unchanged by these Git metadata operations; default-parallel analysis execution was pending at this point and is recorded below when completed.
+
+# Preparation design R2 acceptance and engine-only grant
+
+**Recommendation: `7519e5ed` is design-ready for narrow, serialized implementation in the requested windows.** I found no additional blocking design objection. This grants an implementation attempt; P1’s production lock defect remains open until composed-source proof passes.
+
+The four R1 responses resolve their respective design conditions:
+
+1. **Physical rows and generation identities:** [§2a/2b](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:449) now distinguishes P20/G30, maps alternatives to destinations, flattens unresolved choices, and refuses a required third source before construction or Document mutation. The common Ledger predicate also couples generation retention with actual owner reuse, addressing the mismatch between [plan retention](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/plan.rs:337) and builder eligibility. **Required proof:** queue `{g0,g1}` plus active g2; retain g2 without construction; refuse removal requiring three sources; then advance completion/first hearing between lease acceptance and adoption. Check concrete ownership, active indexes and row bounds.
+
+2. **Selected history and inherited capacity:** [§2c/2d](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:535) supplies ordered selected views, copy-before-retarget ordering, suffix/promotion/fallback rules, and conservative inherited ring/tap capacity. These directly address the physical-stage assumptions in [history transfer](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/rack.rs:1012). The checked payload calculation and visible memory refusal are acceptable; they establish neither measured feasibility nor a global legacy-backlog bound. **Required proof:** late choice during unfinished taps, larger inherited capacities without clamping, and unchanged R3–R5 signal/allocation assertions. Include adopted-None rows followed by fading-voice/fader edits: inactive storage must not incorrectly influence [shaped/ringing decisions](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/state.rs:802).
+
+3. **Publication intent:** [§3a](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:637) supplies owned Edit/Replace intent, late transport binding, and reserved producer capacity. Its replacement order matches [existing publication](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/apps/desktop/src-tauri/src/session/files.rs:461), while retaining serial consumer semantics. **Required proof:** late play/stop/seek/pattern changes, full/one-short/exact-capacity queues, and consumer interleaving/headroom pauses. Refusal must precede musical mutation; accepted installation must require no fallible fallback.
+
+4. **Device adapter and retirement:** The [attachment design](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:840) and [explicit device window](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/docs/PROJECT-PREPARATION.md:954) now cover the previously omitted [infallible production attachment](/C:/Users/ewhee/.t3/worktrees/windfall/gpt-t3-project-preparation-p1/crates/windfall-engine/src/device.rs:724). Starting/Closing fences and retained control endpoints provide a feasible ownership order. **Required proof:** constructor Err, CPAL build/play failure, bounded stale exhaustion, same-rate reopen, and full-ring/backlog teardown. Destructors must verify guard freedom, including refusal, poison and unwind, and final endpoint release after Processor destruction.
+
+Borrowed outer staging and private Unavailable-versus-Native handling introduce no further design blocker. T1 invalid-meter refusal/healthy retry, M1 borrowed eligibility-before-dispatch and acknowledgement-after-install, and N4’s independent render/error channel remain mandatory integration checks.
+
+Read-only audit completed at the fixed pin. No edits, imports, builds, tests or nested agents.
+
+Parent granted stage 1 engine implementation only after that audit. The same bound owner merged the sole authorized root prerequisite `abd044dd` as `937891439e4c9f268ddfa5cd91c1b7c6a9d4e8ff`, preserving both immutable proposal pins. Controller/State/Plan/Rack/private native preparation, message/export declarations and fallible device lifecycle are the narrow implementation window. Session publication, Processor/transport, N4 runtime/host ABI, M1/T8 integration and render/stem error-channel changes remain closed. No design verdict closes the P1 locking defect; actual engine source, retirement and queue/history proof must precede a separate Session grant.
+
+# Invalid-meter snapshot guard source review
+
+Fixed root guard `7354fc4b61e862ad74ab2c0d1ab4e9b9e23e2462` preserves accepted valid-plan native identity snapshots and skips them only for a typed rejected meter map. The unchanged Controller refusal test now passes in the full composed engine suite.
+
+## Standards
+
+Judgment: **accept this guard. No findings** in the pinned `c0fcabea…7354fc4b` diff.
+
+- **Standards:** No documented-rule violation or actionable baseline smell. The condition adds no abstraction, ownership mechanism, or callback work.
+- **Spec:** At [plan.rs:584](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-engine/src/plan.rs:584), `meters.is_ok()` prevents both factory revision and provider-identity reads for invalid raw plans while preserving their typed `MeterMapError`. Existing Controller refusal gates run before state mutation, native construction, publication, or selected-pattern changes. Valid plans execute the same snapshot, linking, automation, installation-refresh, and retention paths, preserving the documented R3–R6 identity/life contract.
+
+Source-only checks: verified both commit objects and the one-file diff; inspected pinned compilation, snapshot, Controller gates, the invalid-meter regression assertions, and relevant architecture, timeline, roadmap, and utility docs.
+
+No edits, builds, tests, imports, pushes, or nested agents. Reported passing suites remain parent execution evidence, not independently verified here. The known P1 preparation/retirement-under-guards objection remains open and unchanged; this judgment covers only the composition guard.
+
+## Spec
+
+**Approve for the bounded guard.** No actionable standards violations, spec failures, or judgment-call smells found in pinned `c0fcabea…7354fc4b`.
+
+At [plan.rs:584](C:/Users/ewhee/.t3/projects/windfall/crates/windfall-engine/src/plan.rs:584), the condition skips provider identity/revision snapshots for invalid meter maps while preserving the original typed `MeterMapError`. The existing Controller refusal gates precede state mutation, owner retention, native construction, and publication.
+
+For valid maps, snapshot timing, linking, automation compilation, and utility R3–R6 identity/revision/lifetime retention remain unchanged. Raw compilation retains its existing tolerance of other invalid model values.
+
+Checks were source-only: inspected the pinned diff, relevant documentation, Controller gates, and the named regression’s unchanged assertions. `git diff --check` passed. No edits, builds, tests, imports, pushes, or nested agents were performed; parent execution results remain separate evidence.
+
+The acknowledged P1 preparation/retirement-under-guards issue remains open and outside this guard’s acceptance.
+
+# Composed root verification before final MIDI import
+
+At `abd044dd`, Windows serial MSVC/jobs=1 native checks passed: project 331; FLP 129; engine 410 plus one existing optional CPU ignore; host 186 ordinary cases plus the explicitly invoked sticky CLAP native-state case (187 total); desktop 43 focused native cases (timeline 11, plugin/session 11, playback 14, export 7). The 21-class native fixture was built separately. Host real-process tests exercised the authenticated subprocess role despite its ordinary-suite ignore. These are actual parent runs, distinct from child evidence and source-only reviewers. No installed external-plugin, native editor, physical device or other-OS claim follows.
+
+Strict Clippy passed for project/MIDI/FLP/IPC/sim/engine all targets, host all features/all targets and desktop lib/tests; workspace formatting passed. After the one-file heap isolation import, root analysis ran with default parallel test scheduling: 30 passed, zero failed/ignored, followed by strict all-target Clippy. Remote corrected macOS/Linux runs remain pending.
+
+Fresh generator output contains 183 bindings. `scripts/check-bindings.mjs` matched their exact bytes. `.gitattributes` disables only end-of-line whitespace warnings within generated bindings, preserving ts-rs output without hand editing it. The intermediate simulator was 1,982,006 bytes, SHA-256 `9b5a7e88ec863b901b2f7b0205cbcdb052c97b501fb82bba364d9ca1f6c9144a`, input digest `9cbcf6165f84c3ebac24cc763828cc2feb28646620fef13ce067f360a711896c`. On those matching intermediate artifacts, full desktop TypeScript/ESLint checks passed and the actual shared-WASM UI suite passed 172 files / 2,662 tests in 335.06 seconds (`C:/Temp/windfall-root-timeline-all-ui.log`). The final MIDI source import requires a further matching simulator rebuild; intermediate evidence is not relabelled as that final run.
+
+# MIDI integration repair
+
+Root imported only `aa6c55b6138d34257d73bb55a4e5c30cc6b6deb5` as `b801cc21`, retaining every earlier timeline/native/utility pin. The four-file repair uses the effective last-wins tick-zero meter for scalar pattern sizing, or 4/4 before a late first event. Ordered absolute meter changes and the existing last-clip export end authority remain unchanged. The complete metadata oracle is derived independently from source; all existing note/channel/mix/tempo/history/duration/byte assertions remain.
+
+The real failing canonical trip grew by 1,920 ticks (28,800 to 30,720); the earlier parent shortening interpretation was incorrect. The authored fixed fixture stabilizes at 30,720, and the collision/no-tempo fixture at 30,240. New independent Standards/Spec reviews target exactly `3d2475c7...aa6c55b6` with the original task, all prior findings/responses and root failure context. Their source conclusions and final parent runtime/artifact results will be recorded separately.
+
+# Production bridge capture repair R2
+
+Frozen `6b228e1216d6e33757faa2d5970fba66f935039d`, direct parent `19f6ddc2`. Both new reviewers received original N4 scope, all earlier R1/R2/R3 findings/responses, prerequisite and production verdicts, the new capture P1 and its exact response.
+
+## Standards
+
+Standards review of fixed `19f6ddc2…6b228e12`: **0 new findings**—no documented-rule violations against pinned `docs/ARCHITECTURE.md`, and no new optional heuristic concerns.
+
+The [capture fix](C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src-tauri/src/plugins/bridge.rs:90) initializes every transmitted value from its current control snapshot before pending-document overrides. It adds no callback work or generation/proof mutation.
+
+The added test source covers settled COMPLETE followed by an unprocessed note, unchanged DSP proof, distinct CLAP/VST3 reconciliation, capture/save/reopen, opaque-state-only restoration, and newer pending-document precedence. Reported execution results remain owner evidence; I ran no builds or tests.
+
+Prior optional P3 concerns remain deferred. Guarded construction/retirement P1 and the full T1 producer/pre-refusal composition gate remain material and open. This review does not authorize production integration or activation, close full N4, or accept editor, installer, device, licensed-corpus, or non-Windows gates.
+
+Inspection used immutable Git objects only; no edits or nested delegation.
+
+## Spec
+
+**SPEC: 0 new findings** in frozen `19f6ddc2…6b228e12`.
+
+The prior capture P1 is repaired at source: [bridge.rs:94](C:/Users/ewhee/.t3/projects/windfall/apps/desktop/src-tauri/src/plugins/bridge.rs:94) initializes every transmitted value from its current control snapshot before pending document overrides. Settled gain therefore survives note-only pending intent, while newer committed values retain precedence.
+
+The added CLAP/VST3 facade tests explicitly require COMPLETE settlement before queuing the note, then assert unchanged DSP proof and distinct inactive reconciliation. The Session cases cover capture/save/reopen, restoring opaque state without parameter overrides, pending `0.75` precedence, and unchanged live document/ownership.
+
+Inspection used immutable Git objects; no builds or tests were executed. Reported RED/GREEN results remain owner evidence.
+
+The acknowledged guarded construction/retirement P1 and full T1 malformed-meter precheck remain open. This review does not accept production activation or full N4; installer, editor, device, licensed-plugin corpus and non-Windows gates remain unverified.
+
+Parent retains the clean source verdict without importing production `19f6ddc2` or `6b228e12`. Their actual native tests remain owner evidence. P1 prepared installation/retirement and checked full meter/render composition still gate any production integration or activation.
+
+# Final MIDI native and artifact checks
+
+At root `b801cc21`, all 116 MIDI targets passed with `PROPTEST_RNG_SEED=20261008`, including existing persisted seeds and all four 300-case properties. Strict MIDI all-target Clippy and workspace fmt passed. No regression seed changed. Final matching simulator: 1,982,055 bytes, SHA-256 `d1a3aa6b1d4b908b160ed77fc88c4ee82fa1ec8bad7206ee0e715e5ed27e51a3`; input digest `732414a3bad9f213c17a4791f5bb3301caa4e5f6e1b8beb04f8e5fc3c180ea59`. Freshness, exact 183-binding comparison and parity checks passed. Native/build log: `C:/Temp/windfall-root-midi-aa6-final.log`.
+
+The final full UI run on that exact artifact also passed **172 files / 2,662 tests**, in 292.90 seconds (`C:/Temp/windfall-root-timeline-final-all-ui.log`), without mocks replacing the shared Rust document. No code or assertion changed between the intermediate and final UI runs. Previous TypeScript and ESLint passes apply to the identical UI/generated type sources. Parity remains 68 done / 60 in progress / 212 todo / two won't-do; no row was closed through this integration batch. Published alpha, private-repository access and collaborator permissions are unchanged.
+
+# MIDI integration repair source review R1
+
+Both new independent reviewers inspected immutable `3d2475c7...aa6c55b6` with the original timeline scope, complete prior findings/responses and parent integration failure context.
+
+## Standards
+
+**Standards: 0 new findings.** No documented `docs/ARCHITECTURE.md` breach or actionable Fowler smell in this increment.
+
+**Spec: 0 new findings.** Stable normalization preserves collision order, so selecting the last tick-zero event agrees with map retention. The 4/4 fallback fixes late-first-meter sizing while preserving later absolute ticks and disabled-signature behavior. The replacement oracle derives metadata from normalized source, independently of import/export results. Original non-metadata assertions remain intact; authored fixtures check canonical duration, exact bytes, notes, and checked undo/redo.
+
+Reviewed the exact `3d2475c7...aa6c55b6` diff/log—one commit, four paths—and complete pinned `TIMELINE-REGIONS.md`. Tests were not executed; RED/GREEN results remain owner-reported evidence.
+
+Global construction/retirement P1, parent integration, combined artifacts/WASM, platform/device acceptance, and retained T1 follow-ups remain open. No parity-row closure or global-gate waiver.
+
+## Spec
+
+**0 new findings.**
+
+**Standards — 0:** No new violations of the pinned `docs/ARCHITECTURE.md` contract or legal rules.
+
+**Spec — 0:** The importer selects the effective last tick-zero meter after stable normalization and uses 4/4 for sizing before a late first event. Later map ticks, option gating, collision/clamp/bounds handling, and export’s clip-end authority remain intact. The metadata oracle derives expectations from normalized source data; existing content, history, duration, and byte assertions are retained. The authored fixtures pin 30,720 and 30,240 ticks.
+
+Reviewed the exact `3d2475c7...aa6c55b6` diff/log and complete timeline record using read-only Git objects. No builds or tests were run; execution evidence is owner-reported.
+
+The global native construction/retirement P1 remains **OPEN**. Combined source/artifact, platform/device, and remaining T1 acceptance gates are unchanged; this review closes no rows.
+
+Both source verdicts are clean. The parent full 116-target execution and final artifact checks above are separate executed evidence; no global preparation, hardware/platform, remaining timeline or parity gate is waived.
+
+# Additional CI repair windows
+
+The analyzer owner reproduced default-parallel contention on unchanged source: nine pass/seven fail, then eleven pass/five fail, each with the existing optional timing ignore. Controlled unrelated admission reproduced the count discrepancy and legitimate `InstanceLimit`; concurrent probes still admitted exactly eight tap contenders, or four maximum-layout contenders with four `ByteLimit` refusals. No production quota defect was demonstrated. Parent granted only a test-local mutex held across all 17 analyzer cases and endpoint/native-worker destruction, with every quota/signal/allocator assertion and process-wide eight-tap/eight-slot/32 MiB policy unchanged. No global CI serialization or routing/source grant follows. New source and review remain pending.
+
+The release owner froze `cbaeedac`, a four-file workflow/context checker repair after the pinned GitHub parser reproduced three invalid job-level `runner` references and zero after repair. The VST portability owner froze `5d3fe8e7`, a four-file creator-identity fixture repair for verified GNU Linux x86_64, preserving both owner assertions and class0–20 behavior. New independent Standards/Spec pairs now inspect each exact increment. Neither is yet imported at this point; remote workflow/Ubuntu validation and macOS support remain distinct gates.

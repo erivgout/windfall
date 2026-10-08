@@ -16,6 +16,8 @@ import type { EffectSlotPatch } from "./EffectSlotPatch";
 import type { Envelope } from "./Envelope";
 import type { InstrumentKind } from "./InstrumentKind";
 import type { InstrumentParams } from "./InstrumentParams";
+import type { MarkerKind } from "./MarkerKind";
+import type { MeterChangeId } from "./MeterChangeId";
 import type { MixerTrackPatch } from "./MixerTrackPatch";
 import type { Note } from "./Note";
 import type { NoteId } from "./NoteId";
@@ -32,9 +34,12 @@ import type { SampleId } from "./SampleId";
 import type { SamplePath } from "./SamplePath";
 import type { SamplerPatch } from "./SamplerPatch";
 import type { SettingsPatch } from "./SettingsPatch";
+import type { TimeSignature } from "./TimeSignature";
+import type { TimelineMarker } from "./TimelineMarker";
+import type { TimelineMarkerId } from "./TimelineMarkerId";
 import type { TrackId } from "./TrackId";
 
-export type Command = { "type": "addPluginInstrument", plugin: PluginBinding, } | { "type": "addPluginEffect", track: TrackId, plugin: PluginBinding, } | { "type": "setPluginParam", target: PluginTarget, id: number, value: number, } | { "type": "setPluginState", target: PluginTarget, state: Array<number>, } | { "type": "updateSettings", patch: SettingsPatch, } | { "type": "addSample", name: string, path: SamplePath, } | { "type": "removeSample", id: SampleId, } | { "type": "addChannel", 
+export type Command = { "type": "addMeterChange", tick: number, signature: TimeSignature, } | { "type": "updateMeterChange", id: MeterChangeId, tick: number, signature: TimeSignature, } | { "type": "removeMeterChange", id: MeterChangeId, } | { "type": "addTimelineMarker", tick: number, name: string, kind: MarkerKind, } | { "type": "updateTimelineMarker", marker: TimelineMarker, } | { "type": "removeTimelineMarker", id: TimelineMarkerId, } | { "type": "addPluginInstrument", plugin: PluginBinding, } | { "type": "addPluginEffect", track: TrackId, plugin: PluginBinding, } | { "type": "setPluginParam", target: PluginTarget, id: number, value: number, } | { "type": "setPluginState", target: PluginTarget, state: Array<number>, } | { "type": "updateSettings", patch: SettingsPatch, } | { "type": "addSample", name: string, path: SamplePath, } | { "type": "removeSample", id: SampleId, } | { "type": "addChannel", 
 /**
  * Defaults to the sample name, the instrument's name, or "Sampler".
  */
