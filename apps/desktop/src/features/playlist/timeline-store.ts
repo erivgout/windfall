@@ -196,7 +196,6 @@ export async function publishPlaybackRegion(
         "The timeline request limit was reached. Restart the app before selecting another playback region."
       )
     const request = ++wireRequest
-    if (operation.playPending) operation.guard = { ...state, region, request }
     // An edit invalidates the source revision, not an unchanged action owner.
     // A retry uses this fresh canonical revision while retaining the exact
     // generation/request/range of the action being cancelled.
@@ -215,6 +214,9 @@ export async function publishPlaybackRegion(
         "The project changed while the timeline selection was being applied. Retry the selection or Clear."
       )
     receiveTimelineState(published, true)
+    // An unpublished successor cannot reach guarded transport. Until its
+    // accepted reply, keep the inherited live cancellation target instead.
+    if (operation.playPending) operation.guard = published
     operation.cancel = null
     useTimelineStore.setState({ error: null })
     return published

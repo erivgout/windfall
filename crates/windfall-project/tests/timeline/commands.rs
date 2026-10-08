@@ -91,7 +91,7 @@ fn checked_batch_patch_undo_save_and_legacy_scalar_adapter() {
     assert_eq!(doc.project().playlist.timeline, changed.playlist.timeline);
     doc.dispatch(
         Command::RemoveTimelineMarker {
-            id: applied.created[2],
+            id: TimelineMarkerId(applied.created[2]),
         },
         None,
     )
@@ -102,7 +102,7 @@ fn checked_batch_patch_undo_save_and_legacy_scalar_adapter() {
             .timeline
             .markers
             .iter()
-            .any(|m| m.id == applied.created[2])
+            .any(|m| m.id.0 == applied.created[2])
     );
     doc.undo().unwrap();
     assert_eq!(doc.project().playlist.timeline, changed.playlist.timeline);
@@ -121,7 +121,9 @@ fn rejected_commands_restore_ids_project_history_and_dirty_state() {
         marker(200, MarkerKind::Pause),
         marker(300, MarkerKind::Pause),
         marker(400, MarkerKind::Loop { end: u32::MAX }),
-        Command::RemoveTimelineMarker { id: 999 },
+        Command::RemoveTimelineMarker {
+            id: TimelineMarkerId(999),
+        },
         Command::Batch {
             label: Some("Invalid".into()),
             commands: vec![meter(1_920, 3, 4), meter(960, 5, 4)],
@@ -134,9 +136,12 @@ fn rejected_commands_restore_ids_project_history_and_dirty_state() {
     for mutation in 0..3 {
         let mut invalid = doc.project().clone();
         match mutation {
-            0 => invalid.playlist.timeline.meters[0].id = invalid.patterns[0].id.0,
-            1 => invalid.playlist.timeline.markers[0].id = invalid.playlist.timeline.meters[0].id,
-            _ => invalid.playlist.timeline.meters[0].id = invalid.next_id,
+            0 => invalid.playlist.timeline.meters[0].id = MeterChangeId(invalid.patterns[0].id.0),
+            1 => {
+                invalid.playlist.timeline.markers[0].id =
+                    TimelineMarkerId(invalid.playlist.timeline.meters[0].id.0)
+            }
+            _ => invalid.playlist.timeline.meters[0].id = MeterChangeId(invalid.next_id),
         }
         assert!(invalid.check().is_err());
         assert!(file::from_json(&serde_json::to_string(&invalid).unwrap()).is_err());

@@ -54,8 +54,8 @@ impl Project {
             .timeline
             .meters
             .iter()
-            .map(|m| m.id)
-            .chain(self.playlist.timeline.markers.iter().map(|m| m.id))
+            .map(|m| m.id.0)
+            .chain(self.playlist.timeline.markers.iter().map(|m| m.id.0))
             .collect();
         let entity_ids = self
             .samples

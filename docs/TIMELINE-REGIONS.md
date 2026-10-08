@@ -328,8 +328,8 @@ mutation; a recording, source, range or numeric refusal retains the owner,
 transport, region and watermark. The transport event follows the completed
 region/watermark decision.
 
-The UI records the target before publishing its region, so a delayed region
-reply does not lose request identity. It keeps `playPending` until a fresh Play
+The R2 UI recorded the target before publishing its region; R3 below corrects
+that timing for chained successors. It keeps `playPending` until a fresh Play
 reply completes the action. Cancelling an action whose Play committed during
 the source-query window stops that exact still-owned playback; if Clear wins
 first, the old Play guard refuses. A later valid Play owns a different request,
@@ -403,3 +403,157 @@ were imported. Verification here applies to this isolated source, not combined
 root, installed external plugins, physical UI/audio or non-Windows behavior.
 The full arrangements, per-pattern timelines, WAV metadata and scalar clip
 snap/grid refinements remain explicit follow-ups.
+
+## Review R3 repair (parent source `59c8f7f3`)
+
+This incremental repair preserves immutable parent
+`59c8f7f3adc0c552fca972b515e5219ddaf24d06` and all earlier source commits.
+It addresses the two P2 behavior findings and three documented-standard
+findings; it does not close the retained full-T1 follow-ups.
+
+### Bounded cancellation authority through successors
+
+Play A can remain awaiting its native Play commit while B, then C, prepare
+newer region publications. Their unpublished guards cannot authorize
+transport yet. R2 incorrectly preferred one of those guards over the inherited
+live A target, so Clear could remove the region while A continued playing.
+
+An operation now acquires its own cancellation guard only after receiving an
+accepted region reply while its entry lifetime/revision/intent is still current.
+Until then, it carries its predecessor's exact target. This is one inherited
+target, not a growing lineage. When a successor publication commits, the same
+existing native recording-before-State decision cancels an owned predecessor
+or makes its delayed Play stale. Only an accepted current successor reply can
+continue into guarded Set/Seek/Play. A cancelled committed publication cannot
+become another Play target. No new native API, watermark or owner field is needed.
+
+Clear/refusal retries retain that exact target with the fresh canonical revision;
+New/Open resets UI lifetime metadata and canonical generation guards reject old
+requests. Ordinary successful transport still relinquishes ownership, so Clear
+does not stop unrelated playback. Natural region end relinquishes a matched
+owner without a second Stop, preserving endpoint automation/tails. Counter
+rebasing, exact JS-safe numbers, exhaustion without reuse, canonical source
+authority and atomic refusal are unchanged.
+
+### Mode-correct hosted transport
+
+Processor's meter lookup now uses the song map only in song mode. Pattern mode
+uses the scalar project signature, matching the retained pattern-label contract.
+The new test installs actual engine `PluginFactory` probes for CLAP/VST3 saved
+bindings, both instruments and effects. It observes every `PluginTransport`
+field through the accepted hosted facades at song tick zero (7/8), pattern tick
+zero and tick 2001 (4/4), then song tick 2001 (3/4) and back to zero. It switches
+the selected pattern source too. Probe writes are preallocated atomic stores;
+every processing assertion also requires zero callback allocation/free.
+
+Desktop runtime forwarding and CLAP/VST3 adapter signature assignments were
+source-traced unchanged. This test executes engine hosted facades, not installed
+external plugins or OS native fixture binaries; no N4/native fixture edits or
+new capture/format/state APIs are involved.
+
+### Registry controls and numeric identity types
+
+Playlist registry invalidation includes `hydrated`. An already-open registry
+consumer now updates when hydration returns no range, as well as when it
+restores an existing range. Clear explains that no selection remains. The five
+static Play/Loop/Zoom/Export/Clear dropdown entries render `ActionMenuItem` from
+their registered action IDs, including registry titles, shortcut labels,
+contextual enablement and disabled reasons. Entity-specific CRUD remains local.
+The separately approved caller cleanup removes only the unused controls metrics
+prop; playlist viewport/layout/ruler behavior is unchanged.
+
+`MeterChangeId` and `TimelineMarkerId` are separate serde-transparent u32
+newtypes, with the same conversions and numeric TypeScript representation as
+existing project IDs. Timeline command IDs are typed; allocation and global
+collision checks explicitly compare their underlying u32 values. Numeric JSON,
+v1 format version, legacy defaults, created-ID reply order, playlist patches,
+next-ID non-reuse and undo/redo stay unchanged. MIDI/FLP conversions already
+dispatch timeline commands and obtain IDs from the typed project, so they need
+no vendor-ID casts or wire changes. Project native and actual shared-WASM tests
+cover numeric add/update/remove, wrong-family/invalid-number atomic refusal,
+allocator identities, save/open and undo/redo.
+
+### Executed RED/GREEN and limits
+
+Before either P2 production fix, compiled/executed actual-function tests with
+fresh local shared WASM failed for A→B and A→B→C, leaving `playing: true` after
+Clear. The native engine hosted transport test failed at pattern tick zero:
+received `(7,8)`, expected `(4,4)`. The no-range hydration registry test also
+failed because its notification version did not change. These were behavior
+assertions, not enum-presence or synthetic source predictions.
+
+GREEN executes deferred publication and reply reordering, Clear/rearm, edited
+source, New/Open, refusal/retry and each ordinary Play/Seek/Set/Stop supersession.
+Native audio proves the inherited A guard stops only its still-owned Play,
+refuses delayed B/C requests, preserves ordinary and naturally stopped transport,
+does not mutate project/history/revision/dirty state, and allows a later audible
+valid Play. The full existing R1/R2 timeline guard, replacement, reload, safe-number,
+recording, actual WAV/PDC/tail and destination/staging cleanup cases are retained.
+
+All work uses the existing isolated `target/timeline-verification` cache,
+`CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=1`, isolated TS export directories and
+at most two UI workers. Validation-only generation produced 179 bindings and a
+1,964,581-byte simulator. `check-sim` verified the simulator current after source
+formatting; generated bindings/WASM are restored/excluded before commit.
+Final executed checks passed: **251 shared-WASM UI tests in 14 focused files**,
+including 50 lifetime cases, three actual module-reload cases, four hydration/
+registry menu cases and eight timeline/identity/zoom cases. Project timeline
+seven, MIDI map two, FLP actual-map one, engine timeline ten and native session
+timeline eleven cases passed (**31 distinct native/project/engine cases**).
+The chained native case was rerun after adding natural-end hold/position
+assertions. No full native compatibility cluster was repeated just for counts.
+Strict all-target Clippy (`-D warnings`) passed for project, MIDI, FLP, IPC,
+simulator, engine and desktop; workspace fmt, desktop TypeScript, ESLint,
+changed-TypeScript Prettier and source diff checks passed.
+
+Commands used the isolated cache and export environment above:
+
+```text
+cargo test -p windfall-project --test timeline -- --test-threads=1
+cargo test -p windfall-midi --test timeline -- --test-threads=1
+cargo test -p windfall-flp --test conversion timeline_ -- --test-threads=1
+cargo test -p windfall-engine --test engine timeline:: -- --test-threads=1
+cargo test -p windfall-desktop --lib session::tests::timeline:: -- --test-threads=1
+cargo test -p windfall-desktop --lib timeline_chained_unpublished -- --test-threads=1
+cargo clippy -p windfall-project -p windfall-midi -p windfall-flp -p windfall-ipc -p windfall-sim -p windfall-engine -p windfall-desktop --all-targets -- -D warnings
+cargo fmt --all -- --check
+pnpm --dir apps/desktop exec tsc -b
+pnpm --dir apps/desktop exec eslint .
+pnpm --dir apps/desktop exec vitest run [14 focused files] --maxWorkers=2
+```
+
+The 14-file UI run at 07:09:25 UTC and final four-case menu refinement run at
+07:15:26 UTC used current WASM SHA-256
+`e4161abd2abe188a7d43d5d7d4429d242545b13f430f7423c05ff4b4bb1c0abc`.
+Its verified input fingerprint after formatting was
+`0da6ea9d89ec046006eb8865f6fce439fd923cc298c6f588886eefdf6aed983d`.
+The final menu refinement checks the correct disabled reason outside playlist
+context and awaits the actual menu portal before inspecting its registry items.
+An intervening check after premature artifact restoration hit legacy artifacts;
+it was discarded, the matching local artifacts were reapplied/verified, and
+the final menu/TypeScript checks passed before restoring artifacts again.
+Private executable provenance under `target/timeline-verification/debug/deps`
+(2026-10-08 UTC; not committed/generated product artifacts):
+
+| Binary | Written UTC | SHA-256 |
+| --- | --- | --- |
+| `engine-d477693dd860322b.exe` | 07:07:27 | `aae0b84c6a15dcb71a5341b6574eeac4293bf3989bb1e9c10ef86b9eee9596b0` |
+| `windfall_desktop_lib-a486fa5ea3ee0578.exe` | 07:09:51 | `0da7168ad85d21f33d67c9163ddc694f0a33009f50203690c58f25aa1a1cdc3a` |
+| `timeline-8c4ccc693213df2b.exe` | 07:10:03 | `3a628989044b01ff016b716bf0725d57a7f007a48652a0e76599242d8070a8cc` |
+
+Corresponding Cargo `.fingerprint/windfall-{package}-{binary suffix}/`
+`test-integration-test-engine.json`, `test-lib-windfall_desktop_lib.json` and
+`test-integration-test-timeline.json` match those build times; `.d` dependency
+paths identify this bound worktree. Independent inventory of these executables
+lists ten engine and eleven session timeline tests. Final engine timeline source
+SHA-256 is `872973f89e3aa9711d1ec4c8105e751bd08b3848c8a36f23c08deb69ff184065`;
+session timeline source is
+`8e8847d61a0632a06227d4bb745297ec45819c0baafe40d7535a4f3e298ebeab`.
+Combined-root integration remains the parent's gate.
+
+No root source/artifacts or other owners' changes were imported. Controller,
+Plan, Rack, engine State, utility departure/adoption, native runtime, sampler,
+browser, portable files, piano/history-intent and DSP seams remain untouched.
+Physical UI/audio, installed external plugins and non-Windows behavior remain
+unverified. Arrangements, per-pattern timelines, linked/group/make-unique/scrub,
+WAV marker metadata and scalar snap/grid refinements remain open.

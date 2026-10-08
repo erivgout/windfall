@@ -44,12 +44,12 @@ pub enum Command {
         signature: TimeSignature,
     },
     UpdateMeterChange {
-        id: u32,
+        id: crate::MeterChangeId,
         tick: u32,
         signature: TimeSignature,
     },
     RemoveMeterChange {
-        id: u32,
+        id: crate::MeterChangeId,
     },
     AddTimelineMarker {
         tick: u32,
@@ -60,7 +60,7 @@ pub enum Command {
         marker: crate::TimelineMarker,
     },
     RemoveTimelineMarker {
-        id: u32,
+        id: crate::TimelineMarkerId,
     },
     /// Adds an instrument channel and binds its hosted plugin in one undo step.
     AddPluginInstrument {

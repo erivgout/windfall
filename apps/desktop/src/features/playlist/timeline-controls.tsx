@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react"
+import { ActionMenuItem } from "@/components/action-menu-item"
+import { registry, useAppState } from "@/lib/actions"
 import type { Command, MarkerKind } from "@/bindings"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -35,7 +37,6 @@ import {
   useProjectGeneration,
 } from "@/lib/store/replaced"
 import { songTick } from "./ops"
-import type { GridMetrics } from "./metrics"
 import {
   editTimeline,
   refreshTimelineState,
@@ -43,11 +44,6 @@ import {
   type RulerTool,
   type TimelineEdit,
 } from "./timeline-store"
-import {
-  clearTimelineSelection,
-  exportTimelineSelection,
-  playTimelineSelection,
-} from "./timeline-actions"
 
 function TimelineEditor({
   edit,
@@ -285,12 +281,13 @@ function TimelineEditor({
   )
 }
 
-export function TimelineControls({ metrics }: { metrics: GridMetrics }) {
+export function TimelineControls() {
   const timeline = useProjectStore((state) => state.project.playlist.timeline)
   const ready = useProjectStore((state) => state.ready)
   const revision = useProjectStore((state) => state.revision)
   const generation = useProjectGeneration()
-  const { tool, selection, active, hydrated, error, edit } = useTimelineStore()
+  const { tool, selection, active, error, edit } = useTimelineStore()
+  const actionState = useAppState()
   const choose = editTimeline
   useEffect(() => {
     if (ready) void refreshTimelineState()
@@ -369,38 +366,24 @@ export function TimelineControls({ metrics }: { metrics: GridMetrics }) {
                   Add {type} marker…
                 </DropdownMenuItem>
               ))}
-              <DropdownMenuItem
-                disabled={!selection}
-                onClick={() => void playTimelineSelection(false)}
-              >
-                Play selection
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!selection}
-                onClick={() => void playTimelineSelection(true)}
-              >
-                Loop selection
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!selection}
-                onClick={() => {
-                  if (selection) metrics.fitRegion(selection)
-                }}
-              >
-                Zoom to selection
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!selection}
-                onClick={exportTimelineSelection}
-              >
-                Export selected region…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!selection && !active && hydrated}
-                onClick={() => void clearTimelineSelection()}
-              >
-                Clear time selection
-              </DropdownMenuItem>
+              {[
+                "playlist.playSelection",
+                "playlist.loopSelection",
+                "playlist.zoomRegion",
+                "playlist.exportRegion",
+                "playlist.clearRegion",
+              ].map((id) => {
+                const action = registry.get(id)
+                return (
+                  action && (
+                    <ActionMenuItem
+                      key={id}
+                      action={action}
+                      state={actionState}
+                    />
+                  )
+                )
+              })}
             </DropdownMenuGroup>
             <DropdownMenuGroup>
               <DropdownMenuLabel>Meter changes</DropdownMenuLabel>

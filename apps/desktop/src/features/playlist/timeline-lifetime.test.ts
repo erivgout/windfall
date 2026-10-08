@@ -53,6 +53,184 @@ beforeEach(async () => {
 })
 afterEach(() => rig.stop())
 
+for (const successors of [1, 2]) {
+  it(`cancels the live Play through ${successors} unpublished successors without retaining a request lineage`, async () => {
+    const playEntered = gate(),
+      playResume = gate()
+    const play = rig.backend.transportPlay.bind(rig.backend)
+    const playSpy = vi
+      .spyOn(rig.backend, "transportPlay")
+      .mockImplementationOnce(async (...args) => {
+        playEntered.release()
+        await playResume.promise
+        return play(...args)
+      })
+    const first = playTimelineSelection(false)
+    await playEntered.promise
+    const firstGuard = playSpy.mock.calls[0][0]!
+    const publish = rig.backend.timelineRegion.bind(rig.backend)
+    const gates = Array.from({ length: successors }, () => ({
+      entered: gate(),
+      resume: gate(),
+    }))
+    const publication = vi.spyOn(rig.backend, "timelineRegion")
+    for (const deferred of gates)
+      publication.mockImplementationOnce(async (...args) => {
+        deferred.entered.release()
+        await deferred.resume.promise
+        return publish(...args)
+      })
+    const actions: Promise<void>[] = []
+    for (const deferred of gates) {
+      actions.push(playTimelineSelection(true))
+      await deferred.entered.promise
+    }
+    playResume.release()
+    await first
+    expect((await rig.backend.transportState()).playing).toBe(true)
+    await clearTimelineSelection()
+    expect((await rig.backend.transportState()).playing).toBe(false)
+    expect(publication.mock.calls.at(-1)?.[4]).toEqual(firstGuard)
+    expect((await rig.backend.timelineState()).region).toBeNull()
+    expect(useTimelineStore.getState()).toMatchObject({
+      selection: null,
+      active: false,
+    })
+    // Reordered stale publications cannot clear or start the newer valid Play.
+    await selectTimelineRegion({ start: 91, end: 210 })
+    await playTimelineSelection(true)
+    const healthy = await rig.backend.timelineState()
+    for (const deferred of [...gates].reverse()) deferred.resume.release()
+    await Promise.all(actions)
+    expect(await rig.backend.timelineState()).toEqual(healthy)
+    expect((await rig.backend.transportState()).playing).toBe(true)
+    expect(playSpy).toHaveBeenCalledTimes(2)
+  })
+}
+
+for (const event of [
+  "edit",
+  "New",
+  "Open",
+  "refusal",
+  "ordinary Play",
+  "ordinary Seek",
+  "ordinary Set",
+  "ordinary Stop",
+] as const) {
+  it(`retains exact cancellation authority through chained successors and ${event}`, async () => {
+    const playEntered = gate(),
+      playResume = gate()
+    const play = rig.backend.transportPlay.bind(rig.backend)
+    vi.spyOn(rig.backend, "transportPlay").mockImplementationOnce(
+      async (...args) => {
+        playEntered.release()
+        await playResume.promise
+        return play(...args)
+      }
+    )
+    const first = playTimelineSelection(false)
+    await playEntered.promise
+    const publish = rig.backend.timelineRegion.bind(rig.backend)
+    const entered = gate(),
+      resume = gate()
+    vi.spyOn(rig.backend, "timelineRegion").mockImplementationOnce(
+      async (...args) => {
+        entered.release()
+        await resume.promise
+        return publish(...args)
+      }
+    )
+    const successor = playTimelineSelection(true)
+    await entered.promise
+    playResume.release()
+    await first
+    if (event === "edit")
+      await dispatch({
+        type: "addMeterChange",
+        tick: 4001,
+        signature: { numerator: 7, denominator: 8 },
+      })
+    if (event === "New") await rig.backend.projectNew()
+    if (event === "Open") {
+      await rig.backend.projectOpen(saved)
+      await rig.backend.transportPlay()
+    }
+    if (event === "refusal")
+      vi.spyOn(rig.backend, "timelineRegion").mockRejectedValueOnce(
+        new Error("Stop recording before changing the timeline region.")
+      )
+    if (event === "ordinary Play") await rig.backend.transportPlay()
+    if (event === "ordinary Seek") await rig.backend.transportSeek(99)
+    if (event === "ordinary Set")
+      await rig.backend.transportSet({ loopSong: true })
+    if (event === "ordinary Stop") {
+      await rig.backend.transportStop()
+      await rig.backend.transportPlay()
+    }
+    const before = await rig.backend.transportState()
+    await clearTimelineSelection()
+    if (event === "refusal") {
+      expect(useTimelineStore.getState()).toMatchObject({
+        active: true,
+        selection: { start: 17, end: 839 },
+      })
+      expect(useTimelineStore.getState().error).toMatch(/Stop recording/)
+      expect((await rig.backend.transportState()).playing).toBe(true)
+      await clearTimelineSelection()
+    }
+    if (event === "edit" || event === "refusal")
+      expect((await rig.backend.transportState()).playing).toBe(false)
+    else expect(await rig.backend.transportState()).toEqual(before)
+    expect((await rig.backend.timelineState()).region).toBeNull()
+    resume.release()
+    await successor
+    expect((await rig.backend.timelineState()).region).toBeNull()
+    // A valid later intent is not stranded by the inherited target or refusal.
+    await selectTimelineRegion({ start: 91, end: 210 })
+    expect(await applyPlaybackRegion({ start: 91, end: 210 })).toBe(true)
+  })
+}
+
+it("never promotes a successor whose native publication committed but whose reply was cancelled", async () => {
+  const playEntered = gate(),
+    playResume = gate()
+  const play = rig.backend.transportPlay.bind(rig.backend)
+  vi.spyOn(rig.backend, "transportPlay").mockImplementationOnce(
+    async (...args) => {
+      const result = await play(...args)
+      playEntered.release()
+      await playResume.promise
+      return result
+    }
+  )
+  const first = playTimelineSelection(false)
+  await playEntered.promise
+  const publish = rig.backend.timelineRegion.bind(rig.backend)
+  const entered = gate(),
+    resume = gate()
+  vi.spyOn(rig.backend, "timelineRegion").mockImplementationOnce(
+    async (...args) => {
+      const result = await publish(...args)
+      entered.release()
+      await resume.promise
+      return result
+    }
+  )
+  const second = playTimelineSelection(true)
+  await entered.promise
+  expect((await rig.backend.transportState()).playing).toBe(false)
+  await clearTimelineSelection()
+  await selectTimelineRegion({ start: 91, end: 210 })
+  await playTimelineSelection(true)
+  const healthy = await rig.backend.timelineState()
+  resume.release()
+  playResume.release()
+  await Promise.all([first, second])
+  expect(await rig.backend.timelineState()).toEqual(healthy)
+  expect((await rig.backend.transportState()).playing).toBe(true)
+})
+
 for (const stage of ["set", "seek", "play"] as const) {
   for (const delivery of ["before commit", "after commit"] as const) {
     for (const replacement of ["New", "Open"] as const) {

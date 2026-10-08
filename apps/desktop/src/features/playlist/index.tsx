@@ -71,7 +71,7 @@ function Playlist() {
         {...scope}
       >
         <PlaylistToolbar metrics={metrics} />
-        <TimelineControls metrics={metrics} />
+        <TimelineControls />
         <ClipInspector />
         <div className="flex min-h-0 flex-1">
           {pickerOpen && <PatternPicker />}

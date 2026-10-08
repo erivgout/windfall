@@ -9,6 +9,39 @@ use ts_rs::TS;
 pub const MAX_TIMELINE_ITEMS: usize = 2_048;
 pub const MAX_MARKER_NAME_BYTES: usize = 256;
 
+/// Stable meter identity. Its JSON representation remains a numeric u32.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(transparent)]
+#[ts(export)]
+pub struct MeterChangeId(pub u32);
+
+/// Stable marker identity, distinct from meter and other document identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[serde(transparent)]
+#[ts(export)]
+pub struct TimelineMarkerId(pub u32);
+
+impl From<u32> for MeterChangeId {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+impl From<MeterChangeId> for u32 {
+    fn from(value: MeterChangeId) -> Self {
+        value.0
+    }
+}
+impl From<u32> for TimelineMarkerId {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+impl From<TimelineMarkerId> for u32 {
+    fn from(value: TimelineMarkerId) -> Self {
+        value.0
+    }
+}
+
 /// Half-open absolute song ticks, checked before transport/export mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +66,7 @@ impl TickRange {
 #[ts(export)]
 pub struct MeterChange {
     /// Monotonic document ID, shared with every other entity.
-    pub id: u32,
+    pub id: MeterChangeId,
     pub tick: u32,
     pub signature: TimeSignature,
 }
@@ -58,7 +91,7 @@ pub enum MarkerKind {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct TimelineMarker {
-    pub id: u32,
+    pub id: TimelineMarkerId,
     pub tick: u32,
     pub name: String,
     pub kind: MarkerKind,
@@ -115,8 +148,8 @@ impl Timeline {
         for id in self
             .meters
             .iter()
-            .map(|m| m.id)
-            .chain(self.markers.iter().map(|m| m.id))
+            .map(|m| m.id.0)
+            .chain(self.markers.iter().map(|m| m.id.0))
         {
             if id == 0 || id >= next_id || !ids.insert(id) {
                 return Err("timeline IDs must be unique, positive and below nextId".to_owned());

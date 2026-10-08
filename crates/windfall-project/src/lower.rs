@@ -96,7 +96,7 @@ impl Transaction<'_> {
                 let id = self.allocate()?;
                 let mut timeline = self.project.playlist.timeline.clone();
                 timeline.meters.push(crate::MeterChange {
-                    id,
+                    id: crate::MeterChangeId(id),
                     tick,
                     signature,
                 });
@@ -136,7 +136,7 @@ impl Transaction<'_> {
                 let id = self.allocate()?;
                 let mut timeline = self.project.playlist.timeline.clone();
                 timeline.markers.push(crate::TimelineMarker {
-                    id,
+                    id: crate::TimelineMarkerId(id),
                     tick,
                     name,
                     kind,

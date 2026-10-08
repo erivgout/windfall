@@ -509,6 +509,7 @@ export function registerPlaylistActions(): () => void {
       state.tool,
       state.selection,
       state.active,
+      state.hydrated,
     ]),
   ]
   return () => {

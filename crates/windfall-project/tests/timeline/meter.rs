@@ -1,5 +1,7 @@
 use windfall_project::timeline::MeterMap;
-use windfall_project::{MAX_SONG_TICKS, MeterChange, MusicalPosition, TimeSignature};
+use windfall_project::{
+    MAX_SONG_TICKS, MeterChange, MeterChangeId, MusicalPosition, TimeSignature,
+};
 
 fn signature(numerator: u8, denominator: u8) -> TimeSignature {
     TimeSignature {
@@ -35,12 +37,12 @@ fn unaligned_nonzero_changes_have_shortened_bars_and_checked_inverse() {
         signature(4, 4),
         &[
             MeterChange {
-                id: 2,
+                id: MeterChangeId(2),
                 tick: 4_001,
                 signature: signature(7, 8),
             },
             MeterChange {
-                id: 3,
+                id: MeterChangeId(3),
                 tick: 7_400,
                 signature: signature(3, 4),
             },
@@ -112,12 +114,12 @@ fn invalid_and_colliding_meter_ticks_never_divide_by_zero() {
             signature(4, 4),
             &[
                 MeterChange {
-                    id: 2,
+                    id: MeterChangeId(2),
                     tick: 100,
                     signature: signature(7, 8)
                 },
                 MeterChange {
-                    id: 3,
+                    id: MeterChangeId(3),
                     tick: 100,
                     signature: signature(3, 4)
                 },
@@ -128,7 +130,7 @@ fn invalid_and_colliding_meter_ticks_never_divide_by_zero() {
     let map = MeterMap::new(
         signature(3, 8),
         &[MeterChange {
-            id: 2,
+            id: MeterChangeId(2),
             tick: 0,
             signature: signature(7, 16),
         }],
