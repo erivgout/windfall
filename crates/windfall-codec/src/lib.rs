@@ -23,8 +23,9 @@ mod vorbis;
 mod wav;
 
 pub use decode::{
-    AudioInfo, DEFAULT_MAX_DECODED_BYTES, DecodeOptions, decode_bytes, decode_bytes_with,
-    decode_file, decode_file_with, probe_bytes, probe_file,
+    AudioInfo, DEFAULT_MAX_DECODED_BYTES, DecodeOptions, decode_bytes, decode_bytes_strict_with,
+    decode_bytes_with, decode_file, decode_file_strict_with, decode_file_with, probe_bytes,
+    probe_file,
 };
 pub use encoder::{AudioFormat, Encoder, EncoderSettings};
 pub use error::CodecError;

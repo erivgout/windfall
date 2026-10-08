@@ -164,6 +164,9 @@ impl CapturedInput {
         work: &mut Work,
     ) -> Result<Self> {
         let shape = AudioShape::of(audio);
+        if !stamp.source_identity.is_live() || stamp.source_fingerprint.bytes == 0 {
+            return Err(AnalysisError::Invalid("unverified/expired source capture"));
+        }
         if shape != stamp.input_shape {
             return Err(AnalysisError::Invalid("capture shape mismatch"));
         }

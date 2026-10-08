@@ -36,7 +36,9 @@ impl RelativeName {
         {
             return Err(AnalysisError::Invalid("artifact relative name"));
         }
-        Ok(Self(name))
+        // Keep metadata bounded even when a native adapter supplied a String
+        // with small length and arbitrarily large unused capacity.
+        Ok(Self(name.into_boxed_str().into_string()))
     }
     pub fn as_str(&self) -> &str {
         &self.0
@@ -125,7 +127,7 @@ impl ArtifactWriter {
         if self
             .artifacts
             .iter()
-            .any(|a| a.metadata.name == name.0 || a.metadata.role == role)
+            .any(|a| a.metadata.name.eq_ignore_ascii_case(&name.0) || a.metadata.role == role)
         {
             return Err(AnalysisError::Invalid("duplicate artifact name/role"));
         }
@@ -253,7 +255,21 @@ impl ArtifactWriter {
         }
         encoded.flush()?;
         work.check()?;
-        let decoded = windfall_codec::decode_file_with(
+        // Probe before creating a decoder: other codec packet/runtime memory
+        // cannot hide behind this fixed PCM verification reservation.
+        let info = windfall_codec::probe_file(encoded.path())?;
+        if info.format != "wave"
+            || info.codec != "pcm_f32le"
+            || info.sample_rate != shape.sample_rate
+            || info.channels != shape.channels
+            || info.frames != Some(shape.frames)
+        {
+            return Err(AnalysisError::Invalid(
+                "encoded helper must be aligned Float32 WAV",
+            ));
+        }
+        work.check()?;
+        let decoded = windfall_codec::decode_file_strict_with(
             encoded.path(),
             &DecodeOptions {
                 max_decoded_bytes: shape.pcm_bytes()?,
@@ -282,7 +298,7 @@ impl ArtifactWriter {
 
 fn validate_decoded(path: &Path, shape: AudioShape, work: &mut Work) -> Result<()> {
     work.check()?;
-    let decoded = windfall_codec::decode_file_with(
+    let decoded = windfall_codec::decode_file_strict_with(
         path,
         &DecodeOptions {
             max_decoded_bytes: shape.pcm_bytes()?,
@@ -300,7 +316,12 @@ fn validate_decoded(path: &Path, shape: AudioShape, work: &mut Work) -> Result<(
     Ok(())
 }
 
-pub(crate) fn publish(artifact: &Artifact, target: &Path, work: &mut Work) -> Result<()> {
+pub(crate) fn publish(
+    artifact: &Artifact,
+    target: &Path,
+    work: &mut Work,
+    track: impl FnOnce(&Path),
+) -> Result<()> {
     // Revalidate staging from the content before publication, and hash the
     // exact copied bytes. No failed/colliding publication ever unlinks target.
     let mut source = File::open(&artifact.staged)?;
@@ -309,6 +330,9 @@ pub(crate) fn publish(artifact: &Artifact, target: &Path, work: &mut Work) -> Re
             .parent()
             .ok_or(AnalysisError::Invalid("output parent"))?,
     )?;
+    // Register immediately, before any fallible copy/check/rename. Destruction
+    // is only a first cleanup attempt: the manager tracks a refused deletion.
+    track(file.path());
     let mut sha = sha2::Sha256::new();
     use sha2::Digest;
     let mut bytes = 0;
@@ -334,6 +358,12 @@ pub(crate) fn publish(artifact: &Artifact, target: &Path, work: &mut Work) -> Re
     }
     file.as_file().sync_all()?;
     work.check()?;
+    #[cfg(test)]
+    PUBLICATION_TEST_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook(file.path());
+        }
+    });
     match file.persist_noclobber(target) {
         Ok(file) => {
             drop(file);
@@ -347,4 +377,11 @@ pub(crate) fn publish(artifact: &Artifact, target: &Path, work: &mut Work) -> Re
         }
         Err(e) => Err(e.error.into()),
     }
+}
+
+#[cfg(test)]
+type PublicationTestHook = Box<dyn FnMut(&Path)>;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PUBLICATION_TEST_HOOK: std::cell::RefCell<Option<PublicationTestHook>> = const { std::cell::RefCell::new(None) };
 }

@@ -80,4 +80,8 @@ impl Work {
     pub(crate) fn set_completed(&mut self, completed: u64) {
         self.completed = completed;
     }
+    #[cfg(test)]
+    pub(crate) fn expire_at_checkpoint(&mut self) {
+        self.deadline = Instant::now();
+    }
 }
