@@ -133,30 +133,36 @@ fn retired_owner_is_terminal_and_does_not_drop_a_sibling_pending_ticket() {
 
 #[test]
 fn manager_publishes_unconfirmed_ack_warning_until_terminal_completion() {
+    let folder = tempfile::tempdir().unwrap();
+    let manager = crate::plugins::PluginManager::new(folder.path()).unwrap();
     let mut updates = CaptureUpdates::default();
     updates.push(request(7, 4));
     updates.capture(|_| Ok(pending(7, 5, true, "owner stopped")));
-    let mut status = windfall_ipc::PluginManagerState::default();
-    crate::plugins::update_capture_status(&mut status, true, &updates);
+    manager.publish_capture_status(true, &updates);
     assert_eq!(
-        status.error.as_deref(),
+        manager.state().error.as_deref(),
         Some("Native plugin state was accepted; acknowledgement is pending: owner stopped")
     );
+    assert_eq!(manager.status.lock().unwrap().error, None);
     updates.retry_ack(|_| Err("completion timed out".into()));
-    crate::plugins::update_capture_status(&mut status, true, &updates);
+    manager.publish_capture_status(true, &updates);
     assert!(
-        status
+        manager
+            .state()
             .error
             .as_deref()
             .unwrap()
             .ends_with("completion timed out")
     );
     updates.retry_ack(|_| Ok(CaptureAckCompletion::Retired));
-    crate::plugins::update_capture_status(&mut status, true, &updates);
-    assert_eq!(status.error, None);
-    status.error = Some("Unrelated scanner failure".into());
-    crate::plugins::update_capture_status(&mut status, true, &updates);
-    assert_eq!(status.error.as_deref(), Some("Unrelated scanner failure"));
+    manager.publish_capture_status(true, &updates);
+    assert_eq!(manager.state().error, None);
+    manager.status.lock().unwrap().error = Some("Unrelated scanner failure".into());
+    manager.publish_capture_status(true, &updates);
+    assert_eq!(
+        manager.state().error.as_deref(),
+        Some("Unrelated scanner failure")
+    );
 }
 
 #[test]
@@ -173,4 +179,33 @@ fn status_snapshot_keeps_ack_warning_visible_despite_other_status_producers() {
     status.error = Some("Scanner is busy".into());
     crate::plugins::overlay_capture_ack_warning(&mut status, None);
     assert_eq!(status.error.as_deref(), Some("Scanner is busy"));
+}
+
+#[test]
+fn pending_ack_completion_preserves_a_scanner_failure_from_the_pending_interval() {
+    let folder = tempfile::tempdir().unwrap();
+    let manager = crate::plugins::PluginManager::new(folder.path()).unwrap();
+    let mut updates = CaptureUpdates::default();
+    updates.push(request(7, 4));
+    updates.capture(|_| Ok(pending(7, 5, true, "receipt unconfirmed")));
+    manager.publish_capture_status(true, &updates);
+
+    // A scan publishes its result while the accepted capture awaits delivery.
+    manager.status.lock().unwrap().error = Some("Scanner executable failed".into());
+    manager.publish_capture_status(true, &updates);
+    assert_eq!(
+        manager.state().error.as_deref(),
+        Some("Native plugin state was accepted; acknowledgement is pending: receipt unconfirmed")
+    );
+
+    updates.retry_ack(|_| Ok(CaptureAckCompletion::Acknowledged));
+    manager.publish_capture_status(true, &updates);
+    assert_eq!(
+        manager.state().error.as_deref(),
+        Some("Scanner executable failed")
+    );
+    assert_eq!(
+        manager.status.lock().unwrap().error.as_deref(),
+        Some("Scanner executable failed")
+    );
 }

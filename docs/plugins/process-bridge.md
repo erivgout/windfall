@@ -95,7 +95,7 @@ Final post-audit timings were0.37s for all76 library cases and6.48s for the31
 process cases. Initialization keeps authority zero until its first Release1;
 there is no earlier relaxed1 for attach to acquire. Formatting and whitespace
 checks passed, the original process test body is identical to6b, and the host-only
-patch applies cleanly to copied exact root702 sources without production19f.
+patch applies cleanly to copied exact root702 sources without production 19f.
 
 The five native owner-turn units follow the existing sticky-writer explicit
 fixture convention and never build via nested Cargo. Mandatory full verification
@@ -767,3 +767,23 @@ dependency or generated artifact changes occur in this bookkeeping repair.
 P1 ready preparation/retirement and full meter render composition remain distinct
 acceptance gates. All verification is local; no GitHub Actions run or triggering
 push is authorized. Installer/device/licensed-corpus/editor/platform gates remain.
+
+
+### Parent acknowledgement status correction
+
+The parent composes only e075/11267's private acknowledgement/Manager contract,
+not production 19f routing. Spec R1 identified that writing its warning into
+stored status overwrote a scanner error which terminal delivery then erased.
+A real PluginManager status-publication/snapshot regression compiled RED with
+`None` instead of `Scanner executable failed`. Stored status now retains
+underlying errors; only the returned clone receives the separate warning latch.
+The same regression and all 15 acknowledgement cases pass, including all four
+explicit native fixture units with the prebuilt 21-class DLL. Desktop lib/tests
+strict Clippy passes. The original warning assertions now observe the public
+snapshot rather than requiring the destructive internal write. All five existing
+recording/capture and all five runtime-repair cases pass on the rebuilt binary.
+
+P1's genuinely ready Session route remains a separate composition gate. The
+historical parent capture body is not presented as off-lock native preparation.
+The parent correction has compiled RED/GREEN evidence; its next independent
+review waits for T3 messaging to become available. No Actions run is authorized.

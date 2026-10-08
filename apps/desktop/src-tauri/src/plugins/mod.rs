@@ -32,15 +32,15 @@ fn update_capture_status(
     pending_empty: bool,
     captures: &capture_ack::CaptureUpdates,
 ) {
-    if let Some(warning) = captures.warning() {
-        overlay_capture_ack_warning(status, Some(warning));
-    } else if status.error.as_ref().is_some_and(|error| {
-        error.starts_with(ACKNOWLEDGEMENT_WARNING)
-            || (pending_empty
-                && captures.is_empty()
-                && (error.starts_with("Native plugin edit is waiting:")
-                    || error.starts_with("Native plugin state is waiting:")))
-    }) {
+    // The acknowledgement warning belongs only to state()'s cloned snapshot.
+    // Keep other producers' errors intact while delivery is pending or settles.
+    if pending_empty
+        && captures.is_empty()
+        && status.error.as_ref().is_some_and(|error| {
+            error.starts_with("Native plugin edit is waiting:")
+                || error.starts_with("Native plugin state is waiting:")
+        })
+    {
         status.error = None;
     }
 }
@@ -110,6 +110,17 @@ impl PluginManager {
         });
         manager.update_entries();
         Ok(manager)
+    }
+    fn publish_capture_status(&self, pending_empty: bool, captures: &capture_ack::CaptureUpdates) {
+        *self
+            .capture_ack_warning
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = captures.warning().map(str::to_owned);
+        let mut status = self
+            .status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        update_capture_status(&mut status, pending_empty, captures);
     }
     pub fn state(&self) -> PluginManagerState {
         let mut state = self
@@ -241,18 +252,7 @@ impl PluginManager {
                     pending.drain(..pending.len() - 4096);
                     manager.status.lock().unwrap_or_else(|error| error.into_inner()).error = Some("Too many pending native plugin edits; reopen the plugin to reconcile its state".into());
                 }
-                {
-                    *manager
-                        .capture_ack_warning
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner()) =
-                        captures.warning().map(str::to_owned);
-                    let mut status = manager
-                        .status
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner());
-                    update_capture_status(&mut status, pending.is_empty(), &captures);
-                }
+                manager.publish_capture_status(pending.is_empty(), &captures);
                 // Preserve native edits before replacing their current owner. A
                 // take can refuse refresh; one flag retains the request until idle.
                 if pending.is_empty()
