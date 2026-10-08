@@ -191,10 +191,25 @@ export async function dispatch(
   }
 }
 
-async function runHistory(work: Promise<ProjectPatch | null>) {
+const historyNavigationListeners = new Set<() => void>()
+
+/**
+ * Runs before Undo, Redo or a history jump starts its backend request, even
+ * when navigation turns out to be a no-op. Transient UI choices can cancel
+ * without waiting for a patch. This signal never changes document state.
+ */
+export function onHistoryNavigation(listener: () => void): () => void {
+  historyNavigationListeners.add(listener)
+  return () => {
+    historyNavigationListeners.delete(listener)
+  }
+}
+
+async function runHistory(work: () => Promise<ProjectPatch | null>) {
   const generation = getProjectGeneration()
+  for (const listener of [...historyNavigationListeners]) listener()
   try {
-    const patch = await work
+    const patch = await work()
     if (patch && generation === getProjectGeneration()) receivePatch(patch)
   } catch (error) {
     if (generation === getProjectGeneration()) reportError(error)
@@ -202,16 +217,16 @@ async function runHistory(work: Promise<ProjectPatch | null>) {
 }
 
 export function undo(): Promise<void> {
-  return runHistory(backend.undo())
+  return runHistory(() => backend.undo())
 }
 
 export function redo(): Promise<void> {
-  return runHistory(backend.redo())
+  return runHistory(() => backend.redo())
 }
 
 /** Undoes or redoes until `cursor` history entries are applied. */
 export function historyJump(cursor: number): Promise<void> {
-  return runHistory(backend.historyJump(cursor))
+  return runHistory(() => backend.historyJump(cursor))
 }
 
 /**
