@@ -481,8 +481,36 @@ fn r1_final_guard(count: usize) {
     applied.retire();
 }
 
+// LIVE/PEAK describe the whole executable. Isolate only their asserting cases
+// from unrelated libtest allocations; each case still uses real worker threads.
+fn isolated_heap_case(name: &str) -> bool {
+    const CHILD: &str = "WINDFALL_ANALYSIS_HEAP_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        return false;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--test-threads=1", "--nocapture"])
+        .env(CHILD, name)
+        .output()
+        .expect("start isolated native heap case");
+    eprint!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.status.success(),
+        "isolated heap case {name}: {}",
+        output.status
+    );
+    true
+}
+
 #[test]
 fn r1_high_capacity_valid_manifest_is_charged_queued_running_and_ready() {
+    if isolated_heap_case("r1_high_capacity_valid_manifest_is_charged_queued_running_and_ready") {
+        return;
+    }
     let mut fixture = Fixture::new();
     fixture.config.memory_bytes = 24 * 1024 * 1024;
     let gate = Gate::new(2);
@@ -1463,6 +1491,9 @@ fn persistent_file_quota_and_restart_inventory_survive_forget_and_shutdown() {
 
 #[test]
 fn one_second_cpu_lifecycle_measures_owned_peak_and_retirement() {
+    if isolated_heap_case("one_second_cpu_lifecycle_measures_owned_peak_and_retirement") {
+        return;
+    }
     let fixture = Fixture::new();
     let manager = fixture.manager(Arc::new(CopyAdapter::default()));
     let samples = (0..96_000)
