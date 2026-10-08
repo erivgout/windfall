@@ -52,6 +52,9 @@ describe("descriptors", () => {
       stereoMatrix: true,
       softClipper: true,
       distortion: true,
+      fastLowpass: true,
+      selectableFilter: true,
+      bassShelf: true,
     }
     const instruments: Record<InstrumentKind, true> = {
       subtractiveSynth: true,
