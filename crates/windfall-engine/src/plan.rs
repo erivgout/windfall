@@ -581,7 +581,9 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         lanes: Vec::new(),
         tempo_map: None,
     };
-    plan.snapshot_native_owners();
+    if plan.meters.is_ok() {
+        plan.snapshot_native_owners();
+    }
     plan.link();
     plan.lanes = automation::compile(project, &plan);
     let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());
