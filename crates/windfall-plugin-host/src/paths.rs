@@ -140,6 +140,7 @@ fn walk(folder: &Path, depth: u32, found: &mut BTreeSet<PluginFile>) {
 }
 
 /// The folder inside a VST3 bundle that holds the binary for this machine.
+#[cfg(not(target_os = "macos"))]
 pub(crate) const fn vst3_architecture_folder() -> &'static str {
     if cfg!(all(windows, target_arch = "x86_64")) {
         "x86_64-win"
@@ -156,22 +157,32 @@ pub(crate) const fn vst3_architecture_folder() -> &'static str {
     }
 }
 
-/// The library to load for a VST3 plugin: the path itself when it is a
-/// single file, as old Windows plugins are, or the binary inside the bundle.
+/// The library inside a VST3 bundle. On macOS, fresh Info.plist metadata
+/// selects CFBundleExecutable. Other platforms also accept a single file,
+/// as old Windows plugins use, and retain their existing bundle naming rules.
 pub fn vst3_binary(path: &Path) -> Option<PathBuf> {
-    if path.is_file() {
-        return Some(path.to_path_buf());
+    #[cfg(target_os = "macos")]
+    {
+        crate::vst3::bundle_macos::resolve_source(path)
+            .ok()
+            .map(|source| source.binary)
     }
-    let stem = path.file_stem()?;
-    let folder = path.join("Contents").join(vst3_architecture_folder());
-    let mut name = stem.to_os_string();
-    if cfg!(windows) {
-        name.push(".vst3");
-    } else if !cfg!(target_os = "macos") {
-        name.push(".so");
+    #[cfg(not(target_os = "macos"))]
+    {
+        if path.is_file() {
+            return Some(path.to_path_buf());
+        }
+        let stem = path.file_stem()?;
+        let folder = path.join("Contents").join(vst3_architecture_folder());
+        let mut name = stem.to_os_string();
+        if cfg!(windows) {
+            name.push(".vst3");
+        } else if !cfg!(target_os = "macos") {
+            name.push(".so");
+        }
+        let binary = folder.join(name);
+        binary.is_file().then_some(binary)
     }
-    let binary = folder.join(name);
-    binary.is_file().then_some(binary)
 }
 
 /// The file whose size and date say whether a plugin has changed: the
