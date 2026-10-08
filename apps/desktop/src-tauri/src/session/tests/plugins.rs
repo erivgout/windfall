@@ -72,6 +72,342 @@ fn transport() -> PluginTransport {
 }
 
 #[test]
+fn r4_deduplicated_clap_instrument_document_adoption() {
+    r4_document_adoption(false, true);
+}
+#[test]
+fn r4_deduplicated_vst3_instrument_document_adoption() {
+    r4_document_adoption(true, true);
+}
+#[test]
+fn r4_deduplicated_clap_effect_document_adoption() {
+    r4_document_adoption(false, false);
+}
+#[test]
+fn r4_deduplicated_vst3_effect_document_adoption() {
+    r4_document_adoption(true, false);
+}
+
+fn r4_document_adoption(vst3: bool, instrument: bool) {
+    use windfall_project::{
+        AutomationId, AutomationPoint, AutomationTarget, ClipContent, ClipInit,
+    };
+    let mut rig = Rig::new();
+    let (manager, binding, id) = if vst3 {
+        let (runtime, binding) = crate::plugins::vst3_fixture(if instrument { 2 } else { 0 });
+        let manager = crate::plugins::PluginManager::fixture_runtime(rig.folder.path(), runtime);
+        rig.session.install_plugins(manager.clone());
+        (manager, binding, 7)
+    } else {
+        let (manager, path) = manager(&rig);
+        let binding = manager
+            .binding(
+                &path,
+                if instrument {
+                    "org.windfall.test.sine"
+                } else {
+                    "org.windfall.test.gain"
+                },
+                if instrument {
+                    PluginTarget::Instrument {
+                        channel: windfall_project::ChannelId(0),
+                    }
+                } else {
+                    PluginTarget::Effect {
+                        effect: EffectId(0),
+                    }
+                },
+            )
+            .unwrap();
+        (manager, binding, if instrument { 1 } else { 7 })
+    };
+    let added = rig
+        .session
+        .dispatch(
+            if instrument {
+                Command::AddPluginInstrument { plugin: binding }
+            } else {
+                Command::AddPluginEffect {
+                    track: TrackId(0),
+                    plugin: binding,
+                }
+            },
+            None,
+        )
+        .unwrap();
+    let channel = if instrument {
+        windfall_project::ChannelId(added.created[0])
+    } else {
+        windfall_project::ChannelId(
+            rig.session
+                .dispatch(
+                    Command::AddChannel {
+                        name: Some("Native effect source".into()),
+                        sample: None,
+                        instrument: Some(windfall_project::InstrumentKind::SubtractiveSynth),
+                        index: None,
+                        mixer_track: None,
+                    },
+                    None,
+                )
+                .unwrap()
+                .created[0],
+        )
+    };
+    let target = if instrument {
+        PluginTarget::Instrument { channel }
+    } else {
+        PluginTarget::Effect {
+            effect: EffectId(*added.created.last().unwrap()),
+        }
+    };
+    let automation_target = if instrument {
+        AutomationTarget::InstrumentParam { channel, param: 0 }
+    } else {
+        AutomationTarget::EffectParam {
+            track: TrackId(0),
+            effect: EffectId(*added.created.last().unwrap()),
+            param: 0,
+        }
+    };
+    let range = rig.project().automation_range(&automation_target).unwrap();
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id,
+                value: 0.5,
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel,
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    let track = rig
+        .session
+        .dispatch(
+            Command::AddPlaylistTrack {
+                name: None,
+                index: None,
+            },
+            None,
+        )
+        .unwrap()
+        .created[0];
+    let automation = rig
+        .session
+        .dispatch(
+            Command::AddAutomation {
+                name: None,
+                target: automation_target,
+                points: Some(vec![
+                    AutomationPoint {
+                        tick: 0,
+                        value: range.normalized(0.75),
+                        curve: 0.0,
+                        hold: true,
+                    },
+                    AutomationPoint {
+                        tick: 96,
+                        value: range.normalized(0.25),
+                        curve: 0.0,
+                        hold: true,
+                    },
+                ]),
+            },
+            None,
+        )
+        .unwrap()
+        .created[0];
+    let track = windfall_project::PlaylistTrackId(track);
+    rig.session
+        .dispatch(
+            Command::AddClips {
+                clips: vec![
+                    ClipInit {
+                        track,
+                        start: 0,
+                        length: Some(960),
+                        offset: None,
+                        muted: None,
+                        content: ClipContent::Pattern {
+                            pattern: rig.pattern(),
+                        },
+                    },
+                    ClipInit {
+                        track,
+                        start: 0,
+                        length: Some(960),
+                        offset: None,
+                        muted: None,
+                        content: ClipContent::Automation {
+                            automation: AutomationId(automation),
+                        },
+                    },
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .transport_set(windfall_ipc::TransportPatch {
+            mode: Some(PlayMode::Song),
+            ..Default::default()
+        })
+        .unwrap();
+    rig.session.transport_play().unwrap();
+    let mut out = [0.0; 960];
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| rig.processor.process(&mut out)),
+        0
+    );
+    assert_eq!(manager.runtime.fixture_parameter(target, id), Some(0.75));
+    let token = manager.runtime.selected_token(target).unwrap();
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id,
+                value: 0.75,
+            },
+            None,
+        )
+        .unwrap();
+    // The installed value equals the automation cache: apply_plugin must
+    // adopt its document generation even though set_param is deduplicated.
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+        0
+    );
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| {
+            for _ in 0..10 {
+                rig.processor.process(&mut out);
+            }
+        }),
+        0
+    );
+    assert_eq!(manager.runtime.fixture_parameter(target, id), Some(0.25));
+    assert!(
+        rig.session
+            .controller()
+            .frame()
+            .automated
+            .iter()
+            .any(|p| p.automation == AutomationId(automation) && p.value == range.normalized(0.25))
+    );
+    let runtime = manager.runtime.clone();
+    let project = rig.project();
+    let task = std::thread::spawn(move || runtime.capture(project));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+            0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let captured = task.join().unwrap().unwrap();
+    let value = |p: &Project| {
+        p.plugin(target)
+            .unwrap()
+            .parameters
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .value
+    };
+    assert_eq!(
+        value(&captured),
+        0.25,
+        "{vst3}: deduplicated document suppressed newer automation"
+    );
+    assert_eq!(manager.runtime.selected_token(target), Some(token));
+    let save_path = rig.file("deduplicated.windfall");
+    let path = save_path.clone();
+    let task = rig
+        .session
+        .background(move |session| session.project_save(Some(&path)));
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+            0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    task.join().unwrap().unwrap();
+    assert_eq!(
+        value(&windfall_project::file::load(Path::new(&save_path)).unwrap()),
+        0.25
+    );
+    let options = ExportOptions {
+        path: rig.file("deduplicated.wav"),
+        format: ExportFormat::Wav,
+        bit_depth: BitDepth::Float32,
+        sample_rate: SAMPLE_RATE,
+        mode: PlayMode::Pattern,
+        tail_secs: 0.0,
+        ..Default::default()
+    };
+    let export = options.clone();
+    let task = rig
+        .session
+        .background(move |session| session.export_audio(export));
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+            0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    task.join().unwrap().unwrap();
+    assert_eq!(rig.events.wait_for_export().error, None);
+    assert_eq!(manager.runtime.selected_token(target), Some(token));
+    let exported = windfall_codec::decode_file(&options.path).unwrap();
+    rig.session.project_open(&save_path).unwrap();
+    rig.run(256);
+    assert_eq!(value(&rig.project()), 0.25);
+    assert_eq!(manager.runtime.fixture_parameter(target, id), Some(0.25));
+    rig.events.take();
+    let reference = ExportOptions {
+        path: rig.file("reopened.wav"),
+        ..options
+    };
+    let export = reference.clone();
+    let task = rig
+        .session
+        .background(move |session| session.export_audio(export));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !task.is_finished() {
+        assert!(std::time::Instant::now() < deadline);
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [])),
+            0
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    task.join().unwrap().unwrap();
+    assert_eq!(rig.events.wait_for_export().error, None);
+    assert_eq!(
+        exported.samples(),
+        windfall_codec::decode_file(&reference.path)
+            .unwrap()
+            .samples()
+    );
+}
+
+#[test]
 fn saturated_clap_parameter_edit_retries_without_replacing_playback_or_allocating() {
     let mut rig = Rig::new();
     let (manager, path) = manager(&rig);

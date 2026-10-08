@@ -11,6 +11,12 @@ use vst3::{Class, ComPtr, ComWrapper, Steinberg::*};
 // the same held note twice without another admitted note-on in between.
 const NOTE_CAPACITY: usize = 16 * 128 + 2 * EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY;
 
+pub(super) const PENDING_PARAMETER_CAPACITY: usize = 256;
+// All three input sources may be disjoint. Reserved instrument events cannot
+// contain parameters. Neither points nor COM queues grow during a callback.
+const INPUT_PARAMETER_CAPACITY: usize =
+    PENDING_PARAMETER_CAPACITY + crate::instance::QUEUE_CAPACITY + EVENT_CAPACITY;
+
 #[derive(Clone, Copy)]
 struct Point {
     offset: i32,
@@ -24,7 +30,7 @@ struct Arena {
     dropped: Cell<u32>,
 }
 impl Arena {
-    fn new() -> Rc<Self> {
+    fn new(capacity: usize) -> Rc<Self> {
         Rc::new(Self {
             points: UnsafeCell::new(vec![
                 Point {
@@ -32,7 +38,7 @@ impl Arena {
                     value: 0.0,
                     next: None
                 };
-                EVENT_CAPACITY
+                capacity
             ]),
             used: Cell::new(0),
             dropped: Cell::new(0),
@@ -106,7 +112,7 @@ impl IParamValueQueueTrait for Queue {
             }
         }
         let at = self.arena.used.get();
-        if at == EVENT_CAPACITY {
+        if at == points.len() {
             self.arena.drop_point();
             return kResultFalse;
         }
@@ -143,8 +149,17 @@ pub(super) struct Changes {
 }
 impl Changes {
     pub fn new() -> ComWrapper<Self> {
-        let arena = Arena::new();
-        let queues = (0..EVENT_CAPACITY)
+        Self::with_capacity(EVENT_CAPACITY, EVENT_CAPACITY)
+    }
+    pub fn input(parameter_count: usize) -> ComWrapper<Self> {
+        Self::with_capacity(
+            INPUT_PARAMETER_CAPACITY,
+            parameter_count.min(INPUT_PARAMETER_CAPACITY),
+        )
+    }
+    fn with_capacity(points: usize, queues: usize) -> ComWrapper<Self> {
+        let arena = Arena::new(points);
+        let queues = (0..queues)
             .map(|_| {
                 let queue = ComWrapper::new(Queue {
                     id: Cell::new(0),
@@ -173,13 +188,29 @@ impl Changes {
         self.arena.used.set(0);
         self.arena.dropped.set(0);
     }
-    pub fn push(&self, id: u32, offset: u32, value: f64) {
+    pub fn push(&self, id: u32, offset: u32, value: f64) -> bool {
         let mut index = 0;
+        let before = self.dropped();
         // SAFETY: synchronous call on exclusively owned COM objects and valid args.
         unsafe {
             let queue = self.addParameterData(&id, &mut index);
-            if let Some(queue) = vst3::ComRef::from_raw(queue) {
-                queue.addPoint(offset as i32, value, &mut index);
+            if let Some(queue) = vst3::ComRef::from_raw(queue)
+                && queue.addPoint(offset as i32, value, &mut index) == kResultOk
+            {
+                return true;
+            }
+        }
+        if self.dropped() == before {
+            self.arena.drop_point();
+        }
+        false
+    }
+    pub fn visit_final(&self, out: &mut dyn FnMut(u32, f64)) {
+        // SAFETY: caller owns the fixed arena; the SDK process has returned.
+        let points = unsafe { &*self.arena.points.get() };
+        for slot in self.queues.iter().take(self.active.get()) {
+            if let Some(last) = slot.queue.last.get() {
+                out(slot.queue.id.get(), points[last].value);
             }
         }
     }
@@ -327,6 +358,26 @@ impl IEventListTrait for Events {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn all_input_sources_fit_without_coalescing_or_growing() {
+        assert_eq!(INPUT_PARAMETER_CAPACITY, 5376);
+        let changes = Changes::input(INPUT_PARAMETER_CAPACITY + 1);
+        for id in 0..INPUT_PARAMETER_CAPACITY {
+            assert!(changes.push(id as u32, id as u32, 0.5));
+        }
+        assert_eq!(changes.dropped(), 0);
+        assert!(!changes.push(INPUT_PARAMETER_CAPACITY as u32, 0, 0.75));
+        assert_eq!(changes.dropped(), 1);
+        changes.clear();
+        for time in 0..INPUT_PARAMETER_CAPACITY {
+            assert!(changes.push(7, time as u32, 0.5));
+        }
+        assert!(!changes.push(7, INPUT_PARAMETER_CAPACITY as u32, 0.75));
+        let mut final_value = None;
+        changes.visit_final(&mut |_, value| final_value = Some(value));
+        assert_eq!(final_value, Some(0.5), "refusal cannot replace readback");
+        assert_eq!(changes.dropped(), 1);
+    }
     #[test]
     fn parameter_queues_preserve_offsets_and_enforce_capacity() {
         let changes = Changes::new();

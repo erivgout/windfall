@@ -423,6 +423,9 @@ impl InstrumentUnit {
     }
 
     pub fn apply_plugin(&mut self, binding: &windfall_project::PluginBinding) {
+        if let Some(Some(unit)) = &mut self.external {
+            unit.adopt_parameters(&binding.parameters);
+        }
         for (index, param) in binding.parameters.iter().enumerate() {
             self.automate(index, param.value);
         }
