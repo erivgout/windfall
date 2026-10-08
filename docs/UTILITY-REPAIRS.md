@@ -710,3 +710,83 @@ Existing independent varying-branch/topology boundaries and the one-second
 fallback remain; the detached native-owner loss is fixed without a new
 exception. Hardware listening, device deadline measurements and combined
 shared-WASM parity are not claimed.
+
+## CI portability: DC step reference (95a0c48f source)
+
+CI run `37740818762`, pinned to
+`95a0c48f588c21a0378707ff0decb6d4dc2eb24f`, passed strict Clippy on macOS
+and Ubuntu but failed
+`utilities::dc_rejection_cutoff_and_step_response_are_rate_independent`.
+Both actual remote logs report **0.37561557** measured versus **0.37561253**
+expected at the unchanged **2e-6** bound, with **151 passed, one failed and
+three ignored**. The inspected logs are
+`C:/Users/ewhee/AppData/Local/Temp/windfall-95a-macos-ci.log` (failure around
+2050-2064) and `windfall-95a-ubuntu-ci.log` (around 2448-2460). These are
+executed remote failures; no local macOS or Ubuntu execution is claimed.
+
+Before source edits, the unchanged exact test passed on Windows with the
+existing private Cargo cache. A bounded standalone native diagnostic then
+reproduced the failing reference mechanism, using the existing worktree-local
+DSP library and only nine rate/cutoff combinations. At 44.1 kHz, 1 Hz and sample
+441, the f32 pole is **0.99985754**, bits `0x3f7ff6aa`. Explicit f32
+exponentiation by squaring yields **0.37561253**, exactly the remote expected
+value. The actual processor yields **0.37561557**, while f64 exponentiation
+of that same quantized pole also yields **0.37561557**. The diagnostic's
+unchanged 2e-6 comparison failed with error **3.0398369e-6** and native Rust
+assertion exit 101. It also exposed f32-squaring reference errors above the
+bound at 44.1 kHz/5 Hz and 96 kHz/1 Hz. Windows' native f32 `powi` gave
+**0.37561554** for the first case, explaining why the old test passed locally.
+This matches a platform-dependent exponentiation rounding mechanism; remote
+compiler disassembly and a particular remote libm implementation were not
+inspected. The DSP already maintains f64 state and is unchanged.
+
+The corrected closed-form step reference promotes the intended f32 coefficient
+to f64 before exponentiation, and promotes the actual f32 input amplitude
+before its normalization. It compares the final output at the original
+**2e-6** bound. All nine measured Windows outputs match this f64 reference
+after its final f32 conversion. No recurrence copied from the processor is
+used as the committed oracle.
+
+A separate physical response check computes the ideal pole
+`r = exp(-2π cutoff / rate)` entirely in f64. Coefficient quantization must be
+accounted for: the 96 kHz/5 Hz step differs from that ideal by approximately
+**7.24e-6**, despite matching the intended quantized transfer. For the tested
+poles in `[0.5, 1)`, one f32 coefficient ULP is exactly `f32::EPSILON / 2`.
+The test explicitly bounds the intended f32 pole's deviation from the ideal
+by this quantum. It then propagates the quantum through the monotone analytic
+step `S(r) = x (1+r)/2 r^n`, using
+`max(S(r+ULP)-S(r), S(r)-S(r-ULP))` as the coefficient error budget. The
+original **2e-6** state/output bound remains after this separately derived
+coefficient contribution. This additional assertion neither substitutes a
+looser bound for the quantized transfer nor permits unbounded coefficient
+error.
+
+The original first-sample **1e-6**, two-second DC rejection **1e-5**, physical
+cutoff measurement **0.02 dB** around -3.0103 dB, zero latency and exact
+declared-tail silence assertions are preserved. The cutoff measurement still
+uses independently generated f64 sinusoidal phase and f64 RMS. No test is
+skipped, and the existing ignored timing benchmark is unchanged.
+
+Completed fixed-source Windows checks use
+`target/utility-repairs-native`, `target/utility-repairs-bindings`,
+`source scripts/msvc-env.sh`, `CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=1`
+and one Cargo process:
+
+- `cargo test -p windfall-dsp --test dsp utilities::dc_rejection_cutoff_and_step_response_are_rate_independent --locked -- --nocapture`:
+  **one passed**, covering all nine rate/cutoff combinations.
+- `cargo test -p windfall-dsp --test dsp utilities:: --locked --quiet`:
+  **18 passed**, one existing timing benchmark ignored.
+- `cargo test -p windfall-dsp --test dsp utility_repairs:: --locked --quiet`:
+  **nine passed**. The two final suites cover **27 distinct tests**; the
+  focused one-test run is not counted again.
+- `cargo clippy -p windfall-dsp --all-targets --locked -- -D warnings` and
+  `cargo fmt --all --check`: **passed**.
+- Prettier on this repair document and `git diff --check`: **passed**.
+
+Only the exact existing utility test's numerical reference/physical error
+accounting and this evidence document change. Product DSP, engine lifecycle,
+E1 tests, generated artifacts and prior utility contracts are untouched.
+The incremental source-only repair is atop immutable 6d80370e; no parent
+import, amendment, push or release is included. Parent-owned CI must rerun
+the corrected test on macOS and Ubuntu before either platform is reported
+GREEN. Hardware, device deadlines and combined parity are not claimed.

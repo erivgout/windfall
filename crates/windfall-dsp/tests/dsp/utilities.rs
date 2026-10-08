@@ -163,7 +163,29 @@ fn dc_rejection_cutoff_and_step_response_are_rate_independent() {
             let pole = (-std::f32::consts::TAU * cutoff_hz / rate).exp();
             close(l[0], 0.4 * (1.0 + pole) * 0.5, 1e-6);
             let at = (rate * 0.01) as usize;
-            close(l[at], 0.4 * (1.0 + pole) * 0.5 * pole.powi(at as i32), 2e-6);
+            // The coefficient is f32, but the filter's state is f64. An f32
+            // powi can accumulate rounding in repeated squaring, exceeding
+            // this bound even when the actual recurrence is accurate.
+            let step = |pole: f64| f64::from(0.4_f32) * (1.0 + pole) * 0.5 * pole.powi(at as i32);
+            close(l[at], step(f64::from(pole)) as f32, 2e-6);
+
+            // Independently check the physical f64 transfer. These poles
+            // lie in [0.5, 1), where one f32 coefficient ULP is EPSILON/2.
+            // Propagate that quantum through the monotone closed-form step;
+            // it bounds coefficient rounding/exp precision, not state error.
+            let ideal_pole =
+                (-std::f64::consts::TAU * f64::from(cutoff_hz) / f64::from(rate)).exp();
+            let quantum = f64::from(f32::EPSILON) * 0.5;
+            assert!((0.5..1.0).contains(&ideal_pole));
+            assert!((f64::from(pole) - ideal_pole).abs() <= quantum);
+            let ideal_step = step(ideal_pole);
+            let coefficient_error = (step(ideal_pole + quantum) - ideal_step)
+                .max(ideal_step - step(ideal_pole - quantum));
+            assert!(
+                (f64::from(l[at]) - ideal_step).abs() <= coefficient_error + 2e-6,
+                "{rate}/{cutoff_hz}: physical step {}, expected {ideal_step}, coefficient budget {coefficient_error}",
+                l[at]
+            );
             assert!(
                 l[frames - 1].abs() < 1e-5 && r[frames - 1].abs() < 1e-5,
                 "{rate}/{cutoff_hz}"
