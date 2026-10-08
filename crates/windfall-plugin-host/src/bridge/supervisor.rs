@@ -2,7 +2,7 @@
 
 use super::{
     adapter::{Audio, ParameterSpec, Signals},
-    control::{ControlParameter, Decoder, Message, Owner, Packet},
+    control::{ControlParameter, Decoder, Message, Owner, Packet, ReadStep},
     mapping::Mapping,
     protocol::{Config, Identity},
     slots::Region,
@@ -300,6 +300,12 @@ impl Drop for Process {
 /// an already negotiated, allocated audio half. Production helper discovery is
 /// the desktop executable, not a Cargo target lookup.
 pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
+    // Supported capability, no clamp: reject before file/listener/map/spawn IO.
+    super::auth::check_startup_timeout(options.startup_timeout)
+        .map_err(|error| error.to_string())?;
+    let deadline = Instant::now()
+        .checked_add(options.startup_timeout)
+        .ok_or("invalid helper startup deadline")?;
     options
         .config
         .validate()
@@ -348,12 +354,14 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let key = super::auth::Key::generate().map_err(|error| error.to_string())?;
-    let deadline = Instant::now()
-        .checked_add(options.startup_timeout)
-        .ok_or("invalid helper startup deadline")?;
     let mut process = Process(command.spawn().map_err(|error| error.to_string())?);
-    key.write_to_child(&mut process.0, identity.session)
-        .map_err(|error| error.to_string())?;
+    key.write_to_child(
+        &mut process.0,
+        identity.session,
+        deadline,
+        options.cancelled.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
     let mut socket = super::auth::accept(
         &listener,
         &mut process.0,
@@ -552,11 +560,19 @@ fn wait_reply(
             process.reap()?;
             return Err("audio helper control deadline exceeded; process terminated".into());
         }
-        if let Some(packet) = decoder.poll(socket).map_err(|error| error.to_string())? {
+        let step = decoder
+            .poll_step(socket)
+            .map_err(|error| error.to_string())?;
+        // A bounded read/decode can cross the deadline or cancellation edge.
+        if Instant::now() >= deadline || cancellation.requested() {
+            process.reap()?;
+            return Err("audio helper control deadline exceeded; process terminated".into());
+        }
+        if let ReadStep::Packet(packet) = step {
             if packet.request != request || packet.owner != owner {
                 return Err("stale audio helper control response".into());
             }
-            return Ok(packet);
+            return Ok(*packet);
         }
         if process
             .0
@@ -566,7 +582,9 @@ fn wait_reply(
         {
             return Err("audio helper process exited".into());
         }
-        std::thread::sleep(Duration::from_micros(200));
+        if matches!(step, ReadStep::Idle) {
+            std::thread::sleep(Duration::from_micros(200));
+        }
     }
 }
 struct Supervision {

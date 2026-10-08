@@ -136,9 +136,10 @@ A bounded length-prefixed control protocol over an authenticated loopback TCP
 connection is separate from mapped audio (native stdout cannot corrupt it).
 Before any Load/path/state/mapping/owner metadata is sent, the supervisor
 creates a 32-byte BCryptGenRandom system-preferred key. A new private child
-stdin pipe carries that key plus the eight-byte expected session; neither key
-nor owner metadata is placed in CLI/environment/logs. The child sends a fixed
-40-byte Hello: WFAH magic (4), Hello version1 (4 LE), nonce (32). Malformed,
+stdin pipe carries a56-byte WFAP/version1 record: magic4, version4, key32,
+expected session8 and remaining startup milliseconds8 (integers little endian).
+No key/session/budget metadata is placed in CLI/environment/logs. The child
+sends a fixed40-byte Hello: WFAH magic4, Hello version2 (4 LE), nonce32. Malformed,
 wrong-version/key and stalled clients receive zero metadata and are closed.
 At most eight candidates are polled without blocking; a full stalled set
 releases its oldest candidate for a newcomer. Candidate age is 50 ms, and the
@@ -146,10 +147,14 @@ whole startup retains deadline/cancellation/child-exit bounds. RNG, pipe or
 authentication failure fails closed and the child owner reaps on unwinding.
 This prevents an unrelated first loopback client from obtaining the launch
 payload; it is not a security sandbox or privileged-adversary defense.
-Hello version1 and control framing version1 are distinct from mapping ABI2;
+Hello version2, private bootstrap version1 and control framing version1 are
+distinct from mapping ABI2;
 none has a downgrade path.
 The 24-byte little-endian frame prefix bounds metadata to 1 MiB and native
-state to the existing 256 MiB host limit. Partial reads retain framing state;
+state to256MiB including the WFPS wrapper. Native save can succeed at its
+raw256MiB cap while exceeding this complete-container wire budget; both
+capture paths return a recoverable control error before reply framing.
+Partial reads retain framing state;
 there is one reader and no abandoned blocked reader thread per timeout.
 Load, state capture/restore, editor refusal, and shutdown carry request IDs and
 the full owner identity; state bytes use the existing checked WFPS/VST3
@@ -260,7 +265,7 @@ Current Windows headless evidence:
   preallocated 37-frame stereo delay. Healthy helper audio and delayed dry
   fallback after confirmed termination both begin at **165 frames for B=64**
   and **549 for B=256**, exactly matching the adapter's latency report. VST3
-  class 10 follows the unchanged original classes 0â€“9; scanner count is 18 (classes11–17 add process hang, held-key probe and fault fixtures).
+  class 10 follows the unchanged original classes 0â€“9; scanner count is 18 (classes11-17 add process hang, held-key probe and fault fixtures).
   Engine graph PDC/routing/dry-wet integration remains unverified until wiring.
 - Before any native DSP block, capture retains pending parameter intent without
   claiming DSP acknowledgement. CLAP stays active: its opaque state retains
@@ -370,9 +375,9 @@ claim, licensed-corpus result, native editor parity or other-OS claim follows.
 
 ## Capture and output-fault followup
 
-After the fixed R1 response ba61a255, new CLAP bridge IDs and VST3 classes13–17
+After the fixed R1 response ba61a255, new CLAP bridge IDs and VST3 classes13-17
 append capture-exit, capture-hang, partial-state refusal, unsupported latency
-and output-event flood. Previous IDs/classes0–12 retain their behavior.
+and output-event flood. Previous IDs/classes0-12 retain their behavior.
 Capture faults trigger only after actual gain0.75 DSP so gain0.5 can establish
 a real last validated state first. Both formats preserve that cached state on
 exit/hang/refusal; permanent capture hangs are terminated under a100ms control
@@ -464,3 +469,72 @@ git diff --check pass for delivery. Production routing, engine
 PDC/routing/export/stems, save/undo/replacement/recording integration, packaged
 installer discovery, licensed Windows corpus, native editors and other OSes
 remain open acceptance gates.
+
+## R3 Load and native-wrapper boundary response
+
+Immutable e6696dd3 source review raised two counterexamples, both reproduced
+with compiled real-process RED before repair. A valid48MiB native state with
+opaque inversion outside the Load parameter table failed at5.11s despite a
+15s caller startup deadline. Decoder read at most8KiB but the old helper slept
+1ms after each successful incomplete read and kept a separate fixed5s limit.
+The progress-aware decoder now performs one bounded8KiB read/decode step,
+checks deadlines before and after the step, drains available bytes without
+sleep, and sleeps only on no-progress WouldBlock. EOF/truncated input fails,
+never loops as idle. The control supervisor also drains bounded progress with
+its cancellation/child-exit/deadline checks intact. No callback waits/IO/clock
+or processing acknowledgement is added. Native48MiB launch now completes
+healthy DSP/state capture/restore, while the16MiB case remains green.
+
+Supported startup capability is a positive Duration no greater than60seconds.
+Invalid/oversized budgets are rejected before file/listener/map/spawn/native
+side effects; no silent clamp. Parent's absolute deadline starts at launch and
+remains authoritative across spawn, private pipe transfer, authentication,
+Load retries and Ready. The fixed56B private record carries WFAP/version1,
+key32/session8/remaining-ms8. Remaining budget is derived at actual pipe write
+with checked ceiling conversion: a positive submillisecond remainder becomes
+1ms, and parent absolute expiry still wins. Child validates nonzero<=60000ms,
+starts its finite local origin, and bounds connection/Hello/Load from it.
+Hello2 rejects oldHello1 before any Load disclosure; old40B bootstrap,
+unknown-version/zero/over-limit records fail closed. Mapping ABI2/WFCB1 remain
+unchanged. No downgrade, CLI/environment metadata, new dependency, facade or
+state-format change follows. Launch key is cleared before native loading.
+Units cover zero/submillisecond/exact60s/>60s/conversion overflow, expired and
+cancelled pre-pipe writes sending nothing, private versions and oldHello1.
+The real unrelated-client case includes eight stalled sockets, a wrong-key
+Hello2 and an oldHello1; none receives metadata. Deadline/cancellation still
+reclaims the failed startup mapping and child on the parent control owner.
+
+New CLAP bridge-state-boundary and appended VST3 class18 stream exactly the
+existing native raw256MiB cap using bounded8KiB buffers (no giant repo asset).
+VST3 component supplies MAX-24, ordinary controller8 plus native VST2 header16
+completes the raw cap; prior classes0-17/IDs and R4 point/drop behavior stay
+unchanged. Each successful native save adds WFPS6, exceeding the wire cap.
+Both CLAP and VST3 compiled RED losing the healthy owner on packet validation;
+GREEN emits the explicit wrapper-budget control error, retains cached bytes,
+keeps the same PID, and resumes actual healthy DSP and native capture. VST3
+still reactivates after failed capture. Warm initial DSP makes the comparison
+independent of inactive pending-parameter container differences. Checked
+full-frame size/header tests cover raw payloads below/at/above MAX-6 and the
+full nativeMAX case, metadata maximum, oversized lengths and arithmetic bounds
+without allocating near-limit unit payloads. Opaque semantic validity remains
+outside this byte/stream acceptance proof.
+
+This response preserves all earlier R1/R2 regressions. The R2 old single
+16MiB write_all still passed actual Windows even with SO_SNDBUF4096; its RED
+remains scripted partial/WouldBlock mechanism evidence. R3's48MiB timeout is
+an actual native RED and is a separate finding. Final scoped checks on this
+response passed: host lib52 (including28 bridge units), explicit small-limit
+native CLAP state unit1, real bridge process27, realtime20, parameter/state11,
+scanner2, strict all-feature/all-target host Clippy, host/full fixture formatting
+and whitespace checks. The process suite's one ignored entry is the child role
+invoked by the authentication regression. Final16/48MiB launches recorded
+1030/1192 WouldBlock retries; the complete process suite finished in7.08s.
+The callback guard recorded320 calls, zero alloc/realloc/free, max3us/average1us
+on this busy headless Windows machine; earlier same-source runs reached13us,
+so these observations do not establish a physical callback deadline bound.
+Control decoding boxes completed packets off realtime to satisfy strict Clippy;
+shared audio payload/slot ownership and callback code are unchanged.
+Production routing remains closed
+pending independent leaf acceptance; engine/document integration, packaged
+installer, licensed Windows corpus, native editors/other OSes and hardware
+acceptance remain open.

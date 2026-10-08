@@ -1,6 +1,8 @@
 //! Shared deterministic DSP for newly appended bridge fixtures.
 
 pub(crate) const DELAY: usize = 37;
+/// Native cap exercised with valid8KiB stream chunks, never persisted assets.
+pub(crate) const STATE_LIMIT: usize = 256 << 20;
 pub(crate) fn hang() -> ! {
     loop {
         std::thread::park();

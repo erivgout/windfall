@@ -401,7 +401,8 @@ unsafe extern "C" fn process(
             | Kind::BridgeInvalidStream
             | Kind::BridgeBadLatency
             | Kind::BridgeEventFlood
-            | Kind::BridgeIgnoredStreamError => process_bridge_delayed(plugin, audio, block),
+            | Kind::BridgeIgnoredStreamError
+            | Kind::BridgeStateBoundary => process_bridge_delayed(plugin, audio, block),
             Kind::BridgeNoteProbe => process_bridge_note_probe(audio, block),
             Kind::BridgeProcessHang => crate::bridge_behaviors::hang(),
             Kind::Sine | Kind::MidiSine => process_sine(plugin, audio, block),

@@ -439,11 +439,14 @@ fn auth_impostor_client_process() {
     let mut wrong = std::net::TcpStream::connect(&endpoint).unwrap();
     let mut hello = [0u8; 40];
     hello[..4].copy_from_slice(b"WFAH");
-    hello[4..8].copy_from_slice(&1u32.to_le_bytes());
+    hello[4..8].copy_from_slice(&2u32.to_le_bytes());
     wrong.write_all(&hello).unwrap();
+    let mut old = std::net::TcpStream::connect(&endpoint).unwrap();
+    hello[4..8].copy_from_slice(&1u32.to_le_bytes());
+    old.write_all(&hello).unwrap();
     println!("CONNECTED");
     std::io::stdout().flush().unwrap();
-    for socket in stalled.iter_mut().chain(std::iter::once(&mut wrong)) {
+    for socket in stalled.iter_mut().chain([&mut wrong, &mut old]) {
         socket
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
@@ -524,8 +527,13 @@ fn unrelated_first_and_stalled_clients_receive_no_load_before_real_child_authent
             .spawn()
             .unwrap(),
     );
-    key.write_to_child(&mut child.0, options.config.identity.session)
-        .unwrap();
+    key.write_to_child(
+        &mut child.0,
+        options.config.identity.session,
+        Instant::now() + Duration::from_secs(5),
+        None,
+    )
+    .unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut socket = auth::accept(&listener, &mut child.0, &key, deadline, None).unwrap();
     socket.set_nonblocking(false).unwrap();
@@ -611,6 +619,93 @@ fn native_output_event_saturation_is_visible_and_cannot_acknowledge_desired_cont
             audio.desired_generation(),
             "accepted desired control did not recover after native flood"
         );
+        assert!(!control.status().failed);
+        assert!(control.terminate().reaped);
+    }
+}
+
+#[test]
+fn successful_native_state_at_the_raw_limit_refuses_capture_without_losing_the_owner() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            "org.windfall.test.bridge-state-boundary".to_owned()
+        } else {
+            vst_id(18)
+        };
+        let mut settings = options(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_secs(5),
+        );
+        settings.offline = true;
+        let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+        let process_id = control.status().process_id;
+        audio
+            .process_offline(
+                &mut [0.25; 512],
+                &mut [0.25; 512],
+                Instant::now() + Duration::from_secs(2),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        let old = control
+            .capture(
+                1,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        assert!(audio.set_param(7, 0.75));
+        audio
+            .process_offline(
+                &mut [0.25; 512],
+                &mut [0.25; 512],
+                Instant::now() + Duration::from_secs(2),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        let pending = [ParameterSpec {
+            value: 0.75,
+            ..gain(format)
+        }];
+        let result = control.capture(
+            1,
+            audio.desired_generation(),
+            &pending,
+            Duration::from_secs(5),
+        );
+        assert!(
+            result.is_err(),
+            "full raw payload cannot fit its WFPS wrapper"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .contains("wrapper exceeds bridge control budget")
+        );
+        assert_eq!(control.last_valid_state().unwrap().state, old.state);
+        assert!(audio.set_param(7, 0.5));
+        audio
+            .process_offline(
+                &mut [0.25; 512],
+                &mut [0.25; 512],
+                Instant::now() + Duration::from_secs(2),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .expect("successful native save over wrapped budget must retain healthy owner");
+        let healthy = control
+            .capture(
+                1,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        assert_eq!(healthy.state, old.state);
+        assert_eq!(control.status().process_id, process_id);
         assert!(!control.status().failed);
         assert!(control.terminate().reaped);
     }
@@ -836,7 +931,14 @@ fn wrong_child_key_and_startup_cancellation_fail_closed_with_bounded_reap() {
             .spawn()
             .unwrap(),
     );
-    wrong.write_to_child(&mut child.0, 7).unwrap();
+    wrong
+        .write_to_child(
+            &mut child.0,
+            7,
+            Instant::now() + Duration::from_secs(5),
+            None,
+        )
+        .unwrap();
     let start = Instant::now();
     assert!(
         auth::accept(
@@ -1006,13 +1108,22 @@ fn idle_native_hang_is_reaped_while_callbacks_keep_turning_over_ready_slots() {
 
 #[test]
 fn authenticated_production_launch_accepts_large_valid_native_state_under_backpressure() {
+    large_native_state_launch(16 << 20, Duration::from_secs(5));
+}
+
+#[test]
+fn authenticated_production_launch_drains_48_mib_with_the_callers_startup_budget() {
+    large_native_state_launch(48 << 20, Duration::from_secs(15));
+}
+
+fn large_native_state_launch(bytes: usize, startup_timeout: Duration) {
     let host = PluginHost::windfall();
     let module = host.load(&fixture("clap")).unwrap();
     let mut native = module.create(common::GAIN).unwrap();
     assert!(native.set_param(7, 0.625));
     assert!(native.set_param(9, 1.0)); // Opaque state owns inversion; Load table only sets gain.
     let mut state = native.save_state().unwrap().into_bytes();
-    state.resize(16 << 20, 0); // Fixture accepts trailing opaque native bytes.
+    state.resize(bytes, 0); // Fixture accepts trailing opaque native bytes.
     native
         .load_state(&PluginState::from_bytes(state.clone()))
         .unwrap();
@@ -1029,6 +1140,7 @@ fn authenticated_production_launch_accepts_large_valid_native_state_under_backpr
         Duration::from_secs(2),
     );
     settings.state = state;
+    settings.startup_timeout = startup_timeout;
     settings.offline = true;
     settings.helper = PathBuf::from(env!("CARGO_BIN_EXE_windfall-plugin-audio-backpressure"));
     // Actual production launch, with the native helper paused before Load reads.
@@ -1063,6 +1175,39 @@ fn authenticated_production_launch_accepts_large_valid_native_state_under_backpr
     assert_eq!(native.param_value(7), Some(0.625));
     assert_eq!(native.param_value(9), Some(1.0));
     assert!(control.terminate().reaped);
+}
+
+#[test]
+fn unsupported_startup_budget_is_rejected_before_paths_or_mapping_resources() {
+    for duration in [
+        Duration::ZERO,
+        Duration::from_secs(60) + Duration::from_nanos(1),
+        Duration::MAX,
+    ] {
+        let mut settings = options(
+            "clap",
+            common::GAIN,
+            Kind::Effect,
+            vec![gain("clap")],
+            Duration::from_secs(2),
+        );
+        settings.startup_timeout = duration;
+        settings.plugin = PathBuf::from("missing-budget-probe.clap");
+        settings.helper = PathBuf::from("missing-budget-probe.exe");
+        let name = format!(
+            "Local\\Windfall-Audio-{:016x}-{:016x}",
+            settings.config.identity.session, settings.config.identity.token
+        );
+        let error = match supervisor::launch(settings) {
+            Ok(_) => panic!("unsupported startup budget launched"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("unsupported helper startup budget"),
+            "{error}"
+        );
+        assert!(windfall_plugin_host::bridge::mapping::Mapping::open(&name).is_err());
+    }
 }
 
 #[test]
