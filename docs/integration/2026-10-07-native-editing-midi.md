@@ -954,3 +954,120 @@ tracks implementation in progress: 68 done, 60 in progress, 212 todo and two
 exclusions out of 342. N4's startup-budget and wrapped-state repairs continue
 in its existing owner. Root is clean after checked commits; no new alpha,
 signature, installed bundle, full-project or hardware acceptance is claimed.
+
+## 2026-10-08 accepted foundations and active application integration
+
+E1's separate R4 standards and specification reviews are clean at composed
+`f7ae4583`. The specification reviewer independently executed all four
+project and six engine cases after fixed-source/fingerprint attribution;
+all nine restoration paths retain the independent serial reference and
+2e-6 bound. Both reviewers verified the matching 174-file binding inventory
+and committed simulator hashes. Their full reports and exact test provenance
+are in `2026-10-08-review-rounds.md`. The three rows remain in progress for
+physical listening/usability and other-platform evidence; clean headless
+reviews do not claim those external runs.
+
+M1 foundation R2 is clean on specification and has no documented standards
+breach; one predicate-duplication judgment is nonblocking. Root imported
+`89d5ffbd` as `44cc4d65` and `f006ce1b` as `2176fc31`. Fresh combined
+execution passed **37 analysis plus 145 codec tests** and two existing
+ffmpeg-only ignores. Strict analysis/codec/desktop all-target Clippy, fmt,
+simulator freshness and whitespace checks passed; process 48249 exited zero.
+The complete log is `windfall-root-m1-r1-composed-native.log`. This closes
+the review's older-codec-binary attribution gap. The same owner now has the
+exclusive additive Session/IPC/UI registration window for actual capture,
+review, checked batch installation and deferred retirement. The sole
+necessary lock change is the existing desktop package's analysis dependency
+reference; no dependency upgrade is authorized. No inference, app-level
+atomic installation or successful user-visible analysis is claimed yet.
+
+N4 leaf R4 standards/specification reviews are clean at `0741117f`, with all
+six R1, three R2 and two R3 findings included. Root imported only incremental
+`27dc8a4a`, `ba61a255`, `e6696dd3`, `0741117f` as `32bec1b5`,
+`aab5ad7e`, `6da1caeb`, `db577c8a`; local import merge `02072c81` was not
+used. Fresh root process 12871 exited zero: **117 distinct native tests**
+(52 host library, one explicit native CLAP writer, 27 process, 20 realtime,
+11 parameter/state, two scanner and four desktop R4 adoption roles). The
+complete log is `windfall-root-n4-r4-composed-native.log`. Strict host
+all-feature/all-target and desktop lib/tests Clippy, workspace/full-fixture
+formatting, freshness and whitespace checks passed. The callback guard
+recorded 320 calls with zero allocator/free calls; latest max 3us/average 1us
+is headless wall time, not a hardware deadline guarantee.
+
+The same N4 owner now has the narrow production facade/factory/manager/runtime
+and pre-Tauri helper-entry window, plus appended existing Session plugin
+integration tests. It cannot edit M1's central registration paths. Production
+routing, engine PDC/export/stems and document bridge barriers remain unproven
+until that next source is built and reviewed. Packaged helper discovery,
+licensed external corpus, native editors, other OSs and physical hardware
+remain acceptance gates. Process separation is crash containment, not a
+security sandbox.
+
+T1 R3 `a8e33f20`, directly atop `59c8f7f3`, is frozen outside root for new
+separate R4 reviews. Its owner reports closure of all five R3 findings,
+251 shared-WASM and 31 Rust/native cases with local validation artifacts
+restored. This freeze releases the central registration window to M1; any
+new overlapping timeline repair must be serialized by the parent. Full
+arrangements, per-pattern maps, links/groups/make-unique/scrub, WAV metadata
+and scalar snap/grid remain open.
+
+Rack note preview `ea2f36dd` is complete in its owned source, with 187 focused
+cases reported and 80 independently executed cases passing on the actual
+assigned WASM. Specification review is clean, but standards found missing
+action-registry entries and an innermost thumbnail context menu. Both are
+with the same owner; root integration and parity acceptance wait for the
+next independent round. E3 R1 found recoverable preparation allocation and
+signed-control units needing repair. Its owner is staging fallible histories
+and correcting descriptor units; no delay registry/editor acceptance is
+claimed. Release source/resource and metadata-bound SBOM repairs continue
+in the existing release owner.
+
+CI run 37740818762 at `95a0c48f` passed all three binding checks, parity and
+simulator freshness. Its macOS/Linux strict Clippy passes confirm the earlier
+allocator-module condition fix. Both Rust test jobs then failed the same
+DC step oracle: 0.37561557 actual versus 0.37561253 expected at tolerance 2e-6.
+The utility owner reproduced the exact mechanism in a Windows diagnostic:
+f32 exponentiation-by-squaring differs from the processor's f64 recurrence
+using its quantized pole. The unchanged-tolerance oracle correction and an
+independent physical-coefficient error budget are under verification; no
+product DSP change is proposed. CI UI passed 2529 cases but failed the old
+141-range inventory assertion after the eight E1 controls were generated.
+`47ba2b90` updates only the exact inventory to 149 and compares all 1341
+values with the original tolerances. Its nine focused automation tests and
+lint pass. A fresh complete remote run is still required; skipped app jobs
+and earlier failures are not described as successful platform builds.
+
+The matrix remains 342 rows: 68 done, 60 in progress, 212 todo and two explicit
+exclusions. All accepted source advances are development work beyond the
+immutable alpha installer. Private repository access and the pending WRITE
+invitation remain unchanged. No new release, installed bundle, signature,
+hardware result or full-project completion is claimed.
+
+The DC reference repair is now integrated as `dfe3dcc2` from source-only
+`c92d7f34`. It promotes analytic exponentiation to the processor's f64 state
+precision while keeping the quantized-reference tolerance at 2e-6. A separate
+physical f64 transfer assertion propagates one near-one f32 coefficient ULP;
+it does not replace the original state/output bound. Fresh combined root
+verification passed 18 utility and nine repair cases, with one existing
+optional timing ignore, strict DSP all-target Clippy, formatting, simulator
+freshness and whitespace checks. Process 57371 exited zero;
+`windfall-root-dc-ci-reference-green.log` is the full log. Corrected macOS/Linux
+CI still needs a new remote run.
+
+T1 R4 independently passed 28 attributable project/engine/session cases but
+found two remaining inherited paths: static Add meter/marker menu entries
+still bypass the registry, and native CLAP/VST3 bar fields assume the current
+meter began at tick zero. A 4/4-to-7/8 change at tick 4001 should start bar 3
+at 4001; the adapters instead report origin 3360. The same owner is fixing
+the menu and now has narrow ownership for explicit typed meter-segment origin
+and cumulative bar-index metadata and native adapter bar fields. N4 owns the
+corresponding runtime forwarding and verified versioned ABI3 byte codec.
+M1 retains the exclusive central Session/IPC registration window.
+
+N4 also has narrow control-thread render-error reporting windows: an
+independent private render provider/error latch, explicit buffered/streaming
+engine reports and desktop checks before staging finalization/commit. These
+prevent helper failure from being published as successful partial audio while
+preserving cancellation and sampler-error behavior. No such production
+integration is verified yet; the next source checkpoint must prove actual
+failed-prefix staging discard, healthy retries and untouched live owners.
