@@ -7,6 +7,10 @@ use windfall_project::TickRange;
 pub(super) const MAX_TIMELINE_REQUEST: u64 = (1_u64 << 53) - 1;
 
 impl Session {
+    pub(super) fn clear_timeline_play_owner(&self, _state: &State) {
+        self.inner.timeline_play_request.store(0, Ordering::Relaxed);
+    }
+
     fn check_timeline_guard(
         &self,
         state: &State,
@@ -48,7 +52,7 @@ impl Session {
         generation: u64,
         revision: u64,
     ) -> Result<TimelinePlaybackState, String> {
-        self.timeline_region_request(region, generation, revision, None)
+        self.timeline_region_request(region, generation, revision, None, None)
     }
 
     pub fn timeline_region_request(
@@ -57,6 +61,7 @@ impl Session {
         generation: u64,
         revision: u64,
         request: Option<u64>,
+        cancel: Option<TimelinePlaybackState>,
     ) -> Result<TimelinePlaybackState, String> {
         if let Some(range) = region {
             range.check()?;
@@ -73,10 +78,36 @@ impl Session {
                 "The timeline request is stale or exceeds the exact request limit.".to_owned(),
             );
         }
+        let mut stopped = false;
+        if let Some(cancel) = cancel {
+            if cancel.request == 0 || cancel.request > MAX_TIMELINE_REQUEST {
+                return Err(
+                    "The cancelled timeline request exceeds the exact request limit.".to_owned(),
+                );
+            }
+            // A delayed selected Play can commit while its cancellation query
+            // is awaiting IO. Reconcile only that exact still-owned action,
+            // atomically with the newer region and watermark. Ordinary
+            // transport explicitly relinquishes this ownership under State.
+            if self
+                .check_timeline_guard(&state, cancel, self.controller().timeline_region())
+                .is_ok()
+                && self.inner.timeline_play_request.load(Ordering::Relaxed) == cancel.request
+            {
+                if self.controller().transport().playing {
+                    self.controller().stop();
+                    stopped = true;
+                }
+                self.clear_timeline_play_owner(&state);
+            }
+        }
         self.controller().set_timeline_region(region)?;
         self.inner
             .timeline_request
             .store(request, Ordering::Relaxed);
+        if stopped {
+            self.sync_transport();
+        }
         Ok(TimelinePlaybackState {
             request,
             generation,
@@ -126,6 +157,9 @@ impl Session {
             return Err(reason.to_owned());
         }
         self.controller().play();
+        self.inner
+            .timeline_play_request
+            .store(guard.request, Ordering::Relaxed);
         Ok(self.sync_transport())
     }
 }

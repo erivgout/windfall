@@ -58,8 +58,11 @@ it("adds, edits, deletes and undoes meters/markers through accessible menus and 
   })
   const meter = useProjectStore.getState().project.playlist.timeline!.meters[0]
   expect(meter.tick).toBe(4001)
-  await user.click(screen.getByRole("button", { name: "Timeline" }))
-  await user.click(screen.getByRole("menuitem", { name: "7/8 at tick 4001" }))
+  screen.getByRole("button", { name: "Timeline" }).focus()
+  await user.keyboard("{ArrowDown}")
+  await user.click(
+    await screen.findByRole("menuitem", { name: "7/8 at tick 4001" })
+  )
   fireEvent.change(screen.getByLabelText("Song tick"), {
     target: { value: "4003" },
   })

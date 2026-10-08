@@ -63,8 +63,14 @@ export function createTauriBackend(): Backend {
   return {
     kind: "tauri",
     timelineState: () => call("timeline_state"),
-    timelineRegion: (region, generation, revision, request) =>
-      call("timeline_region", { region, generation, revision, request }),
+    timelineRegion: (region, generation, revision, request, cancel) =>
+      call("timeline_region", {
+        region,
+        generation,
+        revision,
+        request,
+        cancel,
+      }),
     midiHardwareState: () => call("midi_hardware_state"),
     midiHardwareRefresh: () => call("midi_hardware_refresh"),
     midiHardwareConfigure: (settings) =>

@@ -302,13 +302,9 @@ fn timeline_region(
     generation: u64,
     revision: u64,
     request: Option<u64>,
+    cancel: Option<windfall_ipc::TimelinePlaybackState>,
 ) -> Result<windfall_ipc::TimelinePlaybackState, String> {
-    match request {
-        Some(request) => {
-            session.timeline_region_request(region, generation, revision, Some(request))
-        }
-        None => session.timeline_region(region, generation, revision),
-    }
+    session.timeline_region_request(region, generation, revision, request, cancel)
 }
 
 #[tauri::command]

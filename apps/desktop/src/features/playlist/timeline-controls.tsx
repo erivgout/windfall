@@ -30,11 +30,15 @@ import { useProjectStore, dispatch } from "@/lib/store/project"
 import { MAX_SONG_TICKS } from "@/lib/units"
 import { backend } from "@/lib/ipc"
 import { useTransportStore } from "@/lib/store/transport"
-import { getProjectGeneration } from "@/lib/store/replaced"
+import {
+  getProjectGeneration,
+  useProjectGeneration,
+} from "@/lib/store/replaced"
 import { songTick } from "./ops"
 import type { GridMetrics } from "./metrics"
 import {
   editTimeline,
+  refreshTimelineState,
   useTimelineStore,
   type RulerTool,
   type TimelineEdit,
@@ -283,8 +287,14 @@ function TimelineEditor({
 
 export function TimelineControls({ metrics }: { metrics: GridMetrics }) {
   const timeline = useProjectStore((state) => state.project.playlist.timeline)
-  const { tool, selection, active, error, edit } = useTimelineStore()
+  const ready = useProjectStore((state) => state.ready)
+  const revision = useProjectStore((state) => state.revision)
+  const generation = useProjectGeneration()
+  const { tool, selection, active, hydrated, error, edit } = useTimelineStore()
   const choose = editTimeline
+  useEffect(() => {
+    if (ready) void refreshTimelineState()
+  }, [ready, revision, generation])
   useEffect(() => {
     let alive = true
     let reported = 0
@@ -386,7 +396,7 @@ export function TimelineControls({ metrics }: { metrics: GridMetrics }) {
                 Export selected region…
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={!selection && !active}
+                disabled={!selection && !active && hydrated}
                 onClick={() => void clearTimelineSelection()}
               >
                 Clear time selection

@@ -67,12 +67,15 @@ impl Session {
         {
             return Err(reason.to_owned());
         }
+        self.clear_timeline_play_owner(&state);
         self.controller().play();
         Ok(self.sync_transport())
     }
 
     /// Stops playback. The playhead returns to where playback started.
     pub fn transport_stop(&self) -> TransportState {
+        let state = self.state();
+        self.clear_timeline_play_owner(&state);
         self.controller().stop();
         self.sync_transport()
     }
@@ -91,6 +94,8 @@ impl Session {
         let Ok(_recording) = self.recording_idle() else {
             return;
         };
+        let state = self.state();
+        self.clear_timeline_play_owner(&state);
         self.controller().seek(tick);
     }
 
@@ -106,6 +111,7 @@ impl Session {
         {
             return Err(format!("pattern {} does not exist", pattern.0));
         }
+        self.clear_timeline_play_owner(&state);
         self.controller().set_transport(patch);
         Ok(self.sync_transport())
     }

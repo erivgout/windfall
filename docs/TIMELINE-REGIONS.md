@@ -286,3 +286,120 @@ independent and was not treated as an accepted prerequisite or edited here.
 These checks establish this source's behavior, not combined-root verification.
 All per-pattern, arrangements/grouping/linked-track/scrub, WAV marker metadata
 and scalar clip snap/grid follow-ups listed above remain open.
+
+## R2: native cancellation ownership and retained range recovery
+
+R2 reviewed immutable `e0809d0e1933e650667f379dbaf4687196d30865` and requested
+three P2 changes. This repair is incremental on that exact source, without
+parent imports or amendments:
+
+1. Clear invalidated UI continuations but awaited a canonical source query
+   before publishing its newer request. A pending guarded Play could commit
+   during that wait, then continue playing after the region was cleared.
+   Pending selection actions now carry an exact cancellation target through
+   newer intents. Native reconciles a still-owned guarded Play in the same
+   recording-before-State decision that changes the region and watermark.
+2. Refused or edit-cancelled Clear erased selection and `active` before native
+   acceptance. The UI now retains the canonical active range through a pending
+   replacement. A failed or edited continuation queries canonical state again,
+   restores the retained range and shows an inline retry error. A later newer
+   intent or project replacement suppresses old recovery and error replies.
+3. A new frontend had no knowledge of the native retained region, so Clear
+   was disabled or skipped publication. Playlist startup now hydrates canonical
+   region state after the document mirror is ready. Until it is known, Clear
+   stays available. Actual Clear and selection actions always query canonical
+   state; they do not depend on an optimistic `mayBeArmed` flag. A retained
+   range is shown and can be cleared after reload, including after selecting
+   another range. Delayed hydration cannot overwrite a newer request/intent.
+
+### One native decision, exact pending action ownership
+
+Session `Inner.timeline_play_request` is transient and initialized once.
+Every read/store is under the existing State mutex, like the publication
+watermark. Successful guarded Play records its exact positive JS-safe request.
+The optional cancellation guard carries generation, revision, request and
+region. Region publication first validates its own current canonical source,
+checked bounds and strictly newer safe watermark under recording-idle then
+State. It stops playback only if the cancellation guard still matches the
+canonical generation/revision/request/region **and** the successful guarded
+Play owner. If playback already ended, it relinquishes ownership without a
+second Stop, preserving the accepted automation/tail hold. All checks precede
+mutation; a recording, source, range or numeric refusal retains the owner,
+transport, region and watermark. The transport event follows the completed
+region/watermark decision.
+
+The UI records the target before publishing its region, so a delayed region
+reply does not lose request identity. It keeps `playPending` until a fresh Play
+reply completes the action. Cancelling an action whose Play committed during
+the source-query window stops that exact still-owned playback; if Clear wins
+first, the old Play guard refuses. A later valid Play owns a different request,
+so a stale cancellation cannot stop it. A settled selection Clear carries no
+cancellation target and preserves the existing ordinary playback semantics.
+On edit retry, the target keeps the original generation/request/range and uses
+the newly queried canonical revision. Native still checks the complete guard
+against its current State; no frontend cached epoch is a native authority.
+
+The approved four legacy transport hooks only relinquish ownership immediately
+before successful Play/Stop/Seek/Set mutation. Invalid pattern/empty-song Play
+and recording-refused Set/Seek retain ownership. Stop and Seek serialize with
+the existing State mutex; Seek keeps recording-before-State order, and Stop
+retains its existing availability during recording. Toggle delegates to these
+helpers. Caller inspection found the production command wrappers and Toggle;
+recording finalization/take attachment does not call these helpers under State.
+No controller, Plan, Rack, engine State, utility departure/adoption, callback,
+plugin, source, history or portable-file change is involved.
+
+UI `playback` holds the canonical region snapshot; `active` is its derived
+display state. View-only selection is still transient and may exist without a
+native region. Intent identity and entry frontend lifetime/revision reject late
+continuations, while native guards remain the mutation authority. Recovery
+does not send late compensating mutations, so it cannot clear a newer arm.
+Canonical request rebasing, exact-number checks and exhaustion without wrap
+remain unchanged, including actual module reloads near `2^53 - 1`.
+
+### Executed RED/GREEN
+
+Before production changes, the six new actual-function UI cases failed using
+fresh local shared WASM: the Play-during-Clear-query case ended playing with no
+region; recording refusal and both edit query/commit races hid `[17,839)`; both
+reloaded user-action paths retained the region after direct Clear or select-
+then-Clear. The native compiled regression held the query off State, committed
+guarded Play, confirmed audible processor output and then cleared the region;
+its stopped-playback assertion failed against the original function.
+
+GREEN covers the original R1 source/publication/set/seek/play New/Open races,
+out-of-order first arm/clear/newer arm, numeric exhaustion and module reload,
+plus R2 cancellation before/after native Play commit, committed-before-reply
+Play, each ordinary Play/Seek/Set/Stop supersession, settled selection Clear,
+later valid Play, recording/refusal retry, edit-query/commit recovery, delayed
+hydration and the accessible startup menu showing the retained range. The
+legacy export test observes the export action after selection's necessary
+canonical query, so it still proves absent export source guards/query. Meter
+CRUD also opens the menu with its accessible ArrowDown keyboard path after
+closing the editor, without a timing sleep or ambiguous toggle.
+
+Native tests prove audible cancellation, later valid playback, stale arm/clear
+refusal, all four ordinary supersessions, invalid legacy mutations preserving
+ownership, recording-before-State refusal, fresh retry after an edit and natural
+selected-end stop followed by a refused empty-song Play. Project/history/
+revision/dirty data stays unchanged by timeline decisions. The original R1
+stopped-skip test still proves held automation through audible fixed/automatic
+effect tails and 480-frame PDC with bit parity and zero callback allocation/free.
+Native WAV readback and cancellation destination/staging cleanup still pass.
+
+Final R2 checks passed: 248 shared-WASM UI tests in 15 focused files, including
+39 lifetime cases, three actual module-reload cases and the retained-range
+startup menu; ten native timeline, 14 native playback, two native recording/
+take, 17 native export/format/stem, nine engine timeline and 25 engine automation
+tests (77 Rust/native tests). Strict all-target Clippy for project, MIDI, FLP,
+IPC, simulator, engine and desktop, workspace fmt, desktop TypeScript/ESLint,
+changed TypeScript Prettier and source diff checks pass. Local generation
+produced 177 bindings and a 1,964,361-byte shared simulator, verified current by
+`check-sim` before UI validation. These artifacts are restored/excluded before
+the source-only commit; parent remains the combined-artifact owner.
+
+Parent E1 DSP and utility R5/R6 work remains separate; no root code or artifacts
+were imported. Verification here applies to this isolated source, not combined
+root, installed external plugins, physical UI/audio or non-Windows behavior.
+The full arrangements, per-pattern timelines, WAV metadata and scalar clip
+snap/grid refinements remain explicit follow-ups.

@@ -1,6 +1,41 @@
 import { expect, it, vi } from "vitest"
 import { startPlaylist } from "./test-utils"
 
+for (const selectFirst of [false, true]) {
+  it(`clears a retained native range through reloaded user actions${selectFirst ? " after selecting another range" : ""}`, async () => {
+    const rig = await startPlaylist()
+    const source = await rig.backend.timelineState()
+    await rig.backend.timelineRegion(
+      { start: 17, end: 839 },
+      source.generation,
+      source.revision,
+      50
+    )
+    vi.resetModules()
+    const { setBackend } = await import("@/lib/ipc")
+    setBackend(rig.backend)
+    const { connectStores } = await import("@/lib/store/connect")
+    const { settle } = await import("@/test/harness")
+    const timeline = await import("./timeline-store")
+    const actions = await import("./timeline-actions")
+    const disconnect = connectStores()
+    try {
+      await settle()
+      if (selectFirst)
+        await timeline.selectTimelineRegion({ start: 91, end: 210 })
+      await actions.clearTimelineSelection()
+      expect((await rig.backend.timelineState()).region).toBeNull()
+      expect(timeline.useTimelineStore.getState()).toMatchObject({
+        selection: null,
+        active: false,
+      })
+    } finally {
+      disconnect()
+      rig.stop()
+    }
+  })
+}
+
 it("rebases actual reloaded UI functions at the last two exact native request numbers without wrap", async () => {
   const rig = await startPlaylist()
   const original = await rig.backend.documentSnapshot()
@@ -35,14 +70,14 @@ it("rebases actual reloaded UI functions at the last two exact native request nu
     expect(await timeline.applyPlaybackRegion({ start: 17, end: 839 })).toBe(
       true
     )
-    expect(publish.mock.calls[0].slice(1)).toEqual([
+    expect(publish.mock.calls[0].slice(1, 4)).toEqual([
       source.generation,
       source.revision,
       max - 1,
     ])
     timeline = await reload()
     expect(await timeline.applyPlaybackRegion(null)).toBe(true)
-    expect(publish.mock.calls[1].slice(1)).toEqual([
+    expect(publish.mock.calls[1].slice(1, 4)).toEqual([
       source.generation,
       source.revision,
       max,

@@ -69,7 +69,8 @@ export interface Backend {
     region: import("@/bindings").TickRange | null,
     generation: number,
     revision: number,
-    request?: number
+    request?: number,
+    cancel?: import("@/bindings").TimelinePlaybackState
   ): Promise<import("@/bindings").TimelinePlaybackState>
   midiHardwareState(): Promise<import("@/bindings").MidiHardwareState>
   midiHardwareRefresh(): Promise<import("@/bindings").MidiHardwareState>
