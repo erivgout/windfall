@@ -726,6 +726,7 @@ impl Processor {
             position_seconds: warped * 60.0 / (self.plan.tempo_bpm * windfall_core::PPQ as f64),
             numerator: signature.numerator as u16,
             denominator: signature.denominator as u16,
+            meter_anchor: None,
         };
         for (index, chain) in self.state.chains.iter_mut().enumerate() {
             for (place, unit) in chain.iter_mut().enumerate() {

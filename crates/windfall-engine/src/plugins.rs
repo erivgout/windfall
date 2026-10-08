@@ -3,6 +3,13 @@
 use std::collections::HashMap;
 use windfall_project::{PluginBinding, PluginParameter, PluginTarget};
 
+/// A song meter segment's first downbeat and zero-based bar index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeterAnchor {
+    pub bar_origin_beats: f64,
+    pub bar_origin_index: u32,
+}
+
 /// Musical position at the first frame of a processing block.
 #[derive(Debug, Clone, Copy)]
 pub struct PluginTransport {
@@ -12,6 +19,8 @@ pub struct PluginTransport {
     pub position_seconds: f64,
     pub numerator: u16,
     pub denominator: u16,
+    /// `None` retains the scalar signature's origin at beat zero.
+    pub meter_anchor: Option<MeterAnchor>,
 }
 
 /// Prepared effects. Setup and destruction belong to the factory's owner thread.
