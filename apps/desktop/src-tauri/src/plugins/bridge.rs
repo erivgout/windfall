@@ -89,6 +89,9 @@ impl Record {
         let mut intents = Vec::new();
         for (spec, control) in specs.iter_mut().zip(self.controls.iter()) {
             let (generation, value) = control.snapshot();
+            // The complete table must reflect current intent even for settled
+            // controls when unrelated pending notes advance desired generation.
+            spec.value = f64::from(value);
             let (document, committed) = control.document();
             let wanted = desired
                 .iter()
@@ -606,5 +609,133 @@ mod tests {
         metadata.version.store(u64::MAX - 1, Ordering::Release);
         assert!(!metadata.publish(1, 1));
         assert_eq!(metadata.version.load(Ordering::Acquire), u64::MAX - 1);
+    }
+
+    fn native_settled_gain_with_pending_note(vst3: bool) {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder
+            .path()
+            .join(if vst3 { "proof.vst3" } else { "proof.clap" });
+        std::fs::copy(std::env::var_os("WINDFALL_BRIDGE_FIXTURE").unwrap(), &path).unwrap();
+        let parameter = PluginParameter {
+            id: if vst3 { 7 } else { 1 },
+            name: "Gain".into(),
+            min: 0.0,
+            max: 1.0,
+            value: 0.5,
+            stepped: false,
+            read_only: false,
+            automatable: true,
+        };
+        let binding = PluginBinding {
+            target: windfall_project::PluginTarget::Instrument {
+                channel: windfall_project::ChannelId(9001),
+            },
+            format: if vst3 { "vst3" } else { "clap" }.into(),
+            id: if vst3 {
+                "00000000000000000000000000000003"
+            } else {
+                "org.windfall.test.sine"
+            }
+            .into(),
+            path: path.to_string_lossy().into_owned(),
+            name: "Native settled gain regression".into(),
+            state: Vec::new(),
+            parameters: vec![parameter.clone()],
+        };
+        let controls = super::super::runtime::parameter_controls(&binding);
+        let options = options(
+            PathBuf::from(std::env::var_os("WINDFALL_DESKTOP_BRIDGE_HELPER").unwrap()),
+            &binding,
+            windfall_plugin_host::paths::plugin_file_identity(&path).unwrap(),
+            9001,
+            1,
+            48_000,
+            false,
+        )
+        .unwrap();
+        let (record, mut audio) = launch(
+            options,
+            binding,
+            controls.clone(),
+            None,
+            Arc::new(Mutex::new(None)),
+        )
+        .unwrap();
+        let mut committed = parameter;
+        committed.value = 0.625;
+        controls[0].commit(committed.value);
+        let before_adoption = audio.process.collection_frontier();
+        assert_eq!(
+            crate::test_alloc::allocator_calls(
+                || audio.adopt_parameters(std::slice::from_ref(&committed))
+            ),
+            0
+        );
+        assert_eq!(audio.process.collection_frontier(), before_adoption);
+        assert_eq!(audio.process.completed_proof(), None);
+        audio.set_param(committed.id, committed.value);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            std::thread::sleep(Duration::from_millis(8));
+            assert_eq!(
+                crate::test_alloc::allocator_calls(
+                    || audio.process(&mut [0.0; DEFAULT_BLOCK], &mut [0.0; DEFAULT_BLOCK])
+                ),
+                0
+            );
+            if controls[0].settled(controls[0].snapshot().0)
+                && controls[0].applied_document.load(Ordering::Acquire) == controls[0].document().0
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native gain never completed"
+            );
+        }
+        let proof = audio.process.completed_proof().unwrap();
+        let settled = controls[0].snapshot();
+        assert_eq!(settled.1, 0.625);
+        assert_eq!(proof.2, audio.process.desired_generation());
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| audio.note_on(60, 0.75)),
+            0
+        );
+        let desired = audio.process.desired_generation();
+        assert_eq!(desired, proof.2 + 1, "only the actual note advances intent");
+        assert_eq!(audio.process.completed_proof(), Some(proof));
+        assert_eq!(controls[0].snapshot(), settled);
+        let (state, parameters) = record.capture(std::slice::from_ref(&committed)).unwrap();
+        assert_eq!(
+            parameters
+                .iter()
+                .find(|param| param.0 == committed.id)
+                .unwrap()
+                .1,
+            0.625
+        );
+        assert_eq!(audio.process.desired_generation(), desired);
+        assert_eq!(audio.process.completed_proof(), Some(proof));
+        assert_eq!(controls[0].snapshot(), settled);
+        let captured = record.control.last_valid_state().unwrap();
+        assert_eq!(captured.processed_generation, proof.2);
+        assert!(captured.processed_generation < desired);
+        assert_eq!(
+            captured.reconciled_generation,
+            if vst3 { desired } else { 0 }
+        );
+        assert!(!state.is_empty());
+        drop(audio);
+        assert!(record.control.terminate().reaped);
+    }
+
+    #[test]
+    fn native_clap_capture_keeps_settled_gain_without_acknowledging_pending_note() {
+        native_settled_gain_with_pending_note(false);
+    }
+    #[test]
+    fn native_vst3_capture_keeps_settled_gain_without_acknowledging_pending_note() {
+        native_settled_gain_with_pending_note(true);
     }
 }

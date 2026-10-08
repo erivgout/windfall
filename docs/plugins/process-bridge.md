@@ -722,3 +722,47 @@ full Song meter producer is separately coordinated by the parent. Production
 routing/renderer integration and the inherited native preparation/retirement
 under State/controller guards remain unaccepted pending the larger leaf and P1.
 N4 stays partial; separate processes provide crash containment, not a sandbox.
+
+## Production Spec R1: settled controls during pending note capture
+
+The source review of frozen19f6ddc2 identified a distinct stale-table failure.
+Record capture cloned launch-time parameter specs and refreshed only unsettled
+or pending document controls. After native gain0.625 was processed and collected,
+an unprocessed note advanced overall desired generation. The helper correctly
+considered capture reconciliation, but received stale settled gain0.5. CLAP's
+companion value could regress; VST3 could also write0.5 into opaque native state.
+
+Two actual Session regressions compiled RED in0.87s, returning0.5 instead of0.625
+for both formats. They launch stable-latency instruments at0.5, commit0.625,
+collect completed blocks, then admit a note in a1-frame callback without
+publishing its incomplete B256 input. Two actual helper/facade regressions
+compiled RED in0.17s with the same values. Those additionally prove matching
+completed processing and settled document metadata before the note: desired2,
+processed2; note intent alone advances desired3 while proof remains processed2.
+
+The narrow fix initializes every transmitted spec value from its current
+ParameterControl snapshot before matching pending document overrides. It does
+not change host capture semantics, inactive native reconciliation, native points,
+desired/adoption counters, processed proof, ownership or ABI. Both native pairs
+then passed: helper/facade cases0.47s, Session cases0.73s. Assertions preserve
+processed2 after capture at desired3, distinguish VST inactive reconciliation
+from DSP, retain0.625 through capture/save/reopen, and honor a newer pending
+document0.75. An independent authenticated helper restores only the saved opaque
+state with an empty parameter-override table, then reads actual native metadata;
+both formats report0.625. Callback allocator guards remain zero.
+
+Final scoped checks passed all23 N4 native Session cases and4 owned facade units,
+desktop lib/tests strict Clippy, host all-feature/all-target strict Clippy,
+workspace/full-fixture formatting and whitespace checks. The23-case run took
+15.78s. The measured25-callback role maxima were123.4/50.6/81.6/48.4us for
+CLAP effect/instrument and VST3 effect/instrument respectively, with zero
+allocator calls; these remain busy-machine headless wall times rather than a
+hardware deadline guarantee. Host/engine source and historical R4 test bodies
+are unchanged by this repair; their earlier native results are not new reruns.
+
+This response owns only desktop plugins/bridge.rs, appended Session plugin tests
+and this document, directly atop immutable19f6ddc2. No fixture/native_thread,
+host state API, engine, preparation, runtime or shared identity path changes.
+The optional P3 refactors are deferred. The preparation-lock/retirement and
+missing full meter-producer precheck gates remain material and open; production
+activation and source integration require the parent's fresh full-context review.

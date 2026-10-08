@@ -2494,3 +2494,155 @@ fn n4_clap_instrument_helper_death_is_silent_and_explicit_retry_recovers() {
 fn n4_vst3_instrument_helper_death_is_silent_and_explicit_retry_recovers() {
     n4_instrument_death_and_manual_retry(true);
 }
+
+fn n4_settled_gain_with_unprocessed_note(vst3: bool) {
+    use std::time::Duration;
+    use windfall_plugin_host::bridge::{
+        protocol::{Config, DEFAULT_BLOCK, Kind},
+        supervisor::{self, Launch},
+    };
+    let (mut rig, manager, target) = n4_setup(vst3, true);
+    let PluginTarget::Instrument { channel } = target else {
+        unreachable!()
+    };
+    let id = if vst3 { 7 } else { 1 };
+    let value = |project: &Project| {
+        project
+            .plugin(target)
+            .unwrap()
+            .parameters
+            .iter()
+            .find(|param| param.id == id)
+            .unwrap()
+            .value
+    };
+    assert_eq!(value(&rig.project()), 0.5, "actual launch value");
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id,
+                value: 0.625,
+            },
+            None,
+        )
+        .unwrap();
+    let mut block = [0.0; 512];
+    // Complete and collect many matching fixed blocks before the pending note.
+    // This remains stopped, so no pattern automation or note release intervenes.
+    for _ in 0..16 {
+        std::thread::sleep(Duration::from_millis(8));
+        assert_eq!(
+            crate::test_alloc::allocator_calls(|| rig.processor.process(&mut block)),
+            0
+        );
+    }
+    let before = manager.runtime.bridge_status()[0].clone();
+    assert!(!before.2.failed);
+    rig.session.controller().note_on(channel, 60, 0.75);
+    // Admit the note into the facade, but never publish its incomplete B256
+    // input block. Capture must not turn that note intent into DSP proof.
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| rig.processor.process(&mut [0.0; 2])),
+        0
+    );
+    let document = rig.project();
+    let captured = manager.runtime.capture(document.clone()).unwrap();
+    assert_eq!(
+        value(&captured),
+        0.625,
+        "an unprocessed note cannot restore launch-time gain0.5"
+    );
+    assert_eq!(rig.project(), document);
+    assert_eq!(manager.runtime.selected_token(target), Some(before.1));
+    assert_eq!(
+        manager.runtime.bridge_status()[0].2.process_id,
+        before.2.process_id
+    );
+
+    let saved = rig.file("n4-settled-note.windfall");
+    rig.session.project_save(Some(&saved)).unwrap();
+    let loaded = windfall_project::file::load(Path::new(&saved)).unwrap();
+    assert_eq!(value(&loaded), 0.625);
+    // Independently restore ONLY opaque state, with no companion parameters
+    // that could conceal a stale value written into VST3 native state.
+    let binding = loaded.plugin(target).unwrap();
+    let plugin = PathBuf::from(&binding.path);
+    let (control, audio, _) = supervisor::launch(Launch {
+        helper: PathBuf::from(std::env::var_os("WINDFALL_DESKTOP_BRIDGE_HELPER").unwrap()),
+        plugin: plugin.clone(),
+        id: binding.id.clone(),
+        format: binding.format.clone(),
+        approved_binary: windfall_plugin_host::paths::plugin_file_identity(&plugin).unwrap(),
+        config: Config {
+            identity: supervisor::fresh_identity(9001, 1, 9001).unwrap(),
+            sample_rate: SAMPLE_RATE,
+            block: DEFAULT_BLOCK,
+            native_latency: 0,
+            kind: Kind::Instrument,
+        },
+        parameters: Vec::new(),
+        state: binding.state.clone(),
+        offline: false,
+        startup_timeout: Duration::from_secs(5),
+        audio_timeout: Duration::from_secs(2),
+        cancelled: None,
+    })
+    .unwrap();
+    let (_, parameters) = control.describe(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        parameters
+            .iter()
+            .find(|param| param.spec.id == id)
+            .unwrap()
+            .spec
+            .value,
+        0.625,
+        "actual opaque native state must retain the settled gain"
+    );
+    drop(audio);
+    assert!(control.terminate().reaped);
+
+    // A newer committed document value still takes precedence when genuinely
+    // pending; it must not change the live document while saving.
+    rig.session
+        .dispatch(
+            Command::SetPluginParam {
+                target,
+                id,
+                value: 0.75,
+            },
+            None,
+        )
+        .unwrap();
+    let pending = rig.project();
+    rig.session.project_save(Some(&saved)).unwrap();
+    assert_eq!(
+        value(&windfall_project::file::load(Path::new(&saved)).unwrap()),
+        0.75
+    );
+    assert_eq!(rig.project(), pending);
+    // Return to the settled snapshot saved above, using the real Session path.
+    windfall_project::file::save(&loaded, Path::new(&saved)).unwrap();
+    rig.session.project_new().unwrap();
+    rig.session.project_open(&saved).unwrap();
+    assert_eq!(
+        crate::test_alloc::allocator_calls(|| rig.processor.process(&mut block)),
+        0
+    );
+    assert_eq!(value(&rig.project()), 0.625);
+    assert_ne!(manager.runtime.selected_token(target), Some(before.1));
+    assert_eq!(
+        value(&manager.runtime.capture(rig.project()).unwrap()),
+        0.625
+    );
+}
+
+#[test]
+fn n4_clap_settled_gain_survives_unprocessed_note_capture_save_and_reopen() {
+    n4_settled_gain_with_unprocessed_note(false);
+}
+#[test]
+fn n4_vst3_settled_gain_survives_unprocessed_note_capture_save_and_reopen() {
+    n4_settled_gain_with_unprocessed_note(true);
+}
