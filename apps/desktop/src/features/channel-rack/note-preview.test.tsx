@@ -1,12 +1,29 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { ChannelId, NoteInit } from "@/bindings"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { CommandPalette } from "@/features/palette/command-palette"
 import PianoRollPanel from "@/features/piano-roll"
 import { currentSession } from "@/features/piano-roll/session"
-import { runAction } from "@/lib/actions"
+import {
+  actionForEvent,
+  disabledReason,
+  getAppState,
+  isChecked,
+  isEnabled,
+  registry,
+  runAction,
+  shortcutLabel,
+} from "@/lib/actions"
 import { sourceSample } from "@/lib/channel-source"
 import { SAMPLE_DRAG_TYPE } from "@/lib/dnd"
 import { useHintStore } from "@/lib/store/hint"
@@ -20,6 +37,12 @@ import { settle } from "@/test/harness"
 
 import ChannelRackPanel from "./index"
 import { LEFT_WIDTH, PITCH_VAR, STEPS_INSET } from "./layout"
+import { NOTE_VIEW_ACTION_IDS, OPEN_NOTE_PREVIEW_ACTION } from "./actions"
+import {
+  notePreviewActionForTarget,
+  runNotePreviewAction,
+  type NotePreviewTarget,
+} from "./note-preview-target"
 import { useRackStore } from "./rack-store"
 import {
   channel,
@@ -104,7 +127,10 @@ async function view(name: string, label: string) {
     screen.getByRole("button", { name: `${name} row view` })
   )
   await userEvent.click(
-    await screen.findByRole("menuitem", { name: new RegExp(`^${label}`) })
+    await screen.findByRole(
+      label === "Open in piano roll" ? "menuitem" : "menuitemcheckbox",
+      { name: new RegExp(`^${label}`) }
+    )
   )
   await waitFor(() =>
     expect(screen.queryByRole("menu")).not.toBeInTheDocument()
@@ -143,6 +169,295 @@ function Editors() {
 }
 
 describe("the rack note preview backed by the Rust WASM document", () => {
+  it("discovers canonical row commands in the real palette with current-lane disabled reasons and shortcuts", async () => {
+    render(
+      <>
+        <ChannelRackPanel />
+        <CommandPalette />
+      </>
+    )
+    const before = useProjectStore.getState()
+    const sent = vi.spyOn(app.backend, "dispatch")
+    await userEvent.keyboard("{Control>}k{/Control}")
+    for (const id of [...NOTE_VIEW_ACTION_IDS, OPEN_NOTE_PREVIEW_ACTION]) {
+      const action = registry.get(id)!
+      const option = screen.getByRole("option", {
+        name: new RegExp(`^${action.title}`),
+      })
+      expect(option).toHaveAttribute("aria-disabled", "true")
+      expect(option).toHaveTextContent("Select a channel in a pattern")
+      expect(action.scope).toBe("channelRack")
+    }
+    await act(async () =>
+      useUiStore.getState().selectChannel(channel("Drum").id)
+    )
+    const notes = screen.getByRole("option", { name: /^Show notes/ })
+    expect(notes).not.toHaveAttribute("aria-disabled", "true")
+    expect(
+      within(notes).getByText(shortcutLabel(NOTE_VIEW_ACTION_IDS[2])!)
+    ).toBeVisible()
+    expect(
+      screen.getByRole("option", { name: /^Open in piano roll/ })
+    ).toHaveTextContent("Alt+3")
+    await act(async () => useUiStore.getState().setKeymap("fl"))
+    expect(
+      screen.getByRole("option", { name: /^Open in piano roll/ })
+    ).toHaveTextContent("F7")
+    await userEvent.click(notes)
+    expect(preview("Drum")).toBeInTheDocument()
+    await waitFor(() => expect(preview("Drum")).toHaveFocus())
+    expect(rectangles("Drum")[0][0]).toBe(80)
+    expect(useUiStore.getState().selectedChannel).toBe(channel("Drum").id)
+    expect(useProjectStore.getState().project).toBe(before.project)
+    expect(useProjectStore.getState().history).toBe(before.history)
+    expect(useProjectStore.getState().dirty).toBe(false)
+    expect(sent).not.toHaveBeenCalled()
+  })
+
+  it("uses scoped registry shortcuts and invalidates current-lane checked state", async () => {
+    render(<ChannelRackPanel />)
+    await act(async () =>
+      useUiStore.getState().selectChannel(channel("Lead").id)
+    )
+    preview().focus()
+    const before = useProjectStore.getState()
+    const sent = vi.spyOn(app.backend, "dispatch")
+    expect(
+      actionForEvent(
+        new KeyboardEvent("keydown", { key: "2", ctrlKey: true, altKey: true })
+      )?.id
+    ).toBe(NOTE_VIEW_ACTION_IDS[1])
+    const version = registry.stateVersion()
+    await userEvent.keyboard("{Control>}{Alt>}2{/Alt}{/Control}")
+    expect(stepButtons("Lead")).toHaveLength(16)
+    await waitFor(() => expect(stepButtons("Lead")[0]).toHaveFocus())
+    expect(registry.stateVersion()).toBeGreaterThan(version)
+    expect(
+      isChecked(registry.get(NOTE_VIEW_ACTION_IDS[1])!, getAppState())
+    ).toBe(true)
+    stepButtons("Lead")[0].focus()
+    await userEvent.keyboard("{Control>}{Alt>}3{/Alt}{/Control}")
+    expect(preview()).toBeInTheDocument()
+    await waitFor(() => expect(preview()).toHaveFocus())
+    await userEvent.click(screen.getByRole("button", { name: "Lead row view" }))
+    const notes = await screen.findByRole("menuitemcheckbox", {
+      name: /^Show notes/,
+    })
+    expect(notes).toHaveAttribute("aria-checked", "true")
+    expect(notes).toHaveTextContent(shortcutLabel(NOTE_VIEW_ACTION_IDS[2])!)
+    await userEvent.keyboard("{Escape}")
+    await act(async () => useUiStore.getState().showCenterTab("pianoRoll"))
+    expect(
+      actionForEvent(
+        new KeyboardEvent("keydown", { key: "2", ctrlKey: true, altKey: true })
+      )
+    ).toBeUndefined()
+    expect(useProjectStore.getState().project).toBe(before.project)
+    expect(useProjectStore.getState().history).toBe(before.history)
+    expect(sent).not.toHaveBeenCalled()
+  })
+
+  it("owns the innermost thumbnail context menu with captured metadata and no primary opening", async () => {
+    render(<ChannelRackPanel />)
+    await act(async () =>
+      useUiStore.getState().selectChannel(channel("Drum").id)
+    )
+    const before = useProjectStore.getState()
+    const sent = vi.spyOn(app.backend, "dispatch")
+    const transport = vi.spyOn(app.backend, "transportToggle")
+    fireEvent.pointerDown(preview(), { button: 2, pointerId: 1 })
+    fireEvent.contextMenu(preview(), { button: 2 })
+    // Keep the rack's existing pointer-down row selection; opening the menu
+    // itself never navigates. Subsequent selection must not retarget it.
+    expect(useUiStore.getState().selectedChannel).toBe(channel("Lead").id)
+    await act(async () =>
+      useUiStore.getState().selectChannel(channel("Drum").id)
+    )
+    expect(
+      await screen.findByRole("menuitemcheckbox", {
+        name: /^Automatic steps or notes/,
+      })
+    ).toHaveAttribute("aria-checked", "true")
+    expect(screen.getAllByRole("menu")).toHaveLength(1)
+    expect(
+      screen.queryByRole("menuitem", { name: /Add channel/ })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("menuitem", { name: /^Open in piano roll/ })
+    ).toHaveTextContent(shortcutLabel("view.pianoRoll")!)
+    expect(useUiStore.getState().selectedChannel).toBe(channel("Lead").id)
+    expect(useUiStore.getState().centerTab).toBe("channelRack")
+    expect(transport).not.toHaveBeenCalled()
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: /^Show steps/ })
+    )
+    await waitFor(() => expect(stepButtons("Lead")[0]).toHaveFocus())
+    expect(useUiStore.getState().selectedChannel).toBe(channel("Lead").id)
+    expect(stepButtons("Drum")).toHaveLength(16)
+    expect(useProjectStore.getState().project).toBe(before.project)
+    expect(useProjectStore.getState().history).toBe(before.history)
+    expect(useProjectStore.getState().dirty).toBe(false)
+    expect(sent).not.toHaveBeenCalled()
+  })
+
+  it.each(["click", "Enter"])(
+    "opens the captured context lane using %s after close with existing piano session focus",
+    async (method) => {
+      render(<Editors />)
+      await act(async () =>
+        useUiStore.getState().selectChannel(channel("Drum").id)
+      )
+      const before = useProjectStore.getState()
+      const sent = vi.spyOn(app.backend, "dispatch")
+      fireEvent.contextMenu(preview())
+      const opening = await screen.findByRole("menuitem", {
+        name: /^Open in piano roll/,
+      })
+      if (method === "click") await userEvent.click(opening)
+      else {
+        opening.focus()
+        await userEvent.keyboard("{Enter}")
+      }
+      await waitFor(() =>
+        expect(
+          screen.getByRole("application", { name: "Note grid" })
+        ).toHaveFocus()
+      )
+      expect(currentSession()?.editing).toEqual({
+        patternId: project().patterns[0].id,
+        channelId: channel("Lead").id,
+      })
+      expect(useProjectStore.getState().project).toBe(before.project)
+      expect(useProjectStore.getState().history).toBe(before.history)
+      expect(sent).not.toHaveBeenCalled()
+    }
+  )
+
+  it("keeps row checked state and execution bound when another lane is selected", async () => {
+    render(<ChannelRackPanel />)
+    await view("Lead", "Show notes")
+    await act(async () =>
+      useUiStore.getState().selectChannel(channel("Drum").id)
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Lead row view" }))
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: /^Show notes/ })
+    ).toHaveAttribute("aria-checked", "true")
+    expect(
+      screen.getByRole("menuitemcheckbox", {
+        name: /^Automatic steps or notes/,
+      })
+    ).toHaveAttribute("aria-checked", "false")
+    await userEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: /^Show steps/ })
+    )
+    expect(stepButtons("Lead")).toHaveLength(16)
+    expect(stepButtons("Drum")).toHaveLength(16)
+    expect(useUiStore.getState().selectedChannel).toBe(channel("Lead").id)
+  })
+
+  it.each(["pattern", "New", "Open", "selection"] as const)(
+    "does not restore pending view focus into a successor %s",
+    async (successor) => {
+      render(<ChannelRackPanel />)
+      await app.backend.projectSave("/Focus.windfall")
+      await act(async () =>
+        useUiStore.getState().selectChannel(channel("Lead").id)
+      )
+      let focusFrame: FrameRequestCallback | undefined
+      const actualFrame = globalThis.requestAnimationFrame
+      // Control timing only. The command, project replacement and mirror are
+      // real; this checks the window between a view command and its UI frame.
+      const frameSpy = vi
+        .spyOn(globalThis, "requestAnimationFrame")
+        .mockImplementation((callback) => {
+          if (!focusFrame) {
+            focusFrame = callback
+            return 0
+          }
+          return actualFrame(callback)
+        })
+      await act(async () => {
+        await runAction(NOTE_VIEW_ACTION_IDS[1])
+      })
+      expect(stepButtons("Lead")).toHaveLength(16)
+      expect(focusFrame).toBeDefined()
+      frameSpy.mockRestore()
+      await act(async () => {
+        if (successor === "pattern") {
+          const added = await dispatch({ type: "addPattern" })
+          await setTransportPattern(added!.created[0])
+        } else if (successor === "New") await app.backend.projectNew()
+        else if (successor === "Open")
+          await app.backend.projectOpen("/Focus.windfall")
+        else useUiStore.getState().selectChannel(channel("Drum").id)
+      })
+      const state = useProjectStore.getState()
+      const selected = useUiStore.getState().selectedChannel
+      const focused = document.activeElement
+      const sent = vi.spyOn(app.backend, "dispatch")
+      await act(async () => {
+        focusFrame!(0)
+      })
+      expect(useUiStore.getState().selectedChannel).toBe(selected)
+      expect(document.activeElement).toBe(focused)
+      expect(useProjectStore.getState().project).toBe(state.project)
+      expect(useProjectStore.getState().history).toBe(state.history)
+      expect(sent).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(["pattern", "New", "Open", "delete"] as const)(
+    "rejects captured registry metadata and stale context items after %s",
+    async (replacement) => {
+      render(<ChannelRackPanel />)
+      await app.backend.projectSave("/Captured.windfall")
+      const target: NotePreviewTarget = {
+        pattern: project().patterns[0].id,
+        channel: channel("Lead").id,
+        generation: getProjectGeneration(),
+      }
+      const canonical = registry.get(NOTE_VIEW_ACTION_IDS[1])!
+      const bound = notePreviewActionForTarget(canonical, target)
+      const opening = registry.get(OPEN_NOTE_PREVIEW_ACTION)!
+      fireEvent.contextMenu(preview())
+      const stale = await screen.findByRole("menuitemcheckbox", {
+        name: /^Show steps/,
+      })
+      await act(async () => {
+        if (replacement === "pattern") {
+          const added = await dispatch({ type: "addPattern" })
+          await setTransportPattern(added!.created[0])
+        } else if (replacement === "New") await app.backend.projectNew()
+        else if (replacement === "Open")
+          await app.backend.projectOpen("/Captured.windfall")
+        else await dispatch({ type: "removeChannel", id: target.channel })
+      })
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+      const state = useProjectStore.getState()
+      const selected = useUiStore.getState().selectedChannel
+      const sent = vi.spyOn(app.backend, "dispatch")
+      expect(isEnabled(bound, getAppState())).toBe(false)
+      expect(disabledReason(bound, getAppState())).toBe(
+        replacement === "pattern"
+          ? "Pattern changed"
+          : replacement === "delete"
+            ? "Channel no longer exists"
+            : "Project changed"
+      )
+      expect(await runNotePreviewAction(target, canonical)).toBe(false)
+      expect(await runNotePreviewAction(target, opening)).toBe(false)
+      fireEvent.click(stale)
+      expect(useUiStore.getState().selectedChannel).toBe(selected)
+      expect(useUiStore.getState().centerTab).toBe("channelRack")
+      expect(useRackStore.getState().noteViews).toEqual({})
+      expect(useProjectStore.getState().project).toBe(state.project)
+      expect(useProjectStore.getState().history).toBe(state.history)
+      expect(useProjectStore.getState().dirty).toBe(state.dirty)
+      expect(sent).not.toHaveBeenCalled()
+    }
+  )
+
   it("replaces only non-step lanes with real timing, duration, pitch, chord and overlap rectangles", () => {
     render(<ChannelRackPanel />)
     expect(stepButtons("Drum")).toHaveLength(16)
@@ -391,7 +706,7 @@ describe("the rack note preview backed by the Rust WASM document", () => {
     await view("Lead", "Show steps")
     await app.backend.projectSave("/Saved.windfall")
     await userEvent.click(screen.getByRole("button", { name: "Lead row view" }))
-    const item = screen.getByRole("menuitem", { name: "Open in piano roll" })
+    const item = screen.getByRole("menuitem", { name: /^Open in piano roll/ })
     await act(async () => {
       await app.backend.projectOpen("/Saved.windfall")
     })

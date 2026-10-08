@@ -5,6 +5,8 @@ import type { ChannelId } from "@/bindings"
 import { useProjectStore } from "@/lib/store/project"
 import { onProjectReplaced } from "@/lib/store/replaced"
 
+import type { NotePreviewLane } from "./note-preview-target"
+
 /**
  * How many keys the keyboard in the channel settings shows: around the
  * root key, six octaves, or every key there is.
@@ -21,8 +23,8 @@ type RackState = {
   /** The channel whose color swatches are open, if any. */
   colorPickerFor: ChannelId | null
   /** Per-lane display choices, never saved into a project or preferences. */
-  noteViews: Record<string, RackNoteView>
-  setNoteView(lane: string, view: RackNoteView): void
+  noteViews: Record<string, { lane: NotePreviewLane; view: RackNoteView }>
+  setNoteView(lane: NotePreviewLane, view: RackNoteView): void
 
   setInspectorOpen(open: boolean): void
   toggleInspector(): void
@@ -46,8 +48,9 @@ export const useRackStore = create<RackState>()(
       setNoteView: (lane, view) =>
         set((state) => {
           const noteViews = { ...state.noteViews }
-          if (view === "auto") delete noteViews[lane]
-          else noteViews[lane] = view
+          const key = laneKey(lane)
+          if (view === "auto") delete noteViews[key]
+          else noteViews[key] = { lane, view }
           return { noteViews }
         }),
 
@@ -70,6 +73,18 @@ export const useRackStore = create<RackState>()(
   )
 )
 
+// Encoding is private to this transient store; callers pass typed lane identity.
+function laneKey(lane: NotePreviewLane): string {
+  return `${lane.pattern}:${lane.channel}`
+}
+
+export function rackNoteView(
+  state: RackState,
+  lane: NotePreviewLane
+): RackNoteView {
+  return state.noteViews[laneKey(lane)]?.view ?? "auto"
+}
+
 // The channel the swatches were open for is not a channel of the next
 // project, though one there may have its id.
 onProjectReplaced(() =>
@@ -85,11 +100,10 @@ useProjectStore.subscribe((state, previous) => {
     return
   const views = useRackStore.getState().noteViews
   const noteViews = Object.fromEntries(
-    Object.entries(views).filter(([key]) => {
-      const [pattern, channel] = key.split(":").map(Number)
+    Object.entries(views).filter(([, { lane }]) => {
       return (
-        state.project.patterns.some((item) => item.id === pattern) &&
-        state.project.channels.some((item) => item.id === channel)
+        state.project.patterns.some((item) => item.id === lane.pattern) &&
+        state.project.channels.some((item) => item.id === lane.channel)
       )
     })
   )
