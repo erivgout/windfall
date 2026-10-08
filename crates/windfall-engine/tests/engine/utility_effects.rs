@@ -724,6 +724,7 @@ struct R4OwnerStats {
 }
 #[derive(Debug)]
 struct R4Owners {
+    latency_override: std::sync::atomic::AtomicUsize,
     creates: std::sync::atomic::AtomicUsize,
     revision: std::sync::atomic::AtomicU64,
     owners: [R4OwnerStats; 64],
@@ -731,6 +732,7 @@ struct R4Owners {
 impl Default for R4Owners {
     fn default() -> Self {
         Self {
+            latency_override: Default::default(),
             creates: Default::default(),
             revision: Default::default(),
             owners: std::array::from_fn(|_| R4OwnerStats::default()),
@@ -757,7 +759,14 @@ impl windfall_engine::plugins::PluginFactory for R4Factory {
         Ok(Box::new(R4HostedDelay {
             ring: [[0.0; 2]; 64],
             write: 0,
-            delay: binding.state.first().copied().map_or(32, usize::from),
+            delay: match self
+                .0
+                .latency_override
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                0 => binding.state.first().copied().map_or(32, usize::from),
+                delay => delay,
+            },
             owner,
             stats: self.0.clone(),
         }))
@@ -991,6 +1000,323 @@ fn utility_effects_r4_superseded_restores_cannot_accumulate_or_activate_native_o
             .iter()
             .all(|owner| owner.drops.load(Relaxed) == 1)
     );
+}
+
+fn r5_revision_only_restoration(cancel: bool, revision_frames: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let tone = sine(RATE, 173.0, 1.0);
+    let up = rig.channel_on(tone.clone(), first);
+    rig.channel_mut(up).volume = 0.5;
+    rig.steps(up, &[0]);
+    if cancel {
+        let second = rig.track();
+        let down = rig.channel_on(crate::support::inverted(&tone), second);
+        rig.channel_mut(down).volume = 0.5;
+        rig.steps(down, &[0]);
+    }
+    let id = rig.effect(first, EffectKind::Balance.default_params());
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = r4_binding(id);
+    rig.project.plugins.push(binding.clone());
+    let stats = std::sync::Arc::new(R4Owners::default());
+    rig.pool
+        .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    guarded_run(&mut processor, 4092, 137);
+    let slot = rig.remove_effect(id);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    let mut audio = guarded_run(&mut processor, 80, 7);
+    rig.track_mut(first).effects.insert(0, slot);
+    rig.project.plugins.push(binding.clone());
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 80, 7));
+    let unchanged = rig.project.clone();
+    stats.revision.fetch_add(1, Relaxed);
+    // Only the existing factory's revision changes. Project, binding state,
+    // parameter layout/values, slot id and factory Arc stay exactly the same.
+    controller.set_project(&rig.project, &rig.pool);
+    assert_eq!(rig.project, unchanged);
+    let revised = guarded_run(&mut processor, revision_frames, 1);
+    if cancel {
+        let residual = peak(&revised);
+        println!("revision-only restoration residual {residual}");
+        assert!(
+            residual < 1e-6,
+            "revision-only restoration residual {residual}"
+        );
+    }
+    audio.extend(revised);
+    controller.frame();
+    let slot = rig.remove_effect(id);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 1, 1));
+    rig.track_mut(first).effects.insert(0, slot);
+    rig.project.plugins.push(binding);
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 1, 1));
+    controller.frame();
+    let count = stats.creates.load(Relaxed);
+    let dropped: usize = stats
+        .owners
+        .iter()
+        .map(|owner| owner.drops.load(Relaxed))
+        .sum();
+    assert!(
+        count - dropped <= 2,
+        "restored native live owners {}, expected at most two",
+        count - dropped
+    );
+    audio.extend(guarded_run(&mut processor, 1000, 29));
+    if cancel {
+        assert!(peak(&audio) < 1e-6);
+    } else {
+        let step = left(&audio)
+            .windows(2)
+            .map(|p| (p[1] - p[0]).abs())
+            .fold(0.0_f32, f32::max);
+        println!("revision-only restoration solo step {step}");
+        assert!(step < 0.04, "revision-only restoration solo step {step}");
+    }
+    controller.set_project(&rig.project, &rig.pool);
+    guarded_run(&mut processor, 137, 137);
+    controller.frame();
+    assert_eq!(stats.creates.load(Relaxed), 4);
+    assert!(
+        stats.owners[..3]
+            .iter()
+            .all(|owner| owner.drops.load(Relaxed) == 1)
+    );
+    assert_eq!(stats.owners[3].drops.load(Relaxed), 0);
+    assert_eq!(controller.latency_frames(), 80);
+}
+
+#[test]
+fn utility_effects_r5_revision_only_restoration_keeps_reference_cancellation() {
+    r5_revision_only_restoration(true, 400);
+}
+
+#[test]
+fn utility_effects_r5_revision_only_restoration_keeps_solo_continuity_and_owner_bound() {
+    r5_revision_only_restoration(false, 64);
+}
+
+#[test]
+fn utility_effects_r5_revision_only_remove_restore_before_departure_finishes() {
+    r5_revision_only_restoration(true, 64);
+}
+
+#[test]
+fn utility_effects_r5_pending_revisions_keep_latency_changes_and_precompiled_plans_bounded() {
+    use std::sync::atomic::Ordering::Relaxed;
+    for place in 0..=2 {
+        let mut rig = Rig::new();
+        let (first, second) = (rig.track(), rig.track());
+        let tone = sine(RATE, 173.0, 1.0);
+        for (track, sample) in [
+            (first, tone.clone()),
+            (second, crate::support::inverted(&tone)),
+        ] {
+            let channel = rig.channel_on(sample, track);
+            rig.channel_mut(channel).volume = 0.5;
+            rig.steps(channel, &[0]);
+        }
+        rig.effect(first, matrix(1.0, 1.0));
+        rig.effect(first, matrix(1.0, 1.0));
+        let id = rig.effect(first, EffectKind::Balance.default_params());
+        let slot = rig.remove_effect(id);
+        rig.track_mut(first).effects.insert(place, slot);
+        let binding = r4_binding(id);
+        rig.project.plugins.push(binding.clone());
+        let stats = std::sync::Arc::new(R4Owners::default());
+        rig.pool
+            .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+        let (mut processor, controller) = rig.processor(RATE);
+        controller.play();
+        assert!(peak(&guarded_run(&mut processor, 4092, 137)) < 1e-6);
+        let mut slot = Some(rig.remove_effect(id));
+        rig.project.plugins.clear();
+        controller.set_project(&rig.project, &rig.pool);
+        assert!(peak(&guarded_run(&mut processor, 80, 7)) < 1e-6);
+        rig.track_mut(first)
+            .effects
+            .insert(place, slot.take().unwrap());
+        rig.project.plugins.push(binding.clone());
+        controller.set_project(&rig.project, &rig.pool);
+        assert!(peak(&guarded_run(&mut processor, 80, 7)) < 1e-6);
+        let unchanged = rig.project.clone();
+        // Compile before each retry, then install after the revision changes.
+        // Metadata must snapshot installation identity, not query a past
+        // plan's now-mutated factory or trust precompilation's old identity.
+        for edit in 0..8 {
+            let prepared = windfall_engine::Controller::prepare_project(&rig.project, &rig.pool);
+            stats
+                .latency_override
+                .store(if edit % 2 == 0 { 64 } else { 32 }, Relaxed);
+            stats.revision.fetch_add(1, Relaxed);
+            controller.set_prepared_project(&rig.project, prepared);
+            assert_eq!(rig.project, unchanged);
+            let residual = peak(&guarded_run(&mut processor, 7, 1));
+            assert!(
+                residual < 1e-6,
+                "pending revised latency residual {residual}, place {place}, edit {edit}"
+            );
+            controller.frame();
+            let count = stats.creates.load(Relaxed);
+            let dropped: usize = stats
+                .owners
+                .iter()
+                .map(|owner| owner.drops.load(Relaxed))
+                .sum();
+            assert_eq!(count - dropped, 2);
+        }
+        // Remove while the original departure is still audible, then restore
+        // with the same binding and a revised 64-frame prepared owner.
+        slot = Some(rig.remove_effect(id));
+        rig.project.plugins.clear();
+        controller.set_project(&rig.project, &rig.pool);
+        assert!(peak(&guarded_run(&mut processor, 1, 1)) < 1e-6);
+        stats.latency_override.store(64, Relaxed);
+        stats.revision.fetch_add(1, Relaxed);
+        rig.track_mut(first)
+            .effects
+            .insert(place, slot.take().unwrap());
+        rig.project.plugins.push(binding);
+        controller.set_project(&rig.project, &rig.pool);
+        assert!(peak(&guarded_run(&mut processor, 1000, 29)) < 1e-6);
+        controller.set_project(&rig.project, &rig.pool);
+        assert!(peak(&guarded_run(&mut processor, 137, 137)) < 1e-6);
+        controller.frame();
+        let count = stats.creates.load(Relaxed);
+        assert_eq!(count, 11);
+        assert!(
+            stats.owners[..count - 1]
+                .iter()
+                .all(|owner| owner.drops.load(Relaxed) == 1)
+        );
+        assert_eq!(stats.owners[count - 1].drops.load(Relaxed), 0);
+        assert_eq!(controller.latency_frames(), 160);
+    }
+}
+
+#[test]
+fn utility_effects_r5_superseded_revision_owners_never_process_or_join_departures() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(sine(RATE, 173.0, 1.0), first);
+    rig.channel_mut(channel).volume = 0.5;
+    rig.steps(channel, &[0]);
+    let id = rig.effect(first, EffectKind::Balance.default_params());
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = r4_binding(id);
+    rig.project.plugins.push(binding.clone());
+    let stats = std::sync::Arc::new(R4Owners::default());
+    rig.pool
+        .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    guarded_run(&mut processor, 4092, 137);
+    let slot = rig.remove_effect(id);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    let mut audio = guarded_run(&mut processor, 80, 7);
+    rig.track_mut(first).effects.insert(0, slot);
+    rig.project.plugins.push(binding);
+    controller.set_project(&rig.project, &rig.pool);
+    audio.extend(guarded_run(&mut processor, 80, 7));
+    let unchanged = rig.project.clone();
+    for _ in 0..20 {
+        stats.revision.fetch_add(1, Relaxed);
+        controller.set_project(&rig.project, &rig.pool);
+        let superseded = stats.creates.load(Relaxed) - 1;
+        stats.revision.fetch_add(1, Relaxed);
+        controller.set_project(&rig.project, &rig.pool);
+        assert_eq!(rig.project, unchanged);
+        audio.extend(guarded_run(&mut processor, 1, 1));
+        controller.frame();
+        assert_eq!(stats.owners[superseded].processes.load(Relaxed), 0);
+        assert_eq!(stats.owners[superseded].drops.load(Relaxed), 1);
+        let count = stats.creates.load(Relaxed);
+        let dropped: usize = stats
+            .owners
+            .iter()
+            .map(|owner| owner.drops.load(Relaxed))
+            .sum();
+        assert_eq!(count - dropped, 2);
+    }
+    audio.extend(guarded_run(&mut processor, 1000, 29));
+    let step = left(&audio)
+        .windows(2)
+        .map(|p| (p[1] - p[0]).abs())
+        .fold(0.0_f32, f32::max);
+    assert!(step < 0.04, "repeated revision solo step {step}");
+    controller.set_project(&rig.project, &rig.pool);
+    guarded_run(&mut processor, 137, 137);
+    controller.frame();
+    assert_eq!(stats.creates.load(Relaxed), 42);
+    assert!(
+        stats.owners[..41]
+            .iter()
+            .all(|owner| owner.drops.load(Relaxed) == 1)
+    );
+    assert_eq!(stats.owners[41].drops.load(Relaxed), 0);
+}
+
+#[test]
+fn utility_effects_r5_revised_native_id_moves_after_departure_without_new_owner_or_unity_hole() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut rig = Rig::new();
+    let first = rig.track();
+    let channel = rig.channel_on(level(RATE, 1.0, 1.0), first);
+    rig.steps(channel, &[0]);
+    let id = rig.effect(first, EffectKind::Balance.default_params());
+    rig.effect(first, matrix(1.0, 1.0));
+    let binding = r4_binding(id);
+    rig.project.plugins.push(binding.clone());
+    let stats = std::sync::Arc::new(R4Owners::default());
+    rig.pool
+        .set_plugin_factory(std::sync::Arc::new(R4Factory(stats.clone())));
+    let (mut processor, controller) = rig.processor(RATE);
+    controller.play();
+    guarded_run(&mut processor, 4092, 137);
+    let slot = rig.remove_effect(id);
+    rig.project.plugins.clear();
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 80, 7)
+            .iter()
+            .all(|sample| *sample == 1.0)
+    );
+    rig.track_mut(first).effects.insert(0, slot);
+    rig.project.plugins.push(binding);
+    controller.set_project(&rig.project, &rig.pool);
+    guarded_run(&mut processor, 80, 7);
+    stats.revision.fetch_add(1, Relaxed);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 1000, 29)
+            .iter()
+            .all(|sample| *sample == 1.0)
+    );
+    let slot = rig.remove_effect(id);
+    rig.track_mut(TrackId::MASTER).effects.push(slot);
+    controller.set_project(&rig.project, &rig.pool);
+    assert!(
+        guarded_run(&mut processor, 1000, 137)
+            .iter()
+            .all(|sample| *sample == 1.0)
+    );
+    controller.frame();
+    assert_eq!(stats.creates.load(Relaxed), 3);
+    assert_eq!(stats.owners[0].drops.load(Relaxed), 1);
+    assert_eq!(stats.owners[1].drops.load(Relaxed), 1);
+    assert_eq!(stats.owners[2].drops.load(Relaxed), 0);
+    assert_eq!(controller.latency_frames(), 80);
 }
 
 #[test]

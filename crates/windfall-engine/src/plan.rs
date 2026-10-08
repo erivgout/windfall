@@ -231,6 +231,9 @@ pub(crate) struct PlanEffect {
     /// [`Plan::keep_leaving`].
     pub leaving: bool,
     pub life: Arc<EffectLife>,
+    /// Control-side snapshot of binding/provider/revision identity. A live
+    /// factory Arc can change revision without changing the project binding.
+    native_owner: Option<u64>,
     /// A restored id waits for this audible departure before its fresh
     /// owner joins. Progress only; never a native-owner handle or lineage.
     pub after: Option<Arc<EffectLife>>,
@@ -292,6 +295,22 @@ pub(crate) struct PlanAudioClip {
 }
 
 impl Plan {
+    fn snapshot_native_owners(&mut self) {
+        let provider = self.plugin_factory.as_ref().map_or(0, |factory| {
+            factory.revision().rotate_left(17) ^ factory.provider_identity()
+        });
+        for effect in self.tracks.iter_mut().flat_map(|track| &mut track.effects) {
+            if !effect.leaving {
+                let key = windfall_project::PluginTarget::Effect { effect: effect.id };
+                effect.native_owner = self
+                    .plugins
+                    .iter()
+                    .find(|binding| binding.target == key)
+                    .map(|binding| crate::plugins::identity(binding) ^ provider);
+            }
+        }
+    }
+
     /// What plays before a project is set: nothing, through a master track
     /// at unity so sample previews are still heard.
     pub fn empty() -> Self {
@@ -313,6 +332,9 @@ impl Plan {
     /// A track that is gone takes its effects with it at once: there is
     /// nowhere left for them to be heard.
     pub fn keep_leaving(&mut self, previous: &Plan) {
+        // Refresh on installation too: precompilation may precede a retry.
+        // Never query the old plan's mutable factory for its past revision.
+        self.snapshot_native_owners();
         let same_factory = match (&self.plugin_factory, &previous.plugin_factory) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
@@ -326,16 +348,9 @@ impl Plan {
             };
             let (track, place) = previous.effect_places[before];
             let before = &previous.tracks[track].effects[place];
-            let key = windfall_project::PluginTarget::Effect { effect: effect.id };
-            let owner = |bindings: &[windfall_project::PluginBinding]| {
-                bindings
-                    .iter()
-                    .find(|binding| binding.target == key)
-                    .map(crate::plugins::identity)
-            };
-            let native = owner(&self.plugins);
+            let native = effect.native_owner;
             if effect.params.kind() == before.params.kind()
-                && native == owner(&previous.plugins)
+                && native == before.native_owner
                 && (native.is_none() || same_factory)
             {
                 effect.life = before.life.clone();
@@ -547,6 +562,7 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         lanes: Vec::new(),
         tempo_map: None,
     };
+    plan.snapshot_native_owners();
     plan.link();
     plan.lanes = automation::compile(project, &plan);
     let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());
@@ -919,6 +935,7 @@ fn compile_mixer(mixer: &Mixer) -> (Vec<PlanTrack>, Vec<usize>) {
                     },
                     leaving: false,
                     life: Arc::new(EffectLife::default()),
+                    native_owner: None,
                     after: None,
                 })
                 .collect();
