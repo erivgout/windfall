@@ -346,6 +346,10 @@ fn check_channel(project: &Project, channel: &Channel) -> Result<(), String> {
 }
 
 fn check_sampler(project: &Project, owner: &str, sampler: &SamplerSettings) -> Result<(), String> {
+    sampler
+        .stretch
+        .validate()
+        .map_err(|error| format!("{owner}: {error}"))?;
     if let Some(sample) = sampler.sample
         && project.sample(sample).is_none()
     {

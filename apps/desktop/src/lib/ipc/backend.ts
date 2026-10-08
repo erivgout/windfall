@@ -105,6 +105,15 @@ export interface Backend {
   documentSnapshot(): Promise<DocumentSnapshot>
   dispatch(command: Command, gesture?: number): Promise<DispatchResult>
   prepareClipCommand(command: Command): Promise<DispatchResult>
+  samplerPreparationBegin(): Promise<number>
+  samplerPreparationCancel(request: number): Promise<void>
+  samplerPreparationProgress(
+    request: number
+  ): Promise<import("@/bindings").SamplerPreparationProgress>
+  prepareSamplerCommand(
+    command: Command,
+    request: number
+  ): Promise<DispatchResult>
   detectClipTempo(
     sample: SampleId
   ): Promise<{ bpm: number; confidence: number }[]>

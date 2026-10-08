@@ -99,6 +99,7 @@ pub struct Stem {
 /// the user as they are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StemError {
+    SamplerPreparation(crate::sampler_processing::SamplerPreparationError),
     /// The master track was asked for as a stem.
     Master,
     /// A track was asked for that the project does not have.
@@ -113,6 +114,7 @@ pub enum StemError {
 impl std::fmt::Display for StemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SamplerPreparation(error) => std::fmt::Display::fmt(error, f),
             Self::Master => f.write_str(
                 "The master track cannot be a stem. Its sound is the mix, which can be exported with the stems.",
             ),
@@ -289,8 +291,24 @@ pub fn render_streaming(
     sink: &mut dyn FnMut(&[f32]) -> bool,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Streamed {
-    let pass = Pass::new(compile(project, pool), options, &[]);
-    pass.run(None, &mut |_, block| sink(block), progress)
+    render_streaming_checked(project, pool, options, sink, progress).unwrap_or(Streamed {
+        frames: 0,
+        dropped_clips: 0,
+        completed: false,
+    })
+}
+
+/// Fallible sampler preparation with the same strict budget as realtime playback.
+pub fn render_streaming_checked(
+    project: &Project,
+    pool: &SamplePool,
+    options: &RenderOptions,
+    sink: &mut dyn FnMut(&[f32]) -> bool,
+    progress: &mut dyn FnMut(f32) -> bool,
+) -> Result<Streamed, crate::sampler_processing::SamplerPreparationError> {
+    let pool = pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {})?;
+    let pass = Pass::new(compile(project, &pool), options, &[]);
+    Ok(pass.run(None, &mut |_, block| sink(block), progress))
 }
 
 /// Renders the stems of a project and hands each to `sink` a block at a
@@ -312,6 +330,10 @@ pub fn render_stems(
     sink: &mut dyn FnMut(usize, &[f32]) -> bool,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Result<Streamed, StemError> {
+    let prepared_pool = pool
+        .prepare_samplers(project, &mut || true, &mut |_, _, _| {})
+        .map_err(StemError::SamplerPreparation)?;
+    let pool = &prepared_pool;
     let list = stems(project, stem_options)?;
     let mix = list.iter().position(|stem| stem.track.is_none());
     let tracks: Vec<(usize, TrackId)> = list

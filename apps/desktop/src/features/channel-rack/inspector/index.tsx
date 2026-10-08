@@ -17,6 +17,7 @@ import { LoopSection } from "./loop-section"
 import { RoutingSection } from "./routing-section"
 import { SampleSection } from "./sample-section"
 import { SoundSection } from "./sound-section"
+import { SamplerProcessingSection } from "./processing-section"
 
 /**
  * The settings of the selected channel, docked beside the rack: a sampler's
@@ -79,6 +80,7 @@ export function ChannelInspector() {
               <>
                 <SampleSection channel={channel} />
                 <LoopSection channel={channel} />
+                <SamplerProcessingSection channel={channel} />
                 <SoundSection channel={channel} />
                 <EnvelopeSection channel={channel} />
               </>

@@ -47,6 +47,30 @@ pub fn stretch_with_formants(
     quality: Quality,
     preserve_formants: bool,
 ) -> AudioBuffer {
+    stretch_with_formants_cancellable(
+        buffer,
+        time_ratio,
+        pitch_semitones,
+        quality,
+        preserve_formants,
+        &mut || true,
+    )
+    .expect("an uncancelled stretch always completes")
+}
+
+/// The same offline algorithm, with cancellation checked before construction and
+/// every 4096 output frames. A cancelled result is discarded on the worker.
+pub fn stretch_with_formants_cancellable(
+    buffer: &AudioBuffer,
+    time_ratio: f64,
+    pitch_semitones: f64,
+    quality: Quality,
+    preserve_formants: bool,
+    keep_going: &mut dyn FnMut() -> bool,
+) -> Option<AudioBuffer> {
+    if !keep_going() {
+        return None;
+    }
     let channels = usize::from(buffer.channels());
     let frames = buffer.frames();
     let wanted = stretched_frames(frames, time_ratio);
@@ -57,7 +81,11 @@ pub fn stretch_with_formants(
     };
     if wanted == 0 || (wanted == frames && pitch == 0.0) {
         let samples = buffer.samples()[..wanted * channels].to_vec();
-        return AudioBuffer::from_interleaved(buffer.sample_rate(), buffer.channels(), samples);
+        return Some(AudioBuffer::from_interleaved(
+            buffer.sample_rate(),
+            buffer.channels(),
+            samples,
+        ));
     }
 
     let planar: Vec<Vec<f32>> = (0..channels)
@@ -75,6 +103,9 @@ pub fn stretch_with_formants(
     let mut data = Vec::with_capacity(wanted * channels);
     let (mut position, mut produced) = (0, 0);
     while produced < lead + wanted {
+        if !keep_going() {
+            return None;
+        }
         let chunk = CHUNK.min(lead + wanted - produced);
         let input: Vec<&[f32]> = planar
             .iter()
@@ -91,5 +122,9 @@ pub fn stretch_with_formants(
         }
         produced += chunk;
     }
-    AudioBuffer::from_interleaved(buffer.sample_rate(), buffer.channels(), data)
+    Some(AudioBuffer::from_interleaved(
+        buffer.sample_rate(),
+        buffer.channels(),
+        data,
+    ))
 }

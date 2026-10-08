@@ -491,3 +491,14 @@ pub struct ClipTempoCandidate {
     pub bpm: f64,
     pub confidence: f64,
 }
+/// Worker progress is session state, never project musical data.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SamplerPreparationProgress {
+    #[ts(type = "number")]
+    pub request: u64,
+    pub completed: u32,
+    pub total: u32,
+    pub current: bool,
+}

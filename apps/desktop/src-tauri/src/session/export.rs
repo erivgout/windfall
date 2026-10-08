@@ -262,9 +262,19 @@ impl Session {
         // and not of a project opened a moment later.
         let (project, pool, pattern, plugin_revision) = {
             let state = self.state();
+            if state
+                .pool
+                .needs_sampler_preparation(state.document.project())
+            {
+                return Err("Sampler audio is not prepared for the current sources yet. Wait for preparation or Apply its settings again before exporting.".into());
+            }
+            let mut pool = state.pool.clone();
+            // Retain the published banks even if a later edit prunes the live
+            // cache before this export worker starts rendering.
+            pool.share_sampler_budget(&state.pool);
             (
                 state.document.project().clone(),
-                state.pool.clone(),
+                pool,
                 self.controller().transport().pattern,
                 self.plugin_revision(),
             )
@@ -352,6 +362,8 @@ impl Session {
     }
 
     fn run_export(&self, job: &Job) {
+        #[cfg(test)]
+        self.pause("sampler:export-snapshot");
         let mut progress = Progress {
             session: self,
             path: job.options.path.clone(),
@@ -590,6 +602,10 @@ fn write_files(
     progress: &mut Progress,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Outcome, String> {
+    let prepared_pool = job
+        .pool
+        .prepare_samplers(&job.project, &mut || !cancelled(), &mut |_, _, _| {})
+        .map_err(|error| error.to_string())?;
     let options = &job.options;
     let render = RenderOptions {
         sample_rate: options.sample_rate,
@@ -646,7 +662,7 @@ fn write_files(
     let streamed: Streamed = match &job.stems {
         Some(stems) => render_stems(
             &job.project,
-            &job.pool,
+            &prepared_pool,
             &render,
             stems,
             &mut write,
@@ -655,7 +671,7 @@ fn write_files(
         .map_err(|error| error.to_string())?,
         None => render_streaming(
             &job.project,
-            &job.pool,
+            &prepared_pool,
             &render,
             &mut |block| write(0, block),
             &mut report,
