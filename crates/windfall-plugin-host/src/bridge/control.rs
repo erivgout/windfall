@@ -236,6 +236,7 @@ impl Packet {
     }
     /// Startup owner only. Keep framing across partial/nonblocking writes while
     /// checking the same whole-startup deadline, cancellation and child lifetime.
+    #[cfg(any(windows, test))]
     pub(crate) fn write_bounded(
         &self,
         socket: &mut impl Write,
