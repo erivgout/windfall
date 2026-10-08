@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        10
+        11
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..10).contains(&index) {
+        if info.is_null() || !(0..11).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -62,6 +62,7 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Native Dirty",
                         "VST3 Recovery Failure",
                         "VST3 Parameter Sources",
+                        "VST3 Bridge Delayed Effect",
                     ][index as usize],
                 ),
             });
@@ -82,7 +83,7 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..10).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..11).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
@@ -93,6 +94,7 @@ impl IPluginFactoryTrait for Factory {
                 notify: class == cid(7),
                 recovery_failure: class == cid(8),
                 multi_params: class == cid(9),
+                bridge_delayed: class == cid(10),
                 activations: std::sync::atomic::AtomicU32::new(0),
                 creator: std::thread::current().id(),
                 notified: std::sync::atomic::AtomicBool::new(false),
@@ -123,7 +125,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..10).contains(&index) {
+        if info.is_null() || !(0..11).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -144,6 +146,7 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Native Dirty",
                         "VST3 Recovery Failure",
                         "VST3 Parameter Sources",
+                        "VST3 Bridge Delayed Effect",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -168,6 +171,7 @@ struct Component {
     notify: bool,
     recovery_failure: bool,
     multi_params: bool,
+    bridge_delayed: bool,
     activations: std::sync::atomic::AtomicU32,
     creator: std::thread::ThreadId,
     notified: std::sync::atomic::AtomicBool,
@@ -327,6 +331,7 @@ struct Audio {
     held: [[bool; 128]; 16],
     held_count: usize,
     extra: [f64; 2],
+    bridge_delay: crate::bridge_behaviors::DelayedEffect,
 }
 impl Default for Audio {
     fn default() -> Self {
@@ -338,6 +343,7 @@ impl Default for Audio {
             held: [[false; 128]; 16],
             held_count: 0,
             extra: [0.5; 2],
+            bridge_delay: crate::bridge_behaviors::DelayedEffect::default(),
         }
     }
 }
@@ -423,6 +429,9 @@ impl IAudioProcessorTrait for Component {
         if size == 0 { kResultOk } else { kResultFalse }
     }
     unsafe fn getLatencySamples(&self) -> u32 {
+        if self.bridge_delayed {
+            return crate::bridge_behaviors::DELAY as u32;
+        }
         if self.notify && f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)) < 0.5
         {
             64
@@ -462,6 +471,7 @@ impl IAudioProcessorTrait for Component {
             audio.velocity = 0.0;
             audio.held = [[false; 128]; 16];
             audio.held_count = 0;
+            audio.bridge_delay.reset();
         }
         kResultOk
     }
@@ -580,6 +590,24 @@ impl IAudioProcessorTrait for Component {
                 0.0
             };
             audio.phase = (audio.phase + 440.0 / audio.rate).fract();
+            if self.bridge_delayed {
+                let input = unsafe { &*data.inputs };
+                let pair = unsafe {
+                    [
+                        *(*input.__field0.channelBuffers32).add(frame as usize),
+                        *(*input.__field0.channelBuffers32.add(1)).add(frame as usize),
+                    ]
+                };
+                let delayed = audio.bridge_delay.tick(pair, gain as f32);
+                for (channel, value) in delayed.into_iter().enumerate() {
+                    unsafe {
+                        (*output.__field0.channelBuffers32.add(channel))
+                            .add(frame as usize)
+                            .write(value);
+                    }
+                }
+                continue;
+            }
             for channel in 0..output.numChannels {
                 let out = unsafe { *output.__field0.channelBuffers32.add(channel as usize) };
                 let input = if self.instrument {

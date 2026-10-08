@@ -95,26 +95,38 @@ struct Inner {
     owner: Owner,
     last_state: Mutex<Option<Captured>>,
 }
-impl Drop for Inner {
-    fn drop(&mut self) {
+impl Inner {
+    fn stop(&self) {
         // All facade/control references retire away from the callback. Queue
         // fullness cannot prevent stop: disconnect also stops the worker.
         let _ = self.jobs.try_send(Job::Stop);
         self.signals.retired.store(true, Ordering::Release);
         self.signals.failed.store(true, Ordering::Release);
-        if let Some(worker) = self
+        // Keep the join lock through confirmed exit: concurrent stop callers
+        // must not return merely because another caller took the JoinHandle.
+        let mut worker = self
             .worker
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-        {
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(worker) = worker.take() {
             let _ = worker.join();
         }
+    }
+}
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 #[derive(Clone)]
 pub struct Control(Arc<Inner>);
 impl Control {
+    /// Control/render caller only. Ends this instance and confirms process exit
+    /// before returning; audio may retain its mapping for bounded fallback.
+    pub fn terminate(&self) -> Status {
+        self.0.stop();
+        self.status()
+    }
     pub fn status(&self) -> Status {
         self.0
             .status
@@ -227,14 +239,49 @@ impl Control {
 
 struct Process(Child);
 impl Process {
-    fn reap(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+    fn reap(&mut self) -> Result<(), String> {
+        if self
+            .0
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if let Err(error) = self.0.kill() {
+            return if self
+                .0
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "helper termination failed; exit is unconfirmed: {error}"
+                ))
+            };
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if self
+                .0
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err("helper termination deadline exceeded; exit is unconfirmed".into());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 }
 impl Drop for Process {
     fn drop(&mut self) {
-        self.reap();
+        let _ = self.reap();
     }
 }
 
@@ -345,7 +392,7 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
         owner,
         1,
         deadline,
-        None,
+        Cancellation::default(),
     )?;
     let Message::Ready {
         native_latency,
@@ -385,12 +432,12 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
                 },
             );
             worker_signals.failed.store(true, Ordering::Release);
-            process.reap();
+            let exit = process.reap();
             let mut status = worker_status
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            status.reaped = true;
-            if let Err(error) = result {
+            status.reaped = exit.is_ok();
+            if let Err(error) = result.and(exit) {
                 status.failed = true;
                 status.error = Some(error);
             }
@@ -410,6 +457,19 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
     ))
 }
 
+#[derive(Default)]
+struct Cancellation<'a> {
+    request: Option<&'a AtomicBool>,
+    retired: Option<&'a AtomicBool>,
+}
+impl Cancellation<'_> {
+    fn requested(&self) -> bool {
+        [self.request, self.retired]
+            .into_iter()
+            .flatten()
+            .any(|flag| flag.load(Ordering::Acquire))
+    }
+}
 fn wait_reply(
     process: &mut Process,
     socket: &mut TcpStream,
@@ -417,12 +477,11 @@ fn wait_reply(
     owner: Owner,
     request: u64,
     deadline: Instant,
-    cancelled: Option<&AtomicBool>,
+    cancellation: Cancellation<'_>,
 ) -> Result<Packet, String> {
     loop {
-        if Instant::now() >= deadline || cancelled.is_some_and(|flag| flag.load(Ordering::Acquire))
-        {
-            process.reap();
+        if Instant::now() >= deadline || cancellation.requested() {
+            process.reap()?;
             return Err("audio helper control deadline exceeded; process terminated".into());
         }
         if process
@@ -512,7 +571,10 @@ fn supervise(
                         owner,
                         request,
                         deadline,
-                        Some(&cancelled),
+                        Cancellation {
+                            request: Some(&cancelled),
+                            retired: Some(&signals.retired),
+                        },
                     )
                 });
                 let failed = result.as_ref().err().cloned();

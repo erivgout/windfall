@@ -133,6 +133,21 @@ impl Region {
         }
     }
     pub fn submit(&self, sequence: u64, block: &InputBlock) -> bool {
+        if block.parameter_count > PARAM_CAPACITY || block.event_count > EVENT_CAPACITY {
+            return false;
+        }
+        let Ok(transport) = encode_transport(block.transport) else {
+            return false;
+        };
+        if block.parameters[..block.parameter_count]
+            .iter()
+            .any(|parameter| parameter.encode().is_err())
+            || block.events[..block.event_count]
+                .iter()
+                .any(|event| encode_event(*event, self.config.block).is_err())
+        {
+            return false;
+        }
         let Some(slot) = (0..SLOT_COUNT).find(|slot| self.claim(*slot, EMPTY, HOST_WRITE)) else {
             return false;
         };
@@ -147,7 +162,6 @@ impl Region {
         self.write_sequence(slot, CONTROL_START, block.control_start);
         self.write_sequence(slot, CONTROL_END, block.control_end);
         // Values were checked on admission; invalid transport is retained locally.
-        let transport = encode_transport(block.transport).expect("admitted transport");
         for (index, word) in transport.iter().enumerate() {
             self.put(slot, TRANSPORT + index, *word);
         }

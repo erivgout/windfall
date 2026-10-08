@@ -156,6 +156,12 @@ impl Audio {
         }
     }
     fn begin_block(&mut self) {
+        // A valid host position can advance past the explicit wire bound.
+        // Exhaustion must never reach a fallible encoder on the callback.
+        if encode_transport(self.transport).is_err() {
+            self.signals.failed.store(true, Ordering::Release);
+            self.transport = Transport::default();
+        }
         self.input.epoch = self.epoch;
         self.input.transport = self.transport;
         self.input.notes = self.held;
@@ -678,6 +684,34 @@ mod tests {
         assert!(worker.controls_complete);
         assert_eq!(worker.parameters[0].value, 0.75);
         assert_eq!(worker.notes, [0.0; 128]);
+    }
+
+    #[test]
+    fn advancing_past_wire_transport_bounds_fails_closed_without_callback_panic() {
+        let (mut audio, _) = make(Kind::Effect, 0);
+        let transport = Transport {
+            position_seconds: 1e9,
+            position_beats: 1e9,
+            playing: true,
+            ..Transport::default()
+        };
+        assert!(audio.set_transport(transport));
+        audio.process(&mut [0.25; 512], &mut [0.25; 512]);
+        assert!(audio.signals().failed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_second_panic_releases_notes_admitted_after_the_first_panic() {
+        let (mut audio, region) = make(Kind::Instrument, 0);
+        audio.all_notes_off();
+        assert!(audio.note_on(60, 0.75));
+        audio.all_notes_off();
+        audio.process(&mut [0.0; 64], &mut [0.0; 64]);
+        let mut input = InputBlock::new();
+        let _owned = region.take_input(&mut input).unwrap().unwrap();
+        assert_eq!(input.event_count, 3);
+        assert!(matches!(input.events[2], HostEvent::AllNotesOff { .. }));
+        assert_eq!(audio.voices(), 0);
     }
 
     #[test]

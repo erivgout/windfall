@@ -82,6 +82,7 @@ struct Audio {
     /// Frames of the delay that still hold sound after the last voice ended.
     ringing: usize,
     blocks: u32,
+    bridge_delay: crate::bridge_behaviors::DelayedEffect,
 }
 
 /// What only the main thread touches.
@@ -179,6 +180,7 @@ pub(crate) fn create(
             delay_at: 0,
             ringing: 0,
             blocks: 0,
+            bridge_delay: crate::bridge_behaviors::DelayedEffect::default(),
         }),
         main: UnsafeCell::new(Main {
             timer: None,
@@ -239,6 +241,7 @@ unsafe extern "C" fn activate(
     audio.delay = [[0.0; SINE_LATENCY]; 2];
     audio.delay_at = 0;
     audio.ringing = 0;
+    audio.bridge_delay.reset();
     true
 }
 
@@ -257,6 +260,7 @@ unsafe extern "C" fn reset(plugin: *const clap_plugin) {
     audio.delay = [[0.0; SINE_LATENCY]; 2];
     audio.delay_at = 0;
     audio.ringing = 0;
+    audio.bridge_delay.reset();
 }
 
 unsafe extern "C" fn on_main_thread(plugin: *const clap_plugin) {
@@ -376,6 +380,7 @@ unsafe extern "C" fn process(
     unsafe {
         match plugin.kind {
             Kind::Gain => process_gain(plugin, block),
+            Kind::BridgeDelayed => process_bridge_delayed(plugin, audio, block),
             Kind::Sine | Kind::MidiSine => process_sine(plugin, audio, block),
             Kind::Swap => process_stereo(block, |left, right| (right, left)),
             Kind::Sidechain => process_sidechain(block),
@@ -398,6 +403,44 @@ unsafe extern "C" fn process(
             }
         }
     }
+}
+
+/// # Safety
+/// All channels and event lists belong to the host's valid current block.
+unsafe fn process_bridge_delayed(
+    plugin: &Plugin,
+    audio: &mut Audio,
+    block: &clap_process,
+) -> clap_process_status {
+    let channels = unsafe {
+        [
+            channel(block.audio_inputs, block.audio_inputs_count, 0, 0),
+            channel(block.audio_inputs, block.audio_inputs_count, 0, 1),
+            channel(block.audio_outputs, block.audio_outputs_count, 0, 0),
+            channel(block.audio_outputs, block.audio_outputs_count, 0, 1),
+        ]
+    };
+    if channels.iter().any(|channel| channel.is_null()) {
+        return CLAP_PROCESS_ERROR;
+    }
+    let mut incoming = unsafe { Incoming::new(block.in_events) };
+    for frame in 0..block.frames_count {
+        while let Some(event) = unsafe { incoming.due(frame) } {
+            unsafe {
+                handle_param_event(plugin, event, block.out_events);
+            }
+        }
+        let at = frame as usize;
+        let input = unsafe { [*channels[0].add(at), *channels[1].add(at)] };
+        let output = audio
+            .bridge_delay
+            .tick(input, plugin.value(slot::GAIN) as f32);
+        unsafe {
+            *channels[2].add(at) = output[0];
+            *channels[3].add(at) = output[1];
+        }
+    }
+    CLAP_PROCESS_CONTINUE
 }
 
 /// Runs `shape` over a stereo port pair, sample by sample.

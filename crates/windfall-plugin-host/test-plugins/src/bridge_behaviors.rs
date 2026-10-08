@@ -1,0 +1,31 @@
+//! Shared deterministic DSP for newly appended bridge fixtures.
+
+pub(crate) const DELAY: usize = 37;
+
+pub(crate) struct DelayedEffect {
+    samples: [[f32; 2]; DELAY],
+    cursor: usize,
+}
+impl Default for DelayedEffect {
+    fn default() -> Self {
+        Self {
+            samples: [[0.0; 2]; DELAY],
+            cursor: 0,
+        }
+    }
+}
+impl DelayedEffect {
+    pub(crate) fn reset(&mut self) {
+        self.samples.fill([0.0; 2]);
+        self.cursor = 0;
+    }
+    pub(crate) fn tick(&mut self, input: [f32; 2], gain: f32) -> [f32; 2] {
+        let output = self.samples[self.cursor];
+        self.samples[self.cursor] = [input[0] * gain, input[1] * gain];
+        self.cursor += 1;
+        if self.cursor == DELAY {
+            self.cursor = 0;
+        }
+        output
+    }
+}

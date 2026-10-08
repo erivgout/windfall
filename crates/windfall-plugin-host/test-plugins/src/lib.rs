@@ -13,6 +13,7 @@
 //! - a name containing `nasty` adds the plugins that hang or crash in their
 //!   own `init`, which would otherwise slow down every scan of the file.
 
+mod bridge_behaviors;
 mod ext;
 #[cfg(windows)]
 mod gui;
@@ -34,6 +35,8 @@ use clap_sys::version::CLAP_VERSION;
 pub(crate) enum Kind {
     /// Stereo gain with parameters, state and an editor. Works in place.
     Gain,
+    /// Truthful stereo37-frame delay; original gain fixture stays undelayed.
+    BridgeDelayed,
     /// Sine instrument that takes CLAP notes and reports latency.
     Sine,
     /// The same instrument with a note port that only speaks MIDI.
@@ -155,6 +158,12 @@ const SPECS: &[Spec] = &[
         kind: Kind::InitCrash,
         id: c"org.windfall.test.init-crash",
         name: c"Test Init Crash",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeDelayed,
+        id: c"org.windfall.test.bridge-delayed",
+        name: c"Test Bridge Delayed Effect",
         features: EFFECT,
     },
 ];

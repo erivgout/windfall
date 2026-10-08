@@ -8,6 +8,7 @@ pub mod helper;
 #[cfg(windows)]
 pub mod mapping;
 pub mod protocol;
+pub mod retry;
 pub mod slots;
 #[cfg(windows)]
 pub mod supervisor;
