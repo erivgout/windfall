@@ -574,6 +574,249 @@ fn unrelated_first_and_stalled_clients_receive_no_load_before_real_child_authent
 }
 
 #[test]
+fn native_output_event_saturation_is_visible_and_cannot_acknowledge_desired_controls() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            "org.windfall.test.bridge-event-flood".to_owned()
+        } else {
+            vst_id(17)
+        };
+        let (control, mut audio) = launch(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_secs(2),
+        );
+        assert!(audio.set_param(7, 0.75));
+        let mut left = [0.25; 64];
+        let mut right = left;
+        for _ in 0..3 {
+            assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            audio.health().native_drops > 0,
+            "native output losses hidden for {format}"
+        );
+        assert!(audio.health().unknown_blocks > 0);
+        assert_eq!(audio.health().acknowledged_generation, 0);
+        assert!(audio.set_param(7, 0.5));
+        for _ in 0..3 {
+            assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            audio.health().acknowledged_generation,
+            audio.desired_generation(),
+            "accepted desired control did not recover after native flood"
+        );
+        assert!(!control.status().failed);
+        assert!(control.terminate().reaped);
+    }
+}
+
+#[test]
+fn clap_ignored_failed_state_write_preserves_cached_state_and_owner() {
+    let mut settings = options(
+        "clap",
+        "org.windfall.test.bridge-ignored-stream-error",
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_secs(5),
+    );
+    settings.offline = true;
+    let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+    let old = control
+        .capture(
+            1,
+            audio.desired_generation(),
+            &[gain("clap")],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(audio.set_param(7, 0.75));
+    audio
+        .process_offline(
+            &mut [0.25; 512],
+            &mut [0.25; 512],
+            Instant::now() + Duration::from_secs(2),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    let pending = [ParameterSpec {
+        value: 0.75,
+        ..gain("clap")
+    }];
+    // Actual native CLAP save reaches the existing256MiB writer cap; no invalid
+    // borrowed pointer or invented oversized slice is passed to the host stream.
+    assert!(
+        control
+            .capture(
+                1,
+                audio.desired_generation(),
+                &pending,
+                Duration::from_secs(5)
+            )
+            .is_err()
+    );
+    assert_eq!(control.last_valid_state().unwrap().state, old.state);
+    assert!(audio.set_param(7, 0.5));
+    audio
+        .process_offline(
+            &mut [0.25; 512],
+            &mut [0.25; 512],
+            Instant::now() + Duration::from_secs(2),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect("refused state must leave native owner usable");
+    let healthy = control
+        .capture(
+            1,
+            audio.desired_generation(),
+            &[gain("clap")],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert_eq!(healthy.state, old.state);
+    assert!(!control.status().failed);
+    assert!(control.terminate().reaped);
+}
+
+#[test]
+fn native_capture_exit_hang_and_partial_state_failure_preserve_the_last_cache() {
+    let (other, mut live) = launch(
+        "clap",
+        common::GAIN,
+        Kind::Effect,
+        vec![gain("clap")],
+        Duration::from_secs(2),
+    );
+    for format in ["clap", "vst3"] {
+        for (suffix, index) in [
+            ("capture-exit", 13),
+            ("capture-hang", 14),
+            ("invalid-stream", 15),
+        ] {
+            let id = if format == "clap" {
+                format!("org.windfall.test.bridge-{suffix}")
+            } else {
+                vst_id(index)
+            };
+            let mut settings = options(
+                format,
+                &id,
+                Kind::Effect,
+                vec![gain(format)],
+                Duration::from_secs(2),
+            );
+            settings.offline = true;
+            let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+            let old = control
+                .capture(
+                    1,
+                    audio.desired_generation(),
+                    &[gain(format)],
+                    Duration::from_secs(1),
+                )
+                .unwrap();
+            assert!(audio.set_param(7, 0.75));
+            audio
+                .process_offline(
+                    &mut [0.25; 512],
+                    &mut [0.25; 512],
+                    Instant::now() + Duration::from_secs(2),
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .unwrap();
+            let pending = [ParameterSpec {
+                value: 0.75,
+                ..gain(format)
+            }];
+            let start = Instant::now();
+            assert!(
+                control
+                    .capture(
+                        1,
+                        audio.desired_generation(),
+                        &pending,
+                        Duration::from_millis(100)
+                    )
+                    .is_err()
+            );
+            assert!(start.elapsed() < Duration::from_secs(2));
+            assert_eq!(control.last_valid_state().unwrap().state, old.state);
+            if suffix == "invalid-stream" {
+                assert!(
+                    !control.status().failed,
+                    "native refused partial state should not kill healthy helper"
+                );
+                assert!(audio.set_param(7, 0.5));
+                audio
+                    .process_offline(
+                        &mut [0.25; 512],
+                        &mut [0.25; 512],
+                        Instant::now() + Duration::from_secs(2),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .unwrap();
+                control
+                    .capture(
+                        1,
+                        audio.desired_generation(),
+                        &[gain(format)],
+                        Duration::from_secs(1),
+                    )
+                    .unwrap();
+            } else {
+                wait_failed(&control);
+                for _ in 0..6 {
+                    let mut left = [0.25; 64];
+                    let mut right = left;
+                    assert_eq!(guarded(|| audio.process(&mut left, &mut right)), 0);
+                }
+            }
+            assert!(control.terminate().reaped);
+            let mut left = [0.25; 512];
+            let mut right = left;
+            assert_eq!(guarded(|| live.process(&mut left, &mut right)), 0);
+            std::thread::sleep(Duration::from_millis(5));
+            assert!(!other.status().failed);
+        }
+    }
+    assert!(live.health().completed_blocks > 0);
+    assert!(other.terminate().reaped);
+}
+
+#[test]
+fn unsupported_actual_native_latency_is_rejected_before_audio_installation() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            "org.windfall.test.bridge-bad-latency".to_owned()
+        } else {
+            vst_id(16)
+        };
+        let settings = options(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_secs(1),
+        );
+        let start = Instant::now();
+        let result = supervisor::launch(settings);
+        let error = result
+            .err()
+            .expect("bad native latency produced an installed facade");
+        assert!(
+            error.contains("unsupported native latency"),
+            "unsupported latency was hidden by {error}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+}
+
+#[test]
 fn wrong_child_key_and_startup_cancellation_fail_closed_with_bounded_reap() {
     use std::process::{Command, Stdio};
     use windfall_plugin_host::bridge::auth;
@@ -759,6 +1002,204 @@ fn idle_native_hang_is_reaped_while_callbacks_keep_turning_over_ready_slots() {
         "idle hang evaded watchdog: {result:?}"
     );
     assert_eq!(audio.health().acknowledged_generation, 0);
+}
+
+#[test]
+fn authenticated_production_launch_accepts_large_valid_native_state_under_backpressure() {
+    let host = PluginHost::windfall();
+    let module = host.load(&fixture("clap")).unwrap();
+    let mut native = module.create(common::GAIN).unwrap();
+    assert!(native.set_param(7, 0.625));
+    assert!(native.set_param(9, 1.0)); // Opaque state owns inversion; Load table only sets gain.
+    let mut state = native.save_state().unwrap().into_bytes();
+    state.resize(16 << 20, 0); // Fixture accepts trailing opaque native bytes.
+    native
+        .load_state(&PluginState::from_bytes(state.clone()))
+        .unwrap();
+    assert_eq!(native.param_value(7), Some(0.625));
+    assert_eq!(native.param_value(9), Some(1.0));
+    let mut settings = options(
+        "clap",
+        common::GAIN,
+        Kind::Effect,
+        vec![ParameterSpec {
+            value: 0.625,
+            ..gain("clap")
+        }],
+        Duration::from_secs(2),
+    );
+    settings.state = state;
+    settings.offline = true;
+    settings.helper = PathBuf::from(env!("CARGO_BIN_EXE_windfall-plugin-audio-backpressure"));
+    // Actual production launch, with the native helper paused before Load reads.
+    let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+    let mut left = [1.0; 512];
+    let mut right = left;
+    audio
+        .process_offline(
+            &mut left,
+            &mut right,
+            Instant::now() + Duration::from_secs(2),
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+    assert!(left[128..].iter().all(|value| *value == -0.625));
+    let captured = control
+        .capture(
+            1,
+            audio.desired_generation(),
+            &[ParameterSpec {
+                value: 0.625,
+                ..gain("clap")
+            }],
+            Duration::from_secs(2),
+        )
+        .unwrap();
+    assert!(native.set_param(7, 0.0));
+    assert!(native.set_param(9, 0.0));
+    native
+        .load_state(&PluginState::from_bytes(captured.state))
+        .unwrap();
+    assert_eq!(native.param_value(7), Some(0.625));
+    assert_eq!(native.param_value(9), Some(1.0));
+    assert!(control.terminate().reaped);
+}
+
+#[test]
+fn backpressured_startup_cancellation_and_deadline_reclaim_the_mapping() {
+    for cancel in [false, true] {
+        let host = PluginHost::windfall();
+        let module = host.load(&fixture("clap")).unwrap();
+        let mut state = module
+            .create(common::GAIN)
+            .unwrap()
+            .save_state()
+            .unwrap()
+            .into_bytes();
+        state.resize(16 << 20, 0);
+        let mut settings = options(
+            "clap",
+            common::GAIN,
+            Kind::Effect,
+            vec![gain("clap")],
+            Duration::from_secs(2),
+        );
+        settings.helper = PathBuf::from(env!("CARGO_BIN_EXE_windfall-plugin-audio-backpressure"));
+        settings.state = state;
+        settings.startup_timeout = if cancel {
+            Duration::from_secs(5)
+        } else {
+            Duration::from_millis(100)
+        };
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        settings.cancelled = Some(flag.clone());
+        let mapping = format!(
+            "Local\\Windfall-Audio-{:016x}-{:016x}",
+            settings.config.identity.session, settings.config.identity.token
+        );
+        let canceller = cancel.then(|| {
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                flag.store(true, Ordering::Release);
+            })
+        });
+        let started = Instant::now();
+        let error = match supervisor::launch(settings) {
+            Ok(_) => panic!("partial cancelled/expired Load was accepted"),
+            Err(error) => error,
+        };
+        if let Some(canceller) = canceller {
+            canceller.join().unwrap();
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "startup bound: {error}"
+        );
+        assert!(
+            error.contains(if cancel {
+                "startup cancelled"
+            } else {
+                "startup deadline"
+            }),
+            "{error}"
+        );
+        assert!(
+            windfall_plugin_host::bridge::mapping::Mapping::open(&mapping).is_err(),
+            "failed launch retained its map"
+        );
+    }
+}
+
+#[test]
+fn capture_after_an_incomplete_new_epoch_cannot_relabel_old_dsp_proof() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            common::GAIN.to_owned()
+        } else {
+            vst_id(0)
+        };
+        let mut settings = options(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_secs(2),
+        );
+        settings.offline = true;
+        let (control, mut audio, _) = supervisor::launch(settings).unwrap();
+        audio
+            .process_offline(
+                &mut [1.0; 512],
+                &mut [1.0; 512],
+                Instant::now() + Duration::from_secs(2),
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        let first = control
+            .capture(
+                1,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        assert!(first.processed_generation > 0);
+        audio.reset_timeline();
+        for _ in 0..1024 {
+            assert!(audio.note_on(60, 0.5));
+        }
+        assert!(!audio.note_on(69, 0.75));
+        // Submit only one native block in epoch2. It is actually incomplete;
+        // a successful serialized capture then runs after that native call.
+        audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+        std::thread::sleep(Duration::from_millis(20));
+        let incomplete = control
+            .capture(
+                2,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(
+            incomplete.processed_generation, 0,
+            "{format} relabelled old DSP proof after incomplete new-epoch processing"
+        );
+        for _ in 0..3 {
+            audio.process(&mut [1.0; 64], &mut [1.0; 64]);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let healthy = control
+            .capture(
+                2,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(1),
+            )
+            .unwrap();
+        assert_eq!(healthy.processed_generation, audio.desired_generation());
+        assert!(control.terminate().reaped);
+    }
 }
 
 #[test]

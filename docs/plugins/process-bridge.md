@@ -6,9 +6,10 @@ the bridge or native editor parity rows.
 
 The owner has since advanced its worktree baseline to `7f70315c` (including
 `19caf872`) at the parent's direction. The parent approved the proposed 2B
-schedule and host-library edit window; production runtime/manager/main and
-shared fixture classes 10+ have a narrow approved window; production routing
-remains reserved while bridge review repairs are independently accepted. The initial 512-frame default delay was a proposal; the evidence
+schedule and host-library edit window. Shared fixture classes10+ have a narrow
+approved window; production runtime/manager/main routing remains reserved
+while bridge repairs are independently accepted. The initial512-frame default
+delay was a proposal; the evidence
 below now measures it with B=256 native helper fixtures, separately from B=64.
 The owner subsequently imported reviewed R4 `ec601edf` in local merge
 `02072c81`, using the parent's applied `ea145d93` composition to preserve the
@@ -228,12 +229,12 @@ parent's existing runtime/main/manager edit reservation.
 
 Current Windows headless evidence:
 
-- Twenty bridge unit checks pass, including exact layout/identity/events,
+- Twenty-one bridge unit checks pass, including exact layout/identity/events,
   corrupt output, late helper-owned slot preservation, overflow snapshots,
   epoch rejection, no submission acknowledgement, continuous fallback ramps,
   counter exhaustion, transport-bound exhaustion without callback panic,
   bounded retry/cooldown/stale-attempt rejection and local-reference delay.
-- Seventeen process integration checks pass (one additional ignored test is an
+- Twenty process integration checks pass (one additional ignored test is an
   explicitly invoked client subprocess role): CLAP native crash, nonfinite samples and a
   helper deadline exceeded by a slow native block are terminated/reaped while
   the parent stays alive with aligned dry fallback; VST3 processing errors and
@@ -259,7 +260,7 @@ Current Windows headless evidence:
   preallocated 37-frame stereo delay. Healthy helper audio and delayed dry
   fallback after confirmed termination both begin at **165 frames for B=64**
   and **549 for B=256**, exactly matching the adapter's latency report. VST3
-  class 10 follows the unchanged original classes 0â€“9; scanner count is 13 (class11 permanent process hang, class12 held-key probe).
+  class 10 follows the unchanged original classes 0â€“9; scanner count is 18 (classes11–17 add process hang, held-key probe and fault fixtures).
   Engine graph PDC/routing/dry-wet integration remains unverified until wiring.
 - Before any native DSP block, capture retains pending parameter intent without
   claiming DSP acknowledgement. CLAP stays active: its opaque state retains
@@ -287,13 +288,13 @@ Current Windows headless evidence:
   before/after native processing. Native input/output losses are separately
   observable and retain desired controls. R4 prerequisite source is accepted;
   production use still awaits independent bridge-repair acceptance.
-- All sixteen existing realtime checks pass, including native CLAP/VST3
+- All twenty existing realtime checks pass, including native CLAP/VST3
   allocator, note-release reserve and ownership regressions. The fixture was
   built separately and the test executable run directly to keep one Cargo
   process per owner.
 
 Pending: production factory/manager/helper mode and adopted document metadata,
-capture-exit/hang/malformed-state/bad-latency fixture hooks, save/undo/replacement/recording barriers, engine PDC/routing/export
+semantic-native-state validation, save/undo/replacement/recording barriers, engine PDC/routing/export
 and stems, manager wiring for the tested retry budget, packaged installer discovery, licensed
 corpus, native editors and other OS execution. Existing state bytes are opaque:
 checked container/stream validity is enforced, but this does not prove an
@@ -366,3 +367,100 @@ Strict all-feature/all-target Clippy, fixture formatting and scanner counts
 are rerun for the source-only response commit. These tests remain headless
 Windows evidence; no production desktop activation, installed-package helper
 claim, licensed-corpus result, native editor parity or other-OS claim follows.
+
+## Capture and output-fault followup
+
+After the fixed R1 response ba61a255, new CLAP bridge IDs and VST3 classes13–17
+append capture-exit, capture-hang, partial-state refusal, unsupported latency
+and output-event flood. Previous IDs/classes0–12 retain their behavior.
+Capture faults trigger only after actual gain0.75 DSP so gain0.5 can establish
+a real last validated state first. Both formats preserve that cached state on
+exit/hang/refusal; permanent capture hangs are terminated under a100ms control
+deadline, and an independent live instance remains healthy. Truncated3-byte
+native writes followed by explicit save failure are rejected; recovery can
+subsequently capture a healthy state again.
+
+Actual native u32::MAX latency is latched unavailable and reported as an
+explicit unsupported-native-latency startup error before audio installation;
+a compiled RED showed that the earlier generic EOF hid the reason. Completed
+authenticated control errors are decoded before considering child exit so the
+bounded startup error remains visible. Native loss-counter exhaustion or
+observed rollover terminates the helper; it cannot later claim affirmative
+no-drop proof from a wrapped counter.
+
+A5000-output-event fixture in each format proves native loss telemetry is
+visible, lost/unknown generations receive no DSP acknowledgement, and desired
+controls recover in actual healthy blocks after the flood is disabled. CLAP
+fills owner notifications; VST3 fills its fixed SDK output note-event list.
+Repeated same-offset VST3 parameter points coalesce by SDK contract, so that
+would not constitute a capacity proof. Callback guards remain zero alloc/free.
+
+The parent approved a narrow shared-host state-writer repair. LimitedWriter
+now retains every refusal, uses checked size arithmetic, and refuses subsequent
+writes/flush. CLAP save checks that sticky failure even if native code reports
+success. A new CLAP-only bridge-ignored-stream-error ID deliberately ignores
+the first refused write and returns success. Existing VST3 classes0-17 stay
+unchanged, with factory/scanner count18. A32-byte native-boundary unit compiled
+RED when partial bytes were accepted and GREEN after the guard; the helper's
+actual256MiB cap compiled RED when the oversized reply lost the native owner.
+GREEN preserves the previous cache, rejects capture, and completes healthy DSP
+and capture on that same owner. The small-limit native unit is explicitly
+ignored by default because it requires the separately built owned fixture; its
+explicit fixture-backed invocation passes. The VST3 host already retains
+sticky stream failure. These checks do not establish semantic validity of
+arbitrary opaque native state or native editor behavior.
+
+## R2 proof, startup backpressure and offline completion
+
+DSP proof has a separate processed_epoch tag. Only the complete, matching,
+nonempty successful native process with successful admission and affirmative
+no-drop evidence can advance this tag with its processed generation. Current
+native epoch/sequence may advance on an incomplete block without advancing
+proof. Actual CLAP/VST3 regression compiled RED after epoch1 healthy DSP, reset,
+then the first epoch2 note-overflow block: capture relabeled old proof under
+epoch2. GREEN returns zero DSP proof, then acknowledges a later healthy epoch2
+block. The earlier no-intervening-DSP VST3 capture regression remains green.
+
+Authentication still completes before any Load disclosure. Startup Load now
+writes incrementally on the authenticated nonblocking socket in at most64KiB
+chunks. Every partial-write/retry checks the whole startup deadline,
+cancellation and child exit; WouldBlock yields only on the control thread.
+No truncation, retry of an entire already-partial frame, downgrade or local
+DSP acknowledgement is allowed. The private debug test executable pauses
+native Load reads500ms and only that test launch clamps SO_SNDBUF to4096; the
+production socket buffer is unchanged. Existing windows-sys0.61 gained only
+the approved Win32_Networking_WinSock feature, with no package/version/lock
+change. Scripted old write_all compiled RED on WouldBlock; incremental writes
+preserve exact framing across partial/Interrupted/WouldBlock responses and
+stop on an injected deadline (GREEN). The actual supervisor::launch16MiB
+valid native state completed with5017 observed WouldBlock retries in the
+final run, then produced matching healthy audio and captured/restored state. Its native
+inversion setting exists only in opaque state, outside the Load gain table,
+so parameter adoption cannot hide a lost restore.
+The old single large write_all still passed on this Windows machine even
+with the clamp; this is not claimed as an executed native RED. Actual startup
+cancel/deadline during backpressure refuse launch within the bounded control
+budget and reclaim the mapping. Authentication's eight candidates and stale
+owner/identity/framing checks remain unchanged. Not a security sandbox or
+protection from a privileged adversary.
+
+Offline scheduling rechecks cancellation/deadline/shared failure after DONE
+and before final success. A private deterministic wait seam publishes DONE
+simultaneously with cancellation or expiry: both compiled RED returning Ok,
+then GREEN returning the precise error. The tests also consume a valid first
+chunk before the failed final chunk and prove both entire128-frame supplied
+buffers are cleared. Realtime process keeps no clock, wait or control IO.
+
+Final narrow verification:24 bridge units,24 real-process integration cases
+(plus one explicitly child-invoked ignored role), the fixture-backed CLAP
+state unit and state-writer units pass. The calibrated320-callback run records
+zero alloc/realloc/free, max5us and average1us wall time. Host lib48 cases
+pass (plus the explicitly invoked ignored native state unit), all20 realtime
+cases and both scanner cases pass; the scanner sees18 VST3 classes. Existing
+parameter/state regressions also pass. These headless busy
+Windows observations do not establish physical audio deadlines. Strict
+all-feature/all-target host Clippy, host and complete fixture formatting, and
+git diff --check pass for delivery. Production routing, engine
+PDC/routing/export/stems, save/undo/replacement/recording integration, packaged
+installer discovery, licensed Windows corpus, native editors and other OSes
+remain open acceptance gates.

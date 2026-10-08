@@ -38,10 +38,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        13
+        18
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..13).contains(&index) {
+        if info.is_null() || !(0..18).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -65,6 +65,11 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Bridge Delayed Effect",
                         "VST3 Bridge Permanent Process Hang",
                         "VST3 Bridge Held Key Probe",
+                        "VST3 Bridge Capture Exit",
+                        "VST3 Bridge Capture Hang",
+                        "VST3 Bridge Partial State Failure",
+                        "VST3 Bridge Unsupported Latency",
+                        "VST3 Bridge Native Event Flood",
                     ][index as usize],
                 ),
             });
@@ -85,7 +90,7 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..13).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..18).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
@@ -97,7 +102,20 @@ impl IPluginFactoryTrait for Factory {
                 notify: class == cid(7),
                 recovery_failure: class == cid(8),
                 multi_params: class == cid(9),
-                bridge_delayed: class == cid(10) || class == cid(11),
+                bridge_delayed: class == cid(10)
+                    || class == cid(11)
+                    || (13..18).any(|i| class == cid(i)),
+                bridge_bad_latency: class == cid(16),
+                bridge_event_flood: class == cid(17),
+                bridge_capture_fault: if class == cid(13) {
+                    crate::bridge_behaviors::CaptureFault::Exit
+                } else if class == cid(14) {
+                    crate::bridge_behaviors::CaptureFault::Hang
+                } else if class == cid(15) {
+                    crate::bridge_behaviors::CaptureFault::PartialStream
+                } else {
+                    crate::bridge_behaviors::CaptureFault::None
+                },
                 bridge_hang: class == cid(11),
                 activations: std::sync::atomic::AtomicU32::new(0),
                 creator: std::thread::current().id(),
@@ -129,7 +147,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..13).contains(&index) {
+        if info.is_null() || !(0..18).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -153,6 +171,11 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Bridge Delayed Effect",
                         "VST3 Bridge Permanent Process Hang",
                         "VST3 Bridge Held Key Probe",
+                        "VST3 Bridge Capture Exit",
+                        "VST3 Bridge Capture Hang",
+                        "VST3 Bridge Partial State Failure",
+                        "VST3 Bridge Unsupported Latency",
+                        "VST3 Bridge Native Event Flood",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -180,6 +203,9 @@ struct Component {
     multi_params: bool,
     bridge_delayed: bool,
     bridge_hang: bool,
+    bridge_bad_latency: bool,
+    bridge_event_flood: bool,
+    bridge_capture_fault: crate::bridge_behaviors::CaptureFault,
     activations: std::sync::atomic::AtomicU32,
     creator: std::thread::ThreadId,
     notified: std::sync::atomic::AtomicBool,
@@ -391,6 +417,17 @@ impl Component {
         let Some(stream) = (unsafe { vst3::ComRef::from_raw(state) }) else {
             return kInvalidArgument;
         };
+        if !crate::bridge_behaviors::before_capture(
+            self.bridge_capture_fault,
+            f64::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed)),
+        ) {
+            let mut bytes = [0u8; 3];
+            let mut count = 0;
+            unsafe {
+                stream.write(bytes.as_mut_ptr().cast(), 3, &mut count);
+            }
+            return kInternalError;
+        }
         let mut bytes = self
             .gain
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -437,6 +474,9 @@ impl IAudioProcessorTrait for Component {
         if size == 0 { kResultOk } else { kResultFalse }
     }
     unsafe fn getLatencySamples(&self) -> u32 {
+        if self.bridge_bad_latency {
+            return u32::MAX;
+        }
         if self.bridge_delayed {
             return crate::bridge_behaviors::DELAY as u32;
         }
@@ -640,6 +680,21 @@ impl IAudioProcessorTrait for Component {
                     } else {
                         (input + synth) * (gain as f32 * 2.0)
                     });
+                }
+            }
+        }
+        if self.bridge_event_flood && gain >= 0.75 {
+            if let Some(events) = unsafe { vst3::ComRef::from_raw(data.outputEvents) } {
+                let mut event: Event = unsafe { std::mem::zeroed() };
+                event.r#type = 0;
+                event.__field0.noteOn.channel = 0;
+                event.__field0.noteOn.pitch = 69;
+                event.__field0.noteOn.velocity = 0.75;
+                event.__field0.noteOn.noteId = -1;
+                for _ in 0..5000 {
+                    unsafe {
+                        events.addEvent(&mut event);
+                    }
                 }
             }
         }

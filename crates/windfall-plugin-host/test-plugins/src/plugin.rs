@@ -394,9 +394,14 @@ unsafe extern "C" fn process(
     unsafe {
         match plugin.kind {
             Kind::Gain => process_gain(plugin, block),
-            Kind::BridgeDelayed | Kind::BridgeIdleHang => {
-                process_bridge_delayed(plugin, audio, block)
-            }
+            Kind::BridgeDelayed
+            | Kind::BridgeIdleHang
+            | Kind::BridgeCaptureExit
+            | Kind::BridgeCaptureHang
+            | Kind::BridgeInvalidStream
+            | Kind::BridgeBadLatency
+            | Kind::BridgeEventFlood
+            | Kind::BridgeIgnoredStreamError => process_bridge_delayed(plugin, audio, block),
             Kind::BridgeNoteProbe => process_bridge_note_probe(audio, block),
             Kind::BridgeProcessHang => crate::bridge_behaviors::hang(),
             Kind::Sine | Kind::MidiSine => process_sine(plugin, audio, block),
@@ -456,6 +461,23 @@ unsafe fn process_bridge_delayed(
         unsafe {
             *channels[2].add(at) = output[0];
             *channels[3].add(at) = output[1];
+        }
+    }
+    if plugin.kind == Kind::BridgeEventFlood && plugin.value(slot::GAIN) >= 0.75 {
+        let value = clap_event_param_value {
+            header: header::<clap_event_param_value>(0, CLAP_EVENT_PARAM_VALUE),
+            param_id: ext::GAIN_ID,
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: plugin.value(slot::GAIN),
+        };
+        for _ in 0..5000 {
+            unsafe {
+                push(block.out_events, &value);
+            }
         }
     }
     CLAP_PROCESS_CONTINUE

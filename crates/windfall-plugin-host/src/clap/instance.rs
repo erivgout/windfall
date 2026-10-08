@@ -360,6 +360,11 @@ impl InstanceBackend for ClapInstance {
         state
             .save(&self.instance.plugin_handle(), &mut writer)
             .map_err(|_| PluginError::State("saved"))?;
+        // Native code may ignore a refused stream write and report success.
+        // Never turn that partial payload into a valid state/cached capture.
+        if writer.failed() {
+            return Err(PluginError::State("saved"));
+        }
         Ok(Some(writer.bytes))
     }
 
@@ -524,5 +529,56 @@ impl InstanceBackend for ClapInstance {
 impl Drop for ClapInstance {
     fn drop(&mut self) {
         self.close_editor();
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires explicitly built WINDFALL_BRIDGE_FIXTURE; runs no nested Cargo"]
+    fn native_success_after_a_refused_stream_write_is_not_valid_state() {
+        let path = std::env::var_os("WINDFALL_BRIDGE_FIXTURE").expect("native fixture path");
+        // SAFETY: explicitly built owned synthetic native fixture.
+        let entry = unsafe { PluginEntry::load(std::path::Path::new(&path)) }.unwrap();
+        let info = HostInfo::new(
+            "Windfall state regression",
+            "Windfall",
+            "https://windfall.local",
+            "1",
+        )
+        .unwrap();
+        let mut native = ClapInstance::create(
+            &entry,
+            "org.windfall.test.bridge-ignored-stream-error",
+            &info,
+            super::super::silent_log(),
+        )
+        .unwrap();
+        native.flush_params(
+            &[HostEvent::Param {
+                time: 0,
+                id: 7,
+                value: 0.5,
+            }],
+            &mut |_| {},
+        );
+        let cached = native.save_state(32).unwrap().unwrap();
+        native.flush_params(
+            &[HostEvent::Param {
+                time: 0,
+                id: 7,
+                value: 0.75,
+            }],
+            &mut |_| {},
+        );
+        assert!(
+            native.save_state(32).is_err(),
+            "plugin ignored refused write and relabeled partial bytes as success"
+        );
+        native.load_state(&cached).unwrap();
+        assert_eq!(native.param_value(7), Some(0.5));
+        assert_eq!(native.save_state(32).unwrap().unwrap(), cached);
     }
 }

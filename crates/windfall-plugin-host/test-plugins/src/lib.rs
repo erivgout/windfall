@@ -40,6 +40,12 @@ pub(crate) enum Kind {
     BridgeProcessHang,
     BridgeIdleHang,
     BridgeNoteProbe,
+    BridgeCaptureExit,
+    BridgeCaptureHang,
+    BridgeInvalidStream,
+    BridgeBadLatency,
+    BridgeEventFlood,
+    BridgeIgnoredStreamError,
     /// Sine instrument that takes CLAP notes and reports latency.
     Sine,
     /// The same instrument with a note port that only speaks MIDI.
@@ -186,6 +192,42 @@ const SPECS: &[Spec] = &[
         id: c"org.windfall.test.bridge-note-probe",
         name: c"Test Bridge Held Key Probe",
         features: INSTRUMENT,
+    },
+    Spec {
+        kind: Kind::BridgeCaptureExit,
+        id: c"org.windfall.test.bridge-capture-exit",
+        name: c"Test Bridge Capture Exit",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeCaptureHang,
+        id: c"org.windfall.test.bridge-capture-hang",
+        name: c"Test Bridge Capture Hang",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeInvalidStream,
+        id: c"org.windfall.test.bridge-invalid-stream",
+        name: c"Test Bridge Partial State Failure",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeBadLatency,
+        id: c"org.windfall.test.bridge-bad-latency",
+        name: c"Test Bridge Unsupported Latency",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeEventFlood,
+        id: c"org.windfall.test.bridge-event-flood",
+        name: c"Test Bridge Native Event Flood",
+        features: EFFECT,
+    },
+    Spec {
+        kind: Kind::BridgeIgnoredStreamError,
+        id: c"org.windfall.test.bridge-ignored-stream-error",
+        name: c"Test Bridge Ignored State Write Failure",
+        features: EFFECT,
     },
 ];
 

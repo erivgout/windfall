@@ -34,3 +34,23 @@ impl DelayedEffect {
         output
     }
 }
+
+#[derive(Clone, Copy, Default)]
+pub(crate) enum CaptureFault {
+    #[default]
+    None,
+    Exit,
+    Hang,
+    PartialStream,
+}
+pub(crate) fn before_capture(fault: CaptureFault, value: f64) -> bool {
+    if value < 0.75 {
+        return true;
+    }
+    match fault {
+        CaptureFault::None => true,
+        CaptureFault::Exit => std::process::exit(83),
+        CaptureFault::Hang => hang(),
+        CaptureFault::PartialStream => false,
+    }
+}
