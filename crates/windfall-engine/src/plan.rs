@@ -66,7 +66,10 @@ impl IdIndex {
 pub(crate) struct Plan {
     pub navigation: Vec<crate::timeline::NavigationPoint>,
     pub signature: windfall_project::TimeSignature,
-    pub meters: Vec<(u32, windfall_project::TimeSignature)>,
+    pub meters: Result<
+        Vec<windfall_project::timeline::MeterSegment>,
+        windfall_project::timeline::MeterMapError,
+    >,
     pub plugins: Vec<windfall_project::PluginBinding>,
     pub plugin_factory: Option<std::sync::Arc<dyn crate::plugins::PluginFactory>>,
     pub tempo_bpm: f64,
@@ -449,13 +452,11 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
     let mut plan = Plan {
         navigation: crate::timeline::compile(&project.playlist.timeline),
         signature: project.settings.time_signature,
-        meters: project
-            .playlist
-            .timeline
-            .meters
-            .iter()
-            .map(|m| (m.tick, m.signature))
-            .collect(),
+        meters: windfall_project::timeline::MeterMap::checked(
+            project.settings.time_signature,
+            &project.playlist.timeline.meters,
+        )
+        .map(|map| map.segments().to_vec()),
         plugins: project.plugins.clone(),
         plugin_factory: pool.plugin_factory.clone(),
         tempo_bpm,

@@ -1,6 +1,5 @@
 //! Checked musical meter and navigation data, independent of the tempo clock.
 
-use crate::check::time_signature_problem;
 use crate::{MAX_SONG_TICKS, PPQ, TimeSignature};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -187,11 +186,25 @@ pub struct MusicalPosition {
     pub tick: u32,
 }
 #[derive(Debug, Clone, Copy)]
-struct MeterSegment {
+pub struct MeterSegment {
     start: u32,
     end: u32,
     bar: u32,
     signature: TimeSignature,
+}
+
+impl MeterSegment {
+    /// The segment's first downbeat, in absolute musical ticks.
+    pub const fn start_tick(&self) -> u32 {
+        self.start
+    }
+    /// The cumulative zero-based bar index at this downbeat.
+    pub const fn bar_origin_index(&self) -> u32 {
+        self.bar - 1
+    }
+    pub const fn signature(&self) -> TimeSignature {
+        self.signature
+    }
 }
 
 /// Control-side conversion; unaligned changes start a new bar and shorten
@@ -199,13 +212,64 @@ struct MeterSegment {
 pub struct MeterMap {
     segments: Vec<MeterSegment>,
 }
-impl MeterMap {
-    pub fn new(legacy: TimeSignature, changes: &[MeterChange]) -> Result<Self, String> {
-        if let Some(problem) = time_signature_problem(legacy) {
-            return Err(problem);
+
+/// Control-side preparation failures, retained without an error allocation in
+/// immutable playback metadata. The string adapter remains the document API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeterMapError {
+    Numerator(u8),
+    Denominator(u8),
+    TooManyChanges,
+    UnorderedOrOutOfBounds,
+    BarOverflow,
+}
+
+impl std::fmt::Display for MeterMapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Numerator(value) => write!(
+                f,
+                "a time signature needs 1 to 16 beats per bar, not {value}"
+            ),
+            Self::Denominator(value) => write!(
+                f,
+                "a time signature's beat unit must be 2, 4, 8 or 16, not {value}"
+            ),
+            Self::TooManyChanges => f.write_str("too many meter changes"),
+            Self::UnorderedOrOutOfBounds => f.write_str(
+                "meter changes must have strictly increasing ticks before the longest song",
+            ),
+            Self::BarOverflow => f.write_str("musical bar overflow"),
         }
+    }
+}
+impl std::error::Error for MeterMapError {}
+
+fn checked_meter_signature(signature: TimeSignature) -> Result<(), MeterMapError> {
+    if !(1..=16).contains(&signature.numerator) {
+        return Err(MeterMapError::Numerator(signature.numerator));
+    }
+    if ![2, 4, 8, 16].contains(&signature.denominator) {
+        return Err(MeterMapError::Denominator(signature.denominator));
+    }
+    Ok(())
+}
+
+impl MeterMap {
+    /// Checked immutable records for control-side playback preparation. These
+    /// are Rust-only; persistence and shared-WASM numeric JSON are unchanged.
+    pub fn segments(&self) -> &[MeterSegment] {
+        &self.segments
+    }
+
+    pub fn new(legacy: TimeSignature, changes: &[MeterChange]) -> Result<Self, String> {
+        Self::checked(legacy, changes).map_err(|error| error.to_string())
+    }
+
+    pub fn checked(legacy: TimeSignature, changes: &[MeterChange]) -> Result<Self, MeterMapError> {
+        checked_meter_signature(legacy)?;
         if changes.len() > MAX_TIMELINE_ITEMS {
-            return Err("too many meter changes".to_owned());
+            return Err(MeterMapError::TooManyChanges);
         }
         let mut segments = vec![MeterSegment {
             start: 0,
@@ -216,14 +280,9 @@ impl MeterMap {
         let mut previous = None;
         for change in changes {
             if change.tick >= MAX_SONG_TICKS || previous.is_some_and(|tick| change.tick <= tick) {
-                return Err(
-                    "meter changes must have strictly increasing ticks before the longest song"
-                        .to_owned(),
-                );
+                return Err(MeterMapError::UnorderedOrOutOfBounds);
             }
-            if let Some(problem) = time_signature_problem(change.signature) {
-                return Err(problem);
-            }
+            checked_meter_signature(change.signature)?;
             previous = Some(change.tick);
             let prior = segments.last_mut().expect("the initial meter exists");
             if change.tick == 0 {
@@ -233,7 +292,7 @@ impl MeterMap {
             let bar = prior
                 .bar
                 .checked_add((change.tick - prior.start).div_ceil(prior.signature.ticks_per_bar()))
-                .ok_or_else(|| "musical bar overflow".to_owned())?;
+                .ok_or(MeterMapError::BarOverflow)?;
             prior.end = change.tick;
             segments.push(MeterSegment {
                 start: change.tick,

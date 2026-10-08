@@ -702,23 +702,25 @@ impl Processor {
 
     /// Processes up to [`MAX_BLOCK`] frames.
     fn process_block(&mut self, out: &mut [Frame]) {
-        self.plugin_control_boundary();
+        // Failed preparations are refused on the control side. Keep this
+        // internal invariant fail-closed without manufacturing native anchors.
+        let Ok(meters) = &self.plan.meters else {
+            out.fill([0.0; 2]);
+            return;
+        };
         let tick = self.sequencer.tick(&self.plan, self.frame);
         let warped = self
             .plan
             .tempo_map
             .as_ref()
             .map_or(tick, |map| map.warp(tick));
-        let signature = if self.sequencer.mode() == windfall_ipc::PlayMode::Song {
-            self.plan.meters[..self
-                .plan
-                .meters
-                .partition_point(|(at, _)| f64::from(*at) <= tick)]
+        let segment = if self.sequencer.mode() == windfall_ipc::PlayMode::Song {
+            meters[..meters.partition_point(|segment| f64::from(segment.start_tick()) <= tick)]
                 .last()
-                .map_or(self.plan.signature, |(_, signature)| *signature)
         } else {
-            self.plan.signature
+            None
         };
+        let signature = segment.map_or(self.plan.signature, |segment| segment.signature());
         let transport = crate::plugins::PluginTransport {
             playing: self.sequencer.playing(),
             tempo_bpm: self.state.tempo(),
@@ -726,8 +728,12 @@ impl Processor {
             position_seconds: warped * 60.0 / (self.plan.tempo_bpm * windfall_core::PPQ as f64),
             numerator: signature.numerator as u16,
             denominator: signature.denominator as u16,
-            meter_anchor: None,
+            meter_anchor: segment.map(|segment| crate::plugins::MeterAnchor {
+                bar_origin_beats: f64::from(segment.start_tick()) / windfall_core::PPQ as f64,
+                bar_origin_index: segment.bar_origin_index(),
+            }),
         };
+        self.plugin_control_boundary();
         for (index, chain) in self.state.chains.iter_mut().enumerate() {
             for (place, unit) in chain.iter_mut().enumerate() {
                 if !self.plan.tracks[index].effects[place].leaving
