@@ -80,6 +80,15 @@ impl PluginManager {
             .approve_catalog(&manager.catalog.lock().unwrap());
         manager
     }
+    #[cfg(all(test, windows))]
+    pub(crate) fn bridge_fixture(folder: &Path, file: &Path, helper: &Path) -> Arc<Self> {
+        let mut manager = Self::fixture(folder, file, helper);
+        Arc::get_mut(&mut manager).unwrap().runtime = Runtime::bridge_fixture(helper);
+        manager
+            .runtime
+            .approve_catalog(&manager.catalog.lock().unwrap());
+        manager
+    }
     pub fn new(folder: &Path) -> Result<Arc<Self>, String> {
         let cache = folder.join("plugins.json");
         let folders_file = folder.join("plugin-folders.json");
@@ -482,4 +491,16 @@ pub fn scanner_entry() -> bool {
     windfall_plugin_host::scan::probe::silence_error_dialogs();
     windfall_plugin_host::scan::probe::run(&path, &skip, &mut std::io::stdout().lock());
     true
+}
+
+/// Audio/state helper must run before Tauri, using this installed executable.
+pub fn helper_entry() -> bool {
+    #[cfg(windows)]
+    {
+        windfall_plugin_host::bridge::helper::entry()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }

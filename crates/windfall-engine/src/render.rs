@@ -70,6 +70,8 @@ pub struct Rendered {
     /// those that start on one tick, the ones with the highest ids.
     pub dropped_clips: u32,
     pub sampler_error: Option<crate::sampler_processing::SamplerPreparationError>,
+    /// Authoritative plugin failure; audio is empty even after a valid prefix.
+    pub plugin_error: Option<String>,
 }
 
 /// Renders a project to stereo audio. See [`render_reporting`], which this
@@ -128,6 +130,8 @@ pub fn render_reporting(
         }
     };
     let plan = compile(project, &prepared_pool);
+    let provider = plan.plugin_factory.clone();
+    let plugin_error = || provider.as_ref().and_then(|factory| factory.render_error());
     let pattern = options
         .pattern
         .filter(|id| plan.pattern_ids.get(id.0).is_some())
@@ -176,6 +180,14 @@ pub fn render_reporting(
     }
 
     // Everything comes out of the processor this many frames late.
+    if let Some(error) = plugin_error() {
+        return Rendered {
+            audio: AudioBuffer::from_interleaved(sample_rate, 2, Vec::new()),
+            dropped_clips: 0,
+            sampler_error: None,
+            plugin_error: Some(error),
+        };
+    }
     let latency = controller.latency_frames() as usize;
     let most = latency + body_frames + tail_frames;
     let body_end = latency + body_frames;
@@ -200,6 +212,9 @@ pub fn render_reporting(
         data.resize((done + frames) * 2, 0.0);
         let fresh = &mut data[done * 2..];
         processor.process(fresh);
+        if plugin_error().is_some() {
+            break;
+        }
         let (fresh, _) = fresh.as_chunks::<2>();
         let loud = |frame: &[f32; 2]| frame[0].abs() >= silence || frame[1].abs() >= silence;
         if let Some(last) = fresh.iter().rposition(loud) {
@@ -220,12 +235,17 @@ pub fn render_reporting(
         // out of time is kept whole.
         data.truncate(loud_end.max(body_end) * 2);
     }
+    let plugin_error = plugin_error();
+    if plugin_error.is_some() {
+        data.clear();
+    }
     data.drain(..(latency * 2).min(data.len()));
     Rendered {
         timeline_error: None,
         audio: AudioBuffer::from_interleaved(sample_rate, 2, data),
         dropped_clips: processor.clips_left_out(),
         sampler_error: None,
+        plugin_error,
     }
 }
 
@@ -295,5 +315,215 @@ mod tests {
         };
         let audio = render(&project, &SamplePool::new(), &options, &mut |_| false);
         assert_eq!(audio.frames(), 100);
+    }
+}
+
+#[cfg(test)]
+mod plugin_error_tests {
+    use super::*;
+    use crate::plugins::{HostedEffect, HostedInstrument, PluginFactory};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use windfall_project::{Command, Document, EffectId, PluginBinding, PluginTarget, TrackId};
+    #[derive(Debug)]
+    struct Factory {
+        error: Arc<AtomicBool>,
+        enabled: Arc<AtomicBool>,
+        private: bool,
+    }
+    struct Effect {
+        error: Arc<AtomicBool>,
+        enabled: Arc<AtomicBool>,
+        frames: usize,
+    }
+    impl HostedEffect for Effect {
+        fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+            self.frames += left.len();
+            left.fill(0.25);
+            right.fill(0.25);
+            if self.frames >= 16_001 && self.enabled.load(Ordering::Acquire) {
+                self.error.store(true, Ordering::Release);
+                left.fill(0.0);
+                right.fill(0.0);
+            }
+        }
+        fn set_param(&mut self, _: u32, _: f32) {}
+        fn set_tempo(&mut self, _: f32) {}
+        fn latency(&self) -> usize {
+            0
+        }
+        fn tail(&self) -> usize {
+            0
+        }
+    }
+    impl PluginFactory for Factory {
+        fn render_factory(&self) -> Option<Arc<dyn PluginFactory>> {
+            (!self.private).then(|| {
+                Arc::new(Self {
+                    error: Arc::new(AtomicBool::new(false)),
+                    enabled: self.enabled.clone(),
+                    private: true,
+                }) as Arc<dyn PluginFactory>
+            })
+        }
+        fn render_error(&self) -> Option<String> {
+            self.error
+                .load(Ordering::Acquire)
+                .then(|| "final plugin block failed".into())
+        }
+        fn effect(
+            &self,
+            _: &PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn HostedEffect>, String> {
+            Ok(Box::new(Effect {
+                error: self.error.clone(),
+                enabled: self.enabled.clone(),
+                frames: 0,
+            }))
+        }
+        fn instrument(
+            &self,
+            _: &PluginBinding,
+            _: u32,
+            _: usize,
+        ) -> Result<Box<dyn HostedInstrument>, String> {
+            Err("effect only".into())
+        }
+    }
+    fn fixture() -> (Project, SamplePool, Arc<Factory>, RenderOptions) {
+        let mut document = Document::new(Project::new("plugin failure"));
+        document
+            .dispatch(
+                Command::AddPluginEffect {
+                    track: TrackId::MASTER,
+                    plugin: PluginBinding {
+                        target: PluginTarget::Effect {
+                            effect: EffectId(0),
+                        },
+                        format: "clap".into(),
+                        path: "fault.clap".into(),
+                        id: "fault".into(),
+                        name: "Fault".into(),
+                        state: Vec::new(),
+                        parameters: Vec::new(),
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        let factory = Arc::new(Factory {
+            error: Arc::new(AtomicBool::new(false)),
+            enabled: Arc::new(AtomicBool::new(true)),
+            private: false,
+        });
+        let mut pool = SamplePool::new();
+        pool.set_plugin_factory(factory.clone());
+        (
+            document.project().clone(),
+            pool,
+            factory,
+            RenderOptions {
+                sample_rate: 8_000,
+                block_frames: 64,
+                ..Default::default()
+            },
+        )
+    }
+    #[test]
+    fn failed_final_plugin_block_discards_collected_audio_and_new_render_recovers() {
+        let (project, pool, factory, options) = fixture();
+        let failed = render_reporting(&project, &pool, &options, &mut |_| true);
+        assert!(
+            failed
+                .plugin_error
+                .as_deref()
+                .unwrap()
+                .contains("final plugin")
+        );
+        assert_eq!(failed.audio.frames(), 0);
+        assert!(failed.sampler_error.is_none());
+        assert!(
+            factory.render_error().is_none(),
+            "live provider is unchanged"
+        );
+        assert_eq!(render(&project, &pool, &options, &mut |_| true).frames(), 0);
+        factory.enabled.store(false, Ordering::Release);
+        let healthy = render_reporting(&project, &pool, &options, &mut |_| true);
+        assert_eq!(healthy.plugin_error, None);
+        // The existing tick-to-frame ceiling produces 16,001 frames at 8 kHz.
+        // The fault is on the final one-frame block, after 16,000 valid frames.
+        assert_eq!(healthy.audio.frames(), 16_001);
+        assert!(healthy.audio.samples().iter().any(|sample| *sample > 0.1));
+    }
+    #[test]
+    fn failed_final_plugin_block_never_reports_complete_stream_or_stems() {
+        let (project, pool, _, options) = fixture();
+        let mut prefix = Vec::new();
+        let result = crate::render_streaming_checked(
+            &project,
+            &pool,
+            &options,
+            &mut |block| {
+                prefix.extend_from_slice(block);
+                true
+            },
+            &mut |_| true,
+        );
+        assert!(matches!(result, Err(crate::StemError::Plugin(_))));
+        assert!(!prefix.is_empty() && prefix.iter().any(|sample| *sample > 0.1));
+        let convenience =
+            crate::render_streaming(&project, &pool, &options, &mut |_| true, &mut |_| true);
+        assert!(!convenience.completed && convenience.plugin_error.is_some());
+        for mode in [crate::StemMode::TrackOutputs, crate::StemMode::ToMaster] {
+            let result = crate::render_stems(
+                &project,
+                &pool,
+                &options,
+                &crate::StemOptions {
+                    mode,
+                    tracks: Some(Vec::new()),
+                    include_mix: true,
+                    numbered: false,
+                },
+                &mut |_, _| true,
+                &mut |_| true,
+            );
+            assert!(matches!(result, Err(crate::StemError::Plugin(_))));
+        }
+    }
+    #[test]
+    fn plugin_error_wins_over_simultaneous_final_progress_cancellation() {
+        let (project, pool, factory, options) = fixture();
+        factory.enabled.store(false, Ordering::Release);
+        let private = pool.prepare_plugin_render();
+        // Exact same private provider, failure raised at the final progress edge.
+        let error_provider = private.plugin_factory.as_ref().unwrap().clone();
+        let fresh = Arc::new(Factory {
+            error: Arc::new(AtomicBool::new(false)),
+            enabled: factory.enabled.clone(),
+            private: true,
+        });
+        let mut private = private;
+        private.set_plugin_factory(fresh.clone());
+        let streamed = crate::render_streaming_checked(
+            &project,
+            &private,
+            &options,
+            &mut |_| true,
+            &mut |fraction| {
+                if fraction >= 1.0 {
+                    fresh.error.store(true, Ordering::Release);
+                    false
+                } else {
+                    true
+                }
+            },
+        );
+        assert!(matches!(streamed, Err(crate::StemError::Plugin(_))));
+        assert!(error_provider.render_error().is_none());
     }
 }

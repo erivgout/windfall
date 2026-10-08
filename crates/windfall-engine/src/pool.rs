@@ -22,6 +22,22 @@ pub struct SamplePool {
 }
 
 impl SamplePool {
+    /// Control/render-thread provider snapshot with an independent error channel.
+    pub fn prepare_plugin_render(&self) -> Self {
+        let mut pool = self.clone();
+        if let Some(factory) = &self.plugin_factory
+            && let Some(render) = factory.render_factory()
+        {
+            pool.plugin_factory = Some(render);
+        }
+        pool
+    }
+    /// Control/offline only. A String/lock is forbidden on the live callback.
+    pub fn plugin_render_error(&self) -> Option<String> {
+        self.plugin_factory
+            .as_ref()
+            .and_then(|factory| factory.render_error())
+    }
     /// Creates an independent cache sharing the same retained-bank budget.
     /// Used by document replacement so old plans/voices remain charged.
     pub fn share_sampler_budget(&mut self, other: &Self) {

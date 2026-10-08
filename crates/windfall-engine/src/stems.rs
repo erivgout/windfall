@@ -134,7 +134,7 @@ impl std::fmt::Display for StemError {
 impl std::error::Error for StemError {}
 
 /// What a streamed render came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Streamed {
     /// Frames of each stream. Every stream of a render is the same length.
     pub frames: u64,
@@ -145,6 +145,8 @@ pub struct Streamed {
     /// The render ran to its end. It did not if `progress` or the sink
     /// returned `false`: the streams are then cut short and of no use.
     pub completed: bool,
+    /// Convenience report; checked streaming/stem APIs return Plugin errors.
+    pub plugin_error: Option<String>,
 }
 
 /// The streams [`render_stems`] makes for a project, in the order it
@@ -294,10 +296,17 @@ pub fn render_streaming(
     sink: &mut dyn FnMut(&[f32]) -> bool,
     progress: &mut dyn FnMut(f32) -> bool,
 ) -> Streamed {
-    render_streaming_checked(project, pool, options, sink, progress).unwrap_or(Streamed {
-        frames: 0,
-        dropped_clips: 0,
-        completed: false,
+    render_streaming_checked(project, pool, options, sink, progress).unwrap_or_else(|error| {
+        Streamed {
+            frames: 0,
+            dropped_clips: 0,
+            completed: false,
+            plugin_error: if let StemError::Plugin(error) = error {
+                Some(error)
+            } else {
+                None
+            },
+        }
     })
 }
 
@@ -314,7 +323,7 @@ pub fn render_streaming_checked(
         .map_err(crate::render::RenderError::Timeline)?;
     let pool = pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {})?;
     let pass = Pass::new(compile(project, &pool), options, &[]);
-    Ok(pass.run(None, &mut |_, block| sink(block), progress))
+    pass.run(None, &mut |_, block| sink(block), progress)
 }
 
 /// Renders the stems of a project and hands each to `sink` a block at a
@@ -338,6 +347,7 @@ pub fn render_stems(
 ) -> Result<Streamed, StemError> {
     options.check_region().map_err(StemError::Timeline)?;
     let prepared_pool = pool
+        .prepare_plugin_render()
         .prepare_samplers(project, &mut || true, &mut |_, _, _| {})
         .map_err(StemError::SamplerPreparation)?;
     let pool = &prepared_pool;
@@ -358,7 +368,7 @@ pub fn render_stems(
                 Some(tap) => sink(tracks[tap].0, block),
                 None => mix.is_none_or(|stream| sink(stream, block)),
             };
-            Ok(pass.run(None, &mut hand_on, progress))
+            pass.run(None, &mut hand_on, progress)
         }
         StemMode::ToMaster => {
             // The mix comes first even when it is not wanted, where only
@@ -377,7 +387,7 @@ pub fn render_stems(
                     None,
                     &mut |_, block| mix.is_none_or(|stream| sink(stream, block)),
                     &mut |fraction| progress(scale(fraction)),
-                );
+                )?;
                 if !done.completed {
                     return Ok(done);
                 }
@@ -396,7 +406,7 @@ pub fn render_stems(
                     length,
                     &mut |_, block| sink(stream, block),
                     &mut |fraction| progress(scale(fraction)),
-                );
+                )?;
                 if !done.completed {
                     return Ok(done);
                 }
@@ -407,6 +417,7 @@ pub fn render_stems(
                 frames,
                 dropped_clips,
                 completed: true,
+                plugin_error: None,
             })
         }
     }
@@ -542,6 +553,7 @@ impl Outlet {
 /// One run of a processor over the pattern or song, set up as
 /// [`render`](crate::render) sets its own up.
 struct Pass {
+    provider: Option<std::sync::Arc<dyn crate::plugins::PluginFactory>>,
     processor: Processor,
     /// Kept for as long as the processor runs: it holds the other ends of
     /// the processor's queues.
@@ -565,6 +577,7 @@ impl Pass {
     /// Sets a processor up to play `plan` as `options` say, listening to
     /// `tracks` each on its own as well as to the master.
     fn new(plan: Plan, options: &RenderOptions, tracks: &[TrackId]) -> Self {
+        let provider = plan.plugin_factory.clone();
         let sample_rate = options.sample_rate.max(1);
         let pattern = options
             .pattern
@@ -621,6 +634,7 @@ impl Pass {
         }
 
         Self {
+            provider,
             processor,
             _controller: controller,
             outlets,
@@ -643,7 +657,14 @@ impl Pass {
         length: Option<usize>,
         sink: &mut dyn FnMut(usize, &[f32]) -> bool,
         progress: &mut dyn FnMut(f32) -> bool,
-    ) -> Streamed {
+    ) -> Result<Streamed, StemError> {
+        let check = || {
+            self.provider
+                .as_ref()
+                .and_then(|factory| factory.render_error())
+                .map_or(Ok(()), |error| Err(StemError::Plugin(error)))
+        };
+        check()?;
         let most = length.map_or(self.most, |frames| self.latency + frames);
         let auto_tail = self.auto_tail && length.is_none();
         let (body_end, hold) = (self.body_end, self.hold);
@@ -662,6 +683,7 @@ impl Pass {
             let frames = self.block.min(most - done);
             let fresh = &mut buffer[..frames * 2];
             self.processor.process(fresh);
+            check()?;
             let silence = self.silence;
             let loud = |frame: &[f32; 2]| frame[0].abs() >= silence || frame[1].abs() >= silence;
             if let Some(last) = fresh.as_chunks::<2>().0.iter().rposition(loud) {
@@ -688,6 +710,7 @@ impl Pass {
                 completed = completed && outlet.release(certain, &mut |block| sink(stream, block));
             }
             completed = completed && progress(done as f32 / most as f32);
+            check()?;
             if auto_tail && rung_out(&self.processor, done, loud_end) {
                 break;
             }
@@ -705,11 +728,13 @@ impl Pass {
         for (stream, outlet) in self.outlets.iter_mut().enumerate() {
             completed = completed && outlet.finish(frames, &mut |block| sink(stream, block));
         }
-        Streamed {
+        check()?;
+        Ok(Streamed {
             frames: frames as u64,
             dropped_clips: self.processor.clips_left_out(),
             completed,
-        }
+            plugin_error: None,
+        })
     }
 }
 
