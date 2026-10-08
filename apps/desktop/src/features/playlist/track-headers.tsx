@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -270,7 +271,7 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
     if (!root) return
     const gapAt = (clientY: number) => {
       const { scrollRow, rowHeight } = metrics.viewport
-      const y = clientY - root.getBoundingClientRect().top
+      const y = logicalDelta(clientY - root.getBoundingClientRect().top)
       return Math.round(scrollRow + y / rowHeight)
     }
     const onMove = (event: PointerEvent) => {
@@ -335,7 +336,9 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       const bounds = root.getBoundingClientRect()
-      metrics.wheel(wheelInput(event, { x: 0, y: event.clientY - bounds.top }))
+      metrics.wheel(
+        wheelInput(event, { x: 0, y: logicalDelta(event.clientY - bounds.top) })
+      )
     }
     root.addEventListener("wheel", onWheel, { passive: false })
     return () => root.removeEventListener("wheel", onWheel)

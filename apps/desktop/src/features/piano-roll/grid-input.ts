@@ -1,3 +1,4 @@
+import { logicalDelta, logicalWheel } from "@/lib/ui-scale"
 import {
   createPointerFrame,
   type PointerFrame,
@@ -46,7 +47,9 @@ export function handleWheel(
   if (!view) return
   event.preventDefault()
   // Shift turns a vertical wheel into a horizontal one on some systems.
-  const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX
+  // Preserve the roll's existing line/page step sizes at 100%.
+  const wheel = logicalWheel(event, { line: 1, page: 1 })
+  const delta = wheel.deltaY !== 0 ? wheel.deltaY : wheel.deltaX
   const zoom = event.ctrlKey || event.metaKey
   if (event.altKey || (zoom && event.shiftKey)) {
     if (axes.rows) session.zoomRows(point.y, delta < 0 ? 1.15 : 1 / 1.15)
@@ -60,7 +63,7 @@ export function handleWheel(
     if (axes.time) view.panBy(delta, 0)
     return
   }
-  view.panBy(axes.time ? event.deltaX : 0, event.deltaY)
+  view.panBy(axes.time ? wheel.deltaX : 0, wheel.deltaY)
 }
 
 function edgeSpeed(position: number, size: number): number {
@@ -181,7 +184,10 @@ export function attachGridInput(
       point.y >= 0 &&
       point.y < view.viewport.height
     if (pan) {
-      view.panBy(pan.x - event.clientX, pan.y - event.clientY)
+      view.panBy(
+        logicalDelta(pan.x - event.clientX),
+        logicalDelta(pan.y - event.clientY)
+      )
       pan = { x: event.clientX, y: event.clientY }
       return
     }

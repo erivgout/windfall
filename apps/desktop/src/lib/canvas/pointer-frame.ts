@@ -1,3 +1,5 @@
+import { uiScaleFactor } from "@/lib/ui-scale"
+
 type ClientPoint = { clientX: number; clientY: number }
 type LocalPoint = { x: number; y: number }
 
@@ -24,10 +26,15 @@ export function createPointerFrame(
   localPoint: (event: ClientPoint) => LocalPoint
 ): PointerFrame {
   let origin: LocalPoint | null = null
+  let scale = 1
   return {
     hold(event) {
       const local = localPoint(event)
-      origin = { x: local.x - event.clientX, y: local.y - event.clientY }
+      scale = uiScaleFactor()
+      origin = {
+        x: local.x - event.clientX / scale,
+        y: local.y - event.clientY / scale,
+      }
     },
     release() {
       origin = null
@@ -37,7 +44,10 @@ export function createPointerFrame(
     },
     point(event) {
       return origin
-        ? { x: event.clientX + origin.x, y: event.clientY + origin.y }
+        ? {
+            x: event.clientX / scale + origin.x,
+            y: event.clientY / scale + origin.y,
+          }
         : localPoint(event)
     },
   }

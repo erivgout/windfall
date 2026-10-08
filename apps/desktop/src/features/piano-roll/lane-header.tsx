@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useRef } from "react"
 import { ArrowDown01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -82,7 +83,8 @@ export function LaneResizer() {
       }}
       onPointerMove={(event) => {
         const start = drag.current
-        if (start) setHeight(start.height + start.y - event.clientY)
+        if (start)
+          setHeight(start.height + logicalDelta(start.y - event.clientY))
       }}
       onPointerUp={() => {
         drag.current = null

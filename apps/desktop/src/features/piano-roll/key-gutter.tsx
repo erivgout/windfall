@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef, useState, type Ref } from "react"
 
 import type { ChannelId } from "@/bindings"
@@ -84,7 +85,7 @@ export function KeyGutter({ channelId, color, keyboardRef }: KeyGutterProps) {
       handleWheel(
         session,
         event,
-        { x: 0, y: event.clientY - bounds.top },
+        { x: 0, y: logicalDelta(event.clientY - bounds.top) },
         { time: false, rows: true }
       )
     }

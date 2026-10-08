@@ -1,3 +1,6 @@
+import { observePixelRatio } from "@/lib/ui-scale"
+import { canvasResolution } from "@/lib/canvas/resolution"
+
 export type LayerSize = {
   /** Backing size in device pixels. */
   width: number
@@ -20,6 +23,7 @@ export class CanvasLayer {
   private readonly ctx: CanvasRenderingContext2D | null
   private readonly paint: LayerPainter
   private readonly observer: ResizeObserver
+  private readonly stopPixelObserver: () => void
   private frame = 0
   private destroyed = false
 
@@ -31,6 +35,10 @@ export class CanvasLayer {
       if (this.resize()) this.flush()
     })
     this.observer.observe(canvas)
+    this.stopPixelObserver = observePixelRatio(() => {
+      this.resize()
+      this.invalidate()
+    })
     this.resize()
     this.invalidate()
   }
@@ -46,13 +54,15 @@ export class CanvasLayer {
   destroy(): void {
     this.destroyed = true
     this.observer.disconnect()
+    this.stopPixelObserver()
     if (this.frame !== 0) cancelAnimationFrame(this.frame)
   }
 
   private resize(): boolean {
-    const dpr = window.devicePixelRatio || 1
-    const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr))
-    const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr))
+    const { pixelWidth: width, pixelHeight: height } = canvasResolution(
+      this.canvas.clientWidth,
+      this.canvas.clientHeight
+    )
     if (this.canvas.width === width && this.canvas.height === height) {
       return false
     }
@@ -70,7 +80,12 @@ export class CanvasLayer {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, width, height)
     ctx.save()
-    this.paint(ctx, { width, height, dpr: window.devicePixelRatio || 1 })
+    this.paint(ctx, {
+      width,
+      height,
+      dpr: canvasResolution(this.canvas.clientWidth, this.canvas.clientHeight)
+        .dpr,
+    })
     ctx.restore()
   }
 }

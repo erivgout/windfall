@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
 import {
@@ -183,7 +184,7 @@ export function Ruler() {
       handleWheel(
         session,
         event,
-        { x: event.clientX - bounds.left, y: 0 },
+        { x: logicalDelta(event.clientX - bounds.left), y: 0 },
         { time: true, rows: false }
       )
     }
@@ -196,7 +197,9 @@ export function Ruler() {
   }, [session])
 
   function localX(event: React.PointerEvent<HTMLCanvasElement>): number {
-    return event.clientX - event.currentTarget.getBoundingClientRect().left
+    return logicalDelta(
+      event.clientX - event.currentTarget.getBoundingClientRect().left
+    )
   }
 
   function nearEnd(x: number): boolean {

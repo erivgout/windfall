@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
 import type { TimeSignature } from "@/bindings"
@@ -226,7 +227,10 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       const bounds = root.getBoundingClientRect()
-      const input = wheelInput(event, { x: event.clientX - bounds.left, y: 0 })
+      const input = wheelInput(event, {
+        x: logicalDelta(event.clientX - bounds.left),
+        y: 0,
+      })
       // Over the ruler a plain wheel scrolls time, which is what it shows.
       metrics.wheel({ ...input, shift: !input.mod })
     }
@@ -236,7 +240,10 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
 
   const seekAt = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect()
-    const tick = xToTick(metrics.viewport, event.clientX - bounds.left)
+    const tick = xToTick(
+      metrics.viewport,
+      logicalDelta(event.clientX - bounds.left)
+    )
     const target = snapNearest(
       tick,
       ignoresSnap({ alt: event.altKey }) ? 0 : currentSnapTicks()

@@ -1,3 +1,4 @@
+import { logicalDelta } from "@/lib/ui-scale"
 import { useEffect, useRef } from "react"
 
 import {
@@ -237,7 +238,7 @@ export function ValueLane({ kind, color }: ValueLaneProps) {
       handleWheel(
         session,
         event,
-        { x: event.clientX - bounds.left, y: 0 },
+        { x: logicalDelta(event.clientX - bounds.left), y: 0 },
         { time: true, rows: false }
       )
     }
@@ -255,8 +256,12 @@ export function ValueLane({ kind, color }: ValueLaneProps) {
     if (!view) return null
     const bounds = event.currentTarget.getBoundingClientRect()
     return {
-      tick: xToTick(view.viewport, event.clientX - bounds.left),
-      value: valueAtY(event.clientY - bounds.top, bounds.height, kind),
+      tick: xToTick(view.viewport, logicalDelta(event.clientX - bounds.left)),
+      value: valueAtY(
+        logicalDelta(event.clientY - bounds.top),
+        logicalDelta(bounds.height),
+        kind
+      ),
       reach: GRAB_PX / view.viewport.pxPerTick,
     }
   }

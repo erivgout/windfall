@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
 import type { ChannelId, TrackId } from "@/bindings"
+import { DEFAULT_UI_SCALE, validUiScale, type UiScale } from "@/lib/ui-scale"
 
 export type Theme = "dark" | "light" | "system"
 export type KeymapPreset = "windfall" | "fl"
@@ -39,6 +40,7 @@ export type CenterOverlay = "effects"
 export type PanelSizes = Record<string, number>
 
 type UiState = {
+  uiScale: UiScale
   theme: Theme
   keymap: KeymapPreset
   panels: Record<SidePanel, boolean>
@@ -61,6 +63,7 @@ type UiState = {
   historyOpen: boolean
 
   setTheme(theme: Theme): void
+  setUiScale(scale: UiScale): void
   toggleTheme(): void
   setKeymap(keymap: KeymapPreset): void
   togglePanel(panel: SidePanel): void
@@ -109,6 +112,7 @@ export function activeScopeOf(state: {
 export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
+      uiScale: DEFAULT_UI_SCALE,
       theme: "dark",
       keymap: "windfall",
       panels: DEFAULT_PANELS,
@@ -123,6 +127,7 @@ export const useUiStore = create<UiState>()(
       historyOpen: false,
 
       setTheme: (theme) => set({ theme }),
+      setUiScale: (uiScale) => set({ uiScale: validUiScale(uiScale) }),
       toggleTheme: () =>
         set((state) => ({
           theme: resolveTheme(state.theme) === "dark" ? "light" : "dark",
@@ -171,12 +176,22 @@ export const useUiStore = create<UiState>()(
       name: "windfall.ui",
       version: 1,
       partialize: (state) => ({
+        uiScale: state.uiScale,
         theme: state.theme,
         keymap: state.keymap,
         panels: state.panels,
         centerTab: state.centerTab,
         layouts: state.layouts,
       }),
+      merge: (persisted, current) => {
+        const saved =
+          persisted && typeof persisted === "object" ? persisted : {}
+        return {
+          ...current,
+          ...saved,
+          uiScale: validUiScale((saved as Partial<UiState>).uiScale),
+        }
+      },
     }
   )
 )

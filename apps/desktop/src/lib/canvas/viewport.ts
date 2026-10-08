@@ -1,7 +1,10 @@
 /**
  * The visible window of a time-grid editor. Horizontal units are ticks,
  * vertical units are rows (keys in the piano roll, tracks in the playlist).
- * Sizes are CSS pixels; device pixels only appear in `DeviceTransform`.
+ * Sizes are logical CSS pixels before application zoom. `dpr` is the
+ * effective device density (monitor/browser DPR times application scale,
+ * bounded by the common canvas allocation policy). Device coordinates
+ * only appear in `DeviceTransform`.
  */
 export interface Viewport {
   readonly width: number

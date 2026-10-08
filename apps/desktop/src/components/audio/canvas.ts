@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { logicalDelta, observePixelRatio } from "@/lib/ui-scale"
+import { canvasResolution } from "@/lib/canvas/resolution"
 
 /**
  * Resolves CSS color expressions (`var(--wf-waveform)`, `color-mix(...)`) to
@@ -80,49 +82,29 @@ export function observeCanvas(
   canvas: HTMLCanvasElement,
   onChange: (size: CanvasSize) => void
 ): () => void {
-  let dprQuery: MediaQueryList | null = null
-
   const measure = () => {
-    const dpr = window.devicePixelRatio || 1
     const rect = canvas.getBoundingClientRect()
-    const pixelWidth = Math.max(1, Math.round(rect.width * dpr))
-    const pixelHeight = Math.max(1, Math.round(rect.height * dpr))
+    const size = canvasResolution(
+      logicalDelta(rect.width),
+      logicalDelta(rect.height)
+    )
+    const { pixelWidth, pixelHeight } = size
     if (canvas.width !== pixelWidth) {
       canvas.width = pixelWidth
     }
     if (canvas.height !== pixelHeight) {
       canvas.height = pixelHeight
     }
-    onChange({
-      width: rect.width,
-      height: rect.height,
-      pixelWidth,
-      pixelHeight,
-      dpr,
-    })
-  }
-
-  const watchDpr = () => {
-    dprQuery?.removeEventListener("change", onDprChange)
-    dprQuery =
-      window.matchMedia?.(`(resolution: ${window.devicePixelRatio}dppx)`) ??
-      null
-    dprQuery?.addEventListener("change", onDprChange)
-  }
-
-  function onDprChange() {
-    watchDpr()
-    measure()
+    onChange(size)
   }
 
   const resizeObserver =
     typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure)
   resizeObserver?.observe(canvas)
-  watchDpr()
-  measure()
+  const stopPixelObserver = observePixelRatio(measure)
 
   return () => {
     resizeObserver?.disconnect()
-    dprQuery?.removeEventListener("change", onDprChange)
+    stopPixelObserver()
   }
 }
