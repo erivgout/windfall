@@ -18,6 +18,7 @@ import { currentPatternId } from "@/lib/flows/edit"
 import { backend } from "@/lib/ipc"
 import { newGestureId } from "@/lib/store/gesture"
 import { dispatch, receivePatch, useProjectStore } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
 import { askConfirm, askText } from "@/lib/store/prompts"
 import { useUiStore } from "@/lib/store/ui"
 import { clamp } from "@/lib/units"
@@ -265,6 +266,7 @@ export async function addChannelFromFile(
   index?: number,
   browser?: LibraryFileToken
 ): Promise<void> {
+  const generation = getProjectGeneration()
   const count = project().channels.length
   const at = index === undefined ? undefined : clamp(index, 0, count)
   const result = await attempt(
@@ -273,7 +275,7 @@ export async function addChannelFromFile(
       : backend.addChannelFromFile(path, at),
     "Could not add the sample"
   )
-  if (!result) return
+  if (!result || generation !== getProjectGeneration()) return
   receivePatch(result.patch)
   const created = result.patch.channels?.find((channel) =>
     result.created.includes(channel.id)

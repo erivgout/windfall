@@ -1,4 +1,10 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react"
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -7,6 +13,9 @@ import { newProject, openProjectPath } from "@/lib/flows/project"
 import { useProjectStore } from "@/lib/store/project"
 import { useUiStore } from "@/lib/store/ui"
 import { SAMPLE_DRAG_TYPE } from "@/lib/dnd"
+import ChannelRackPanel from "@/features/channel-rack"
+import { dragData } from "@/features/channel-rack/test-utils"
+import { settle } from "@/test/harness"
 
 import BrowserPanel from "."
 import {
@@ -30,6 +39,73 @@ const destinations = [
 ] as const
 
 describe("browser import document identity", () => {
+  it.each(["New", "Open"])(
+    "does not select a reused channel from an actual rack drop reply after %s",
+    async (change) => {
+      const reply = deferred<void>()
+      const started = deferred<number>()
+      let populateReplacement = async () => 0
+      const app = await startBrowserTest((mock) => {
+        const importFile = async () => {
+          const result = await mock.addChannelFromFile(path)
+          return result.patch.channels!.find((c) =>
+            result.created.includes(c.id)
+          )!.id
+        }
+        populateReplacement = importFile
+        return {
+          addChannelFromFile: async (...args) => {
+            const result = await mock.addChannelFromFile(...args)
+            started.resolve(
+              result.patch.channels!.find((c) => result.created.includes(c.id))!
+                .id
+            )
+            await reply.promise
+            return result
+          },
+        }
+      })
+      stop = app.stop
+      // Begin with the real New template so both documents allocate the same
+      // IDs (the harness initially opens a different demo project).
+      await newProject()
+      render(<ChannelRackPanel />)
+      const scroller = document.querySelector('[data-slot="rack-scroll"]')!
+      const token = await app.backend.libraryFile(path)
+      const dataTransfer = dragData(
+        SAMPLE_DRAG_TYPE,
+        JSON.stringify({ path, name: "Kick 02", browser: token })
+      )
+      const drop = createEvent.drop(scroller, { dataTransfer })
+      Object.defineProperty(drop, "clientY", { value: 600 })
+      let oldId = 0
+      await act(async () => {
+        fireEvent(scroller, drop)
+        oldId = await started.promise
+      })
+      // Mutation/event happen before the held reply. Use the real flows and
+      // deliberately recreate the ID that the obsolete reply would select.
+      await act(async () => {
+        const saved = await app.backend.projectSave("/saved.windfall")
+        if (change === "New") {
+          await newProject()
+          expect(await populateReplacement()).toBe(oldId)
+        } else await openProjectPath(saved)
+      })
+      expect(
+        useProjectStore.getState().project.channels.some((c) => c.id === oldId)
+      ).toBe(true)
+      const before = structuredClone(useProjectStore.getState().project)
+      expect(useUiStore.getState().selectedChannel).toBeNull()
+      await act(async () => {
+        reply.resolve()
+        await settle()
+      })
+      expect(useProjectStore.getState().project).toEqual(before)
+      expect(useUiStore.getState().selectedChannel).toBeNull()
+    }
+  )
+
   it("guards the playlist's mixer routing lookup before sending an import", async () => {
     const roots = deferred<BrowserRoot[]>()
     const started = deferred<void>()
@@ -129,6 +205,103 @@ describe("browser import document identity", () => {
 })
 
 describe("tree selection during pending library search", () => {
+  for (const [destination, importFile] of destinations) {
+    it.each(["refresh", "remove/re-add"])(
+      `holds a canonical outer-root lookup through nested-root %s before ${destination} import`,
+      async (change) => {
+        const lookup = deferred<LibraryFileToken>()
+        const started = deferred<void>()
+        let release = async () => {}
+        const app = await startBrowserTest((mock) => {
+          release = async () => lookup.resolve(await mock.libraryFile(path))
+          return {
+            librarySearch: () => new Promise(() => {}),
+            libraryFile: () => {
+              started.resolve()
+              return lookup.promise
+            },
+          }
+        })
+        stop = app.stop
+        await loadRoots()
+        const nested = "/factory/Drums/Kicks"
+        await applyRoots(await app.backend.browserAddRoot(nested))
+        render(<BrowserPanel />)
+        const user = userEvent.setup()
+        await user.click(await findItem("Kicks"))
+        await user.click(await findItem("Kick 02.wav"))
+        await started.promise
+        const selection = useBrowserStore.getState().selected
+        useUiStore
+          .getState()
+          .selectChannel(useProjectStore.getState().project.channels[0].id)
+        const before = structuredClone(useProjectStore.getState().project)
+        const pending = importFile(path)
+        await act(async () => {
+          if (change === "refresh") await refreshLibrary()
+          else {
+            const root = useBrowserStore
+              .getState()
+              .roots.find((r) => r.path === nested)!
+            await removeRoot(root)
+            await applyRoots(await app.backend.browserAddRoot(nested))
+          }
+          await release()
+          await pending
+        })
+        expect(useProjectStore.getState().project).toEqual(before)
+        expect(selection?.library).toBeUndefined()
+        expect(useBrowserStore.getState().selected?.library).toBeUndefined()
+      }
+    )
+  }
+
+  for (const [destination, importFile] of destinations) {
+    it(`auditions, reads facts and imports a nested-root selection into ${destination} while search is pending`, async () => {
+      const app = await startBrowserTest(() => ({
+        librarySearch: () => new Promise(() => {}),
+      }))
+      stop = app.stop
+      await loadRoots()
+      const nested = "/factory/Drums/Kicks"
+      await applyRoots(await app.backend.browserAddRoot(nested))
+      const preview = vi.spyOn(app.backend, "previewPlay")
+      render(<BrowserPanel />)
+      const user = userEvent.setup()
+      await user.click(await findItem("Kicks"))
+      await user.click(await findItem("Kick 02.wav"))
+      expect(
+        useBrowserStore.getState().selected?.librarySelection?.rootPath
+      ).toBe(nested)
+      expect(useLibraryStore.getState().results).toBeNull()
+      // The real fixture backend, like native library_file, picks the first
+      // containing root, even though this row belongs to the nested root.
+      expect((await app.backend.libraryFile(path)).rootPath).toBe("/factory")
+      useUiStore
+        .getState()
+        .selectChannel(useProjectStore.getState().project.channels[0].id)
+      const before = structuredClone(useProjectStore.getState().project)
+      await act(async () => importFile(path))
+      expect(useProjectStore.getState().project).not.toEqual(before)
+      await waitFor(() =>
+        expect(preview).toHaveBeenCalledWith(
+          path,
+          expect.objectContaining({ rootPath: "/factory" })
+        )
+      )
+      await waitFor(() =>
+        expect(useBrowserStore.getState().info?.status).toBe("ready")
+      )
+      expect(useBrowserStore.getState().selected?.library).toMatchObject({
+        path,
+        rootPath: "/factory",
+      })
+      expect(
+        useBrowserStore.getState().selected?.librarySelection?.rootPath
+      ).toBe(nested)
+    })
+  }
+
   it("pins a drag from preview while search is pending and refuses it after refresh", async () => {
     const search = deferred<LibraryResults>()
     const app = await startBrowserTest(() => ({

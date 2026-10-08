@@ -75,6 +75,30 @@ fn refusing_native_processing_stop_returns_the_running_processor() {
     instance.save_state().unwrap();
 }
 #[test]
+fn runtime_repair_native_deactivation_preset_supersedes_older_queued_controls() {
+    let (_module, mut instance) = create(7);
+    let mut processor = instance.activate(48_000.0, 64).unwrap();
+    assert!(processor.set_param(0, 7, 0.875));
+    let mut left = [1.0; 64];
+    let mut right = left;
+    processor.process(&mut left, &mut right);
+    instance.idle(&mut |_| {});
+    processor.process(&mut left, &mut right);
+    assert_eq!(instance.param_value(7), Some(0.625));
+    assert!(processor.set_param(0, 7, 0.8));
+    instance.deactivate(processor).unwrap();
+    assert_eq!(instance.deactivation_param_value(7), Some(0.375));
+    assert_eq!(instance.param_value(7), Some(0.375));
+    let state = instance.save_state().unwrap();
+    let (_module, mut reopened) = create(7);
+    reopened.load_state(&state).unwrap();
+    assert_eq!(reopened.param_value(7), Some(0.375));
+    // A new explicit inactive edit comes after deactivation and stays valid.
+    assert!(instance.set_param(7, 0.9));
+    assert_eq!(instance.param_value(7), Some(0.9));
+}
+
+#[test]
 fn lifecycle_gain_offsets_transport_state_and_restart() {
     let (module, mut instance) = create(0);
     drop(module); // instance retains DLL

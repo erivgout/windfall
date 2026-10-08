@@ -5,9 +5,11 @@ use std::rc::Rc;
 use vst3::Steinberg::Vst::*;
 use vst3::{Class, ComPtr, ComWrapper, Steinberg::*};
 
-// A reset can expand into every held channel/key before ordinary events and
-// guaranteed adapter releases. Allocate for all three on the creating owner.
-const NOTE_CAPACITY: usize = 2048 + EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY;
+// Release each initially held channel/key once, then allow every admitted
+// note-on both its native event and a later expanded panic release. Explicit
+// reserved releases also need one slot each. Repeated panics cannot release
+// the same held note twice without another admitted note-on in between.
+const NOTE_CAPACITY: usize = 16 * 128 + 2 * EVENT_CAPACITY + IMMEDIATE_RELEASE_CAPACITY;
 
 #[derive(Clone, Copy)]
 struct Point {

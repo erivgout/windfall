@@ -1,4 +1,5 @@
 //! Native-only project packaging. No audio or document locks are used here.
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -9,6 +10,9 @@ use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
 use windfall_project::{Project, ProjectSession, SampleId, SamplePath, file};
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
+
+#[cfg(test)]
+mod tests;
 
 pub const SCHEMA: u32 = 1;
 const MANIFEST: &str = "manifest.json";
@@ -366,12 +370,17 @@ fn u32le(bytes: &[u8], at: usize) -> u32 {
 /// Bounds the central directory BEFORE ZIP's parser allocates its index, and
 /// detects duplicates before any parser can coalesce them. ZIP64/multidisk,
 /// encrypted members, directories and non-regular UNIX types are unsupported.
-fn preflight(
-    input: &mut File,
+struct Preflight {
+    members: HashMap<String, u64>,
+    index: IndexReader,
+}
+
+fn preflight<R: Read + Seek>(
+    input: &mut R,
     limits: Limits,
     check: &mut Check<'_>,
-) -> Result<HashMap<String, u64>, Error> {
-    let length = input.metadata()?.len();
+) -> Result<Preflight, Error> {
+    let length = input.seek(SeekFrom::End(0))?;
     bounded(length, limits.archive_bytes)?;
     let tail_size = length.min(65557) as usize;
     input.seek(SeekFrom::End(-(tail_size as i64)))?;
@@ -391,11 +400,19 @@ fn preflight(
         || u16le(&tail, end + 6) != 0
         || u16le(&tail, end + 8) as usize != count
         || count == 65535
+        || size == u32::MAX as u64
+        || offset == u32::MAX as u64
         || count > limits.entries
         || size > 4 * 1024 * 1024
         || offset + size != length - tail_size as u64 + end as u64
     {
         return Err(invalid("Unsupported or oversized ZIP directory."));
+    }
+    if tail[end + 22..]
+        .windows(4)
+        .any(|magic| matches!(magic, b"PK\x05\x06" | b"PK\x06\x06" | b"PK\x06\x07"))
+    {
+        return Err(invalid("Ambiguous ZIP directory comment."));
     }
     input.seek(SeekFrom::Start(offset))?;
     let mut directory = vec![0; size as usize];
@@ -422,11 +439,29 @@ fn preflight(
         member_name(name)?;
         let mode = u32le(&directory, at + 38) >> 16;
         let bytes = u32le(&directory, at + 24) as u64;
+        // ZIP64 extras can override the sizes and local offset read above.
+        // Refuse them before ZIP sees any metadata, including non-sentinel
+        // fields, which ZIP 6 also permits ZIP64 extras to replace.
+        let mut extra = at + 46 + name_length;
+        let extra_end = extra + u16le(&directory, at + 30) as usize;
+        while extra < extra_end {
+            if extra + 4 > extra_end {
+                return Err(invalid("Truncated ZIP extra field."));
+            }
+            let kind = u16le(&directory, extra);
+            extra += 4 + u16le(&directory, extra + 2) as usize;
+            if extra > extra_end || kind == 1 {
+                return Err(invalid("Unsupported or damaged ZIP extra field."));
+            }
+        }
         if u16le(&directory, at + 8) & 1 != 0
             || !matches!(u16le(&directory, at + 10), 0 | 8)
             || u16le(&directory, at + 34) != 0
             || !matches!(mode & 0o170000, 0 | 0o100000)
             || u32le(&directory, at + 38) & 0x10 != 0
+            || bytes == u32::MAX as u64
+            || u32le(&directory, at + 20) == u32::MAX
+            || u32le(&directory, at + 42) == u32::MAX
         {
             return Err(invalid(
                 "Unsupported encrypted, linked or special ZIP member.",
@@ -445,10 +480,105 @@ fn preflight(
     if at != directory.len() {
         return Err(invalid("Extra ZIP directory data."));
     }
-    Ok(names)
+    // Relocate only the in-memory central directory to offset zero. Local
+    // offsets still address the original file. The parser receives the exact
+    // validated bytes and a comment-free ZIP32 footer, never the source tail.
+    let directory_end = directory.len() as u64;
+    let mut footer: [u8; 22] = tail[end..end + 22].try_into().unwrap();
+    footer[16..22].fill(0);
+    directory.extend_from_slice(&footer);
+    Ok(Preflight {
+        members: names,
+        index: IndexReader {
+            bytes: io::Cursor::new(directory),
+            directory_end,
+            footer_selected: false,
+            footer_read: false,
+            reading_directory: false,
+        },
+    })
 }
-fn json_member(
-    zip: &mut ZipArchive<File>,
+
+/// A single-directory parser view for locked ZIP 6.0.0. Footer discovery sees
+/// zeroes before the canonical footer, so it cannot discover another record.
+/// After selecting that footer, Known(0) probes the validated directory. The
+/// four-byte probe may rewind; subsequent directory parsing is sequential and
+/// excludes the footer. A parser error therefore cannot retry another EOCD,
+/// even if arbitrary CRC/extra/comment bytes contain EOCD signatures.
+struct IndexReader {
+    bytes: io::Cursor<Vec<u8>>,
+    directory_end: u64,
+    footer_selected: bool,
+    footer_read: bool,
+    reading_directory: bool,
+}
+impl Read for IndexReader {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let at = self.bytes.position();
+        if self.reading_directory {
+            let remaining = self.directory_end.saturating_sub(at) as usize;
+            let length = output.len().min(remaining);
+            return self.bytes.read(&mut output[..length]);
+        }
+        let length = self.bytes.read(output)?;
+        let hidden = self.directory_end.saturating_sub(at).min(length as u64) as usize;
+        output[..hidden].fill(0);
+        if self.footer_selected && self.bytes.position() == self.bytes.get_ref().len() as u64 {
+            self.footer_read = true;
+        }
+        Ok(length)
+    }
+}
+impl Seek for IndexReader {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        let current = self.bytes.position();
+        let position = match from {
+            SeekFrom::Start(position) => Some(position),
+            SeekFrom::Current(delta) => current.checked_add_signed(delta),
+            SeekFrom::End(delta) => (self.bytes.get_ref().len() as u64).checked_add_signed(delta),
+        }
+        .ok_or_else(|| io::Error::other("Invalid ZIP index seek."))?;
+        if self.reading_directory {
+            if position != current && !(current <= 4 && position == 0) {
+                return Err(io::Error::other("ZIP directory fallback is forbidden."));
+            }
+        } else if self.footer_read && position == 0 {
+            self.reading_directory = true;
+        } else {
+            self.footer_selected = position == self.directory_end;
+        }
+        self.bytes.set_position(position);
+        Ok(position)
+    }
+}
+
+/// Original file access is enabled only after the bounded index succeeds.
+struct ArchiveReader<'a> {
+    input: File,
+    index: IndexReader,
+    initialized: &'a Cell<bool>,
+}
+impl Read for ArchiveReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if self.initialized.get() {
+            self.input.read(output)
+        } else {
+            self.index.read(output)
+        }
+    }
+}
+impl Seek for ArchiveReader<'_> {
+    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
+        if self.initialized.get() {
+            self.input.seek(from)
+        } else {
+            self.index.seek(from)
+        }
+    }
+}
+
+fn json_member<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
     name: &str,
     limits: Limits,
     check: &mut Check<'_>,
@@ -473,8 +603,19 @@ pub fn extract(
     check: &mut Check<'_>,
 ) -> Result<Extracted, Error> {
     let mut input = File::open(source)?;
-    let members = preflight(&mut input, limits, check)?;
-    let mut zip = ZipArchive::new(input)?;
+    let Preflight { members, index } = preflight(&mut input, limits, check)?;
+    let initialized = Cell::new(false);
+    let mut zip = ZipArchive::with_config(
+        zip::read::Config {
+            archive_offset: zip::read::ArchiveOffset::Known(0),
+        },
+        ArchiveReader {
+            input,
+            index,
+            initialized: &initialized,
+        },
+    )?;
+    initialized.set(true);
     if zip.len() != members.len() {
         return Err(invalid("Ambiguous ZIP directory."));
     }

@@ -176,14 +176,40 @@ pub fn vst3_binary(path: &Path) -> Option<PathBuf> {
 
 /// The file whose size and date say whether a plugin has changed: the
 /// plugin file itself, or the binary inside a bundle.
-pub(crate) fn stamped_file(path: &Path) -> PathBuf {
-    if path.is_dir()
-        && PluginFormat::of(path) == Some(PluginFormat::Vst3)
-        && let Some(binary) = vst3_binary(path)
-    {
-        return binary;
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PluginFileIdentity {
+    pub binary: PathBuf,
+    pub size: u64,
+    pub modified: std::time::SystemTime,
+}
+
+/// Resolves the same VST3 binary used by loading. Missing bundle binaries
+/// cannot fall back to stamping a directory. Canonical path, size and date
+/// together identify the approved source, including symlink retargeting.
+pub fn plugin_file_identity(path: &Path) -> std::io::Result<PluginFileIdentity> {
+    let binary = if PluginFormat::of(path) == Some(PluginFormat::Vst3) {
+        vst3_binary(path).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "VST3 bundle binary is missing",
+            )
+        })?
+    } else {
+        path.to_path_buf()
+    };
+    let binary = std::fs::canonicalize(binary)?;
+    let metadata = std::fs::metadata(&binary)?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Plugin binary must be a file",
+        ));
     }
-    path.to_path_buf()
+    Ok(PluginFileIdentity {
+        binary,
+        size: metadata.len(),
+        modified: metadata.modified()?,
+    })
 }
 
 #[cfg(test)]

@@ -48,7 +48,11 @@ The numbered file is staged and synced, then atomically published without
 replacement. That publication is its filename reservation, so two independent
 owners cannot overwrite one another. Numbered saves share ordinary save
 serialization, plugin capture, sample carrying, relinking and generation/edit
-checks. Successful saves update the current path only for the saved document;
+checks. Carrying and relinking use the numbered destination's sample root,
+including when the chosen base name resembles a timestamped file in `Backup`.
+Each publication candidate is prepared for its actual filename; a competing
+writer causes a retry without overwriting its file. Successful saves update the
+current path only for the saved document;
 concurrent edits remain dirty. The UI refetches authoritative state after a
 numbered save so an old save cannot assign its path to a replacement document.
 
@@ -92,7 +96,11 @@ Source size and modification time are checked before and after staging; a
 detected change refuses the export. External writers must keep source files
 stable while packaging; this is not a filesystem snapshot service.
 The central directory is capped at 4 MiB **before** ZIP parsing allocates an
-index. IO streams in 64 KiB chunks and checks cancellation at each chunk and at
+index. Parsing uses the validated directory snapshot and a canonical ZIP32
+footer, with alternate EOCD discovery and parser fallback disabled. Structural
+EOCD/ZIP64 records in archive comments and ZIP64 member overrides are refused
+before index initialization. Ordinary archive comments remain supported.
+IO streams in 64 KiB chunks and checks cancellation at each chunk and at
 the final boundary.
 
 ZIP64, multidisk, encrypted, directory and non-regular UNIX entries are refused.
@@ -178,3 +186,6 @@ save semantics with mocked native responses, without inventing a filesystem.
 Real cross-machine large-project throughput, power-loss recovery on specific
 filesystems, macOS/Linux desktop dialogs and a real third-party plugin corpus
 remain external checks. Synthetic Windows tests do not establish those results.
+
+The subsequent parser-binding and numbered sample-root repair evidence is
+recorded in [`PORTABLE-REPAIRS.md`](PORTABLE-REPAIRS.md).

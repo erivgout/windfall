@@ -317,3 +317,87 @@ and both published release assets are unchanged. The `artoomreinhart` write
 invitation remains pending. Authenticated Git access through the existing GitHub
 CLI credential helper confirms remote main remains `c37ae0b9`; no source push or
 new release was made by this verification.
+
+The combined UI suite after sampler/artifact integration passed **2,347 tests
+across 154 files**, then passed ESLint and the production TypeScript/Vite build.
+Native workspace validation and independent fresh-binding comparison remain
+live. Independent stamp review closed the initial cancellation/preview cases
+but browser-reproduced pending-choice right-click and rejected-press pointer
+capture defects; the existing stamp owner is repairing both. Sampler review
+traced four P2 transaction gaps: imported source commit before preparation
+failure, no-op Apply discarding runtime recovery, history publication attaching
+different cached audio, and a one-directional clip source guard missing new
+attachments. Sampler and browser owners share the preparation helper/import
+seam with explicit file ownership; no completed sampler claim is made.
+
+Archive repair `d42c810e`, browser follow-up `24b241ff` and selected-note rhythm
+tools `959ed0c0` have clean source-only deliveries. The archive worker passed 52
+focused tests; browser passed 256 UI and 18 native tests; rhythm passed 21 native
+and 121 UI/real-WASM tests. Each also records relevant static/build checks in its
+feature document. These are worker results, not parent combined acceptance.
+Archive round two and rhythm round one independent reviews have started at
+those fixed commits. Root Rust source remains frozen until the current native
+job completes, so these deliveries are not yet merged here.
+
+A separate T3 owner is implementing persisted whole-application scaling through
+the common canvas/control coordinate contract. The parity requirement also
+includes native plugin windows, which remain required host work under the
+runtime owner's separate ownership. The row is in progress; no application-only
+completion substitute is recorded. Totals are 64 done, 50 in progress, 226 todo
+and two won't-do rows, retaining all 342 requirements.
+
+## Completed sampler baseline and next combined batch
+
+The full native run at sampler source `42522322` and artifacts `186652c6`
+completed with **1,822 passing tests and nine intentional ignores**, including
+the real CLAP archive/save/export fixtures. Strict workspace/all-target Clippy,
+workspace formatting and independent regeneration comparison of all 166 binding
+files passed. The full UI baseline passed 2,347 tests in 154 files, ESLint and
+the production TypeScript/Vite build. These results precede the next Rust merges;
+they do not close the four independently traced sampler transaction findings.
+
+Root T3 browser interaction also checked the sampler inspector: Independent
+mode reveals preparation settings; Apply reports the desktop-engine requirement.
+Undo and redo remain disabled, and reopening the channel restores its published
+Tape setting. No project dirty marker appears. This checks the browser refusal
+workflow, not native spectral playback or physical audio hardware. T3 snapshot
+calls failed with a disconnected automation-client error; focused DOM inspection
+and ordinary preview clicks succeeded without another browser system.
+
+Archive `d42c810e`, browser `24b241ff` and rhythm `959ed0c0` merged as
+`ee925c23`, `e841f73a` and `9bd413ed`. Runtime fix `fa3fd16f` was cherry-picked as
+`19caf872`; second stamp fix `aab93768` was cherry-picked as `7f70315c`.
+Combined bindings/WASM regeneration and affected native/UI checks are pending.
+The rhythm review is clean: 121 focused UI/real-WASM tests and twelve independent
+in-memory WASM case groups passed; native tests were inspected rather than rerun.
+The four selected-note rhythm rows remain in progress until combined acceptance.
+
+Archive round two closed the original parser and backup-shaped destination
+findings but source/model tracing found two P2 cases: simultaneous sample carries
+can overwrite a competing session's audio, and moving a numbered save can strand
+samples reachable only through history. The existing archive owner is producing
+compiled RED/GREEN regressions and repairs. Runtime round four and stamp round
+three reviews are running with complete prior context at their delivered commits.
+The original sampler/browser and utility owners continue their assigned repairs.
+
+The N4 process-bridge owner has started isolated audio/state containment work,
+with explicit ABI, nonblocking callback, fallback/PDC and supervisor acceptance
+requirements. Existing host/factory wiring requires a coordinated edit window.
+Native editors, packaged helper discovery, installed external plugins and other
+platforms remain required evidence; scanner isolation is not audio containment.
+No further source push or release was made by these integrations.
+
+At `7f70315c`, regeneration produced 170 binding files (168 TypeScript and two
+JSON) and a current 1,863,302-byte WASM. Affected native and UI checks are running;
+the independent fresh-binding comparison follows the native checks. Current
+totals are 64 done, 54 in progress, 222 todo and two won't-do rows out of 342.
+
+Runtime round four source-traced closure of all three prior reproduction paths,
+then found two further P2 cases: a deduplicated document parameter adoption can
+hide its generation and suppress later processed automation during capture;
+VST3 pending/editor/ordinary parameter points can exceed native storage while
+readback and delivery acknowledgement still report success. These were not
+executed native reproductions. The runtime owner is producing compiled regressions
+and repairs, with the shared runtime/parameter fixture window reserved. N4 can
+continue its new modules, module export and existing Windows mapping API features;
+production runtime/helper routing remains deferred until those repairs land.

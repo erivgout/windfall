@@ -532,7 +532,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Native sampler spectral preparation now persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Worker signal, lifecycle and callback-allocation checks passed; combined integration and independent review remain pending. Browser DSP preparation is unavailable and musical listening is unverified. See docs/SAMPLER-STRETCH.md and crates/windfall-stretch/VALIDATION.md."
+      "notes": "Native sampler spectral preparation persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Full combined native/UI baseline, callback-allocation checks and exact bindings passed. Independent review found four transaction/publication cases; sampler and browser owners are repairing them. Browser Apply honestly refuses DSP and preserves settings/history; musical listening remains unverified. See docs/SAMPLER-STRETCH.md and docs/integration/2026-10-07-native-editing-midi.md."
     },
     {
       "id": "win-rack-layer-channel",
@@ -652,7 +652,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Combined focused tests, lint and build pass. Independent review reproduced pending-menu cancellation and outside-grid modifier-preview bugs; repairs are in progress. See docs/PIANO-SCALES.md."
+      "notes": "One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Delayed blur/tool/Escape cancellation and idle outside-grid preview repairs passed combined tests and review. Review found pending-choice right-click and rejected-press pointer-capture cases; further repairs are in progress. See docs/PIANO-SCALES.md and docs/PIANO-STAMP-REPAIRS.md."
     },
     {
       "id": "win-piano-keyboard",
@@ -796,7 +796,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Selected notes split at absolute grid boundaries with bounded output, one undo entry, and recovered selection after missed events. Independent review of this workflow is closed; user-authored slicing patterns remain unfinished. See docs/PIANO-TOOLS.md and docs/DOCUMENT-REPLIES.md."
+      "notes": "Selected notes split at absolute grid boundaries or a bounded user-authored repeating tick/gate/velocity pattern, preserving partial edges and atomic undo. Custom-pattern implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. Revision-gap and selection recovery remain guarded. See docs/PIANO-RHYTHM.md and docs/DOCUMENT-REPLIES.md."
     },
     {
       "id": "win-piano-glue",
@@ -817,10 +817,10 @@
       "summary": "Rewrites selected chords as arpeggio patterns.",
       "windfall_name": "Arpeggiate",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected equal-onset chords become bounded ascending, descending or alternating arpeggios with explicit rate, gate, octave and duration/repetition controls. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md."
     },
     {
       "id": "win-piano-strum",
@@ -841,10 +841,10 @@
       "summary": "Adds a close double hit to selected notes for a drum flam.",
       "windfall_name": "Flam",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Selected notes gain bounded grace hits before or after the original, with explicit interval and velocity controls and one undo step. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md."
     },
     {
       "id": "win-piano-claw",
@@ -853,10 +853,10 @@
       "summary": "Removes, adds or shifts notes at intervals to turn a regular rhythm into a new one.",
       "windfall_name": "Rhythm reshaper",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Bounded Euclidean interval cells remove, add or shift selected notes with phase/period controls, duplicate suppression and atomic undo. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md."
     },
     {
       "id": "win-piano-limit",
@@ -3244,7 +3244,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Native numbered saves atomically publish the next unused filename through existing plugin capture/sample-carry flow. Earlier versions stay intact and concurrent edits remain dirty. Focused native/UI checks pass; independent integration review is pending. See docs/PORTABLE-PROJECTS.md."
+      "notes": "Native numbered projects publish without replacement through plugin capture/sample carry, using each final reserved candidate's sample root. Parser and backup-shaped destination repairs passed review. Concurrent carried-audio publication and history-only source preservation during root moves remain under repair after round two. See docs/PORTABLE-PROJECTS.md and docs/PORTABLE-REPAIRS.md."
     },
     {
       "id": "fmt-autosave-backup",
@@ -3556,7 +3556,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. A bounded owner-thread processor-return path now exercises desktop capture/save/export with native fixtures. Production desktop additions remain disabled pending dirty-state scheduling, events during capture and fallible native deactivation. Native macOS/Linux hosting and audio crash containment remain pending. See docs/plugins/vst3-desktop.md and docs/plugins/vst3-hosting.md."
+      "notes": "Production Windows VST3 additions are enabled with bounded owner-thread capture, deferred dirty-state scheduling, held-note/control reconciliation and fallible deactivation. Native fixtures verify playback/capture/save/export. Round four closed pending-parameter persistence, scanned inner-binary approval and full-channel panic repairs, but found two further document-adoption and native parameter-overflow cases under repair. Combined checks remain pending. Installed external plugins, native editor operation, macOS/Linux and audio crash containment remain unverified or unfinished. See docs/plugins/vst3-desktop.md and docs/plugins/runtime-repairs.md."
     },
     {
       "id": "fmt-host-clap",
@@ -3604,7 +3604,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. CLAP entries can be added as rack instruments or mixer effects; VST3 addition explains its active-state capture limitation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md."
+      "notes": "Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. Both formats can be added as rack instruments or mixer effects after native identity/role validation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md."
     },
     {
       "id": "fmt-host-bridging",
@@ -3613,10 +3613,10 @@
       "summary": "Runs a plugin in its own process, isolated from the host.",
       "windfall_name": "Out-of-process plugins",
       "phase": 4,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "The plan's crash protection."
+      "notes": "An isolated T3 owner is implementing the N4 Windows audio/state process bridge with a versioned bounded ABI, nonblocking extra-block pipeline, latency-matched fallback, supervisor and native failure fixtures. Existing host wiring requires coordinated integration; no audio crash-containment or full-row completion claim is made. Native editors, packaged helper discovery, external plugins and other platforms remain required. See docs/IMPLEMENTATION-ROADMAP.md."
     },
     {
       "id": "fmt-host-wrapper-options",
@@ -3721,10 +3721,10 @@
       "summary": "Scales the interface and plugin windows for high-resolution displays.",
       "windfall_name": "Interface scaling",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Whole-application scaling with persisted preferences and coherent canvas/control coordinates is being implemented in an isolated T3 task. Native third-party editor content scaling remains a required plugin-host integration; application-only browser checks will not complete this row."
     },
     {
       "id": "wf-hint-bar",

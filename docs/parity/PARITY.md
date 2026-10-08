@@ -18,29 +18,29 @@ As of 2026-10-07. Sources:
 
 | Status | Rows |
 | --- | --- |
-| Todo | 227 |
-| In progress | 49 |
+| Todo | 222 |
+| In progress | 54 |
 | Done | 64 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | Core features | 23 | 13 | 7 | 2 | 1 |
-| Main windows | 113 | 54 | 18 | 40 | 1 |
+| Main windows | 113 | 51 | 21 | 40 | 1 |
 | Instruments | 41 | 38 | 2 | 1 | 0 |
 | Effects | 80 | 68 | 10 | 2 | 0 |
 | Visual and video | 7 | 7 | 0 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
-| File formats and plugin hosting | 36 | 16 | 6 | 14 | 0 |
-| Workflow, MIDI and settings | 39 | 29 | 5 | 5 | 0 |
+| File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
+| Workflow, MIDI and settings | 39 | 28 | 6 | 5 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 7 | 8 | 22 | 2 |
-| 2. Write a song | 99 | 48 | 21 | 30 | 0 |
+| 1. Make a beat | 39 | 6 | 9 | 22 | 2 |
+| 2. Write a song | 99 | 45 | 24 | 30 | 0 |
 | 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
-| 4. Plugins and files | 13 | 7 | 5 | 1 | 0 |
+| 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
 | 5. The long tail | 129 | 122 | 7 | 0 | 0 |
 | 6. Extras | 24 | 24 | 0 | 0 | 0 |
 | 7. Release | 3 | 3 | 0 | 0 | 0 |
@@ -97,7 +97,7 @@ As of 2026-10-07. Sources:
 | Channel settings: echo delay | Note echo | 2 | todo |  |
 | Channel settings: polyphony and portamento | Channel polyphony and glide | 2 | todo |  |
 | Channel settings: gate, shift and swing mix | Channel note timing | 2 | todo |  |
-| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | Native sampler spectral preparation now persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Worker signal, lifecycle and callback-allocation checks passed; combined integration and independent review remain pending. Browser DSP preparation is unavailable and musical listening is unverified. See docs/SAMPLER-STRETCH.md and crates/windfall-stretch/VALIDATION.md. |
+| Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | Native sampler spectral preparation persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Full combined native/UI baseline, callback-allocation checks and exact bindings passed. Independent review found four transaction/publication cases; sampler and browser owners are repairing them. Browser Apply honestly refuses DSP and preserves settings/history; musical listening remains unverified. See docs/SAMPLER-STRETCH.md and docs/integration/2026-10-07-native-editing-midi.md. |
 | Layer channel (Fruity Layer) | Layer channel | 5 | todo | Listed in the manual's plugin index, not on the compare page. The manual points to the modular rack as the more flexible alternative. |
 | Piano roll: Draw tool | Piano roll draw tool | 2 | done |  |
 | Piano roll: Paint tool and drum sequencer mode | Piano roll paint tool | 2 | in-progress | Paint tool is in. No drum sequencer mode yet. |
@@ -107,7 +107,7 @@ As of 2026-10-07. Sources:
 | Piano roll: Select tool | Piano roll select tool | 2 | done |  |
 | Piano roll: Zoom tool | Piano roll zoom tool | 2 | todo |  |
 | Piano roll: Playback (scrub) tool | Piano roll scrub tool | 2 | todo |  |
-| Piano roll: Chord stamp | Chord stamp | 2 | in-progress | One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Combined focused tests, lint and build pass. Independent review reproduced pending-menu cancellation and outside-grid modifier-preview bugs; repairs are in progress. See docs/PIANO-SCALES.md. |
+| Piano roll: Chord stamp | Chord stamp | 2 | in-progress | One-click root-position chord and single-octave scale patterns preview and place atomically with key/tick bounds, selection and stale-lane/project guards. Delayed blur/tool/Escape cancellation and idle outside-grid preview repairs passed combined tests and review. Review found pending-choice right-click and rejected-press pointer-capture cases; further repairs are in progress. See docs/PIANO-SCALES.md and docs/PIANO-STAMP-REPAIRS.md. |
 | Piano roll: preview keyboard and key labels | Preview keyboard | 2 | done |  |
 | Piano roll: event editor lane and note properties | Note property lane | 2 | in-progress | Velocity and pan lanes. Other note properties are not in the model yet. |
 | Piano roll: slide and portamento notes | Slide notes | 2 | todo |  |
@@ -119,12 +119,12 @@ As of 2026-10-07. Sources:
 | Piano roll: waveform helper view | Waveform helper | 2 | todo |  |
 | Piano roll: Quantizer tool | Quantize | 2 | done | Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Articulator tool and Quick legato | Articulate | 2 | in-progress | Selected-note legato and staccato length transformations are implemented with atomic undo and stale-review guards. Portamento phrasing remains pending. See docs/PIANO-TOOLS.md. |
-| Piano roll: Chopper tool and Quick chop | Chop | 2 | in-progress | Selected notes split at absolute grid boundaries with bounded output, one undo entry, and recovered selection after missed events. Independent review of this workflow is closed; user-authored slicing patterns remain unfinished. See docs/PIANO-TOOLS.md and docs/DOCUMENT-REPLIES.md. |
+| Piano roll: Chopper tool and Quick chop | Chop | 2 | in-progress | Selected notes split at absolute grid boundaries or a bounded user-authored repeating tick/gate/velocity pattern, preserving partial edges and atomic undo. Custom-pattern implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. Revision-gap and selection recovery remain guarded. See docs/PIANO-RHYTHM.md and docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Glue | Glue | 2 | done | Touching/overlapping selected notes with matching pitch, velocity and pan union deterministically; incompatible and unselected notes remain separate. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
-| Piano roll: Arpeggiator tool | Arpeggiate | 2 | todo |  |
+| Piano roll: Arpeggiator tool | Arpeggiate | 2 | in-progress | Selected equal-onset chords become bounded ascending, descending or alternating arpeggios with explicit rate, gate, octave and duration/repetition controls. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md. |
 | Piano roll: Strum tool | Strum | 2 | done | Selected simultaneous chords stagger timing and velocity in either pitch order, preserving lengths and unrelated properties in one undo step. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
-| Piano roll: Flam tool | Flam | 2 | todo |  |
-| Piano roll: Claw machine tool | Rhythm reshaper | 2 | todo |  |
+| Piano roll: Flam tool | Flam | 2 | in-progress | Selected notes gain bounded grace hits before or after the original, with explicit interval and velocity controls and one undo step. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md. |
+| Piano roll: Claw machine tool | Rhythm reshaper | 2 | in-progress | Bounded Euclidean interval cells remove, add or shift selected notes with phase/period controls, duplicate suppression and atomic undo. Implementation and independent rhythm review passed; combined artifact/native/UI acceptance is pending. See docs/PIANO-RHYTHM.md. |
 | Piano roll: Key limiter tool | Key limiter | 2 | done | Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Flip tool | Flip | 2 | done | Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Randomizer tool | Randomize | 2 | todo |  |
@@ -348,7 +348,7 @@ As of 2026-10-07. Sources:
 | --- | --- | --- | --- | --- |
 | Project file save and open (.flp) | Windfall project format | 1 | done | Windfall uses its own open format: readable JSON plus audio in a folder or zip, with a version number. Windfall saves its own readable JSON format, .windfall. Reading .flp files is a separate row. |
 | Zipped project (.zip) | Project archive | 1 | in-progress | Native bounded schema-1 ZIP export/open includes captured project/session/plugin state and exact-deduplicated audio. Validated staged extraction, missing-source reports, cancellation and no-overwrite publication are implemented. Independent combined review is pending. See docs/PORTABLE-PROJECTS.md. |
-| Save new version | Save new version | 1 | in-progress | Native numbered saves atomically publish the next unused filename through existing plugin capture/sample-carry flow. Earlier versions stay intact and concurrent edits remain dirty. Focused native/UI checks pass; independent integration review is pending. See docs/PORTABLE-PROJECTS.md. |
+| Save new version | Save new version | 1 | in-progress | Native numbered projects publish without replacement through plugin capture/sample carry, using each final reserved candidate's sample root. Parser and backup-shaped destination repairs passed review. Concurrent carried-audio publication and history-only source preservation during root moves remain under repair after round two. See docs/PORTABLE-PROJECTS.md and docs/PORTABLE-REPAIRS.md. |
 | Autosave and backups | Autosave and backups | 1 | done | The plan builds autosave and timestamped backups into the project format. |
 | New from template and Save as template | Project templates | 2 | todo | FL's bundled templates reference Image-Line content; needs own. |
 | FL Studio project (.flp) as an import source | FL project import | 4 | in-progress | Desktop picker prepares a reviewed conversion with category reports, bounded sample searches, missing-audio warnings, unsaved-project confirmation and stale-request guards. Unsupported plugin bytes and metadata persist in .windfall files and an Imported sounds report. Two real FL 20.8.4 reader projects verified; other versions remain unverified. Sound mappings and some timing/automation are approximate; proprietary restoration and identical playback remain unavailable. See docs/flp/coverage.md. |
@@ -374,12 +374,12 @@ As of 2026-10-07. Sources:
 | Export: M4A (AAC) | M4A export | 6 | todo | Not in the plan's export list. AAC encoder licensing must be checked against GPL-3.0. |
 | Export: loop, slice and note markers in WAV files | WAV marker export | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
 | WavPack compressed audio | WavPack support | 6 | todo | Not in the plan. |
-| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | VST3 backend hosts instruments/effects with events, parameters, transport, inactive state and Windows editors. A bounded owner-thread processor-return path now exercises desktop capture/save/export with native fixtures. Production desktop additions remain disabled pending dirty-state scheduling, events during capture and fallible native deactivation. Native macOS/Linux hosting and audio crash containment remain pending. See docs/plugins/vst3-desktop.md and docs/plugins/vst3-hosting.md. |
+| Plugin hosting: VST3 | VST3 hosting | 4 | in-progress | Production Windows VST3 additions are enabled with bounded owner-thread capture, deferred dirty-state scheduling, held-note/control reconciliation and fallible deactivation. Native fixtures verify playback/capture/save/export. Round four closed pending-parameter persistence, scanned inner-binary approval and full-channel panic repairs, but found two further document-adoption and native parameter-overflow cases under repair. Combined checks remain pending. Installed external plugins, native editor operation, macOS/Linux and audio crash containment remain unverified or unfinished. See docs/plugins/vst3-desktop.md and docs/plugins/runtime-repairs.md. |
 | Plugin hosting: CLAP | CLAP hosting | 4 | in-progress | Windows desktop CLAP instruments/effects now integrate project persistence, native-range automation, playback/export, mixer latency compensation, parameter inspectors and native editors. Real CLAP fixtures verify session audio, state round-trip and current-instance ownership. The host backend was also exercised with Surge XT/Effects and OB-Xf. Native macOS/Linux desktop hosting and audio crash containment remain unfinished. See docs/plugins/desktop-integration.md and docs/plugins/host-evaluation.md. |
 | Plugin hosting: Audio Unit | AU hosting | 4 | todo | macOS only. |
 | Plugin hosting: VST2 | VST2 hosting | 4 | todo | unverified: licensing path. Not in the plan; Steinberg no longer issues VST2 SDK licenses, so this needs a decision and may become wont-do. |
-| Plugin manager (scan and verify) | Plugin scanner | 4 | in-progress | Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. CLAP entries can be added as rack instruments or mixer effects; VST3 addition explains its active-state capture limitation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md. |
-| Bridged plugins (separate process) | Out-of-process plugins | 4 | todo | The plan's crash protection. |
+| Plugin manager (scan and verify) | Plugin scanner | 4 | in-progress | Windows desktop plugin manager provides isolated CLAP/VST3 discovery through the app scanner helper, persisted folders/cache/blocklist, search, scan progress and retry. Both formats can be added as rack instruments or mixer effects after native identity/role validation. Native macOS/Linux manager availability remains pending. Scanner isolation does not contain audio plugin crashes. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md. |
+| Bridged plugins (separate process) | Out-of-process plugins | 4 | in-progress | An isolated T3 owner is implementing the N4 Windows audio/state process bridge with a versioned bounded ABI, nonblocking extra-block pipeline, latency-matched fallback, supervisor and native failure fixtures. Existing host wiring requires coordinated integration; no audio crash-containment or full-row completion claim is made. Native editors, packaged helper discovery, external plugins and other platforms remain required. See docs/IMPLEMENTATION-ROADMAP.md. |
 | Plugin wrapper options (smart disable, fixed-size buffers, threaded processing, scaling, detached window) | Plugin host options | 4 | todo |  |
 | FL Studio as a VST or AU plugin | Windfall as a plugin | 6 | todo | The plan lists this as 'possible later' and assigns no phase. |
 
@@ -393,7 +393,7 @@ As of 2026-10-07. Sources:
 | Metronome | Metronome | 1 | todo |  |
 | Typing keyboard to piano keyboard | Typing keyboard | 1 | todo |  |
 | Themes | Light and dark themes | 1 | done | Light and dark themes. |
-| Interface scaling | Interface scaling | 1 | todo |  |
+| Interface scaling | Interface scaling | 1 | in-progress | Whole-application scaling with persisted preferences and coherent canvas/control coordinates is being implemented in an isolated T3 task. Native third-party editor content scaling remains a required plugin-host integration; application-only browser checks will not complete this row. |
 | Hint bar | Hints | 1 | done |  |
 | Output meter and CPU/memory panels | Status meters | 1 | in-progress | Master meter and engine load. No memory readout. |
 | Undo and edit history | Undo history | 2 | done | The plan calls for linear undo with a visible history list. |

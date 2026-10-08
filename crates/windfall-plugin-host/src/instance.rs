@@ -84,6 +84,12 @@ pub(crate) trait InstanceBackend {
     /// Hands parameter changes to a plugin that is not active. Whatever the
     /// plugin has to say in return goes to `out`.
     fn flush_params(&mut self, changes: &[HostEvent], out: &mut dyn FnMut(PluginEvent));
+    fn flush_retired_params(&mut self, changes: &[HostEvent], out: &mut dyn FnMut(PluginEvent)) {
+        self.flush_params(changes, out);
+    }
+    fn deactivation_param_value(&self, _id: u32) -> Option<f64> {
+        None
+    }
     /// The bytes the plugin's state extension writes, or `None` if it has
     /// no such extension.
     fn save_state(&mut self, limit: usize) -> Result<Option<Vec<u8>>, PluginError>;
@@ -167,6 +173,16 @@ impl PluginInstance {
     /// The current value of a parameter, in the plugin's units.
     pub fn param_value(&mut self, id: u32) -> Option<f64> {
         self.backend.param_value(id)
+    }
+
+    /// A native edit made by the last successful deactivation, in native
+    /// parameter units. It supersedes controls queued before that lifecycle
+    /// call. Available only while inactive; a later explicit set remains valid.
+    pub fn deactivation_param_value(&self, id: u32) -> Option<f64> {
+        self.active
+            .is_none()
+            .then(|| self.backend.deactivation_param_value(id))
+            .flatten()
     }
 
     /// How the plugin writes `value` of a parameter, such as `-6.0 dB`.
@@ -347,7 +363,7 @@ impl PluginInstance {
         // Inactive owner-thread flush, after the audio half has returned and
         // native processing has stopped. No callback allocation is introduced.
         self.backend
-            .flush_params(&pending, &mut |event| self.left_over.push(event.into()));
+            .flush_retired_params(&pending, &mut |event| self.left_over.push(event.into()));
         Ok(())
     }
 
