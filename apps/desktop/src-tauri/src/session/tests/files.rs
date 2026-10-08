@@ -12,7 +12,7 @@ use windfall_project::{Command, PatternId, ProjectSession, SampleId, SamplePath,
 use super::{Rig, rms, still_running};
 use crate::events::Event;
 use crate::paths;
-use crate::session::{EDITED_WHILE_MOVING, NO_FILE_YET};
+use crate::session::NO_FILE_YET;
 use crate::settings::SETTINGS_FILE;
 
 fn rename(rig: &Rig, name: &str) {
@@ -552,6 +552,344 @@ fn own_sample_path(name: &str) -> SamplePath {
 }
 
 #[test]
+fn portable_concurrent_carries_never_replace_the_other_versions_audio() {
+    let first = Rig::new();
+    let second = Rig::new();
+    let (first_home, first_sample) = project_with_its_own_sample(&first);
+    let (second_home, second_sample) = project_with_its_own_sample(&second);
+    let second_source = Path::new(&second_home)
+        .with_file_name("sounds")
+        .join("own.wav");
+    // Decode the other owner's distinct sound into its session too.
+    write_other_tone(&second_source);
+    second.session.project_save(None).unwrap();
+    second.session.project_open(&second_home).unwrap();
+    for (rig, sample) in [(&first, first_sample), (&second, second_sample)] {
+        let channel = rig.project().channels.last().unwrap().id;
+        rig.session
+            .dispatch(
+                Command::ToggleStep {
+                    pattern: rig.pattern(),
+                    channel,
+                    step: 0,
+                },
+                None,
+            )
+            .unwrap();
+        assert!(rig.has_audio(sample));
+    }
+    let first_audio = first
+        .session
+        .state()
+        .pool
+        .get(first_sample)
+        .unwrap()
+        .clone();
+    let second_audio = second
+        .session
+        .state()
+        .pool
+        .get(second_sample)
+        .unwrap()
+        .clone();
+    assert_ne!(first_audio.samples(), second_audio.samples());
+    let first_source = Path::new(&first_home)
+        .with_file_name("sounds")
+        .join("own.wav");
+    let first_bytes = fs::read(&first_source).unwrap();
+    let second_bytes = fs::read(&second_source).unwrap();
+    let first_old_project = fs::read(&first_home).unwrap();
+    let second_old_project = fs::read(&second_home).unwrap();
+    let first_history = first.session.document_snapshot().history;
+    let second_history = second.session.document_snapshot().history;
+    let shared = tempfile::tempdir().unwrap();
+    let base = paths::display(&shared.path().join("Song"));
+    let first_hold = first.session.hold("save:sample-missing");
+    let second_hold = second.session.hold("save:sample-missing");
+    let first_work = {
+        let base = base.clone();
+        first
+            .session
+            .background(move |s| s.project_save_new_version(Some(&base)))
+    };
+    let second_work = second
+        .session
+        .background(move |s| s.project_save_new_version(Some(&base)));
+    first_hold.wait();
+    second_hold.wait();
+    first_hold.release();
+    let first_saved = first_work.join().unwrap().unwrap();
+    let first_version = fs::read(&first_saved).unwrap();
+    let carried = shared.path().join("sounds/own.wav");
+    assert_eq!(fs::read(&carried).unwrap(), first_bytes);
+    second_hold.release();
+    let second_saved = second_work.join().unwrap().unwrap();
+    assert_ne!(first_saved, second_saved);
+    assert!(first_saved.ends_with("Song (001).windfall"));
+    assert!(second_saved.ends_with("Song (002).windfall"));
+    assert_eq!(first.session.document_snapshot().history, first_history);
+    assert_eq!(second.session.document_snapshot().history, second_history);
+    assert!(
+        fs::read(&carried).unwrap() == first_bytes,
+        "the second owner replaced the first owner's audio"
+    );
+    assert_eq!(fs::read(&first_saved).unwrap(), first_version);
+    assert_eq!(fs::read(&first_home).unwrap(), first_old_project);
+    assert_eq!(fs::read(&second_home).unwrap(), second_old_project);
+    assert_eq!(fs::read(&first_source).unwrap(), first_bytes);
+    assert_eq!(fs::read(&second_source).unwrap(), second_bytes);
+    assert_eq!(
+        names_in(carried.parent().unwrap()),
+        ["own (2).wav", "own.wav"]
+    );
+    for (rig, saved, sample, audio) in [
+        (first, first_saved, first_sample, first_audio),
+        (second, second_saved, second_sample, second_audio),
+    ] {
+        assert!(!rig.session.document_snapshot().dirty);
+        let mut rig = rig.restart();
+        rig.session.project_open(&saved).unwrap();
+        assert!(rig.has_audio(sample));
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().samples(),
+            audio.samples()
+        );
+        rig.session.transport_play().unwrap();
+        assert!(rms(&rig.run(4800)) > 0.0);
+    }
+}
+
+#[test]
+fn portable_move_keeps_a_sample_undone_before_capture() {
+    portable_move_with_undone_sample(0);
+}
+
+#[test]
+fn portable_move_keeps_a_sample_undone_during_save() {
+    portable_move_with_undone_sample(1);
+}
+
+#[test]
+fn portable_move_keeps_a_sample_added_and_undone_during_save() {
+    portable_move_with_undone_sample(2);
+}
+
+#[test]
+fn portable_history_only_missing_source_stays_missing_after_move() {
+    let rig = Rig::new();
+    let (home, sample) = project_with_its_own_sample(&rig);
+    let audio = rig.session.state().pool.get(sample).unwrap().clone();
+    rig.session.undo().unwrap();
+    let source = Path::new(&home).with_file_name("sounds").join("own.wav");
+    fs::remove_file(&source).unwrap();
+    let collision = rig.folder.path().join("away/sounds/own.wav");
+    write_other_tone(&collision);
+    let competitor = fs::read(&collision).unwrap();
+    rig.session
+        .project_save_new_version(Some(&rig.file("away/song")))
+        .unwrap();
+    rig.events.take();
+    rig.session.redo().unwrap();
+    rig.wait_until_loaded_or_failed(sample);
+    // Undo may retain already decoded audio. It must remain our sound;
+    // reopening below exercises the actual missing source on disk.
+    if rig.has_audio(sample) {
+        assert_eq!(
+            rig.session.state().pool.get(sample).unwrap().samples(),
+            audio.samples()
+        );
+    }
+    assert_eq!(
+        rig.project().sample(sample).unwrap().path,
+        SamplePath::External(paths::display(&source))
+    );
+    assert_eq!(fs::read(&collision).unwrap(), competitor);
+    assert!(rig.session.document_snapshot().dirty);
+    let saved = rig.session.project_save_new_version(None).unwrap();
+    let rig = rig.restart();
+    rig.session.project_open(&saved).unwrap();
+    assert!(!rig.has_audio(sample));
+    assert!(
+        rig.events
+            .take()
+            .contains(&Event::ProjectWarnings(vec![format!(
+                "Missing sample: {}",
+                paths::display(&source)
+            )]))
+    );
+    assert_eq!(fs::read(&collision).unwrap(), competitor);
+}
+
+#[test]
+fn portable_source_conflict_refuses_root_change_without_discarding_history() {
+    let rig = Rig::new();
+    let home = rig
+        .session
+        .project_save(Some(&rig.file("home/song")))
+        .unwrap();
+    let source = Path::new(&home).with_file_name("sounds").join("own.wav");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    write_tone(&source);
+    let source_bytes = fs::read(&source).unwrap();
+    let home_bytes = fs::read(&home).unwrap();
+    let first = rig
+        .session
+        .dispatch(
+            Command::AddSample {
+                name: "First identity".into(),
+                path: own_sample_path("own.wav"),
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .dispatch(
+            Command::RemoveSample {
+                id: SampleId(first.created[0]),
+            },
+            None,
+        )
+        .unwrap();
+    rig.session
+        .dispatch(
+            Command::AddSample {
+                name: "Second identity".into(),
+                path: own_sample_path("own.wav"),
+            },
+            None,
+        )
+        .unwrap();
+    rig.session.undo().unwrap();
+    let before = rig.session.document_snapshot();
+    assert_eq!(before.history.entries.len(), 3);
+    let error = rig
+        .session
+        .project_save_new_version(Some(&rig.file("away/song")))
+        .unwrap_err();
+    assert!(error.contains("history"), "{error}");
+    let saved_copy = rig.folder.path().join("away").join("song (001).windfall");
+    assert!(error.contains(&paths::display(&saved_copy)), "{error}");
+    assert_eq!(file::load(&saved_copy).unwrap(), before.project);
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert_eq!(
+        rig.session.state().sample_dir,
+        file::sample_dir(Path::new(&home))
+    );
+    assert!(rig.session.redo().is_some());
+    assert!(
+        rig.project()
+            .samples
+            .iter()
+            .any(|s| s.name == "Second identity")
+    );
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(fs::read(&home).unwrap(), home_bytes);
+}
+
+fn portable_move_with_undone_sample(timing: u8) {
+    let rig = Rig::new();
+    let home = rig
+        .session
+        .project_save(Some(&rig.file("home/song")))
+        .unwrap();
+    let old_project = fs::read(&home).unwrap();
+    rename(&rig, "Before carry");
+    let source = Path::new(&home).with_file_name("sounds").join("own.wav");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    write_tone(&source);
+    let source_bytes = fs::read(&source).unwrap();
+    let add = || {
+        let added = rig
+            .session
+            .add_channel_from_file(&paths::display(&source), None)
+            .unwrap();
+        let sample = SampleId(added.created[0]);
+        let audio = rig.session.state().pool.get(sample).unwrap().clone();
+        (sample, audio)
+    };
+    let mut added = (timing != 2).then(add);
+    if timing == 0 {
+        rig.session.undo().unwrap();
+    }
+    let collision = rig.folder.path().join("away/sounds/own.wav");
+    write_other_tone(&collision);
+    let competitor = fs::read(&collision).unwrap();
+    let base = rig.file("away/song");
+    let hold = rig.session.hold("save:write");
+    let work = rig
+        .session
+        .background(move |s| s.project_save_new_version(Some(&base)));
+    hold.wait();
+    if timing == 2 {
+        added = Some(add());
+    }
+    if timing != 0 {
+        rig.session.undo().unwrap();
+    }
+    let (sample, audio) = added.unwrap();
+    let before = rig.session.document_snapshot();
+    assert!(before.project.sample(sample).is_none());
+    assert_eq!(before.history.entries.len(), 2);
+    assert_eq!(before.history.cursor, 1);
+    hold.release();
+    let saved = work.join().unwrap().unwrap();
+    let saved_bytes = fs::read(&saved).unwrap();
+    assert_eq!(
+        file::load(&saved).unwrap().sample(sample).is_some(),
+        timing == 1
+    );
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.history, before.history);
+    assert_eq!(after.dirty, timing != 0);
+    assert_eq!(fs::read(&home).unwrap(), old_project);
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+    assert_eq!(fs::read(&collision).unwrap(), competitor);
+    rig.session.redo().unwrap();
+    rig.wait_until_loaded_or_failed(sample);
+    assert!(rig.has_audio(sample), "redo lost the history-only source");
+    assert!(
+        rig.session.state().pool.get(sample).unwrap().samples() == audio.samples(),
+        "redo loaded the destination's unrelated sound"
+    );
+    assert_eq!(rig.session.document_snapshot().history.cursor, 2);
+    assert!(rig.session.document_snapshot().dirty);
+    rig.session.undo().unwrap();
+    assert!(rig.project().sample(sample).is_none());
+    rig.session.redo().unwrap();
+    rig.wait_until_loaded_or_failed(sample);
+    assert_eq!(
+        rig.session.state().pool.get(sample).unwrap().samples(),
+        audio.samples()
+    );
+    let channel = rig.project().channels.last().unwrap().id;
+    rig.session
+        .dispatch(
+            Command::ToggleStep {
+                pattern: rig.pattern(),
+                channel,
+                step: 0,
+            },
+            None,
+        )
+        .unwrap();
+    let next = rig.session.project_save_new_version(None).unwrap();
+    assert_ne!(saved, next);
+    assert_eq!(fs::read(&saved).unwrap(), saved_bytes);
+    assert_eq!(fs::read(&collision).unwrap(), competitor);
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+    assert!(!rig.session.document_snapshot().dirty);
+    let mut rig = rig.restart();
+    rig.session.project_open(&next).unwrap();
+    assert!(rig.has_audio(sample));
+    assert_eq!(
+        rig.session.state().pool.get(sample).unwrap().samples(),
+        audio.samples()
+    );
+    rig.session.transport_play().unwrap();
+    assert!(rms(&rig.run(4800)) > 0.0);
+}
+
+#[test]
 fn an_older_save_cannot_land_on_top_of_a_newer_one() {
     let rig = Rig::new();
     let session = &rig.session;
@@ -1009,7 +1347,7 @@ fn a_save_as_that_renamed_a_sample_and_was_overtaken_by_an_edit_keeps_both() {
 }
 
 #[test]
-fn a_save_as_overtaken_by_an_edit_is_refused_only_when_a_new_name_is_taken_in_the_history() {
+fn a_save_as_preserves_a_history_only_name_before_relinking_a_carried_sample() {
     let rig = Rig::new();
     let session = &rig.session;
     let (home, sample) = project_with_its_own_sample(&rig);
@@ -1019,9 +1357,11 @@ fn a_save_as_overtaken_by_an_edit_is_refused_only_when_a_new_name_is_taken_in_th
         .with_file_name("sounds")
         .join("own (2).wav");
     write_other_tone(&second);
-    session
+    let added = session
         .add_channel_from_file(&paths::display(&second), None)
         .unwrap();
+    let second_sample = SampleId(added.created[0]);
+    let second_audio = session.state().pool.get(second_sample).unwrap().clone();
     assert!(session.undo().is_some());
     let away = rig.folder.path().join("away");
     write_other_tone(&away.join("sounds").join("own.wav"));
@@ -1042,16 +1382,29 @@ fn a_save_as_overtaken_by_an_edit_is_refused_only_when_a_new_name_is_taken_in_th
     rig.events.take();
     hold.release();
 
-    // The copy in the new folder is `own (2).wav`, which the undone sample
-    // has. Renaming would need a fresh history, and the edits forbid that.
-    assert_eq!(saving.join().unwrap().unwrap_err(), EDITED_WHILE_MOVING);
-    assert_eq!(session.document_snapshot(), edited);
-    assert_eq!(edited.path.as_deref(), Some(home.as_str()));
+    // The undone sample keeps its original absolute file, freeing its old
+    // relative name for the carried sample without dropping either history.
+    let saved = saving.join().unwrap().unwrap();
+    let after = session.document_snapshot();
+    assert_eq!(after.path.as_deref(), Some(saved.as_str()));
+    assert_eq!(after.history, edited.history);
+    assert!(after.dirty);
     assert_eq!(
         rig.project().sample(sample).unwrap().path,
-        own_sample_path("own.wav")
+        own_sample_path("own (2).wav")
     );
-    assert!(rig.events.take().is_empty());
+    assert!(session.redo().is_some());
+    assert_eq!(
+        rig.project().sample(second_sample).unwrap().path,
+        SamplePath::External(paths::display(&second))
+    );
+    rig.wait_until_loaded_or_failed(second_sample);
+    assert_eq!(
+        session.state().pool.get(second_sample).unwrap().samples(),
+        second_audio.samples()
+    );
+    assert!(session.undo().is_some());
+    assert_eq!(session.document_snapshot().history, edited.history);
 }
 
 #[test]

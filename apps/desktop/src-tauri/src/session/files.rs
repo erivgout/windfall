@@ -194,16 +194,15 @@ impl Session {
     /// Saving into another folder takes the project's own samples along;
     /// [`carry_samples`] has the rules. If a sample had to be renamed
     /// there, the open project's sample is pointed at the new name too,
-    /// with [`Document::relink_sample`]. That is not an undo step, since
+    /// with [`Document::relink_sample_source`]. That is not an undo step, since
     /// undoing it would point the project at the other file of that name,
     /// and it reaches into the undo history, so undoing and redoing past
     /// the point where the sample was added brings it back under the new
     /// name. The UI hears of it as an ordinary patch.
     ///
-    /// The one case the history cannot be kept in is a new name that a
-    /// sample somewhere in the history already has. The open project is
-    /// then replaced by the one that was written: the UI is sent
-    /// `project:loaded` and the undo history starts over.
+    /// When source paths cannot be relinked with the history intact, the
+    /// copy is left on disk and the open document stays where it was,
+    /// including its history. A save never discards undo/redo to adopt a copy.
     ///
     /// A project that was edited while it was being written into another
     /// folder is finished all the same. It moves to the new file, its
@@ -211,10 +210,13 @@ impl Session {
     /// made meanwhile are kept, and it stays marked as having unsaved
     /// changes, because those edits are not in the file. A sample those
     /// edits brought in from the old project folder was not taken along,
-    /// so it is pointed at the file where it is. Only when a renamed sample
-    /// cannot be given its name with the history intact is the save
-    /// refused with [`EDITED_WHILE_MOVING`]: the edits rule out starting
-    /// the history over.
+    /// so it is pointed at the file where it is. The same applies to sources
+    /// held only by undo/redo history, even when no edits happened during
+    /// the save. Each exact original source path is retained; missing files
+    /// are not replaced by unrelated names in the new folder. When a
+    /// concurrent save cannot relink a renamed sample with the history
+    /// intact, it is refused with [`EDITED_WHILE_MOVING`], leaving the open
+    /// project at its old root.
     pub fn project_save(&self, path: Option<&str>) -> Result<String, String> {
         self.project_save_mode(path, false)
     }
@@ -264,12 +266,15 @@ impl Session {
                 _ => true,
             };
             let renamed = match (&previous_dir, &target_dir) {
-                (Some(from), Some(to)) if moved => carry_samples(project, from, to)?,
+                (Some(from), Some(to)) if moved => carry_samples(project, from, to, || {
+                    #[cfg(test)]
+                    self.pause("save:sample-missing");
+                })?,
                 _ => Vec::new(),
             };
             Ok((target_dir, moved, renamed))
         };
-        let (target, project, (target_dir, moved, mut renamed)) = if numbered {
+        let (target, project, (target_dir, moved, renamed)) = if numbered {
             super::versions::write(&project, &played, &target, prepare)?
         } else {
             let prepared = prepare(&mut project, &target)?;
@@ -284,13 +289,16 @@ impl Session {
             let current = state.generation == generation;
             let unchanged = state.edits == edits;
             if current {
-                if moved
-                    && !unchanged
-                    && let Some(from) = &previous_dir
-                {
-                    renamed.extend(left_behind(state.document.project(), &project, from));
-                }
-                match relink(&state.document, &renamed) {
+                // Preserve sources absent from the saved snapshot, including
+                // undo/redo-only samples and edits made during the write.
+                // Do this first so their old relative names do not block a
+                // carried sample's new name in the destination root.
+                let mut relinks = match &previous_dir {
+                    Some(from) if moved => left_behind(&state.document, &project, &renamed, from),
+                    _ => Vec::new(),
+                };
+                relinks.extend(renamed);
+                match relink(&state.document, &relinks) {
                     Some((document, touched)) => {
                         state.document = document;
                         state.path = Some(target.clone());
@@ -302,14 +310,11 @@ impl Session {
                         // new dirty flag to every window.
                         self.publish(&mut state, &touched);
                     }
-                    // The document differs from what was written in
-                    // nothing but the paths of its samples.
                     None if unchanged => {
-                        state.path = Some(target.clone());
-                        state.sample_dir = target_dir;
-                        state.document = Document::new(project);
-                        let snapshot = state.document.snapshot(state.path_text());
-                        self.emit(Event::ProjectLoaded(snapshot));
+                        return Err(format!(
+                            "A copy was saved at {}, but the open project could not move without losing sample sources in its undo history. The open project and history are unchanged.",
+                            paths::display(&target)
+                        ));
                     }
                     None => return Err(EDITED_WHILE_MOVING.to_owned()),
                 }
@@ -507,6 +512,9 @@ impl Session {
     }
 }
 
+/// An exact original source identity and the path it must use after a move.
+type SampleRelink = (SampleId, SamplePath, SamplePath);
+
 /// Points samples of the open document at new paths without touching the
 /// undo history: all of them or none. Returns the document with the paths
 /// changed and what that changed in its project, or `None` when a sample
@@ -516,11 +524,11 @@ impl Session {
 /// A sample that is neither in the project nor in its history any more, as
 /// after an edit that left the step which added it behind for good, has
 /// nothing to point anywhere.
-fn relink(document: &Document, renamed: &[(SampleId, SamplePath)]) -> Option<(Document, Touched)> {
+fn relink(document: &Document, renamed: &[SampleRelink]) -> Option<(Document, Touched)> {
     let mut document = document.clone();
     let mut touched = Touched::default();
-    for (sample, path) in renamed {
-        match document.relink_sample(*sample, path.clone()) {
+    for (sample, source, path) in renamed {
+        match document.relink_sample_source(*sample, source, path.clone()) {
             Ok(changed) => touched.merge(&changed),
             Err(CommandError::NotFound { .. }) => {}
             Err(_) => return None,
@@ -529,20 +537,36 @@ fn relink(document: &Document, renamed: &[(SampleId, SamplePath)]) -> Option<(Do
     Some((document, touched))
 }
 
-/// The samples that `open`, the project as it is now, keeps in the old
-/// project folder `from` and that `written`, the copy of it that was saved
-/// into another folder, does not have: edits made during the save brought
-/// them in, too late to be taken along. Each comes with the full path of
-/// its file, which is what it has to be stored as once the project lives in
-/// the other folder.
-fn left_behind(open: &Project, written: &Project, from: &Path) -> Vec<(SampleId, SamplePath)> {
-    let samples = open.samples.iter();
-    samples
-        .filter(|sample| written.sample(sample.id).is_none())
-        .filter(|sample| matches!(sample.path, SamplePath::Project(_)))
-        .filter_map(|sample| {
-            let file = file::resolve_sample_path(&sample.path, Some(from), from)?;
-            Some((sample.id, SamplePath::External(paths::display(&file))))
+/// Sources in the live document or its retained history that were not
+/// carried in `written`. Preserve their exact old files as absolute paths,
+/// including missing files: a same-name file in the new root is unrelated.
+fn left_behind(
+    open: &Document,
+    written: &Project,
+    carried: &[SampleRelink],
+    from: &Path,
+) -> Vec<SampleRelink> {
+    let mut seen = HashSet::new();
+    open.sample_sources()
+        .filter(|(_, source)| matches!(source, SamplePath::Project(_)))
+        .filter(|(id, source)| {
+            !written.sample(*id).is_some_and(|sample| {
+                sample.path == **source
+                    || carried.iter().any(|(carried_id, old, new)| {
+                        carried_id == id && old == *source && new == &sample.path
+                    })
+            })
+        })
+        .filter_map(|(id, source)| {
+            if !seen.insert((id, source.clone())) {
+                return None;
+            }
+            let file = file::resolve_sample_path(source, Some(from), from)?;
+            Some((
+                id,
+                source.clone(),
+                SamplePath::External(paths::display(&file)),
+            ))
         })
         .collect()
 }
@@ -583,6 +607,8 @@ fn with_project_extension(path: PathBuf) -> PathBuf {
 /// holds anything else it is some other sound that happens to share the
 /// name: the sample is copied beside it under a numbered name, such as
 /// `kick (2).wav`, and the project is pointed at the copy.
+/// Every copy is staged and published without replacement; a concurrent
+/// arrival is compared or given another name before the project is written.
 ///
 /// A sample that cannot be copied fails the save, because a project file
 /// that points at nothing must not be written as if all were well. A
@@ -592,7 +618,8 @@ fn carry_samples(
     project: &mut Project,
     from: &Path,
     to: &Path,
-) -> Result<Vec<(SampleId, SamplePath)>, String> {
+    mut missing: impl FnMut(),
+) -> Result<Vec<SampleRelink>, String> {
     // Windows does not tell names apart by letter case, so neither does
     // this.
     let mut taken: HashSet<String> = project
@@ -614,17 +641,19 @@ fn carry_samples(
         if !source.is_file() {
             continue;
         }
-        let placed = place_sample(&source, to, relative, &taken).map_err(|error| {
-            format!(
-                "Could not copy the sample \"{}\" to {}: {error}. The project was not saved.",
-                sample.name,
-                paths::display(to)
-            )
-        })?;
+        let placed =
+            place_sample(&source, to, relative, &taken, &mut missing).map_err(|error| {
+                format!(
+                    "Could not copy the sample \"{}\" to {}: {error}. The project was not saved.",
+                    sample.name,
+                    paths::display(to)
+                )
+            })?;
         if placed != *relative {
             taken.insert(placed.to_lowercase());
+            let source = sample.path.clone();
             sample.path = SamplePath::Project(placed);
-            renamed.push((sample.id, sample.path.clone()));
+            renamed.push((sample.id, source, sample.path.clone()));
         }
     }
     Ok(renamed)
@@ -639,6 +668,7 @@ fn place_sample(
     folder: &Path,
     relative: &str,
     taken: &HashSet<String>,
+    missing: &mut impl FnMut(),
 ) -> io::Result<String> {
     for number in 1..=MAX_SAMPLE_NAMES {
         let candidate = if number == 1 {
@@ -656,10 +686,19 @@ fn place_sample(
                 "its stored path cannot be used",
             )
         })?;
-        match fs::metadata(&target) {
+        match fs::symlink_metadata(&target) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                copy_into_place(source, &target)?;
-                return Ok(candidate);
+                missing();
+                if copy_into_place(source, &target)? {
+                    return Ok(candidate);
+                }
+                // Another owner published after the missing-file check.
+                // Reuse only identical bytes; otherwise try a new name.
+                if fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.is_file())
+                    && same_contents(source, &target)?
+                {
+                    return Ok(candidate);
+                }
             }
             Err(error) => return Err(error),
             Ok(metadata) if metadata.is_file() && same_contents(source, &target)? => {
@@ -684,14 +723,27 @@ fn numbered(relative: &str, number: u32) -> String {
     format!("{folder}{stem} ({number}){extension}")
 }
 
-fn copy_into_place(source: &Path, target: &Path) -> io::Result<()> {
-    if let Some(folder) = target.parent() {
-        fs::create_dir_all(folder)?;
+/// Stage a complete sample in an owned temporary file, then publish it
+/// without replacement. False means a competitor has the final name. All
+/// error/collision cleanup belongs to the temporary file, never `target`.
+fn copy_into_place(source: &Path, target: &Path) -> io::Result<bool> {
+    let folder = target
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "the sample has no folder"))?;
+    fs::create_dir_all(folder)?;
+    let mut staged = tempfile::NamedTempFile::new_in(folder)?;
+    io::copy(&mut File::open(source)?, staged.as_file_mut())?;
+    staged.as_file().sync_all()?;
+    match staged.persist_noclobber(target) {
+        Ok(_) => Ok(true),
+        Err(error)
+            if error.error.kind() == io::ErrorKind::AlreadyExists
+                || fs::symlink_metadata(target).is_ok() =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.error),
     }
-    fs::copy(source, target).map(drop).inspect_err(|_| {
-        // Half a copy under the sample's name would pass for the sample.
-        let _ = fs::remove_file(target);
-    })
 }
 
 /// Whether two files hold the same bytes. Failing to read `source` is an
@@ -765,6 +817,45 @@ mod tests {
         assert_eq!(numbered("takes/take.2.flac", 2), "takes/take.2 (2).flac");
         assert_eq!(numbered("v1.2/noise", 2), "v1.2/noise (2)");
         assert_eq!(numbered(".hidden", 2), ".hidden (2)");
+    }
+
+    #[test]
+    fn portable_sample_publication_reuses_only_identical_bytes_and_cleans_owned_staging() {
+        let folder = tempfile::tempdir().unwrap();
+        let source = folder.path().join("source.wav");
+        let destination = folder.path().join("destination");
+        fs::create_dir(&destination).unwrap();
+        let target = destination.join("sound.wav");
+        fs::write(&source, b"ours").unwrap();
+        fs::write(&target, b"theirs").unwrap();
+        assert!(!copy_into_place(&source, &target).unwrap());
+        assert_eq!(fs::read(&target).unwrap(), b"theirs");
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 1);
+        let taken = HashSet::new();
+        assert_eq!(
+            place_sample(&source, &destination, "sound.wav", &taken, &mut || {}).unwrap(),
+            "sound (2).wav"
+        );
+        assert_eq!(
+            fs::read(destination.join("sound (2).wav")).unwrap(),
+            b"ours"
+        );
+        assert_eq!(
+            place_sample(&source, &destination, "sound.wav", &taken, &mut || {}).unwrap(),
+            "sound (2).wav"
+        );
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 2);
+        assert_eq!(fs::read(&target).unwrap(), b"theirs");
+    }
+
+    #[test]
+    fn portable_failed_sample_staging_leaves_competitors_untouched() {
+        let folder = tempfile::tempdir().unwrap();
+        let target = folder.path().join("competitor.wav");
+        fs::write(&target, b"competitor's complete audio").unwrap();
+        assert!(copy_into_place(&folder.path().join("missing.wav"), &target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"competitor's complete audio");
+        assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
     }
 
     #[test]
