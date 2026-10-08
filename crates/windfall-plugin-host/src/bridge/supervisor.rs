@@ -368,6 +368,29 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
     socket
         .set_write_timeout(Some(options.startup_timeout))
         .map_err(|error| error.to_string())?;
+    // Private debug test executable only; ordinary production launch keeps the
+    // OS socket buffer unchanged. Force a bounded receiver-backpressure test.
+    #[cfg(all(windows, debug_assertions))]
+    if options.helper.file_stem().and_then(|name| name.to_str())
+        == Some("windfall-plugin-audio-backpressure")
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{SO_SNDBUF, SOL_SOCKET, setsockopt};
+        let size: i32 = 4096;
+        // SAFETY: valid owned socket and correctly sized SO_SNDBUF integer.
+        if unsafe {
+            setsockopt(
+                socket.as_raw_socket() as usize,
+                SOL_SOCKET,
+                SO_SNDBUF,
+                (&size as *const i32).cast(),
+                std::mem::size_of_val(&size) as i32,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
     if options
         .cancelled
         .as_deref()
@@ -391,7 +414,35 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
         },
     );
     load.state = options.state;
-    load.write(&mut socket).map_err(|error| error.to_string())?;
+    let _backpressure = load
+        .write_bounded(&mut socket, || {
+            if options
+                .cancelled
+                .as_deref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
+            {
+                return Err(std::io::Error::other("audio helper startup cancelled"));
+            }
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "audio helper startup deadline exceeded",
+                ));
+            }
+            if process.0.try_wait()?.is_some() {
+                return Err(std::io::Error::other(
+                    "audio helper process exited during Load",
+                ));
+            }
+            Ok(())
+        })
+        .map_err(|error| error.to_string())?;
+    #[cfg(all(windows, debug_assertions))]
+    if options.helper.file_stem().and_then(|name| name.to_str())
+        == Some("windfall-plugin-audio-backpressure")
+    {
+        eprintln!("controlled startup Load: {_backpressure} WouldBlock retries");
+    }
     socket
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
@@ -408,6 +459,9 @@ pub fn launch(options: Launch) -> Result<(Control, Audio, usize), String> {
             retired: None,
         },
     )?;
+    if let Message::Error { message } = &ready.body {
+        return Err(message.clone());
+    }
     let Message::Ready {
         native_latency,
         tail,
@@ -498,6 +552,12 @@ fn wait_reply(
             process.reap()?;
             return Err("audio helper control deadline exceeded; process terminated".into());
         }
+        if let Some(packet) = decoder.poll(socket).map_err(|error| error.to_string())? {
+            if packet.request != request || packet.owner != owner {
+                return Err("stale audio helper control response".into());
+            }
+            return Ok(packet);
+        }
         if process
             .0
             .try_wait()
@@ -505,12 +565,6 @@ fn wait_reply(
             .is_some()
         {
             return Err("audio helper process exited".into());
-        }
-        if let Some(packet) = decoder.poll(socket).map_err(|error| error.to_string())? {
-            if packet.request != request || packet.owner != owner {
-                return Err("stale audio helper control response".into());
-            }
-            return Ok(packet);
         }
         std::thread::sleep(Duration::from_micros(200));
     }

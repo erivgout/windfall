@@ -122,6 +122,7 @@ impl PluginState {
 pub(crate) struct LimitedWriter {
     pub bytes: Vec<u8>,
     limit: usize,
+    failed: bool,
 }
 
 impl LimitedWriter {
@@ -129,13 +130,24 @@ impl LimitedWriter {
         Self {
             bytes: Vec::new(),
             limit,
+            failed: false,
         }
+    }
+    pub fn failed(&self) -> bool {
+        self.failed
     }
 }
 
 impl Write for LimitedWriter {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if self.bytes.len() + data.len() > self.limit {
+        if self.failed
+            || self
+                .bytes
+                .len()
+                .checked_add(data.len())
+                .is_none_or(|size| size > self.limit)
+        {
+            self.failed = true;
             return Err(io::Error::other("the plugin's state is too large"));
         }
         self.bytes.extend_from_slice(data);
@@ -143,7 +155,11 @@ impl Write for LimitedWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        if self.failed {
+            Err(io::Error::other("the plugin's state writer failed"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -258,5 +274,17 @@ mod tests {
         assert!(writer.write_all(b"abcd").is_ok());
         assert!(writer.write_all(b"e").is_err());
         assert_eq!(writer.bytes, b"abcd");
+    }
+
+    #[test]
+    fn a_refused_state_write_poison_is_sticky() {
+        let mut writer = LimitedWriter::new(4);
+        writer.write_all(b"ab").unwrap();
+        assert!(writer.write_all(b"cde").is_err());
+        assert_eq!(writer.bytes, b"ab");
+        assert!(writer.failed());
+        assert!(writer.write_all(b"c").is_err());
+        assert!(writer.flush().is_err());
+        assert_eq!(writer.bytes, b"ab");
     }
 }

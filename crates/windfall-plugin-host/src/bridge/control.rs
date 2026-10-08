@@ -194,7 +194,7 @@ impl Packet {
         }
         Ok(())
     }
-    pub fn write(&self, socket: &mut TcpStream) -> io::Result<()> {
+    fn header(&self) -> io::Result<([u8; PREFIX], Vec<u8>)> {
         self.validate()?;
         let metadata = serde_json::to_vec(&Metadata {
             owner: self.owner,
@@ -210,9 +210,42 @@ impl Packet {
         prefix[8..16].copy_from_slice(&self.request.to_le_bytes());
         prefix[16..20].copy_from_slice(&(metadata.len() as u32).to_le_bytes());
         prefix[20..24].copy_from_slice(&(self.state.len() as u32).to_le_bytes());
+        Ok((prefix, metadata))
+    }
+    pub fn write(&self, socket: &mut TcpStream) -> io::Result<()> {
+        let (prefix, metadata) = self.header()?;
         socket.write_all(&prefix)?;
         socket.write_all(&metadata)?;
         socket.write_all(&self.state)
+    }
+    /// Startup owner only. Keep framing across partial/nonblocking writes while
+    /// checking the same whole-startup deadline, cancellation and child lifetime.
+    pub(crate) fn write_bounded(
+        &self,
+        socket: &mut impl Write,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<usize> {
+        check()?;
+        let (prefix, metadata) = self.header()?;
+        let mut backpressure = 0usize;
+        for mut remaining in [&prefix[..], &metadata[..], &self.state[..]] {
+            while !remaining.is_empty() {
+                check()?;
+                let count = remaining.len().min(64 << 10);
+                match socket.write(&remaining[..count]) {
+                    Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                    Ok(written) => remaining = &remaining[written..],
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        backpressure = backpressure.saturating_add(1);
+                        std::thread::sleep(std::time::Duration::from_micros(200));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        check()?;
+        Ok(backpressure)
     }
 }
 fn invalid(message: impl std::fmt::Display) -> io::Error {
@@ -300,6 +333,74 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn partial_control_writes_preserve_framing_and_check_every_retry() {
+        struct Pressure {
+            bytes: Vec<u8>,
+            writes: usize,
+        }
+        impl Write for Pressure {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.writes += 1;
+                if self.writes % 3 == 1 {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                if self.writes % 3 == 2 {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                let count = bytes.len().min(7);
+                self.bytes.extend_from_slice(&bytes[..count]);
+                Ok(count)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let packet = Packet::new(
+            7,
+            Owner {
+                session: 1,
+                token: 2,
+                revision: 3,
+                binding: 4,
+            },
+            Message::Shutdown,
+        );
+        let mut socket = Pressure {
+            bytes: Vec::new(),
+            writes: 0,
+        };
+        let mut checks = 0;
+        packet
+            .write_bounded(&mut socket, || {
+                checks += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert!(checks > socket.writes);
+        let mut decoder = Decoder {
+            bytes: socket.bytes,
+        };
+        let decoded = decoder.parse().unwrap().unwrap();
+        assert_eq!(decoded.request, packet.request);
+        assert_eq!(decoded.owner, packet.owner);
+        assert!(matches!(decoded.body, Message::Shutdown));
+        let mut socket = Pressure {
+            bytes: Vec::new(),
+            writes: 0,
+        };
+        let mut checks = 0;
+        let result = packet.write_bounded(&mut socket, || {
+            checks += 1;
+            if checks == 8 {
+                Err(io::ErrorKind::TimedOut.into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(socket.bytes.len() < PREFIX);
+    }
     #[test]
     fn malformed_and_oversized_control_headers_fail_before_payload_allocation() {
         for length in [MAX_METADATA_BYTES + 1, u32::MAX as usize] {

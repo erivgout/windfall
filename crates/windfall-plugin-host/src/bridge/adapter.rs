@@ -476,7 +476,27 @@ impl Audio {
         deadline: std::time::Instant,
         cancelled: &AtomicBool,
     ) -> Result<(), OfflineError> {
-        let result = self.process_offline_inner(left, right, deadline, cancelled);
+        self.process_offline_with_scheduler(
+            left,
+            right,
+            deadline,
+            cancelled,
+            std::time::Instant::now,
+            || std::thread::sleep(std::time::Duration::from_micros(200)),
+        )
+    }
+    // Private off-realtime scheduler seam for deterministic DONE/cancel races.
+    fn process_offline_with_scheduler(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        deadline: std::time::Instant,
+        cancelled: &AtomicBool,
+        mut now: impl FnMut() -> std::time::Instant,
+        mut wait: impl FnMut(),
+    ) -> Result<(), OfflineError> {
+        let result =
+            self.process_offline_inner(left, right, deadline, cancelled, &mut now, &mut wait);
         if result.is_err() {
             // A staging caller receives no retained partial/fallback output.
             // It must still discard its complete render artifact on this error.
@@ -491,35 +511,23 @@ impl Audio {
         right: &mut [f32],
         deadline: std::time::Instant,
         cancelled: &AtomicBool,
+        now: &mut dyn FnMut() -> std::time::Instant,
+        wait: &mut dyn FnMut(),
     ) -> Result<(), OfflineError> {
         if left.len() != right.len() {
             return Err(OfflineError::Shape);
         }
         let mut offset = 0;
         while offset < left.len() {
-            if cancelled.load(Ordering::Acquire) {
-                return Err(OfflineError::Cancelled);
-            }
-            if self.signals.failed.load(Ordering::Acquire) || self.region.helper_failed() {
-                return Err(OfflineError::Failed);
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(OfflineError::Deadline);
-            }
+            self.offline_status(deadline, cancelled, now())?;
             if self.cursor == 0 && self.blocks_since_reset >= 2 {
                 while !self.region.output_finished(self.sequence - 2) {
-                    if cancelled.load(Ordering::Acquire) {
-                        return Err(OfflineError::Cancelled);
-                    }
-                    if self.signals.failed.load(Ordering::Acquire) || self.region.helper_failed() {
-                        return Err(OfflineError::Failed);
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Err(OfflineError::Deadline);
-                    }
-                    std::thread::sleep(std::time::Duration::from_micros(200));
+                    self.offline_status(deadline, cancelled, now())?;
+                    wait();
                 }
             }
+            // DONE can arrive with cancellation/expiry during the wait.
+            self.offline_status(deadline, cancelled, now())?;
             let frames = (self.region.config.block - self.cursor).min(left.len() - offset);
             let corrupt = self.health.corrupt_blocks;
             let full = self.health.full_blocks;
@@ -542,8 +550,23 @@ impl Audio {
             }
             offset += frames;
         }
+        self.offline_status(deadline, cancelled, now())?;
+        Ok(())
+    }
+    fn offline_status(
+        &self,
+        deadline: std::time::Instant,
+        cancelled: &AtomicBool,
+        now: std::time::Instant,
+    ) -> Result<(), OfflineError> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(OfflineError::Cancelled);
+        }
         if self.signals.failed.load(Ordering::Acquire) || self.region.helper_failed() {
             return Err(OfflineError::Failed);
+        }
+        if now >= deadline {
+            return Err(OfflineError::Deadline);
         }
         Ok(())
     }
@@ -599,6 +622,61 @@ mod tests {
             };
             region.complete(slot, sequence, output, OUTPUT_OK);
         }
+    }
+    #[test]
+    fn offline_done_cancellation_race_fails_and_clears_both_buffers() {
+        offline_done_race(true);
+    }
+    #[test]
+    fn offline_done_deadline_race_fails_and_clears_both_buffers() {
+        offline_done_race(false);
+    }
+    fn offline_done_race(cancellation: bool) {
+        let (mut audio, region) = make(Kind::Effect, 0);
+        audio.process(&mut [0.5; 128], &mut [0.5; 128]);
+        let mut input = InputBlock::new();
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        let mut output = OutputBlock::silent();
+        output.processed_generation = input.control_end;
+        output.left.fill(0.25);
+        output.right.fill(0.25);
+        region.complete(slot, sequence, &output, OUTPUT_OK);
+        // A valid first chunk is already available. The second/final chunk
+        // hits the wait boundary; errors must erase the earlier returned prefix.
+        let (slot, sequence) = region.take_input(&mut input).unwrap().unwrap();
+        let start = std::time::Instant::now();
+        let deadline = start + std::time::Duration::from_secs(1);
+        let now = std::cell::Cell::new(start);
+        let cancelled = AtomicBool::new(false);
+        let mut left = [0.5; 128];
+        let mut right = left;
+        let result = audio.process_offline_with_scheduler(
+            &mut left,
+            &mut right,
+            deadline,
+            &cancelled,
+            || now.get(),
+            || {
+                // Exactly the polling sleep boundary, no scheduling guess.
+                if cancellation {
+                    cancelled.store(true, Ordering::Release);
+                } else {
+                    now.set(deadline);
+                }
+                region.complete(slot, sequence, &output, OUTPUT_OK);
+            },
+        );
+        assert_eq!(
+            result,
+            Err(if cancellation {
+                OfflineError::Cancelled
+            } else {
+                OfflineError::Deadline
+            })
+        );
+        assert_eq!(left, [0.0; 128]);
+        assert_eq!(right, [0.0; 128]);
+        assert_eq!(audio.health().completed_blocks, 1);
     }
     #[test]
     fn healthy_impulse_measures_two_blocks_with_irregular_callbacks() {

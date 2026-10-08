@@ -42,6 +42,7 @@ struct Native {
     sequence: Option<u64>,
     epoch: u64,
     processed_generation: u64,
+    processed_epoch: u64,
     offline: bool,
     dirty: bool,
 }
@@ -208,13 +209,13 @@ impl Native {
             // Admission failures remain in `admitted`; this baseline does not
             // erase them. A nonempty successful native call is mandatory.
             let before = processor.health();
+            dropped_evidence(before.dropped_events, before.dropped_events)?;
             let status = processor.process(&mut output.left[at..end], &mut output.right[at..end]);
             let after = processor.health();
             output.native_drops = output
                 .native_drops
                 .saturating_add(after.dropped_events.saturating_sub(before.dropped_events));
-            no_drop &= before.dropped_events < u32::MAX - 65_536
-                && before.dropped_events == after.dropped_events;
+            no_drop &= dropped_evidence(before.dropped_events, after.dropped_events)?;
             good_audio &= before.scrubbed_samples < u64::MAX - 2048
                 && before.scrubbed_samples == after.scrubbed_samples;
             if status == ProcessStatus::Failed || after.failed {
@@ -229,6 +230,7 @@ impl Native {
         output.processed_generation = 0;
         if admitted && no_drop && good_audio && input.controls_complete {
             self.processed_generation = input.control_end;
+            self.processed_epoch = input.epoch;
             output.processed_generation = input.control_end;
             self.uncertain.clear();
             self.notes_uncertain = false;
@@ -266,7 +268,7 @@ impl Native {
         }
         // Sequence continuity can be cleared by capture; DSP proof remains
         // bound to the epoch of the last actual native block.
-        let processed = if epoch == self.epoch {
+        let processed = if epoch == self.processed_epoch {
             self.processed_generation
         } else {
             0
@@ -403,6 +405,16 @@ fn run(address: SocketAddr) -> io::Result<()> {
     socket.set_nonblocking(true)?;
     let mut decoder = Decoder::default();
     let deadline = Instant::now() + Duration::from_secs(5);
+    // Private debug-only test bootstrap: actual native owner and launch path,
+    // no extra public API/env/key/argv fields. Production filename never selects it.
+    #[cfg(debug_assertions)]
+    if std::env::current_exe()?
+        .file_stem()
+        .and_then(|name| name.to_str())
+        == Some("windfall-plugin-audio-backpressure")
+    {
+        std::thread::sleep(Duration::from_millis(500));
+    }
     let load = loop {
         if let Some(packet) = decoder.poll(&mut socket)? {
             break packet;
@@ -511,8 +523,23 @@ fn run(address: SocketAddr) -> io::Result<()> {
     processor.set_realtime(!offline);
     let latency = processor.latency_samples() as usize;
     if let Err(error_value) = region.negotiate_latency(latency) {
+        region.latch_helper_failure();
+        let message = format!(
+            "unsupported native latency {latency} at {} Hz: {error_value}",
+            config.sample_rate
+        );
+        reply(
+            &mut socket,
+            &Packet::new(
+                load.request,
+                load.owner,
+                Message::Error {
+                    message: message.clone(),
+                },
+            ),
+        )?;
         let _ = instance.deactivate(processor);
-        return Err(error(error_value));
+        return Err(error(message));
     }
     let tail = u64::from(processor.tail_samples().unwrap_or(config.sample_rate * 10));
     let mut native = Native {
@@ -529,6 +556,7 @@ fn run(address: SocketAddr) -> io::Result<()> {
         sequence: None,
         epoch: 1,
         processed_generation: 0,
+        processed_epoch: 0,
         offline: *offline,
         dirty: false,
     };
@@ -616,5 +644,26 @@ fn run(address: SocketAddr) -> io::Result<()> {
         if !worked {
             std::thread::sleep(Duration::from_micros(200));
         }
+    }
+}
+
+// A delta is conservative unknown; saturation/rollover ends this helper rather
+// than letting a later wrapped counter manufacture an affirmative no-drop gate.
+fn dropped_evidence(before: u32, after: u32) -> io::Result<bool> {
+    if before >= u32::MAX - 65_536 || after >= u32::MAX - 65_536 || after < before {
+        return Err(error("native drop counter exhausted or rolled over"));
+    }
+    Ok(before == after)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn exhausted_or_wrapped_native_loss_counters_never_become_affirmative_proof() {
+        assert!(dropped_evidence(100, 100).unwrap());
+        assert!(!dropped_evidence(100, 101).unwrap());
+        assert!(dropped_evidence(u32::MAX - 65_536, u32::MAX - 65_536).is_err());
+        assert!(dropped_evidence(u32::MAX - 65_537, u32::MAX - 65_536).is_err());
+        assert!(dropped_evidence(100, 0).is_err());
     }
 }

@@ -106,7 +106,15 @@ const SINE_PARAMS: &[ParamDef] = &[ParamDef {
 pub(crate) fn params_of(kind: Kind) -> &'static [ParamDef] {
     match kind {
         Kind::Gain => GAIN_PARAMS,
-        Kind::BridgeDelayed | Kind::BridgeProcessHang | Kind::BridgeIdleHang => &GAIN_PARAMS[..1],
+        Kind::BridgeDelayed
+        | Kind::BridgeProcessHang
+        | Kind::BridgeIdleHang
+        | Kind::BridgeCaptureExit
+        | Kind::BridgeCaptureHang
+        | Kind::BridgeInvalidStream
+        | Kind::BridgeBadLatency
+        | Kind::BridgeEventFlood
+        | Kind::BridgeIgnoredStreamError => &GAIN_PARAMS[..1],
         Kind::Sine | Kind::MidiSine => SINE_PARAMS,
         _ => &[],
     }
@@ -295,6 +303,22 @@ fn state_slots(kind: Kind) -> &'static [usize] {
 unsafe extern "C" fn state_save(plugin: *const clap_plugin, stream: *const clap_ostream) -> bool {
     // SAFETY: the host passes the plugin it was given.
     let plugin = unsafe { Plugin::from_raw(plugin) };
+    use crate::bridge_behaviors::{CaptureFault, before_capture};
+    let fault = match plugin.kind {
+        Kind::BridgeCaptureExit => CaptureFault::Exit,
+        Kind::BridgeCaptureHang => CaptureFault::Hang,
+        Kind::BridgeInvalidStream => CaptureFault::PartialStream,
+        _ => CaptureFault::None,
+    };
+    if !before_capture(fault, plugin.value(slot::GAIN)) {
+        let bytes = [0u8; 3];
+        if let Some(write) = unsafe { (*stream).write } {
+            unsafe {
+                write(stream, bytes.as_ptr().cast(), bytes.len() as u64);
+            }
+        }
+        return false; // Refuse the truncated native state, do not claim success.
+    }
     let mut bytes = state_magic(plugin.kind).to_vec();
     for &slot in state_slots(plugin.kind) {
         bytes.extend_from_slice(&plugin.value(slot).to_le_bytes());
@@ -303,6 +327,18 @@ unsafe extern "C" fn state_save(plugin: *const clap_plugin, stream: *const clap_
     let Some(write) = (unsafe { (*stream).write }) else {
         return false;
     };
+    if plugin.kind == Kind::BridgeIgnoredStreamError && plugin.value(slot::GAIN) >= 0.75 {
+        // Valid bounded memory, deliberately broken native save semantics:
+        // ignore the first failed host write and claim success. A small-limit
+        // native unit hits this immediately; the helper hits its real256MiB cap.
+        let padding = [0x42u8; 8192];
+        for _ in 0..=((256 << 20) / padding.len()) {
+            if unsafe { write(stream, padding.as_ptr().cast(), padding.len() as u64) } <= 0 {
+                return true;
+            }
+        }
+        return true;
+    }
     let mut written = 0;
     while written < bytes.len() {
         let rest = &bytes[written..];
@@ -499,9 +535,20 @@ static NOTE_PORTS: clap_plugin_note_ports = clap_plugin_note_ports {
 };
 
 unsafe extern "C" fn latency_get(plugin: *const clap_plugin) -> u32 {
+    if unsafe { Plugin::from_raw(plugin) }.kind == Kind::BridgeBadLatency {
+        return u32::MAX;
+    }
     if matches!(
         unsafe { Plugin::from_raw(plugin) }.kind,
-        Kind::BridgeDelayed | Kind::BridgeProcessHang | Kind::BridgeIdleHang
+        Kind::BridgeDelayed
+            | Kind::BridgeProcessHang
+            | Kind::BridgeIdleHang
+            | Kind::BridgeCaptureExit
+            | Kind::BridgeCaptureHang
+            | Kind::BridgeInvalidStream
+            | Kind::BridgeBadLatency
+            | Kind::BridgeEventFlood
+            | Kind::BridgeIgnoredStreamError
     ) {
         crate::bridge_behaviors::DELAY as u32
     } else {
@@ -552,6 +599,12 @@ pub(crate) fn get(kind: Kind, id: &CStr) -> *const c_void {
                 | Kind::BridgeDelayed
                 | Kind::BridgeProcessHang
                 | Kind::BridgeIdleHang
+                | Kind::BridgeCaptureExit
+                | Kind::BridgeCaptureHang
+                | Kind::BridgeInvalidStream
+                | Kind::BridgeBadLatency
+                | Kind::BridgeEventFlood
+                | Kind::BridgeIgnoredStreamError
         )
     {
         &raw const STATE as *const c_void
@@ -563,6 +616,12 @@ pub(crate) fn get(kind: Kind, id: &CStr) -> *const c_void {
                 | Kind::BridgeDelayed
                 | Kind::BridgeProcessHang
                 | Kind::BridgeIdleHang
+                | Kind::BridgeCaptureExit
+                | Kind::BridgeCaptureHang
+                | Kind::BridgeInvalidStream
+                | Kind::BridgeBadLatency
+                | Kind::BridgeEventFlood
+                | Kind::BridgeIgnoredStreamError
         )
     {
         &raw const LATENCY as *const c_void
