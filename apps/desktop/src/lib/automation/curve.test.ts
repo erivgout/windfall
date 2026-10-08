@@ -116,9 +116,9 @@ describe("the range of a target", () => {
         checked += 1
       })
     }
-    // Includes the 19 numeric ranges added by the seven utility effects.
-    expect(fixtures.ranges).toHaveLength(141)
-    expect(checked).toBe(141 * 9)
+    // Includes 19 utility ranges and eight controls from the three filter kinds.
+    expect(fixtures.ranges).toHaveLength(149)
+    expect(checked).toBe(149 * 9)
     expect(worstForward).toBeLessThan(RANGE_TOLERANCE)
     expect(worstBack).toBeLessThan(RANGE_TOLERANCE)
   })
