@@ -8,6 +8,7 @@ mod effects;
 mod filter_family;
 mod instruments;
 mod mixer;
+mod modulation;
 mod realtime;
 mod rendering;
 mod sampler;

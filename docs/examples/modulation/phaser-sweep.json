@@ -1,0 +1,9 @@
+{
+  "type": "phaser",
+  "minHz": 120,
+  "maxHz": 2400,
+  "rateHz": 0.35,
+  "stereoPhase": 0.25,
+  "feedback": 0.45,
+  "mix": 0.5
+}

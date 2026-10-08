@@ -43,7 +43,10 @@ function milliseconds(ms: number, plus: boolean): string {
   // The kit rounds to a tenth, which would show a 0.05 ms attack as 0.1.
   const text =
     size > 0 && size < 1 ? `${signed(ms, 2, false)} ms` : formatMs(ms)
-  return plus && ms > 0 ? `+${text}` : text
+  // A fractional delay can round to a whole millisecond. Keep the readout
+  // identical when that displayed value is typed back into the control.
+  const readout = text.replace(/\.0 ms$/, " ms")
+  return plus && ms > 0 ? `+${readout}` : readout
 }
 
 function ratio(info: ParamInfo, value: number): string {

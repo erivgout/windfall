@@ -82,6 +82,21 @@ describe("formatParam", () => {
     expect(text(synth, "lfos.0.pulseWidth", 0)).toBe("0%")
   })
 
+  it("reads rounded short modulation delays and signed feedback consistently", () => {
+    const flanger = effectDescriptor("flanger")
+    const phaser = effectDescriptor("phaser")
+    for (const value of [1.02, 4.9999999, 5.02, 9.99]) {
+      const shown = text(flanger, "delayMs", value)
+      expect(text(flanger, "delayMs", read(flanger, "delayMs", shown)!)).toBe(
+        shown
+      )
+    }
+    expect(text(flanger, "feedback", -0.9)).toBe("−90%")
+    expect(text(flanger, "feedback", 0.9)).toBe("+90%")
+    expect(read(flanger, "feedback", "−70%")).toBeCloseTo(-0.7)
+    expect(text(phaser, "feedback", 0.85)).toBe("+85%")
+  })
+
   it("writes pitch offsets in semitones, cents and octaves", () => {
     expect(text(synth, "oscillators.0.coarse", 7)).toBe("+7 st")
     expect(text(synth, "oscillators.0.coarse", -12)).toBe("−12 st")
