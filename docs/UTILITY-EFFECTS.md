@@ -70,8 +70,12 @@ signal. Rapid retargeting preserves the currently audible tap mixture and
 starts another 5 ms fade to the latest target. The final target is fully
 applied 5 ms after the last edit; intermediate requested taps are retained
 at their audible weights, without queuing settings. Prepared storage holds
-at most one contribution per whole-sample delay in the 0�50 ms range.
-The slot's dry signal and engine compensation use the same transition.
+at most one contribution per whole-sample delay in the 0–50 ms range.
+The slot's dry signal uses the same transition. Engine compensation mirrors
+eligible reference routes as ordered shared-delay stages, so a downstream
+delay carries upstream fade weights as well as audio. Zero-delay matrix
+stages retain history for the first delayed edit. This covers overlapping
+edits in a serial matrix route without flattening their transfer to one fade.
 Processing does not
 depend on block divisions, including irregular one-sample blocks.
 
@@ -94,6 +98,23 @@ After bypass or zero mix makes the processor dormant, waking runs unheard
 until **both** matrix outputs are primed, using the maximum channel delay.
 Increasing a delay during priming extends that wait. This wait is separate
 from the shared minimum used for PDC and the dry signal.
+Live insertion uses this maximum output readiness for the engine's outer
+splice too. A longer delay requested while insertion is still unheard
+extends its wait using the samples already collected. During a bypass or
+mix fade to zero, tail/gap accounting keeps
+both wet memory and aligned dry taps; only a settled zero-wet slot switches
+to dry-only accounting.
+
+Routing compensation retains the existing one-second bound. Serial
+mirroring applies when the shorter input is a prefix of the reference
+route, or its fixed leading delay can be factored out, and the sum of
+prepared stage maxima fits that bound. Distinct varying branches and
+changes of reference route retain scalar compensation: settled alignment
+is preserved, but exact transient phase cancellation is not guaranteed.
+The same limit applies to topology changes during an active tap fade.
+[UTILITY-REPAIRS.md](UTILITY-REPAIRS.md) specifies these boundaries and the
+prepared storage/CPU costs. Matrix tap targets settle after 5 ms; their
+effect at a route's output also includes downstream delay.
 
 Drive distortion reports **32 samples of linear-phase group delay** and
 64 samples of finite FIR tail/gap at every rate. Its impulse can have
@@ -175,15 +196,15 @@ One release microbenchmark on Windows / Intel Core i9-14900F processed
 settings. Construction and prepare are outside the timer; resetting the
 input buffers is inside. The observed realtime factors were:
 
-| Processor | Audio duration / elapsed time |
-| --- | ---: |
-| Balance | 13731.55× |
-| DC blocker | 5793.53× |
-| Channel mute | 13518.08× |
-| Polarity | 13528.37× |
-| Stereo matrix | 6274.02× |
-| Soft clipper | 5619.36× |
-| Drive distortion | 82.36× |
+| Processor        | Audio duration / elapsed time |
+| ---------------- | ----------------------------: |
+| Balance          |                     13731.55× |
+| DC blocker       |                      5793.53× |
+| Channel mute     |                     13518.08× |
+| Polarity         |                     13528.37× |
+| Stereo matrix    |                      6274.02× |
+| Soft clipper     |                      5619.36× |
+| Drive distortion |                        82.36× |
 
 These are single-run throughput measurements of default settings, including
 the matrix's zero-delay path. They are not worst-case deadline guarantees.
@@ -253,7 +274,7 @@ the parent. `v0.1.0-alpha.1` is unchanged.
 
 ## Review repairs
 
-[UTILITY-REPAIRS.md](UTILITY-REPAIRS.md) records the three review regressions,
+[UTILITY-REPAIRS.md](UTILITY-REPAIRS.md) records both review rounds,
 the bounded retargeting policy, reproduction results and focused checks on
 the repair branch. The measurements and original verification above retain
 their original provenance; they are not new repair-branch benchmarks.

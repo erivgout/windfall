@@ -712,28 +712,30 @@ impl EffectSlot {
         self.effect.latency_samples()
     }
 
-    /// See [`Effect::tail_samples`]. A slot that is off has its aligned dry
-    /// delays left to play out, including old taps during a transition.
+    /// See [`Effect::tail_samples`]. Include wet memory until the bypass or
+    /// mix fade settles at zero, as well as current and old aligned dry taps.
     pub fn tail_samples(&self) -> usize {
-        if self.enabled {
-            self.effect.tail_samples()
-        } else {
-            self.dry_fade
-                .longest_delay()
-                .max(self.effect.latency_samples())
-        }
+        self.dry_fade
+            .longest_delay()
+            .max(self.effect.latency_samples())
+            .max(if self.wet.value() > 0.0 || !self.wet.is_settled() {
+                self.effect.tail_samples()
+            } else {
+                0
+            })
     }
 
-    /// See [`Effect::gap_samples`]. A slot that is off waits for its aligned
-    /// dry delays, including old taps during a transition.
+    /// See [`Effect::gap_samples`]. A bypass/mix fade can still reveal wet
+    /// memory. Only a settled zero-wet slot uses dry-tap accounting alone.
     pub fn gap_samples(&self) -> usize {
-        if self.enabled {
-            self.effect.gap_samples()
-        } else {
-            self.dry_fade
-                .longest_delay()
-                .max(self.effect.latency_samples())
-        }
+        self.dry_fade
+            .longest_delay()
+            .max(self.effect.latency_samples())
+            .max(if self.wet.value() > 0.0 || !self.wet.is_settled() {
+                self.effect.gap_samples()
+            } else {
+                0
+            })
     }
 
     /// Processes one block in place. Blocks longer than the `max_block`

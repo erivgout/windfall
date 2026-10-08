@@ -84,6 +84,8 @@ pub(crate) struct EffectUnit {
     splice: Splice,
     /// Length of the splice under way, in frames.
     splice_frames: u32,
+    /// Frames already supplied during the current insertion/removal splice.
+    splice_elapsed: u32,
     /// The track whose chain the effect was last part of.
     pub track: TrackId,
     sample_rate: f32,
@@ -115,6 +117,7 @@ impl EffectUnit {
             mix: effect.mix,
             splice: Splice::Steady,
             splice_frames: 1,
+            splice_elapsed: 0,
             track,
             sample_rate: sample_rate as f32,
         };
@@ -170,6 +173,12 @@ impl EffectUnit {
         }
         if effect.params != self.params && self.slot.set_params(&effect.params) {
             self.params = effect.params;
+            if let Splice::In { wait, .. } = &mut self.splice
+                && *wait > 0
+            {
+                let ready = u32::try_from(self.slot.effect().warm_up_samples()).unwrap_or(u32::MAX);
+                *wait = (*wait).max(ready.saturating_sub(self.splice_elapsed));
+            }
         }
         if effect.enabled != self.enabled {
             self.enabled = effect.enabled;
@@ -230,21 +239,31 @@ impl EffectUnit {
         }
     }
 
-    /// Brings the effect in: unheard for as long as its latency, then
-    /// fading in over `frames` frames. Returns how long it stays unheard.
+    /// Brings the effect in: unheard until all outputs are ready, then
+    /// fading in over `frames` frames. Matrix readiness is its longest
+    /// channel delay; shared PDC remains its shortest. Returns the wait.
     pub fn fade_in(&mut self, frames: u32) -> u32 {
-        let wait = u32::try_from(
-            self.external
-                .as_ref()
-                .map_or_else(|| self.slot.latency_samples(), |slot| slot.latency()),
-        )
+        let wait = u32::try_from(self.external.as_ref().map_or_else(
+            || self.slot.effect().warm_up_samples(),
+            |slot| slot.latency(),
+        ))
         .unwrap_or(u32::MAX);
         self.splice_frames = frames.max(1);
+        self.splice_elapsed = 0;
         self.splice = Splice::In {
             wait,
             remaining: self.splice_frames,
         };
         wait
+    }
+
+    /// A later plan can edit a processor that is still being primed. New
+    /// compensation transitions must share its remaining insertion wait.
+    pub fn insertion_wait(&self) -> u32 {
+        match self.splice {
+            Splice::In { wait, .. } => wait,
+            _ => 0,
+        }
     }
 
     /// Starts fading the effect out over `frames` frames.
@@ -311,6 +330,7 @@ impl EffectUnit {
                 break;
             }
             let wet = self.splice.next(length);
+            self.splice_elapsed = self.splice_elapsed.saturating_add(1);
             left[index] = dry_left[index] + (left[index] - dry_left[index]) * wet;
             right[index] = dry_right[index] + (right[index] - dry_right[index]) * wet;
         }
@@ -691,7 +711,7 @@ impl InstrumentUnit {
 /// crossfade can be told to wait first, which is how the delay stays in
 /// step with an effect that is coming into a chain: that effect runs
 /// unheard for as long as its latency before it fades in.
-pub(crate) struct Compensation {
+struct CompensationLine {
     ring: Box<[Frame]>,
     mask: usize,
     /// Where the next frame goes.
@@ -703,7 +723,7 @@ pub(crate) struct Compensation {
     wait: u32,
 }
 
-impl Compensation {
+impl CompensationLine {
     /// Allocates a line that can delay by up to `max_delay` frames, set to
     /// `delay`.
     pub fn new(max_delay: usize, delay: usize) -> Self {
@@ -744,7 +764,7 @@ impl Compensation {
 
     /// Carries on from another line: its recent past, as much as fits, and
     /// the delay it was giving.
-    pub fn take_history(&mut self, other: &Compensation) {
+    pub fn take_history(&mut self, other: &Self) {
         let frames = self.ring.len().min(other.ring.len());
         for back in 1..=frames {
             let frame = other.ring[other.write.wrapping_sub(back) & other.mask];
@@ -755,6 +775,22 @@ impl Compensation {
         self.wait = other.wait;
     }
 
+    fn take_input_history(&mut self, other: &Self, prefix: usize) {
+        for back in 1..=self.ring.len().min(other.ring.len().saturating_sub(prefix)) {
+            self.ring[self.write.wrapping_sub(back) & self.mask] =
+                other.ring[other.write.wrapping_sub(back + prefix) & other.mask];
+        }
+    }
+
+    fn advance(&mut self) {
+        if self.wait > 0 {
+            self.wait -= 1;
+        } else {
+            self.fade.advance();
+        }
+        self.write = (self.write + 1) & self.mask;
+    }
+
     /// Delays a block in place.
     pub fn process(&mut self, block: &mut [Frame]) {
         for frame in block {
@@ -763,13 +799,150 @@ impl Compensation {
                 self.fade
                     .read(|delay| self.ring[self.write.wrapping_sub(delay) & self.mask][side])
             });
-            if self.wait > 0 {
-                self.wait -= 1;
-            } else {
-                self.fade.advance();
-            }
-            self.write = (self.write + 1) & self.mask;
+            self.advance();
             *frame = out;
+        }
+    }
+}
+
+/// One causal stage of the reference route. Zero-delay matrices remain in
+/// this description so their history is already primed before the first edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DelayStage {
+    pub key: windfall_project::PluginTarget,
+    pub delay: usize,
+    pub maximum: usize,
+    pub matrix: bool,
+}
+
+impl DelayStage {
+    pub fn same_line(&self, other: &Self) -> bool {
+        self.key == other.key && self.maximum == other.maximum && self.matrix == other.matrix
+    }
+}
+
+struct CompensationStage {
+    spec: DelayStage,
+    line: CompensationLine,
+}
+
+/// Prepared routing compensation. A matrix reference path is mirrored as
+/// serial delay stages, rather than flattening its time-varying transfer to
+/// one tap fade. Downstream stages then delay both audio and upstream fade
+/// weights, including during overlapping edits. The aggregate line keeps
+/// raw input history for changes of route shape and the legacy scalar policy.
+pub(crate) struct Compensation {
+    line: CompensationLine,
+    stages: Box<[CompensationStage]>,
+}
+
+impl Compensation {
+    pub fn new(max_delay: usize, delay: usize) -> Self {
+        Self::with_path(max_delay, delay, &[], false)
+    }
+
+    pub fn with_path(max_delay: usize, delay: usize, path: &[DelayStage], sounding: bool) -> Self {
+        Self {
+            line: CompensationLine::new(max_delay, delay),
+            stages: path
+                .iter()
+                .map(|spec| CompensationStage {
+                    spec: *spec,
+                    line: CompensationLine::new(
+                        spec.maximum,
+                        if sounding { 0 } else { spec.delay },
+                    ),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.line.capacity()
+    }
+
+    pub fn retarget(&mut self, delay: usize, fade_frames: u32, wait: u32) {
+        self.line.retarget(delay, fade_frames, wait);
+    }
+
+    pub fn retarget_path(
+        &mut self,
+        delay: usize,
+        path: &[DelayStage],
+        fade_frames: u32,
+        wait: u32,
+    ) {
+        self.retarget(delay, fade_frames, wait);
+        for (stage, spec) in self.stages.iter_mut().zip(path) {
+            if spec.delay != stage.line.delay {
+                if spec.matrix {
+                    stage.line.retarget(spec.delay, fade_frames, wait);
+                } else {
+                    // The limiter replaces the destination of its active fade.
+                    stage.line.delay = spec.delay.min(stage.line.capacity());
+                    stage
+                        .line
+                        .fade
+                        .retarget_joining(stage.line.delay, fade_frames);
+                    stage.line.wait = wait;
+                }
+            }
+            stage.spec = *spec;
+        }
+    }
+
+    pub fn snap(&mut self, delay: usize, path: &[DelayStage]) {
+        self.line.snap(delay);
+        for (stage, spec) in self.stages.iter_mut().zip(path) {
+            stage.line.snap(spec.delay);
+            stage.spec = *spec;
+        }
+    }
+
+    pub fn take_history(&mut self, other: &Self) {
+        self.line.take_history(&other.line);
+        // Promote settled scalar compensation when a matrix joins an
+        // existing fixed-delay route. Reconstruct each fixed stage's input
+        // from raw history, including the delay of preceding fixed stages.
+        let fixed: usize = self
+            .stages
+            .iter()
+            .filter(|stage| !stage.spec.matrix)
+            .map(|stage| stage.spec.delay)
+            .sum();
+        let promote = other.stages.is_empty()
+            && other.line.fade.remaining() == 0
+            && fixed == other.line.delay;
+        let mut prefix = 0;
+        for stage in &mut self.stages {
+            if let Some(before) = other
+                .stages
+                .iter()
+                .find(|before| stage.spec.same_line(&before.spec))
+            {
+                stage.line.take_history(&before.line);
+            } else if promote {
+                stage.line.take_input_history(&other.line, prefix);
+                if !stage.spec.matrix {
+                    stage.line.snap(stage.spec.delay);
+                    prefix += stage.spec.delay;
+                }
+            }
+        }
+    }
+
+    pub fn process(&mut self, block: &mut [Frame]) {
+        if self.stages.is_empty() {
+            self.line.process(block);
+        } else {
+            // Keep the aggregate raw history without replacing stage input.
+            for frame in block.iter() {
+                self.line.ring[self.line.write] = *frame;
+                self.line.advance();
+            }
+            for stage in &mut self.stages {
+                stage.line.process(block);
+            }
         }
     }
 }
@@ -825,7 +998,7 @@ mod tests {
 
         // A longer delay than the line holds is held to what it holds.
         line.retarget(1_000, 1, 0);
-        assert_eq!(line.delay, line.capacity());
+        assert_eq!(line.line.delay, line.capacity());
     }
 
     #[test]
