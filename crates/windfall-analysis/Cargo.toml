@@ -17,6 +17,8 @@ thiserror.workspace = true
 sha2 = "=0.10.9"
 # Already locked; MIT OR Apache-2.0. Atomic no-clobber files/private directories.
 tempfile = "=3.27.0"
+# Exact cached source/licenses checked: MIT OR Apache-2.0; see PITCH-ANALYSIS.md.
+rustfft = "=6.4.1"
 
 [lints]
 workspace = true
