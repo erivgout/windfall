@@ -27,7 +27,7 @@ impl Project {
     /// - The master track has no sends, so rerouting a track to the master
     ///   can never close a loop.
     /// - A track has at most one send to any other track.
-    /// - No two samples share a path.
+    /// - Sample paths are valid; unique audio assets may share an immutable file.
     /// - The sample and the mixer track of an audio clip exist.
     /// - What an automation moves exists: its channel, track, send or
     ///   effect is there, the effect is on the track the target names, and
@@ -46,6 +46,7 @@ impl Project {
             ));
         }
         check_settings(self)?;
+        self.notebook.check().map_err(|error| error.to_string())?;
         self.playlist
             .timeline
             .check(self.settings.time_signature, self.next_id)?;
@@ -94,13 +95,20 @@ impl Project {
                 if !associated.insert(id) { return Err("An audio clip belongs to more than one take group".into()); }
             }
         }
+        check_arrangement_references(self, &self.playlist.arrangement_book)?;
+        let book = &self.playlist.arrangement_book;
+        let mut metadata_ids = HashSet::new();
+        for id in book.arrangements.iter().map(|item| item.id)
+            .chain(book.track_groups.iter().map(|item| item.id))
+            .chain(book.clip_groups.iter().map(|item| item.id)) {
+            check_id(self, "arrangement metadata", id, &mut metadata_ids)?;
+            if entity_ids.contains(&id) || timeline_ids.contains(&id) || groups.contains(&id) {
+                return Err("an arrangement metadata ID collides with another entity".into());
+            }
+        }
         check_samples(self)?;
         check_mixer(self)?;
         check_channels(self)?;
-        let mut keys = HashSet::new();
-        for send in &track.sidechains {
-            if track.id == TrackId::MASTER || send.target == track.id || project.mixer.track(send.target).is_none() || !keys.insert(send.target) || !within(send.gain, 0.0, MAX_GAIN) { return Err(format!("{owner} has an invalid sidechain route")); }
-        }
         let mut targets = HashSet::new();
         for plugin in &self.plugins {
             plugin.validate().map_err(str::to_owned)?;
@@ -201,18 +209,12 @@ fn check_settings(project: &Project) -> Result<(), String> {
 
 fn check_samples(project: &Project) -> Result<(), String> {
     let mut ids = HashSet::new();
-    let mut paths = HashSet::new();
     for sample in &project.samples {
         check_id(project, "sample", sample.id, &mut ids)?;
         if let Some(problem) = sample.path.problem() {
             return Err(format!("sample {}: {problem}", sample.id.0));
         }
-        if !paths.insert(&sample.path) {
-            return Err(format!(
-                "sample {} repeats the path of another sample",
-                sample.id.0
-            ));
-        }
+
     }
     Ok(())
 }
@@ -298,6 +300,17 @@ fn check_mixer(project: &Project) -> Result<(), String> {
                     "{owner} has a send with gain {}, outside 0 to {MAX_GAIN}",
                     send.gain
                 ));
+            }
+        }
+        let mut sidechains = HashSet::new();
+        for send in &track.sidechains {
+            if track.id == TrackId::MASTER
+                || send.target == track.id
+                || project.mixer.track(send.target).is_none()
+                || !sidechains.insert(send.target)
+                || !within(send.gain, 0.0, MAX_GAIN)
+            {
+                return Err(format!("{owner} has an invalid sidechain route"));
             }
         }
     }
@@ -386,6 +399,9 @@ fn check_channels(project: &Project) -> Result<(), String> {
 }
 
 fn check_channel(project: &Project, channel: &Channel) -> Result<(), String> {
+    if channel.voice.sanitized() != channel.voice {
+        return Err(format!("channel {} has invalid voice settings", channel.id.0));
+    }
     channel.timing.validate().map_err(|reason| format!("channel {}: {reason}", channel.id.0))?;
     if channel.group.len() > crate::MAX_CHANNEL_GROUP_NAME_BYTES
         || channel.group.trim() != channel.group
@@ -673,6 +689,7 @@ fn check_playlist(project: &Project) -> Result<(), String> {
                 sample,
                 mixer_track,
                 output: _,
+                normalize: _,
                 gain,
                 pan,
                 fade_in,
@@ -725,6 +742,31 @@ fn check_playlist(project: &Project) -> Result<(), String> {
                     ));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Resolves every arrangement reference against the single project entity pools.
+pub(crate) fn check_arrangement_references(project: &Project, book: &crate::ArrangementBook) -> Result<(), String> {
+    book.check().map_err(|error| error.to_string())?;
+    let clips: HashSet<_> = project.playlist.clips.iter().map(|clip| clip.id).collect();
+    let tracks: HashSet<_> = project.playlist.tracks.iter().map(|track| track.id).collect();
+    for clip in book.arrangements.iter().flat_map(|item| &item.clips)
+        .chain(book.clip_groups.iter().flat_map(|group| &group.clips)) {
+        if !clips.contains(clip) { return Err(format!("arrangement clip {} does not exist", clip.0)); }
+    }
+    for track in book.arrangements.iter().flat_map(|item| &item.tracks)
+        .chain(book.track_parents.keys()).chain(book.linked_tracks.keys()) {
+        if !tracks.contains(track) { return Err(format!("arrangement playlist track {} does not exist", track.0)); }
+    }
+    for kind in book.linked_tracks.values() {
+        match *kind {
+            crate::arrangement::TrackKind::Instrument { channel } if project.channel(channel).is_none() =>
+                return Err(format!("arrangement channel {} does not exist", channel.0)),
+            crate::arrangement::TrackKind::Audio { source } if project.sample(source).is_none() =>
+                return Err(format!("arrangement sample {} does not exist", source.0)),
+            _ => {}
         }
     }
     Ok(())

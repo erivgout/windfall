@@ -2,13 +2,16 @@ import { useEffect } from "react"
 
 import { ContextActions } from "@/components/context-actions"
 import { Button } from "@/components/ui/button"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { openPluginManager } from "@/features/plugins/store"
 import { useShortcutScope } from "@/lib/actions"
 
+import { BackupsTab } from "./backups"
 import { BrowserHeader } from "./browser-header"
 import { LibraryControls, LibraryMetadataEditor } from "./library-controls"
 import { flushScrollTop } from "./persist"
 import { PreviewPane } from "./preview-pane"
+import { ProjectTab } from "./project-tab"
 import { BROWSER_MENU } from "./row-menu"
 import { ensureRootsLoaded } from "./store"
 import { TreeView } from "./tree-view"
@@ -33,28 +36,47 @@ export default function BrowserPanel() {
   const scope = useShortcutScope("browser")
 
   return (
-    <ContextActions items={BROWSER_MENU}>
-      <div
-        data-slot="browser-panel"
-        className="@container/browser flex h-full min-h-0 flex-col overflow-auto *:min-w-54"
-        {...scope}
-      >
-        <BrowserHeader />
-        <LibraryControls />
-        <Button variant="ghost" size="sm" onClick={() => openPluginManager()}>
-          Browse plugins
-        </Button>
-        {/* Keep usable controls and a virtual window when zoom or a small panel
+    <Tabs defaultValue="library" className="h-full min-h-0 gap-0">
+      <TabsList aria-label="Browser view" className="m-1 shrink-0">
+        <TabsTrigger value="library">Library</TabsTrigger>
+        <TabsTrigger value="project">Project</TabsTrigger>
+        <TabsTrigger value="backups">Backups</TabsTrigger>
+      </TabsList>
+      <TabsContent value="library" className="min-h-0">
+        <ContextActions items={BROWSER_MENU}>
+          <div
+            data-slot="browser-panel"
+            className="@container/browser flex h-full min-h-0 flex-col overflow-auto *:min-w-54"
+            {...scope}
+          >
+            <BrowserHeader />
+            <LibraryControls />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openPluginManager()}
+            >
+              Browse plugins
+            </Button>
+            {/* Keep usable controls and a virtual window when zoom or a small panel
             makes them larger than the panel. The outer panel scrolls both axes. */}
-        <div
-          data-slot="browser-tree-window"
-          className="flex min-h-32 flex-1 shrink-0 flex-col"
-        >
-          <TreeView />
-        </div>
-        <LibraryMetadataEditor />
-        <PreviewPane />
-      </div>
-    </ContextActions>
+            <div
+              data-slot="browser-tree-window"
+              className="flex min-h-32 flex-1 shrink-0 flex-col"
+            >
+              <TreeView />
+            </div>
+            <LibraryMetadataEditor />
+            <PreviewPane />
+          </div>
+        </ContextActions>
+      </TabsContent>
+      <TabsContent value="project" className="min-h-0 overflow-auto">
+        <ProjectTab />
+      </TabsContent>
+      <TabsContent value="backups" className="min-h-0 overflow-auto">
+        <BackupsTab />
+      </TabsContent>
+    </Tabs>
   )
 }

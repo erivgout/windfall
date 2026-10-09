@@ -3,7 +3,12 @@
   "identifier": "default",
   "description": "What the main window may call",
   "windows": [
-    "main"
+    "main",
+    "panel-browser",
+    "panel-mixer",
+    "panel-channelRack",
+    "panel-playlist",
+    "panel-pianoRoll"
   ],
   "permissions": [
     "core:default",

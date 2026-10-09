@@ -245,7 +245,7 @@ What sound is passing through changes gently:
 - A voice that is fading out when the plan changes, or that loses its channel, finishes inside the track it was in whenever an effect or a compensation delay lies between that track and the output, so it is heard through those effects and shows on the track's meter. With nothing but faders in the way it leaves the mix and finishes at the output at the level it had, which lets the new faders take their values at once. If the track is gone as well, it finishes at the output at its fader gains.
 - These switch at once: effects that trade places within one chain, the track an effect was on when it moves to another track, an instrument channel that moves to another track, and a removed track's own effects.
 
-Sequenced notes reach an instrument on their exact frame and are let go on their tick, so a tempo change moves the end of a held note. The velocity of a note is the instrument's velocity, and its pan is not used. A key holds one note at a time: of two overlapping notes on one key, the key comes up when the one that started later ends. Stopping fades the instruments out, and seeking ends the pattern's notes and leaves the ones played by hand.
+Sequenced notes reach an instrument on their exact frame and are let go on their tick, so a tempo change moves the end of a held note. The velocity of a note is the instrument's velocity, and per-note pan places its voice. A key holds one note at a time: of two overlapping notes on one key, the key comes up when the one that started later ends. Stopping fades the instruments out, and seeking ends the pattern's notes and leaves the ones played by hand.
 
 ### Audio clips
 

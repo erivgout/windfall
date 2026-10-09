@@ -1,11 +1,11 @@
-import { logicalWheel } from "@/lib/ui-scale"
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type { TrackId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
 import { ContextActions } from "@/components/context-actions"
+import { Empty, EmptyDescription } from "@/components/ui/empty"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -35,6 +35,7 @@ import { CreateCurrentUtility } from "./current-source"
 import { maxEffectCount } from "./strip-track"
 import { DockStrips } from "./dock-strips"
 import { MixerToolbar } from "./toolbar"
+import { matchingTrackIds } from "./track-filter"
 
 /** Where the split between the strips and the effects is remembered. */
 const LAYOUT_KEY = "mixer:strips+effects"
@@ -49,7 +50,13 @@ function useLinkedTrack(): TrackId | null {
   )
 }
 
-function AddTrack({ first }: { first: boolean }) {
+function AddTrack({
+  first,
+  noMatches,
+}: {
+  first: boolean
+  noMatches: boolean
+}) {
   return (
     <div className="flex h-full items-start gap-3 p-1.5">
       <ActionButton
@@ -61,6 +68,11 @@ function AddTrack({ first }: { first: boolean }) {
       >
         <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
       </ActionButton>
+      {noMatches && (
+        <Empty className="max-w-64 p-0 pt-0.5">
+          <EmptyDescription role="status">No tracks match.</EmptyDescription>
+        </Empty>
+      )}
       {first && (
         <p className="max-w-64 pt-0.5 leading-snug text-muted-foreground">
           No insert tracks yet. Every channel you add to the rack gets its own
@@ -85,7 +97,32 @@ export default function MixerPanel() {
   const tracks = useProjectStore((state) => state.project.mixer.tracks)
   const layoutChoice = useUiStore((state) => state.mixerLayout)
   const [height, setHeight] = useState(0)
-  const current = useProjectStore((state) => state.project.mixer.tracks.find((track) => track.current)?.id)
+  const [scrollbars, setScrollbars] = useState({ left: 0, middle: 0, right: 0 })
+  const leftScrollbar = useCallback(
+    (left: number) =>
+      setScrollbars((prior) =>
+        prior.left === left ? prior : { ...prior, left }
+      ),
+    []
+  )
+  const middleScrollbar = useCallback(
+    (middle: number) =>
+      setScrollbars((prior) =>
+        prior.middle === middle ? prior : { ...prior, middle }
+      ),
+    []
+  )
+  const rightScrollbar = useCallback(
+    (right: number) =>
+      setScrollbars((prior) =>
+        prior.right === right ? prior : { ...prior, right }
+      ),
+    []
+  )
+  const [filter, setFilter] = useState("")
+  const current = useProjectStore(
+    (state) => state.project.mixer.tracks.find((track) => track.current)?.id
+  )
   const selected = useUiStore((state) => state.selectedTrack)
   const linked = useLinkedTrack()
   const maxSends = useProjectStore((state) =>
@@ -109,10 +146,30 @@ export default function MixerPanel() {
   useEffect(() => registerMixerActions(), [])
   useEffect(() => watchPeaks(), [])
 
-  const inserts = tracks.filter((track) => track.id !== MASTER_TRACK && !track.current)
-  const layout = chosenStripLayout(layoutChoice, height, maxSends, maxEffects)
+  const inserts = tracks.filter(
+    (track) => track.id !== MASTER_TRACK && !track.current
+  )
+  const matchingIds = new Set(matchingTrackIds(inserts, filter))
+  const visibleInserts = inserts.filter((track) => matchingIds.has(track.id))
+  const noMatches = filter.trim().length > 0 && visibleInserts.length === 0
+  const scrollbarSpace = Math.max(
+    scrollbars.middle,
+    visibleInserts.some((track) => track.dock === "left") ? scrollbars.left : 0,
+    visibleInserts.some((track) => track.dock === "right")
+      ? scrollbars.right
+      : 0
+  )
+  const layout = chosenStripLayout(
+    layoutChoice,
+    height > 0 ? height - (scrollbarSpace - scrollbars.middle) : height,
+    maxSends,
+    maxEffects
+  )
   const { mode, sendRows, effectRows, width } = layout
-  const dockIds = (dock: "left" | "middle" | "right") => inserts.filter((track) => (track.dock ?? "middle") === dock).map((track) => track.id)
+  const dockIds = (dock: "left" | "middle" | "right") =>
+    visibleInserts
+      .filter((track) => (track.dock ?? "middle") === dock)
+      .map((track) => track.id)
 
   // A key that moves the selection takes the focus along. The strip may
   // only just have been mounted, so this waits for it.
@@ -135,7 +192,7 @@ export default function MixerPanel() {
         className="relative flex h-full min-h-0 min-w-0 pt-9"
         {...scope}
       >
-        <MixerToolbar />
+        <MixerToolbar filter={filter} onFilterChange={setFilter} />
         <ResizablePanelGroup
           id="mixer"
           orientation="horizontal"
@@ -153,7 +210,7 @@ export default function MixerPanel() {
             <div
               data-slot="mixer-master"
               className="z-10 shrink-0 border-r bg-chassis shadow-[2px_0_6px_-2px_rgb(0_0_0/0.35)]"
-              style={{ width: MASTER_WIDTH, paddingBottom: 0 }}
+              style={{ width: MASTER_WIDTH, paddingBottom: scrollbarSpace }}
             >
               <MixerStrip
                 id={MASTER_TRACK}
@@ -164,12 +221,62 @@ export default function MixerPanel() {
                 metering
               />
             </div>
-            {current !== undefined ? <div className="z-10 shrink-0 border-r bg-chassis" style={{ width, paddingBottom: 0 }}><MixerStrip id={current} mode={mode} sendRows={sendRows} effectRows={effectRows} linked={false} metering /></div> : <div className="shrink-0 p-1"><CreateCurrentUtility /></div>}
-            {dockIds("left").length > 0 && <DockStrips dock="left" ids={dockIds("left")} selected={selected} linked={linked} layout={layout} />}
-            <DockStrips dock="middle" ids={dockIds("middle")} selected={selected} linked={linked} layout={layout} onHeight={setHeight}>
-              <AddTrack first={inserts.length === 0} />
+            {current !== undefined ? (
+              <div
+                className="z-10 shrink-0 border-r bg-chassis"
+                style={{ width, paddingBottom: scrollbarSpace }}
+              >
+                <MixerStrip
+                  id={current}
+                  mode={mode}
+                  sendRows={sendRows}
+                  effectRows={effectRows}
+                  linked={false}
+                  metering
+                />
+              </div>
+            ) : (
+              <div className="shrink-0 p-1">
+                <CreateCurrentUtility />
+              </div>
+            )}
+            {dockIds("left").length > 0 && (
+              <DockStrips
+                dock="left"
+                scrollbarSpace={scrollbarSpace}
+                onScrollbar={leftScrollbar}
+                ids={dockIds("left")}
+                selected={selected}
+                linked={linked}
+                layout={layout}
+              />
+            )}
+            <DockStrips
+              dock="middle"
+              scrollbarSpace={scrollbarSpace}
+              onScrollbar={middleScrollbar}
+              ids={dockIds("middle")}
+              selected={selected}
+              linked={linked}
+              layout={layout}
+              onHeight={setHeight}
+            >
+              <AddTrack
+                first={inserts.length === 0 && !noMatches}
+                noMatches={noMatches}
+              />
             </DockStrips>
-            {dockIds("right").length > 0 && <DockStrips dock="right" ids={dockIds("right")} selected={selected} linked={linked} layout={layout} />}
+            {dockIds("right").length > 0 && (
+              <DockStrips
+                dock="right"
+                scrollbarSpace={scrollbarSpace}
+                onScrollbar={rightScrollbar}
+                ids={dockIds("right")}
+                selected={selected}
+                linked={linked}
+                layout={layout}
+              />
+            )}
           </ResizablePanel>
           {inspectorOpen && (
             <>

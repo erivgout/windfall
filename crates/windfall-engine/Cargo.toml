@@ -13,6 +13,7 @@ authors.workspace = true
 asio = ["cpal/asio"]
 
 [dependencies]
+serde.workspace = true
 windfall-core.workspace = true
 windfall-stretch.workspace = true
 windfall-dsp.workspace = true

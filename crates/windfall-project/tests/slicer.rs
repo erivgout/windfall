@@ -16,6 +16,7 @@ fn clip() -> Clip {
             sample: SampleId(2),
             mixer_track: TrackId(0),
             output: Default::default(),
+            normalize: false,
             gain: 0.7,
             pan: -0.3,
             fade_in: 0,
@@ -153,6 +154,9 @@ fn slicing_is_one_undo_step_and_round_trips_with_all_linked_settings() {
         id: PlaylistTrackId(3),
         name: "Audio".into(),
         muted: false,
+        solo: false,
+        color: 0,
+        height: 0,
     });
     project.playlist.clips.push(c.clone());
     project.next_id = 5;

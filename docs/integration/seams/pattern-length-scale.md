@@ -1,0 +1,1 @@
+The channel rack halves or doubles the selected pattern's length. Half uses the whole number of steps at or below half, and a 1-step pattern stays 1 step. Double stops at 1024 steps. The 16, 32, 48, and 64 step buttons stay as they are. Notes, the time signature, and project swing stay as they are.

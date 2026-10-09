@@ -33,6 +33,7 @@ import {
   type FillRequest,
   type FillRule,
 } from "./advanced-fill"
+import { nextFillRule } from "./fill-rule-step"
 
 const number = (value: string) => (value.trim() === "" ? NaN : Number(value))
 
@@ -183,6 +184,34 @@ function FillForm({ request }: { request: FillRequest }) {
                 <ToggleGroupItem value="euclidean">Euclidean</ToggleGroupItem>
                 <ToggleGroupItem value="random">Seeded random</ToggleGroupItem>
               </ToggleGroup>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Choose the previous rhythm rule"
+                  disabled={pending || nextFillRule(rule, "previous") === null}
+                  onClick={() => {
+                    const next = nextFillRule(rule, "previous")
+                    if (next !== null) setRule(next)
+                  }}
+                >
+                  Previous
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Choose the next rhythm rule"
+                  disabled={pending || nextFillRule(rule, "next") === null}
+                  onClick={() => {
+                    const next = nextFillRule(rule, "next")
+                    if (next !== null) setRule(next)
+                  }}
+                >
+                  Next
+                </Button>
+              </div>
               <FieldDescription>
                 {rule === "regular"
                   ? "Start each cycle with a hit, then repeat at the chosen spacing."

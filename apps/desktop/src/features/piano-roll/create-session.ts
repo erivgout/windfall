@@ -3,6 +3,7 @@ import { registry } from "@/lib/actions"
 import { refuse } from "@/lib/errors"
 import { dispatch, useProjectStore } from "@/lib/store/project"
 import { getProjectGeneration } from "@/lib/store/replaced"
+import { seek } from "@/lib/store/transport"
 
 import { auditionOff, auditionOn } from "./audition"
 import { Editor, type EditorContext, type EditorHost } from "./editor"
@@ -64,6 +65,7 @@ export function createSession(): PianoRollSession {
       const meter = patternMeterAt(tick, pattern?.signature ?? currentSignature(), pattern?.timeline)
       return {
         tool: state.tool,
+        drum: state.drum,
         snap: snapTicks(state.snap, meter.signature),
         snapOrigin: meter.start,
         snapEnd: meter.end,
@@ -83,12 +85,16 @@ export function createSession(): PianoRollSession {
     refuse,
     noteOn: auditionOn,
     noteOff: auditionOff,
+    seek: (tick) => {
+      session.setPlayhead(tick)
+      void seek(tick)
+    },
   }
   const editor = new Editor(host)
   const session: PianoRollSession = new PianoRollSession(editor)
   // Actions and buttons ask the store whether anything is selected.
   editor.subscribe((event) => {
-    if (event === "stamp") registry.invalidate()
+    if (event === "stamp" || event === "drag") registry.invalidate()
     if (event !== "selection" && event !== "scene") return
     const selectionCount = editor.selectionCount
     if (usePianoRollStore.getState().selectionCount !== selectionCount) {

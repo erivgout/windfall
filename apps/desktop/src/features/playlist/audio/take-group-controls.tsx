@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { AudioTakeGroup, AudioTakeLane } from "@/bindings"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
@@ -39,7 +39,12 @@ export function TakeGroupControls() {
   const group = groups.find((group) => group.id === selected) ?? groups.at(-1)
   const passes = group?.lanes[0]?.takes.filter((take) => group.lanes.every((lane) => lane.takes.some((item) => item.pass === take.pass))) ?? []
   const activePass = passes.some((take) => take.pass === pass) ? pass : passes.at(-1)?.pass ?? null
-  useEffect(() => { setName(group?.name ?? ""); setError("") }, [group?.id, group?.name])
+  const [previousGroup, setPreviousGroup] = useState({ id: group?.id, name: group?.name })
+  if (previousGroup.id !== group?.id || previousGroup.name !== group?.name) {
+    setPreviousGroup({ id: group?.id, name: group?.name })
+    setName(group?.name ?? "")
+    setError("")
+  }
   const work = async (command: Parameters<typeof dispatch>[0]) => {
     if (busy) return
     setBusy(true); setError("")

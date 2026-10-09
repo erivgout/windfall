@@ -1,0 +1,1 @@
+The mixer recording panel halves or doubles one track's monitor level. Half of silence stays silent. Double stops at full level. The buttons are hidden while hardware monitoring is off, and a scale does not turn it on. They stay disabled while recording or input monitoring is running. The recording offset and the monitor buffer stay as they are.

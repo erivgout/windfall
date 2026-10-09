@@ -1,6 +1,21 @@
-import type { AutomationId, AutomationPoint, Clip, ClipId } from "@/bindings"
+import type {
+  AutomationId,
+  AutomationPoint,
+  Clip,
+  ClipId,
+  ClipInit,
+  ClipUpdate,
+} from "@/bindings"
 import { formatGain } from "@/components/audio"
-import { queryRect, xToTick, yToRow, type Hit } from "@/lib/canvas"
+import {
+  deviceX,
+  queryRect,
+  rgbaToCss,
+  snapTick,
+  xToTick,
+  type Hit,
+  type OverlayPainter,
+} from "@/lib/canvas"
 import {
   extendView,
   FULL_VIEW,
@@ -8,8 +23,17 @@ import {
 } from "@/lib/automation/view-range"
 import { ignoresSnap } from "@/lib/edit-modifiers"
 import { refuse } from "@/lib/errors"
+import { dispatch } from "@/lib/store/project"
+import { getProjectGeneration, onProjectReplaced } from "@/lib/store/replaced"
+import { seek } from "@/lib/store/transport"
 import { ticksPerBar } from "@/lib/time"
-import { clamp, TICKS_PER_STEP } from "@/lib/units"
+import { meterSegments } from "@/lib/timeline"
+import {
+  clamp,
+  MAX_AUTOMATION_POINTS,
+  MAX_SONG_TICKS,
+  TICKS_PER_STEP,
+} from "@/lib/units"
 
 import { describeFade, fadeFromPointer, gainFromDrag } from "./audio/geometry"
 import {
@@ -22,16 +46,19 @@ import { formatAutomationValue, formatBarBeat } from "./automation/format"
 import { valueAt, valueBeyond, type CurveView } from "./automation/hit"
 import { deletePointAt, setCurve, togglePointHold } from "./automation/ops"
 import { showInView } from "./automation/view-store"
+import { writeSteps, type StepSample } from "./automation/step"
 import {
   bendSegment,
   bendThrough,
   constrainToAxis,
   insertPoint,
   movePoint,
+  moveSelectedPoints,
   toCurveTick,
   toSongTick,
 } from "./automation/points"
 import { brushClip, brushTicks, type BrushContext } from "./brush"
+import { clipGroupMove, expandClipSelection } from "./clip-groups"
 import {
   clampMove,
   cloneMoved,
@@ -69,8 +96,11 @@ import {
   type AudioContent,
   type ClipPainter,
   type DropPreview,
+  type PointSelection,
 } from "./painter"
+import { playlistYToRow } from "./row-geometry"
 import { PlaylistScene } from "./scene"
+import { documentRowFor, trackRowsNow } from "./track-rows"
 import {
   project,
   resolveBrush,
@@ -78,6 +108,7 @@ import {
   type ResolvedBrush,
 } from "./selectors"
 import { usePlaylistStore } from "./store"
+import { snapTicks } from "./snap"
 import type { GridSurface } from "./surface"
 
 /** A pointer event, already placed inside the grid. */
@@ -100,6 +131,8 @@ const BEND_DRAG_PX = 80
 type Gesture =
   | { kind: "idle" }
   | { kind: "pan"; x: number; y: number }
+  | { kind: "playback" }
+  | { kind: "slice"; tick: number }
   | {
       kind: "marquee"
       from: Point
@@ -117,6 +150,8 @@ type Gesture =
       /** The clip was selected before the press, so a Shift+click drops it. */
       wasSelected: boolean
       additive: boolean
+      grouped: boolean
+      updates: ClipUpdate[] | null
     }
   | {
       kind: "resize"
@@ -124,6 +159,14 @@ type Gesture =
       anchor: Clip
       clips: Clip[]
       x: number
+      dragging: boolean
+    }
+  | {
+      kind: "slip"
+      clip: Clip
+      fromTick: number
+      x: number
+      offset: number
       dragging: boolean
     }
   | { kind: "place"; brush: ResolvedBrush }
@@ -163,12 +206,25 @@ type Gesture =
       base: readonly AutomationPoint[]
       points: readonly AutomationPoint[]
       index: number
+      indices: ReadonlySet<number>
+      /** A plain click collapses the selection only if it did not drag. */
+      selectOnlyOnClick: boolean
       x: number
       y: number
       dragging: boolean
       /** The press put the point there, so letting go without moving keeps it. */
       added: boolean
       /** The view the curve was drawn in at the press, which the drag keeps. */
+      range: ViewRange
+    }
+  /** A curve-body stroke writes held points on the grid. */
+  | {
+      kind: "step"
+      clip: Clip
+      automation: AutomationId
+      points: readonly AutomationPoint[]
+      last: StepSample
+      spacing: number
       range: ViewRange
     }
   /** The stretch of a curve leaving a point is being bent. */
@@ -214,6 +270,8 @@ export class PlaylistSession {
   private readonly metrics: GridMetrics
   private readonly scene: PlaylistScene
   private readonly now: () => number
+  private readonly removeSlicePainter: () => void
+  private readonly stopProjectSelection: () => void
   private gesture: Gesture = { kind: "idle" }
   private lastPress: {
     id: ClipId
@@ -236,6 +294,12 @@ export class PlaylistSession {
     this.metrics = metrics
     this.now = now
     this.scene = new PlaylistScene(surface, metrics)
+    this.removeSlicePainter = surface.addOverlayPainter(this.paintSlice)
+    this.stopProjectSelection = onProjectReplaced(() => {
+      this.settle()
+      this.scene.setPointSelection(null)
+      this.lastPress = null
+    })
     // The edit a drop sent has arrived, so what the drag was showing is now
     // the real thing. Dropping the preview in the same turn as the canvas
     // is rebuilt keeps the picture from jumping.
@@ -246,7 +310,22 @@ export class PlaylistSession {
 
   destroy(): void {
     this.stopEdgeScroll()
+    this.removeSlicePainter()
+    this.stopProjectSelection()
     this.scene.destroy()
+  }
+
+  /** The vertical cut being positioned, before any clips have changed. */
+  get slicePreviewTick(): number | null {
+    return this.gesture.kind === "slice" ? this.gesture.tick : null
+  }
+
+  private paintSlice: OverlayPainter = (ctx, { transform, theme }) => {
+    const tick = this.slicePreviewTick
+    if (tick === null) return
+    const x = Math.round(deviceX(transform, tick))
+    ctx.fillStyle = rgbaToCss(theme.item)
+    ctx.fillRect(x, 0, transform.lineWidth, transform.heightDev)
   }
 
   /** True while a button is down on the grid or an edit is being sent. */
@@ -273,6 +352,10 @@ export class PlaylistSession {
     return this.scene.draft?.points ?? null
   }
 
+  get pointSelection(): PointSelection | null {
+    return this.scene.pointSelection
+  }
+
   /** What the box beside the pointer says while something is dragged. */
   get badgeText(): string | null {
     return this.scene.badge?.text ?? null
@@ -284,16 +367,18 @@ export class PlaylistSession {
   }
 
   private settle(): void {
+    const slicing = this.gesture.kind === "slice"
     this.gesture = { kind: "idle" }
     this.stopEdgeScroll()
     this.scene.clearPreview()
+    if (slicing) this.surface.invalidate()
   }
 
   private pointAt(input: { x: number; y: number }): Point {
     const viewport = this.surface.viewport
     return {
       tick: xToTick(viewport, input.x),
-      row: yToRow(viewport, input.y),
+      row: playlistYToRow(viewport, input.y),
     }
   }
 
@@ -303,6 +388,44 @@ export class PlaylistSession {
 
   private snapFor(input: { alt: boolean }): number {
     return ignoresSnap(input) ? 0 : currentSnapTicks()
+  }
+
+  /** The cut follows the visible grid and each meter segment's origin. */
+  private sliceTick(tick: number, input: { alt: boolean }): number {
+    const { settings, playlist } = project()
+    const segments = meterSegments(
+      settings.timeSignature,
+      playlist.timeline?.meters ?? []
+    )
+    const segment =
+      segments.findLast((segment) => segment.start <= tick) ?? segments[0]
+    const snap = ignoresSnap(input)
+      ? 0
+      : snapTicks(ui().snap, segment.signature)
+    return clamp(
+      segment.start + snapNearest(tick - segment.start, snap),
+      0,
+      segment.end
+    )
+  }
+
+  /** Scrubbing lands on the visible grid, including each meter's origin. */
+  private playbackTick(tick: number, input: { alt: boolean }): number {
+    const { settings, playlist } = project()
+    const segments = meterSegments(
+      settings.timeSignature,
+      playlist.timeline?.meters ?? []
+    )
+    const segment =
+      segments.findLast((segment) => segment.start <= tick) ?? segments[0]
+    const snap = ignoresSnap(input)
+      ? 0
+      : snapTicks(ui().snap, segment.signature)
+    return clamp(
+      segment.start + snapNearest(tick - segment.start, snap),
+      0,
+      segment.end
+    )
   }
 
   /** The part of a clip under the pointer that has an edit of its own. */
@@ -383,7 +506,7 @@ export class PlaylistSession {
       intent.kind === "move" ||
       intent.kind === "trim-start" ||
       intent.kind === "resize-end" ||
-      intent.kind === "point"
+      (intent.kind === "point" && !input.shift)
     if (pressed && clicks) {
       const onPoint = intent.kind === "point" ? intent.index : -1
       if (this.isDoubleClick(pressed.id, onPoint, input)) {
@@ -409,13 +532,31 @@ export class PlaylistSession {
     switch (intent.kind) {
       case "none":
         return false
+      case "playback":
+        this.gesture = { kind: "playback" }
+        this.onCursor("crosshair")
+        this.pointerMove(input)
+        return true
+      case "slice":
+        this.gesture = {
+          kind: "slice",
+          tick: this.sliceTick(point.tick, input),
+        }
+        this.onCursor("crosshair")
+        this.surface.invalidate()
+        return true
       case "pan":
         this.gesture = { kind: "pan", x: input.x, y: input.y }
         this.onCursor("grabbing")
         return true
       case "menu": {
-        if (intent.id !== null && !selection.has(intent.id)) {
-          ui().select([intent.id])
+        if (intent.id !== null) {
+          ui().select(
+            expandClipSelection(
+              selection.has(intent.id) ? selection : [intent.id],
+              project().playlist.arrangementBook?.clipGroups ?? []
+            )
+          )
         }
         ui().setMenuOnClips(intent.id !== null)
         return false
@@ -454,21 +595,31 @@ export class PlaylistSession {
       case "move": {
         if (!pressed) return false
         const wasSelected = selection.has(pressed.id)
-        if (!wasSelected) {
-          ui().select(
-            intent.additive ? [...selection, pressed.id] : [pressed.id]
-          )
-        }
+        const groups = project().playlist.arrangementBook?.clipGroups ?? []
+        const ids = expandClipSelection(
+          wasSelected || intent.additive
+            ? [...selection, pressed.id]
+            : [pressed.id],
+          groups
+        )
+        ui().select(ids)
+        const grouped = groups.some((group) =>
+          group.clips.some((id) => ids.includes(id))
+        )
         this.gesture = {
           kind: "move",
           anchor: pressed,
-          clips: selectedClips(),
+          clips: grouped
+            ? ids.flatMap((id) => scene.clipById.get(id) ?? [])
+            : selectedClips(),
           from: { tick: point.tick, row: Math.floor(point.row) },
           x: input.x,
           y: input.y,
           dragging: false,
           wasSelected,
           additive: intent.additive,
+          grouped,
+          updates: null,
         }
         return true
       }
@@ -484,6 +635,20 @@ export class PlaylistSession {
           x: input.x,
           dragging: false,
         }
+        return true
+      }
+      case "slip": {
+        if (!pressed) return false
+        if (!selection.has(pressed.id)) ui().select([pressed.id])
+        this.gesture = {
+          kind: "slip",
+          clip: pressed,
+          fromTick: point.tick,
+          x: input.x,
+          offset: pressed.offset,
+          dragging: false,
+        }
+        this.onCursor("ew-resize")
         return true
       }
       case "fade":
@@ -520,6 +685,28 @@ export class PlaylistSession {
         const base = scene.pointsOf(content.automation)
         if (!base) return false
         if (!selection.has(pressed.id)) ui().select([pressed.id])
+        let indices: ReadonlySet<number> = new Set([intent.index])
+        if (intent.kind === "point") {
+          const current = scene.pointSelection
+          const sameClip =
+            current?.clip === pressed.id &&
+            current.automation === content.automation
+          const wasSelected = sameClip && current.indices.has(intent.index)
+          if (input.shift) {
+            const toggled = new Set(sameClip ? current.indices : [])
+            if (wasSelected) toggled.delete(intent.index)
+            else toggled.add(intent.index)
+            indices = toggled
+          } else if (wasSelected) {
+            indices = current.indices
+          }
+          scene.setPointSelection({
+            clip: pressed.id,
+            automation: content.automation,
+            indices,
+          })
+          if (!indices.has(intent.index)) return false
+        }
         const held = {
           clip: pressed,
           automation: content.automation,
@@ -532,7 +719,14 @@ export class PlaylistSession {
         }
         this.gesture =
           intent.kind === "point"
-            ? { kind: "point", ...held, x: input.x, added: false }
+            ? {
+                kind: "point",
+                ...held,
+                indices,
+                selectOnlyOnClick: !input.shift,
+                x: input.x,
+                added: false,
+              }
             : { kind: "bend", ...held }
         return true
       }
@@ -543,6 +737,28 @@ export class PlaylistSession {
         const view = this.curveView(pressed)
         if (!base || !view) return false
         const window = view.window
+        if (ui().step) {
+          if (base.length >= MAX_AUTOMATION_POINTS) {
+            this.refuseFullCurve()
+            return false
+          }
+          const spacing = Math.max(1, this.snapFor(input))
+          const sample = this.stepSample(view, input, spacing)
+          if (!selection.has(pressed.id)) ui().select([pressed.id])
+          this.gesture = {
+            kind: "step",
+            clip: pressed,
+            automation: content.automation,
+            points: base,
+            last: sample,
+            spacing,
+            range: view.range ?? FULL_VIEW,
+          }
+          scene.setPointSelection(null)
+          this.onCursor("crosshair")
+          this.pointerMove(input)
+          return true
+        }
         const songTick = snapNearest(
           xToTick(this.surface.viewport, input.x),
           this.snapFor(input)
@@ -571,12 +787,15 @@ export class PlaylistSession {
           base: added.points,
           points: added.points,
           index: added.index,
+          indices: new Set([added.index]),
+          selectOnlyOnClick: false,
           x: input.x,
           y: input.y,
           dragging: false,
           added: true,
           range: view.range ?? FULL_VIEW,
         }
+        scene.setPointSelection(null)
         scene.setDraft({ automation: content.automation, points: added.points })
         this.showPointBadge(input, pressed, added.points, added.index)
         this.onCursor("move")
@@ -614,7 +833,17 @@ export class PlaylistSession {
           muteTo: first ? !first.muted : null,
           last: point,
         }
-        scene.setMarked(new Set(first ? [first.id] : []))
+        const ids = first ? [first.id] : []
+        scene.setMarked(
+          new Set(
+            intent.kind === "erase"
+              ? expandClipSelection(
+                  ids,
+                  project().playlist.arrangementBook?.clipGroups ?? []
+                )
+              : ids
+          )
+        )
         this.pointerMove(input)
         return true
       }
@@ -652,10 +881,16 @@ export class PlaylistSession {
   }
 
   /** What a brush's clip is measured by, as things are now. */
-  private brushContext(brush: ResolvedBrush): BrushContext {
-    const { settings } = project()
+  private brushContext(brush: ResolvedBrush, tick: number): BrushContext {
+    const { settings, playlist } = project()
+    const segments = meterSegments(
+      settings.timeSignature,
+      playlist.timeline?.meters ?? []
+    )
+    const segment =
+      segments.findLast((segment) => segment.start <= tick) ?? segments[0]
     return {
-      barTicks: ticksPerBar(settings.timeSignature),
+      barTicks: ticksPerBar(segment.signature),
       tempoBpm: settings.tempoBpm,
       durationSecs:
         brush.type === "audio" ? sampleDuration(brush.sample) : null,
@@ -692,6 +927,34 @@ export class PlaylistSession {
     })
   }
 
+  private refuseFullCurve(): void {
+    refuse(
+      "This curve is full",
+      "A curve holds 4,096 points. Delete some to add more."
+    )
+  }
+
+  private stepSample(
+    view: CurveView,
+    input: PointerInput,
+    spacing: number
+  ): StepSample {
+    const songTick = snapNearest(
+      xToTick(this.surface.viewport, input.x),
+      spacing
+    )
+    return {
+      tick: Math.round(
+        clamp(
+          toCurveTick(view.window, songTick),
+          Math.max(0, view.window.offset),
+          Math.min(MAX_SONG_TICKS, view.window.offset + view.window.length)
+        )
+      ),
+      value: valueAt(view, input.y),
+    }
+  }
+
   /** The pointer moved, with or without a button down. */
   pointerMove(input: PointerInput): void {
     const gesture = this.gesture
@@ -713,6 +976,13 @@ export class PlaylistSession {
       }
       case "committing":
         return
+      case "playback":
+        void seek(this.playbackTick(point.tick, input))
+        return
+      case "slice":
+        gesture.tick = this.sliceTick(point.tick, input)
+        this.surface.invalidate()
+        break
       case "pan":
         this.metrics.panBy(gesture.x - input.x, gesture.y - input.y)
         gesture.x = input.x
@@ -766,6 +1036,37 @@ export class PlaylistSession {
         })
         return
       }
+      case "step": {
+        const view = this.curveView(gesture.clip, gesture.range)
+        if (!view) return
+        const sample = this.stepSample(view, input, gesture.spacing)
+        const points = writeSteps(
+          gesture.points,
+          gesture.last,
+          sample,
+          gesture.spacing,
+          view.window.offset - view.window.start
+        )
+        if (!points) {
+          this.cancel()
+          this.refuseFullCurve()
+          return
+        }
+        gesture.points = points
+        gesture.last = sample
+        scene.setViewHold({
+          automation: gesture.automation,
+          range: gesture.range,
+        })
+        scene.setDraft({ automation: gesture.automation, points })
+        this.showPointBadge(
+          input,
+          gesture.clip,
+          points,
+          points.findLastIndex((point) => point.tick === sample.tick)
+        )
+        break
+      }
       case "point": {
         const dx = input.x - gesture.x
         const dy = input.y - gesture.y
@@ -792,18 +1093,26 @@ export class PlaylistSession {
         }
         // Shift keeps the drag to the axis it has moved further along.
         if (input.shift) target = constrainToAxis(origin, target, dx, dy)
-        gesture.points = movePoint(
-          gesture.base,
-          gesture.index,
-          target.tick,
-          target.value,
-          view.window
-        )
+        gesture.points = gesture.added
+          ? movePoint(
+              gesture.base,
+              gesture.index,
+              target.tick,
+              target.value,
+              view.window
+            )
+          : moveSelectedPoints(
+              gesture.base,
+              gesture.indices,
+              target.tick - origin.tick,
+              target.value - origin.value,
+              view.window
+            )
         scene.setViewHold({
           automation: gesture.automation,
           range: extendView(
             gesture.range,
-            gesture.points[gesture.index]?.value ?? origin.value
+            ...[...gesture.indices].map((index) => gesture.points[index].value)
           ),
         })
         scene.setDraft({
@@ -867,9 +1176,14 @@ export class PlaylistSession {
         )) {
           ids.add(items.batch.ids[index])
         }
-        gesture.ids = ids
+        gesture.ids = new Set(
+          expandClipSelection(
+            ids,
+            project().playlist.arrangementBook?.clipGroups ?? []
+          )
+        )
         // The store hears about it once, when the button comes up.
-        scene.showSelected(ids)
+        scene.showSelected(gesture.ids)
         break
       }
       case "move": {
@@ -880,6 +1194,35 @@ export class PlaylistSession {
           if (!far) return
           gesture.dragging = true
           this.onCursor("grabbing")
+        }
+        if (gesture.grouped) {
+          const { tracks } = project().playlist
+          const visualRows = Math.floor(point.row) - gesture.from.row
+          const destination = documentRowFor(
+            scene.rowOf(gesture.anchor.track) + visualRows
+          )
+          const anchorRow = tracks.findIndex(
+            (track) => track.id === gesture.anchor.track
+          )
+          const ticks =
+            snapTick(
+              gesture.anchor.start + point.tick - gesture.from.tick,
+              this.snapFor(input)
+            ) - gesture.anchor.start
+          gesture.updates =
+            destination === undefined || anchorRow < 0
+              ? null
+              : clipGroupMove(
+                  gesture.clips,
+                  tracks,
+                  ticks,
+                  destination - anchorRow
+                )
+          scene.cloneHint = input.mod
+          scene.setDrag(
+            gesture.updates ? { ...NO_DRAG, ticks, rows: visualRows } : NO_DRAG
+          )
+          break
         }
         const move = clampMove(
           gesture.clips.map((clip) => ({
@@ -894,6 +1237,26 @@ export class PlaylistSession {
         )
         scene.cloneHint = input.mod
         scene.setDrag({ ...NO_DRAG, ticks: move.ticks, rows: move.rows })
+        break
+      }
+      case "slip": {
+        if (!gesture.dragging) {
+          if (Math.abs(input.x - gesture.x) < DRAG_THRESHOLD_PX) return
+          gesture.dragging = true
+        }
+        // Snap the signed travel, not the clip's position or its offset.
+        // Dragging content right exposes earlier content in the fixed window.
+        const delta = snapTick(
+          point.tick - gesture.fromTick,
+          this.snapFor(input)
+        )
+        gesture.offset = clamp(gesture.clip.offset - delta, 0, MAX_SONG_TICKS)
+        scene.setSlipDraft({ clip: gesture.clip.id, offset: gesture.offset })
+        scene.setBadge({
+          x: input.x,
+          y: input.y,
+          text: `Offset: ${gesture.offset} ticks`,
+        })
         break
       }
       case "resize": {
@@ -924,23 +1287,30 @@ export class PlaylistSession {
         )
         break
       }
-      case "place":
+      case "place": {
+        const start = snapCell(point.tick, this.snapFor(input))
         scene.setGhosts([
           brushClip(
             gesture.brush,
-            snapCell(point.tick, this.snapFor(input)),
+            start,
             this.rowAt(point),
-            this.brushContext(gesture.brush)
+            this.brushContext(gesture.brush, start)
           ),
         ])
         break
+      }
       case "paint": {
-        const context = this.brushContext(gesture.brush)
-        const pass = brushTicks(gesture.brush, context)
+        const pass = (tick: number) =>
+          brushTicks(gesture.brush, this.brushContext(gesture.brush, tick))
         scene.setGhosts(
           withoutStacked(
             paintStarts(gesture.anchor, point.tick, pass).map((start) =>
-              brushClip(gesture.brush, start, gesture.row, context)
+              brushClip(
+                gesture.brush,
+                start,
+                gesture.row,
+                this.brushContext(gesture.brush, start)
+              )
             ),
             scene.clips,
             scene.rowOf
@@ -966,7 +1336,16 @@ export class PlaylistSession {
           gesture.muteTo ??= !clip.muted
           marked.add(clip.id)
         }
-        if (marked.size !== scene.marked.size) scene.setMarked(marked)
+        const expanded =
+          gesture.action === "erase"
+            ? new Set(
+                expandClipSelection(
+                  marked,
+                  project().playlist.arrangementBook?.clipGroups ?? []
+                )
+              )
+            : marked
+        if (expanded.size !== scene.marked.size) scene.setMarked(expanded)
         break
       }
       default: {
@@ -1027,9 +1406,17 @@ export class PlaylistSession {
     clips: readonly NewClip[],
     label: string
   ): Promise<ClipId[] | null> {
-    return brush.type === "audio"
-      ? placeSampleClips(brush.sample, clips, label)
-      : addClips(clips, label)
+    if (brush.type !== "audio") return addClips(clips, label)
+    const layout = trackRowsNow()
+    const destinations = clips.map((clip) => documentRowFor(clip.row, layout))
+    if (destinations.some((row) => row === undefined)) {
+      return Promise.resolve(null)
+    }
+    return placeSampleClips(
+      brush.sample,
+      clips.map((clip, index) => ({ ...clip, row: destinations[index]! })),
+      label
+    )
   }
 
   /** The button came up. Resolves once the edit, if any, has been applied. */
@@ -1041,6 +1428,43 @@ export class PlaylistSession {
       case "idle":
       case "committing":
         return
+      case "playback":
+        this.settle()
+        return
+      case "slice": {
+        const tick = this.sliceTick(this.pointAt(input).tick, input)
+        const updates: ClipUpdate[] = []
+        const clips: ClipInit[] = []
+        // Use the document's clips directly: selection, visible rows and
+        // clip groups do not change which spans strictly cross this line.
+        for (const clip of project().playlist.clips) {
+          const end = clip.start + clip.length
+          if (tick <= clip.start || tick >= end) continue
+          const leftLength = tick - clip.start
+          updates.push({ id: clip.id, patch: { length: leftLength } })
+          clips.push({
+            track: clip.track,
+            start: tick,
+            length: end - tick,
+            offset: clip.offset + leftLength,
+            muted: clip.muted,
+            content: clip.content,
+          })
+        }
+        this.settle()
+        if (clips.length === 0) return
+        this.gesture = { kind: "committing" }
+        await dispatch({
+          type: "batch",
+          label: plural(clips.length, "Slice clip"),
+          commands: [
+            { type: "updateClips", updates },
+            { type: "addClips", clips },
+          ],
+        })
+        this.settle()
+        return
+      }
       case "pan":
         this.gesture = { kind: "idle" }
         this.pointerMove(input)
@@ -1083,27 +1507,64 @@ export class PlaylistSession {
         this.settle()
         return
       }
+      case "step": {
+        // Include the release position even if no move event arrived for it.
+        this.pointerMove(input)
+        this.stopEdgeScroll()
+        if (this.gesture.kind !== "step") return
+        this.gesture = { kind: "committing" }
+        const generation = getProjectGeneration()
+        await setCurve(gesture.automation, gesture.points)
+        if (generation !== getProjectGeneration()) return
+        this.settle()
+        return
+      }
       case "point":
       case "bend": {
         const added = gesture.kind === "point" && gesture.added
         if (!gesture.dragging && !added) {
+          if (gesture.kind === "point" && gesture.selectOnlyOnClick) {
+            scene.setPointSelection({
+              clip: gesture.clip.id,
+              automation: gesture.automation,
+              indices: new Set([gesture.index]),
+            })
+          }
           this.settle()
           return
         }
         this.gesture = { kind: "committing" }
         // A point that left the chosen view takes the view's edge along.
-        const moved = gesture.points[gesture.index]
-        if (gesture.kind === "point" && moved) {
-          showInView(gesture.automation, [moved.value])
+        if (gesture.kind === "point") {
+          showInView(
+            gesture.automation,
+            [...gesture.indices].map((index) => gesture.points[index].value)
+          )
         }
-        await setCurve(gesture.automation, gesture.points)
+        const generation = getProjectGeneration()
+        const done = await setCurve(gesture.automation, gesture.points)
+        if (generation !== getProjectGeneration()) return
+        if (done && gesture.kind === "point" && added) {
+          scene.setPointSelection({
+            clip: gesture.clip.id,
+            automation: gesture.automation,
+            indices: gesture.indices,
+          })
+        }
         this.settle()
         return
       }
       case "move": {
         if (!gesture.dragging) {
           const id = gesture.anchor.id
-          if (gesture.additive && gesture.wasSelected) {
+          if (gesture.grouped) {
+            ui().select(
+              expandClipSelection(
+                gesture.additive ? ui().selection : [id],
+                project().playlist.arrangementBook?.clipGroups ?? []
+              )
+            )
+          } else if (gesture.additive && gesture.wasSelected) {
             ui().select([...ui().selection].filter((other) => other !== id))
           } else if (!gesture.additive) {
             ui().select([id])
@@ -1112,7 +1573,10 @@ export class PlaylistSession {
           return
         }
         const { ticks, rows } = scene.drag
-        if (ticks === 0 && rows === 0) {
+        if (
+          (gesture.grouped && gesture.updates === null) ||
+          (ticks === 0 && rows === 0)
+        ) {
           this.settle()
           return
         }
@@ -1130,12 +1594,31 @@ export class PlaylistSession {
             plural(copies.length, "Clone clip")
           )
           if (created && created.length > 0) ui().select(created)
+        } else if (gesture.grouped) {
+          await dispatch({
+            type: "batch",
+            label: plural(gesture.clips.length, "Move clip"),
+            commands: [{ type: "updateClips", updates: gesture.updates! }],
+          })
         } else {
           await changeClips(
             moveChanges(gesture.clips, scene.rowOf, ticks, rows),
             plural(gesture.clips.length, "Move clip")
           )
         }
+        this.settle()
+        return
+      }
+      case "slip": {
+        if (!gesture.dragging || gesture.offset === gesture.clip.offset) {
+          this.settle()
+          return
+        }
+        this.gesture = { kind: "committing" }
+        await dispatch({
+          type: "updateClips",
+          updates: [{ id: gesture.clip.id, patch: { offset: gesture.offset } }],
+        })
         this.settle()
         return
       }

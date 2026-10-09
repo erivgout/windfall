@@ -10,13 +10,6 @@ pub struct MeterAnchor {
     pub bar_origin_index: u32,
 }
 
-/// A song meter segment's first downbeat and zero-based bar index.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MeterAnchor {
-    pub bar_origin_beats: f64,
-    pub bar_origin_index: u32,
-}
-
 /// Musical position at the first frame of a processing block.
 #[derive(Debug, Clone, Copy)]
 pub struct PluginTransport {
@@ -44,7 +37,14 @@ pub trait HostedEffect: Send {
     fn adopt_parameters(&mut self, _parameters: &[PluginParameter]) {}
     fn transport(&mut self, _transport: PluginTransport) {}
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
-    fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], _key: Option<&[[f32; 2]]>) { self.process(left, right); }
+    fn process_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        _key: Option<&[[f32; 2]]>,
+    ) {
+        self.process(left, right);
+    }
     fn set_param(&mut self, id: u32, value: f32);
     fn set_tempo(&mut self, bpm: f32);
     fn latency(&self) -> usize;
@@ -58,9 +58,20 @@ pub trait HostedInstrument: HostedEffect {
     fn all_notes_off(&mut self);
     fn voices(&self) -> usize;
     /// Providers opt in only when their event transport preserves ownership.
-    fn supports_note_instances(&self) -> bool { false }
-    fn supports_note_channels(&self) -> bool { false }
-    fn note_on_instance(&mut self, id: windfall_dsp::NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: windfall_dsp::NoteExpression) {
+    fn supports_note_instances(&self) -> bool {
+        false
+    }
+    fn supports_note_channels(&self) -> bool {
+        false
+    }
+    fn note_on_instance(
+        &mut self,
+        id: windfall_dsp::NoteInstanceId,
+        key: u8,
+        velocity: f32,
+        pan: f32,
+        expression: windfall_dsp::NoteExpression,
+    ) {
         let _ = (id, pan, expression);
         self.note_on(key, velocity);
     }
@@ -72,11 +83,20 @@ pub trait HostedInstrument: HostedEffect {
         let _ = channel;
         self.note_off_instance(id, key);
     }
-    fn set_note_expression(&mut self, id: windfall_dsp::NoteInstanceId, pan: f32, expression: windfall_dsp::NoteExpression) {
+    fn set_note_expression(
+        &mut self,
+        id: windfall_dsp::NoteInstanceId,
+        pan: f32,
+        expression: windfall_dsp::NoteExpression,
+    ) {
         let _ = (id, pan, expression);
     }
-    fn set_note_pitch(&mut self, id: windfall_dsp::NoteInstanceId, pitch: f32) { let _ = (id, pitch); }
-    fn supports_note_pitch(&self) -> bool { false }
+    fn set_note_pitch(&mut self, id: windfall_dsp::NoteInstanceId, pitch: f32) {
+        let _ = (id, pitch);
+    }
+    fn supports_note_pitch(&self) -> bool {
+        false
+    }
 }
 
 /// Creates independent instances for playback and offline render, off the callback.
@@ -294,8 +314,12 @@ impl ExternalEffect {
         self.remaining = (self.sample_rate as usize / 200).max(1);
         self.step = (target - self.wet) / self.remaining as f32;
     }
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
-    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
+    pub fn process_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
+    ) {
         let dry = &mut self.scratch[..left.len()];
         for ((frame, left), right) in dry.iter_mut().zip(left.iter()).zip(right.iter()) {
             *frame = [*left, *right];
@@ -430,8 +454,6 @@ mod tests {
         }
     }
     fn binding() -> PluginBinding {
-            sidechain_input: None,
-            auxiliary_inputs: Vec::new(),
         PluginBinding {
             sidechain_input: None,
             auxiliary_inputs: Vec::new(),

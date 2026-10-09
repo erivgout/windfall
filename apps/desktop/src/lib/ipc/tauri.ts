@@ -62,6 +62,30 @@ export function createTauriBackend(): Backend {
 
   return {
     kind: "tauri",
+    analysisCapability: () => call("analysis_capability"),
+    analysisModelImport: (path, model) =>
+      call("analysis_model_import", { path, model }),
+    pickAnalysisModel: async () => {
+      const picked = await open({
+        title: "Import analysis model",
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Analysis model", extensions: ["onnx"] }],
+      })
+      return typeof picked === "string" ? picked : null
+    },
+    analysisSubmit: (request) => call("analysis_submit", { request }),
+    analysisStatus: (job) => call("analysis_status", { job }),
+    analysisCancel: (job) => call("analysis_cancel", { job }),
+    analysisCancelPreparation: () => call("analysis_cancel_preparation"),
+    analysisForget: (job) => call("analysis_forget", { job }),
+    analysisRetryCleanup: (job) => call("analysis_retry_cleanup", { job }),
+    analysisReview: (ticket) => call("analysis_review", { ticket }),
+    analysisApply: (request) => call("analysis_apply", { request }),
+    analysisShutdown: () => call("analysis_shutdown"),
+    detachPanel: (id) => call("detach_panel", { id }),
+    dockPanel: (id) => call("dock_panel", { id }),
+    onPanelDocked: (listener) => on(EVENTS.panelDocked, listener),
     mixerWaveformTracks: (tracks, generation, revision) => call("mixer_waveform_tracks", { tracks, generation, revision }),
     mixerPresetCapture: (id, generation, revision) => call("mixer_preset_capture", { id, generation, revision }),
     mixerPresetSave: async (preset) => {
@@ -137,6 +161,14 @@ export function createTauriBackend(): Backend {
     importMidi: (token) => call("import_midi", { token }),
     midiDiscard: (token) => call("midi_discard", { token }),
     exportMidi: (path, options) => call("export_midi", { path, options }),
+    sheetMusicSave: async (suggestedName, xml) => {
+      const path = await save({
+        title: "Export sheet music",
+        defaultPath: `${suggestedName.replace(/[<>:"/\\|?*]/g, "_") || "Score"}.musicxml`,
+        filters: [{ name: "MusicXML score", extensions: ["musicxml", "xml"] }],
+      })
+      return path ? call("write_sheet_music", { path, xml }) : null
+    },
     async pickMidiFile() {
       const result = await open({
         title: "Import MIDI",
@@ -211,6 +243,7 @@ export function createTauriBackend(): Backend {
       call("add_audio_clip_from_file", { path, ...place, browser }),
     addAudioClipFromSample: (sample, place) =>
       call("add_audio_clip_from_sample", { sample, ...place }),
+    bounceSelectedClips: (clips) => call("bounce_selected_clips", { clips }),
     automate: (target) => call("automate", { target }),
     samplesReload: () => call("samples_reload"),
 

@@ -12,8 +12,12 @@ import type { Tool } from "./store"
 
 export type Intent =
   | { kind: "draw" }
-  | { kind: "paint" }
+  | { kind: "paint"; drum?: boolean }
   | { kind: "erase" }
+  | { kind: "mute" }
+  | { kind: "slice" }
+  | { kind: "zoom" }
+  | { kind: "playback" }
   | { kind: "marquee" }
   | { kind: "move" }
   | { kind: "resize"; edge: "start" | "end" }
@@ -28,10 +32,26 @@ export function pressIntent(
   tool: Tool,
   button: PressButton,
   hitPart: HitPart | null,
-  modifiers: PressModifiers
+  modifiers: PressModifiers,
+  drum = false
 ): Intent {
   if (button === "right") {
     return tool === "select" ? { kind: "menu" } : { kind: "erase" }
+  }
+  if (tool === "paint" && drum) return { kind: "paint", drum: true }
+  switch (tool) {
+    case "mute": return { kind: "mute" }
+    case "slice": return { kind: "slice" }
+    case "zoom": return { kind: "zoom" }
+    case "playback": return { kind: "playback" }
+    case "draw":
+    case "paint":
+    case "select":
+    case "erase": break
+    default: {
+      const _exhaustive: never = tool
+      return _exhaustive
+    }
   }
   // Ctrl selects with a box, except on a note the tool can move: there it
   // stays a move, which the drop turns into a copy.
@@ -85,6 +105,10 @@ export function cursorFor(intent: Intent | null): string {
       return BRUSH_CURSOR
     case "erase":
       return ERASER_CURSOR
+    case "mute": return "pointer"
+    case "slice": return "col-resize"
+    case "zoom": return "zoom-in"
+    case "playback": return "ew-resize"
     case "marquee":
       return "crosshair"
     case "move":
@@ -112,9 +136,14 @@ export function hintFor(intent: Intent | null, tool: Tool): string | null {
     case "draw":
       return `Click to add a note, drag to place it. ${free}. Ctrl+drag selects. ${rightClick}`
     case "paint":
+      if (intent.drum) return `Drag to toggle drum steps. The first cell chooses add or delete. Escape cancels. ${rightClick}`
       return `Drag to paint a row of notes. ${free}. Ctrl+drag selects. ${rightClick}`
     case "erase":
       return "Click or drag across notes to delete them"
+    case "mute": return "Click a note to mute or unmute it"
+    case "slice": return `Click inside a note to split it. ${free}`
+    case "zoom": return "Drag a rectangle to zoom. Click again or press Escape to restore the view"
+    case "playback": return "Hold and drag to seek and audition notes. Release or press Escape to stop auditioning"
     case "marquee":
       return "Drag to select notes. Shift adds to the selection. Click empty space to clear it"
     case "move":

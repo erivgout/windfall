@@ -17,15 +17,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useActions, useAppState } from "@/lib/actions"
+import { currentPatternId } from "@/lib/flows/edit"
 import { useHint } from "@/lib/store/hint"
-import { useProjectStore } from "@/lib/store/project"
+import { dispatch, useProjectStore } from "@/lib/store/project"
 import { useSelectedPatternId } from "@/lib/store/selectors"
 import { clamp, DEFAULT_PATTERN_STEPS, MAX_PATTERN_STEPS } from "@/lib/units"
 
 import { LENGTH_PRESETS } from "./actions"
+import { setPatternLength } from "./channel-ops"
 import { RACK_MENU } from "./menus"
+import { nextPatternLengthPreset } from "./pattern-length-preset-step"
+import { nextPatternLengthScale } from "./pattern-length-scale"
+import { nextProjectSwingPreset } from "./project-swing-preset-step"
 import { useRackStore } from "./rack-store"
 import { clampPatternLength, describeLength } from "./steps"
+import { nextSwing, SWING_PRESETS } from "./swing-presets"
+import { nextProjectSwingScale } from "./swing-scale"
 import { useGestureValue } from "./use-gesture-value"
 import { ChannelGroupFilter } from "./channel-groups-ui"
 
@@ -133,6 +140,58 @@ function PatternLength() {
           </ActionButton>
         ))}
       </div>
+      <Button
+        variant="outline"
+        size="xs"
+        aria-label="Choose the previous pattern length preset"
+        disabled={
+          nextPatternLengthPreset(
+            lengthSteps ?? DEFAULT_PATTERN_STEPS,
+            "previous"
+          ) === null
+        }
+        onClick={() => {
+          const id = currentPatternId()
+          if (id === null) return
+          const current = useProjectStore
+            .getState()
+            .project.patterns.find((item) => item.id === id)
+          const next = nextPatternLengthPreset(
+            current?.lengthSteps ?? DEFAULT_PATTERN_STEPS,
+            "previous"
+          )
+          if (next === null) return
+          void setPatternLength(next)
+        }}
+      >
+        Previous
+      </Button>
+      <Button
+        variant="outline"
+        size="xs"
+        aria-label="Choose the next pattern length preset"
+        disabled={
+          nextPatternLengthPreset(
+            lengthSteps ?? DEFAULT_PATTERN_STEPS,
+            "next"
+          ) === null
+        }
+        onClick={() => {
+          const id = currentPatternId()
+          if (id === null) return
+          const current = useProjectStore
+            .getState()
+            .project.patterns.find((item) => item.id === id)
+          const next = nextPatternLengthPreset(
+            current?.lengthSteps ?? DEFAULT_PATTERN_STEPS,
+            "next"
+          )
+          if (next === null) return
+          void setPatternLength(next)
+        }}
+      >
+        Next
+      </Button>
       <NumberField
         size="sm"
         aria-label="Pattern length in steps"
@@ -145,6 +204,42 @@ function PatternLength() {
         {...length}
         {...hint}
       />
+      <Button
+        variant="outline"
+        size="xs"
+        disabled={
+          pattern === null || nextPatternLengthScale(lengthSteps, "half") === null
+        }
+        onClick={() => {
+          if (pattern === null) return
+          const current = useProjectStore
+            .getState()
+            .project.patterns.find((item) => item.id === pattern)
+          if (!current) return
+          const next = nextPatternLengthScale(current.lengthSteps, "half")
+          if (next !== null) void setPatternLength(next)
+        }}
+      >
+        Half
+      </Button>
+      <Button
+        variant="outline"
+        size="xs"
+        disabled={
+          pattern === null || nextPatternLengthScale(lengthSteps, "double") === null
+        }
+        onClick={() => {
+          if (pattern === null) return
+          const current = useProjectStore
+            .getState()
+            .project.patterns.find((item) => item.id === pattern)
+          if (!current) return
+          const next = nextPatternLengthScale(current.lengthSteps, "double")
+          if (next !== null) void setPatternLength(next)
+        }}
+      >
+        Double
+      </Button>
     </div>
   )
 }
@@ -173,9 +268,94 @@ function Swing() {
         {...percentUnit}
         {...swing}
       />
-      <span className="w-7 font-readout text-[0.6875rem] text-foreground/85">
-        {percentUnit.format(swing.value)}
-      </span>
+      <ContextActions
+        items={() => [
+          ...SWING_PRESETS.map((preset) => ({
+            title: preset.label,
+            disabled:
+              nextSwing(
+                useProjectStore.getState().project.settings.swing,
+                preset
+              ) === null,
+            run: () => {
+              const value = nextSwing(
+                useProjectStore.getState().project.settings.swing,
+                preset
+              )
+              if (value === null) return
+              return dispatch({ type: "updateSettings", patch: { swing: value } })
+            },
+          })),
+          {
+            title: "Previous preset",
+            disabled:
+              nextProjectSwingPreset(
+                useProjectStore.getState().project.settings.swing,
+                "previous"
+              ) === null,
+            run: () => {
+              const next = nextProjectSwingPreset(
+                useProjectStore.getState().project.settings.swing,
+                "previous"
+              )
+              if (next === null) return
+              return dispatch({ type: "updateSettings", patch: { swing: next } })
+            },
+          },
+          {
+            title: "Next preset",
+            disabled:
+              nextProjectSwingPreset(
+                useProjectStore.getState().project.settings.swing,
+                "next"
+              ) === null,
+            run: () => {
+              const next = nextProjectSwingPreset(
+                useProjectStore.getState().project.settings.swing,
+                "next"
+              )
+              if (next === null) return
+              return dispatch({ type: "updateSettings", patch: { swing: next } })
+            },
+          },
+          {
+            title: "Halve",
+            disabled:
+              nextProjectSwingScale(
+                useProjectStore.getState().project.settings.swing,
+                "halve"
+              ) === null,
+            run: () => {
+              const value = nextProjectSwingScale(
+                useProjectStore.getState().project.settings.swing,
+                "halve"
+              )
+              if (value === null) return
+              return dispatch({ type: "updateSettings", patch: { swing: value } })
+            },
+          },
+          {
+            title: "Double",
+            disabled:
+              nextProjectSwingScale(
+                useProjectStore.getState().project.settings.swing,
+                "double"
+              ) === null,
+            run: () => {
+              const value = nextProjectSwingScale(
+                useProjectStore.getState().project.settings.swing,
+                "double"
+              )
+              if (value === null) return
+              return dispatch({ type: "updateSettings", patch: { swing: value } })
+            },
+          },
+        ]}
+      >
+        <span className="w-7 font-readout text-[0.6875rem] text-foreground/85">
+          {percentUnit.format(swing.value)}
+        </span>
+      </ContextActions>
     </div>
   )
 }

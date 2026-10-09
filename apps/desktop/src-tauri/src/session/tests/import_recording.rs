@@ -119,8 +119,6 @@ fn recording_refuses_flp_open_and_preserves_the_review_for_after_discard() {
         ..Default::default()
     });
     project.patterns.push(Pattern {
-        time_signature: None,
-        timeline: Default::default(),
         iid: 1,
         notes: vec![Note {
             channel: 0,

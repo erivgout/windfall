@@ -9,8 +9,6 @@ import { useUiStore } from "@/lib/store/ui"
 import type { NotePreviewLane } from "./note-preview-target"
 import type { GraphProperty } from "./graph-values"
 
-import type { NotePreviewLane } from "./note-preview-target"
-
 /**
  * How many keys the keyboard in the channel settings shows: around the
  * root key, six octaves, or every key there is.

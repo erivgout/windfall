@@ -4,6 +4,7 @@ import { memo, useMemo, useRef } from "react"
 
 import type { TrackId } from "@/bindings"
 import { MuteSolo, PanControl, ToggleLed } from "@/components/audio"
+import type { ContextItem } from "@/components/context-actions"
 import { ValueContextItems } from "@/components/value-context-menu"
 import { automationFeed, useAutomationMarker } from "@/features/automation/live"
 import { runAction } from "@/lib/actions"
@@ -23,8 +24,11 @@ import { EffectBadge, EffectRack } from "./effect-rack"
 import { SEND_ROW_HEIGHT, type StripMode } from "./layout"
 import { LevelSection, type LevelLayout } from "./level-section"
 import { trackValueItems } from "./menus"
+import { nextMixerPanPreset } from "./mixer-pan-preset-step"
+import { nextMixerPanScale } from "./mixer-pan-scale"
 import { patchTrack } from "./operations"
 import { OutputSelect } from "./output-select"
+import { PAN_PRESETS, nextPan } from "./pan-presets"
 import { heardTracks, type Audibility } from "./routing"
 import { RoutingButton } from "./routing-popover"
 import { AddSendMenu, SendList } from "./sends"
@@ -47,7 +51,52 @@ function PanKnob({
   const pan = useTrackGroupGesture(track.id, "pan")
   const hint = useHint("Pan. Drag, or double-click to center")
   // What the knob is bound to adds its own entries to the knob's menu.
-  const items = useMemo(() => trackValueItems(track.id, "pan"), [track.id])
+  const items = useMemo<ContextItem[]>(
+    () => [
+      ...trackValueItems(track.id, "pan"),
+      {
+        submenu: "Pan",
+        items: [
+          ...PAN_PRESETS.map((preset) => ({
+            title: preset.label,
+            disabled: nextPan(track.pan, preset.value) === null,
+            run: () => {
+              const pan = nextPan(track.pan, preset.value)
+              if (pan === null) return
+              return patchTrack(track.id, { pan })
+            },
+          })),
+          ...(["previous", "next"] as const).map((direction) => ({
+            title: direction === "previous" ? "Previous preset" : "Next preset",
+            disabled: nextMixerPanPreset(track.pan, direction) === null,
+            run: () => {
+              const latest = useProjectStore.getState().project.mixer.tracks.find(
+                (latest) => latest.id === track.id
+              )
+              if (!latest) return
+              const next = nextMixerPanPreset(latest.pan, direction)
+              if (next === null) return
+              return patchTrack(track.id, { pan: next })
+            },
+          })),
+          ...(["half", "double"] as const).map((factor) => ({
+            title: factor === "half" ? "Half" : "Double",
+            disabled: nextMixerPanScale(track.pan, factor) === null,
+            run: () => {
+              const latest = useProjectStore.getState().project.mixer.tracks.find(
+                (latest) => latest.id === track.id
+              )
+              if (!latest) return
+              const next = nextMixerPanScale(latest.pan, factor)
+              if (next === null) return
+              return patchTrack(track.id, { pan: next })
+            },
+          })),
+        ],
+      },
+    ],
+    [track.id, track.pan]
+  )
   const live = useMemo(
     () => automationFeed({ type: "trackPan", track: track.id }),
     [track.id]

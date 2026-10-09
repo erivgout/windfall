@@ -8,6 +8,7 @@ import type {
   LibraryFileToken,
 } from "@/bindings"
 import { backend, errorMessage } from "@/lib/ipc"
+import { loadedFolderIds } from "./folder-expand"
 import {
   invalidateLibrary,
   resetLibraryStore,
@@ -318,6 +319,23 @@ export function collapseFolder(id: string) {
   if (!state.expanded.has(id)) return
   const expanded = new Set(state.expanded)
   expanded.delete(id)
+  set({ expanded })
+}
+
+export function collapseAllFolders() {
+  if (get().expanded.size === 0) return
+  set({ expanded: new Set<string>() })
+}
+
+export function expandLoadedFolders() {
+  const state = get()
+  const expanded = loadedFolderIds(state.roots, state.listings)
+  if (
+    expanded.size === state.expanded.size &&
+    [...expanded].every((id) => state.expanded.has(id))
+  ) {
+    return
+  }
   set({ expanded })
 }
 

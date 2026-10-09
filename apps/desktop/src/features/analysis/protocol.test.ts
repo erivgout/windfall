@@ -4,12 +4,31 @@ import { createTauriBackend } from "@/lib/ipc/tauri"
 import { decimal, validRange } from "./types"
 import { unavailableAnalysis } from "./unavailable"
 import { retireJob } from "./retire"
+import nativeCommands from "../../../src-tauri/src/commands.rs?raw"
+import frontendCommands from "@/lib/ipc/tauri.ts?raw"
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: vi.fn() }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }))
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: vi.fn() }))
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn(), save: vi.fn() }))
 
 describe("analysis native protocol", () => {
+  it("registers every invoked analysis command in the desktop IPC handler", () => {
+    const invoked = new Set(
+      Array.from(
+        frontendCommands.matchAll(/call\("(analysis_[a-z_]+)"/g),
+        (match) => match[1]
+      )
+    )
+    expect(invoked.size).toBeGreaterThan(0)
+    const handler = nativeCommands.match(
+      /tauri::generate_handler!\[([\s\S]*?)\]/
+    )
+    expect(handler, "Desktop IPC handler must exist").not.toBeNull()
+    const registered = new Set(handler![1].match(/[a-z_]+/g))
+    expect([...invoked].filter((command) => !registered.has(command))).toEqual(
+      []
+    )
+  })
   it("reports the exact retained job identity on immediate cleanup refusal", async () => {
     const api = unavailableAnalysis()
     vi.spyOn(api, "analysisStatus").mockResolvedValue({

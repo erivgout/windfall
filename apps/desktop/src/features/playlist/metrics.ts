@@ -5,7 +5,6 @@ import {
   clampViewport,
   DEFAULT_LIMITS,
   scrollByPx,
-  yToRow,
   zoomTimeAt,
   type Viewport,
   type ViewportLimits,
@@ -24,6 +23,7 @@ import {
   MIN_SONG_BARS,
   TALL_ROW_HEIGHT,
 } from "./layout"
+import { physicalLimits, playlistYToRow, rowGeometry } from "./row-geometry"
 import type { GridSurface } from "./surface"
 
 const FOUR_FOUR_BAR = 3840
@@ -160,11 +160,21 @@ export class GridMetrics {
   }
 
   panBy(dx: number, dy: number): void {
-    this.setViewport(scrollByPx(this.viewport, dx, dy, this.limits))
+    this.setViewport(
+      scrollByPx(this.viewport, dx, dy, {
+        ...this.limits,
+        rowCount: physicalLimits(this.viewport, this.limits.rowCount),
+      })
+    )
   }
 
   zoomTime(anchorX: number, factor: number): void {
-    this.setViewport(zoomTimeAt(this.viewport, anchorX, factor, this.limits))
+    this.setViewport(
+      zoomTimeAt(this.viewport, anchorX, factor, {
+        ...this.limits,
+        rowCount: physicalLimits(this.viewport, this.limits.rowCount),
+      })
+    )
   }
 
   /** Fits absolute dragged ticks in the current logical CSS viewport. */
@@ -211,11 +221,12 @@ export class GridMetrics {
         : scaled
     const rowHeight = clamp(stepped, limits.minRowHeight, limits.maxRowHeight)
     if (rowHeight === viewport.rowHeight) return
-    const anchorRow = yToRow(viewport, anchorY)
+    const anchorRow = playlistYToRow(viewport, anchorY)
     this.setViewport({
       ...viewport,
       rowHeight,
-      scrollRow: anchorRow - anchorY / rowHeight,
+      scrollRow:
+        (rowGeometry({ rowHeight }).top(anchorRow) - anchorY) / rowHeight,
     })
   }
 
@@ -230,10 +241,12 @@ export class GridMetrics {
    */
   toggleTall(): void {
     const viewport = this.viewport
+    const rowHeight = this.tall ? DEFAULT_ROW_HEIGHT : TALL_ROW_HEIGHT
+    const first = Math.floor(playlistYToRow(viewport, 0))
     this.setViewport({
       ...viewport,
-      rowHeight: this.tall ? DEFAULT_ROW_HEIGHT : TALL_ROW_HEIGHT,
-      scrollRow: Math.floor(viewport.scrollRow),
+      rowHeight,
+      scrollRow: rowGeometry({ rowHeight }).top(first) / rowHeight,
     })
   }
 

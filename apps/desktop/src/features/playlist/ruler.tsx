@@ -39,6 +39,7 @@ import { TimelineGesture } from "./timeline-gesture"
 import { useTimelineStore } from "./timeline-store"
 
 import { snapNearest, songEnd } from "./edit"
+import { markerJumps } from "./marker-jumps"
 import { wheelInput, type GridMetrics } from "./metrics"
 import { currentSnapTicks, seekSong, songTick, toggleLoopSong } from "./ops"
 import { usePlaylistStore } from "./store"
@@ -332,6 +333,10 @@ export function Ruler({ metrics }: { metrics: GridMetrics }) {
       run: () => seekSong(end),
       disabled: end === 0,
     },
+    ...markerJumps(timeline?.markers ?? []).map(({ title, tick }) => ({
+      title,
+      run: () => seekSong(tick),
+    })),
     contextSeparator,
     "playlist.playSelection",
     "playlist.loopSelection",

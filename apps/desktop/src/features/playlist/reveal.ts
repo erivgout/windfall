@@ -2,6 +2,7 @@ import type { Clip, ClipId } from "@/bindings"
 import type { Viewport } from "@/lib/canvas"
 import { useUiStore } from "@/lib/store/ui"
 
+import { rowGeometry } from "./row-geometry"
 import { usePlaylistStore } from "./store"
 
 /**
@@ -51,8 +52,11 @@ export function viewportShowing(
   const startShown =
     clip.start >= viewport.scrollTick &&
     clip.start < viewport.scrollTick + visibleTicks * 0.9
+  const geometry = rowGeometry(viewport)
+  const top = geometry.top(row) / viewport.rowHeight
+  const bottom = geometry.top(row + 1) / viewport.rowHeight
   const rowShown =
-    row >= viewport.scrollRow && row + 1 <= viewport.scrollRow + visibleRows
+    top >= viewport.scrollRow && bottom <= viewport.scrollRow + visibleRows
   return {
     ...viewport,
     scrollTick: startShown
@@ -60,6 +64,6 @@ export function viewportShowing(
       : Math.max(0, clip.start - LEAD_TICKS),
     scrollRow: rowShown
       ? viewport.scrollRow
-      : Math.max(0, row - Math.max(0, Math.floor(visibleRows / 2) - 1)),
+      : Math.max(0, top - Math.max(0, Math.floor(visibleRows / 2) - 1)),
   }
 }

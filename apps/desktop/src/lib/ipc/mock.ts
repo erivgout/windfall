@@ -17,6 +17,7 @@ import type {
 } from "@/bindings"
 
 import { DEFAULT_TRACK_PROCESSING } from "@/lib/track-processing"
+import { isPanelId, type PanelId } from "@/lib/store/ui"
 import { mixerTrackOfSample } from "@/lib/audio-clips"
 import { ticksPerBar } from "@/lib/time"
 import {
@@ -70,10 +71,17 @@ export type MockOptions = MockMidiOptions &
     dialogs?: MockDialogs
     /** The project to start with. Defaults to the demo beat. */
     project?: Project
+    /** Test render fixture. Browser previews have no offline renderer and reject bounce without it. */
+    renderPlaylistBounce?: (
+      source: Project,
+      region: { start: number; end: number }
+    ) => Promise<string>
   }
 
 /** A backend that lives in the page, and what tidies it up. */
 export type MockBackend = Backend & {
+  /** Successful requests to open a panel window, in call order. */
+  detachCalls: PanelId[]
   /**
    * Stops the mock's timers and frees its document in the WebAssembly
    * module. A call that needs the document rejects afterwards.
@@ -322,6 +330,8 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
   let memoryTransports: Record<string, SavedTransport> = {}
 
   const patches = new Emitter<ProjectPatch>()
+  const panelDocked = new Emitter<PanelId>()
+  const detachCalls: PanelId[] = []
   const loaded = new Emitter<DocumentSnapshot>()
   const transportStates = new Emitter<TransportState>()
   const engineStatuses = new Emitter<EngineStatus>()
@@ -617,6 +627,7 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
 
   return {
     kind: "mock",
+    ...unavailableAnalysis(),
     mixerWaveformTracks: (tracks, generation, revision) => ipc(() => {
       const state = timelineState()
       if (state.generation !== generation || state.revision !== revision) throw new Error("The project changed before waveform selection could update")
@@ -639,6 +650,21 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       document.body.append(anchor); anchor.click(); anchor.remove()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
       return name
+    },
+    sheetMusicSave: async (suggestedName, xml) => {
+      const name = `${suggestedName.replace(/[<>:"/\\|?*]/g, "_") || "Score"}.musicxml`
+      const path = await dialogs.exportPath(`/exports/${name}`)
+      if (!path) return null
+      if (typeof document === "undefined") throw new Error("Score downloads require a browser")
+      const url = URL.createObjectURL(new Blob([xml], { type: "application/vnd.recordare.musicxml+xml" }))
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = path.split(/[\\/]/).pop() || name
+      document.body.append(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      return path
     },
     mixerPresetLoad: async () => {
       if (typeof document === "undefined") throw new Error("Preset import requires a browser")
@@ -1171,6 +1197,82 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
           ),
         })
       }),
+    async bounceSelectedClips(selection) {
+      const { document, snapshot } = await ipc(() => ({
+        document: doc,
+        snapshot: doc.snapshot(path),
+      }))
+      const ids = new Set(selection)
+      const clips = snapshot.project.playlist.clips.filter((clip) =>
+        ids.has(clip.id)
+      )
+      if (ids.size === 0)
+        throw new Error("Select at least one playlist clip to bounce.")
+      if (clips.length !== ids.size)
+        throw new Error("A selected clip no longer exists.")
+      const tracks = new Set(clips.map((clip) => clip.track))
+      const destination = snapshot.project.playlist.tracks.find((track) =>
+        tracks.has(track.id)
+      )
+      if (!destination)
+        throw new Error("A selected playlist track no longer exists.")
+      const region = {
+        start: Math.min(...clips.map((clip) => clip.start)),
+        end: Math.max(...clips.map((clip) => clip.start + clip.length)),
+      }
+      if (!options.renderPlaylistBounce)
+        throw new Error(
+          "Bouncing requires the desktop app's offline renderer. No project changes were made."
+        )
+      const source = structuredClone(snapshot.project)
+      for (const track of source.playlist.tracks) {
+        track.solo = tracks.has(track.id)
+        if (track.solo) track.muted = false
+      }
+      const renderedPath = await options.renderPlaylistBounce(source, region)
+      return ipc(() => {
+        if (
+          doc !== document ||
+          doc.snapshot(path).revision !== snapshot.revision
+        )
+          throw new Error(
+            "The project changed while bouncing. Select the clips and try again."
+          )
+        const info = sampleInfoFor(roots, renderedPath)
+        const { sampleId, addSample } = sampleCommands(renderedPath)
+        const commands = audioClipCommands(
+          sampleId,
+          info.durationSecs,
+          "Bounce",
+          {
+            track: destination.id,
+            start: region.start,
+            mixerTrack: MASTER_TRACK,
+          },
+          snapshot.project.nextId + 1
+        )
+        for (const command of commands) {
+          if (command.type === "addClips") {
+            for (const clip of command.clips) {
+              clip.length = region.end - region.start
+              clip.muted = false
+            }
+          }
+        }
+        return dispatchNow({
+          type: "batch",
+          label: "Bounce selected clips",
+          commands: [
+            addSample,
+            ...commands,
+            {
+              type: "updateClips",
+              updates: [...ids].map((id) => ({ id, patch: { muted: true } })),
+            },
+          ],
+        })
+      })
+    },
     automate: (target) =>
       ipc(() => {
         const project = doc.project()
@@ -1286,6 +1388,16 @@ export function createMockBackend(options: MockOptions = {}): MockBackend {
       }),
 
     onProjectPatch: (handler) => patches.on(handler),
+    detachCalls,
+    async detachPanel(id) {
+      if (!isPanelId(id)) throw new Error(`Unknown panel: ${id}`)
+      detachCalls.push(id)
+    },
+    async dockPanel(id) {
+      if (!isPanelId(id)) throw new Error(`Unknown panel: ${id}`)
+      panelDocked.emit(id)
+    },
+    onPanelDocked: (listener) => panelDocked.on(listener),
     onProjectLoaded: (handler) => loaded.on(handler),
     onTransportState: (handler) => transportStates.on(handler),
     onEngineStatus: (handler) => engineStatuses.on(handler),

@@ -1,8 +1,10 @@
 import { Clock04Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useRef } from "react"
+import { useId, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
   Popover,
   PopoverContent,
@@ -16,6 +18,28 @@ import { useHistory } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 
 import { HistoryList } from "./history-list"
+
+/** Mounted only while open, so closing discards the unsaved filter. */
+function FilteredHistory() {
+  const [query, setQuery] = useState("")
+  const id = useId()
+
+  return (
+    <>
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor={id}>Filter history</FieldLabel>
+          <Input
+            id={id}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </Field>
+      </FieldGroup>
+      <HistoryList query={query} className="max-h-72" />
+    </>
+  )
+}
 
 /** A button that opens the undo history. Edit > History opens it too. */
 export function HistoryPopover() {
@@ -61,7 +85,7 @@ export function HistoryPopover() {
               : "Click a step to go back or forward to it."}
           </PopoverDescription>
         </PopoverHeader>
-        <HistoryList className="max-h-72" />
+        {open && <FilteredHistory />}
       </PopoverContent>
     </Popover>
   )

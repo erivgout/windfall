@@ -1,0 +1,1 @@
+The recording dialog halves or doubles the playlist start tick. Half moves it toward the start of the song, and tick 0 stays at tick 0. Double stops at the song limit. The loop end stays where it is. The buttons stay visible while loop recording is off and stay disabled while recording or while the dialog is busy.

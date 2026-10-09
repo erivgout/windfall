@@ -1,0 +1,1 @@
+The channel rack swing menu halves or doubles the project swing. Halve of straight swing stays straight. Double stops at full. Straight, Light, Medium, Heavy, and Full stay as they are. Channel swing mix is unchanged. Clip positions stay as they are.

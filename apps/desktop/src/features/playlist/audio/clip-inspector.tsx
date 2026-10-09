@@ -31,7 +31,7 @@ import {
 import { INSPECTOR_KEEPS, useShortcutScope } from "@/lib/actions"
 import { newGestureId } from "@/lib/store/gesture"
 import { useHint } from "@/lib/store/hint"
-import { useProjectStore } from "@/lib/store/project"
+import { dispatch, useProjectStore } from "@/lib/store/project"
 import { useProjectGeneration } from "@/lib/store/replaced"
 import {
   clamp,
@@ -45,6 +45,18 @@ import { AudioEditorButton } from "@/features/audio-editor"
 import { AnalysisButton } from "@/features/analysis"
 
 import { usePlaylistStore } from "../store"
+import { clipFadePresetStepUpdates } from "./clip-fade-preset-step"
+import { nextClipGainPreset } from "./clip-gain-preset-step"
+import { nextClipPanPreset } from "./clip-pan-preset-step"
+import { clipPanScaleUpdates } from "./clip-pan-scale"
+import { clipPitchPresetStepUpdates } from "./clip-pitch-preset-step"
+import { clipPitchScaleUpdates } from "./clip-pitch-scale"
+import { FADE_PRESETS, fadePresetUpdates } from "./fade-presets"
+import { fadeScaleUpdates } from "./fade-scale"
+import { GAIN_PRESETS, gainPresetUpdates } from "./gain-presets"
+import { gainScaleUpdates } from "./gain-scale"
+import { PAN_PRESETS, panPresetUpdates } from "./pan-presets"
+import { PITCH_PRESETS, pitchPresetUpdates } from "./pitch-presets"
 import { describeFade, speedOf, ticksPerSecond } from "./geometry"
 import { ClipProcessingControls } from "./processing-controls"
 import { SliceControls } from "@/features/slicer"
@@ -285,6 +297,83 @@ function Settings({ clips }: { clips: AudioClip[] }) {
           {...gainHint}
         />
       </Labelled>
+      <Labelled label="Gain presets">
+        {GAIN_PRESETS.map(({ label, gain: preset }) => {
+          const updates = gainPresetUpdates(
+            clips.map((clip) => ({ id: clip.id, gain: clip.content.gain })),
+            preset
+          )
+          return (
+            <Button
+              key={label}
+              variant="outline"
+              size="sm"
+              disabled={updates.length === 0}
+              onClick={() => {
+                if (updates.length > 0)
+                  void dispatch({ type: "updateAudioClips", updates })
+              }}
+            >
+              {label}
+            </Button>
+          )
+        })}
+        {(["previous", "next"] as const).map((direction) => {
+          const updates = clips.flatMap((clip) => {
+            const next = nextClipGainPreset(clip.content.gain, direction)
+            return next === null ? [] : [{ id: clip.id, patch: { gain: next } }]
+          })
+          return (
+            <Button
+              key={direction}
+              variant="outline"
+              size="sm"
+              aria-label={`Choose the ${direction} clip gain preset`}
+              disabled={updates.length === 0}
+              onClick={() => {
+                if (updates.length > 0)
+                  void dispatch({ type: "updateAudioClips", updates })
+              }}
+            >
+              {direction === "previous" ? "Previous" : "Next"}
+            </Button>
+          )
+        })}
+      </Labelled>
+      <Labelled label="Gain scale">
+        {(["half", "double"] as const).map((factor) => (
+          <Button
+            key={factor}
+            variant="outline"
+            size="sm"
+            disabled={
+              gainScaleUpdates(
+                clips.map((clip) => ({ id: clip.id, gain: clip.content.gain })),
+                factor
+              ).length === 0
+            }
+            onClick={() => {
+              const updates = gainScaleUpdates(
+                clips.map((clip) => ({ id: clip.id, gain: clip.content.gain })),
+                factor
+              )
+              if (updates.length > 0)
+                void dispatch({ type: "updateAudioClips", updates })
+            }}
+          >
+            {factor === "half" ? "Half" : "Double"}
+          </Button>
+        ))}
+      </Labelled>
+      <ToggleLed
+        size="sm"
+        pressed={clips.every((clip) => clip.content.normalize === true)}
+        aria-label="Normalize"
+        onPressedChange={(normalize) => void patchSelectedAudioClips({ normalize })}
+        className="w-auto px-1.5"
+      >
+        Normalize
+      </ToggleLed>
       <Labelled label="Pan">
         <PanControl
           size="sm"
@@ -295,30 +384,168 @@ function Settings({ clips }: { clips: AudioClip[] }) {
           {...panHint}
         />
       </Labelled>
-      {clips.every((clip) => clip.content.stretch?.mode !== "spectral") && (
-        <Labelled label="Pitch">
-          <NumberField
+      <Labelled label="Pan presets">
+        {PAN_PRESETS.map(({ label, pan: preset }) => {
+          const updates = panPresetUpdates(
+            clips.map((clip) => ({ id: clip.id, pan: clip.content.pan })),
+            preset
+          )
+          return (
+            <Button
+              key={label}
+              variant="outline"
+              size="sm"
+              disabled={updates.length === 0}
+              onClick={() => {
+                if (updates.length > 0)
+                  void dispatch({ type: "updateAudioClips", updates })
+              }}
+            >
+              {label}
+            </Button>
+          )
+        })}
+        {(["previous", "next"] as const).map((direction) => {
+          const updates = clips.flatMap((clip) => {
+            const next = nextClipPanPreset(clip.content.pan, direction)
+            return next === null ? [] : [{ id: clip.id, patch: { pan: next } }]
+          })
+          return (
+            <Button
+              key={direction}
+              variant="outline"
+              size="sm"
+              aria-label={`Choose the ${direction} clip pan preset`}
+              disabled={updates.length === 0}
+              onClick={() => {
+                if (updates.length > 0)
+                  void dispatch({ type: "updateAudioClips", updates })
+              }}
+            >
+              {direction === "previous" ? "Previous" : "Next"}
+            </Button>
+          )
+        })}
+      </Labelled>
+      <Labelled label="Pan scale">
+        {(["half", "double"] as const).map((factor) => (
+          <Button
+            key={factor}
+            variant="outline"
             size="sm"
-            aria-label="Clip pitch in semitones"
-            min={-MAX_TUNE_SEMITONES}
-            max={MAX_TUNE_SEMITONES}
-            step={0.01}
-            coarseStep={1}
-            splitDrag
-            defaultValue={0}
-            unit="st"
-            className="w-20"
-            {...pitch}
-            {...pitchHint}
-          />
-          <span
-            data-slot="clip-speed"
-            className="w-16 font-readout text-[0.625rem] whitespace-nowrap text-muted-foreground"
-            title="Pitch changes the speed too, like a tape"
+            disabled={
+              clipPanScaleUpdates(
+                clips.map((clip) => ({ id: clip.id, pan: clip.content.pan })),
+                factor
+              ).length === 0
+            }
+            onClick={() => {
+              const updates = clipPanScaleUpdates(
+                clips.map((clip) => ({ id: clip.id, pan: clip.content.pan })),
+                factor
+              )
+              if (updates.length > 0)
+                void dispatch({ type: "updateAudioClips", updates })
+            }}
           >
-            {speed.toFixed(2)}× speed
-          </span>
-        </Labelled>
+            {factor === "half" ? "Half" : "Double"}
+          </Button>
+        ))}
+      </Labelled>
+      {clips.every((clip) => clip.content.stretch?.mode !== "spectral") && (
+        <>
+          <Labelled label="Pitch">
+            <NumberField
+              size="sm"
+              aria-label="Clip pitch in semitones"
+              min={-MAX_TUNE_SEMITONES}
+              max={MAX_TUNE_SEMITONES}
+              step={0.01}
+              coarseStep={1}
+              splitDrag
+              defaultValue={0}
+              unit="st"
+              className="w-20"
+              {...pitch}
+              {...pitchHint}
+            />
+            <span
+              data-slot="clip-speed"
+              className="w-16 font-readout text-[0.625rem] whitespace-nowrap text-muted-foreground"
+              title="Pitch changes the speed too, like a tape"
+            >
+              {speed.toFixed(2)}× speed
+            </span>
+          </Labelled>
+          <Labelled label="Pitch presets">
+            {PITCH_PRESETS.map(({ label, pitch: preset }) => {
+              const updates = pitchPresetUpdates(
+                clips.map((clip) => ({ id: clip.id, pitch: clip.content.pitch })),
+                preset
+              )
+              return (
+                <Button
+                  key={label}
+                  variant="outline"
+                  size="sm"
+                  disabled={updates.length === 0}
+                  onClick={() => {
+                    if (updates.length > 0)
+                      void dispatch({ type: "updateAudioClips", updates })
+                  }}
+                >
+                  {label}
+                </Button>
+              )
+            })}
+            {(["previous", "next"] as const).map((direction) => {
+              const updates = clipPitchPresetStepUpdates(
+                clips.map((clip) => ({ id: clip.id, pitch: clip.content.pitch })),
+                direction
+              )
+              return (
+                <Button
+                  key={direction}
+                  variant="outline"
+                  size="sm"
+                  aria-label={`Choose the ${direction} clip pitch preset`}
+                  disabled={updates.length === 0}
+                  onClick={() => {
+                    if (updates.length > 0)
+                      void dispatch({ type: "updateAudioClips", updates })
+                  }}
+                >
+                  {direction === "previous" ? "Previous" : "Next"}
+                </Button>
+              )
+            })}
+          </Labelled>
+          <Labelled label="Pitch scale">
+            {(["half", "double"] as const).map((factor) => (
+              <Button
+                key={factor}
+                variant="outline"
+                size="sm"
+                disabled={
+                  clipPitchScaleUpdates(
+                    clips.map((clip) => ({ id: clip.id, pitch: clip.content.pitch })),
+                    factor
+                  ).length === 0
+                }
+                onClick={() => {
+                  const updates = clipPitchScaleUpdates(
+                    clips.map((clip) => ({ id: clip.id, pitch: clip.content.pitch })),
+                    factor
+                  )
+                  if (updates.length > 0)
+                    void dispatch({ type: "updateAudioClips", updates })
+                }}
+              >
+                {factor === "half" ? "Half" : "Double"}
+              </Button>
+            ))}
+          </Labelled>
+        </>
       )}
       <ClipProcessingControls clips={clips} />
       <ToggleLed
@@ -336,6 +563,94 @@ function Settings({ clips }: { clips: AudioClip[] }) {
       </Labelled>
       <Labelled label="Fade out">
         <Knob aria-label="Fade out" {...fadeProps} {...fadeOut} {...fadeHint} />
+      </Labelled>
+      <Labelled label="Fade presets">
+        {FADE_PRESETS.map(({ label, fraction }) => {
+          const updates = fadePresetUpdates(
+            clips.map((clip) => ({
+              id: clip.id,
+              length: clip.length,
+              fadeIn: clip.content.fadeIn,
+              fadeOut: clip.content.fadeOut,
+            })),
+            fraction
+          )
+          return (
+            <Button
+              key={label}
+              variant="outline"
+              size="sm"
+              disabled={updates.length === 0}
+              onClick={() => {
+                if (updates.length > 0)
+                  void dispatch({ type: "updateAudioClips", updates })
+              }}
+            >
+              {label}
+            </Button>
+          )
+        })}
+        {(["previous", "next"] as const).map((direction) => {
+          const updates = clipFadePresetStepUpdates(
+            clips.map((clip) => ({
+              id: clip.id,
+              length: clip.length,
+              fadeIn: clip.content.fadeIn,
+              fadeOut: clip.content.fadeOut,
+            })),
+            direction
+          )
+          return (
+            <Button
+              key={direction}
+              variant="outline"
+              size="sm"
+              aria-label={`Choose the ${direction} clip fade preset`}
+              disabled={updates.length === 0}
+              onClick={() => {
+                if (updates.length > 0)
+                  void dispatch({ type: "updateAudioClips", updates })
+              }}
+            >
+              {direction === "previous" ? "Previous" : "Next"}
+            </Button>
+          )
+        })}
+      </Labelled>
+      <Labelled label="Fade scale">
+        {(["half", "double"] as const).map((factor) => (
+          <Button
+            key={factor}
+            variant="outline"
+            size="sm"
+            disabled={
+              fadeScaleUpdates(
+                clips.map((clip) => ({
+                  id: clip.id,
+                  length: clip.length,
+                  fadeIn: clip.content.fadeIn,
+                  fadeOut: clip.content.fadeOut,
+                })),
+                factor
+              ).length === 0
+            }
+            onClick={() => {
+              const updates = fadeScaleUpdates(
+                clips.map((clip) => ({
+                  id: clip.id,
+                  length: clip.length,
+                  fadeIn: clip.content.fadeIn,
+                  fadeOut: clip.content.fadeOut,
+                })),
+                factor
+              )
+              if (updates.length > 0)
+                void dispatch({ type: "updateAudioClips", updates })
+            }}
+          >
+            {factor === "half" ? "Half" : "Double"}
+          </Button>
+        ))}
       </Labelled>
       <RouteSelect clips={clips} />
     </>

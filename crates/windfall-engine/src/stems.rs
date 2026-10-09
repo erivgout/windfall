@@ -100,6 +100,7 @@ pub struct Stem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StemError {
     Timeline(String),
+    Plugin(String),
     SamplerPreparation(crate::sampler_processing::SamplerPreparationError),
     /// The master track was asked for as a stem.
     Master,
@@ -116,6 +117,7 @@ impl std::fmt::Display for StemError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Timeline(error) => f.write_str(error),
+            Self::Plugin(error) => f.write_str(error),
             Self::SamplerPreparation(error) => std::fmt::Display::fmt(error, f),
             Self::Master => f.write_str(
                 "The master track cannot be a stem. Its sound is the mix, which can be exported with the stems.",
@@ -225,7 +227,11 @@ fn sources(project: &Project, through: bool) -> Vec<bool> {
         .clips
         .iter()
         .filter_map(|clip| match clip.content {
-            ClipContent::Audio { mixer_track, output, .. } if output.is_mixer() => Some(mixer_track),
+            ClipContent::Audio {
+                mixer_track,
+                output,
+                ..
+            } if output.is_mixer() => Some(mixer_track),
             _ => None,
         });
     for index in channels.chain(clips).filter_map(place) {
@@ -238,7 +244,9 @@ fn sources(project: &Project, through: bool) -> Vec<bool> {
                 continue;
             }
             let sends = track.sends.iter().map(|send| send.target);
-            let output = track.output.filter(|_| !track.external_output.is_some_and(|route| route.exclusive));
+            let output = track
+                .output
+                .filter(|_| !track.external_output.is_some_and(|route| route.exclusive));
             for target in output.into_iter().chain(sends).filter_map(place) {
                 gives[target] = true;
             }
@@ -301,7 +309,7 @@ pub fn render_streaming(
             frames: 0,
             dropped_clips: 0,
             completed: false,
-            plugin_error: if let StemError::Plugin(error) = error {
+            plugin_error: if let crate::render::RenderError::Plugin(error) = error {
                 Some(error)
             } else {
                 None
@@ -324,6 +332,12 @@ pub fn render_streaming_checked(
     let pool = pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {})?;
     let pass = Pass::new(compile(project, &pool), options, &[]);
     pass.run(None, &mut |_, block| sink(block), progress)
+        .map_err(|error| match error {
+            StemError::Timeline(error) => crate::render::RenderError::Timeline(error),
+            StemError::SamplerPreparation(error) => crate::render::RenderError::Sampler(error),
+            StemError::Plugin(error) => crate::render::RenderError::Plugin(error),
+            error => crate::render::RenderError::Timeline(error.to_string()),
+        })
 }
 
 /// Renders the stems of a project and hands each to `sink` a block at a
@@ -612,6 +626,7 @@ impl Pass {
             mode: Some(options.mode),
             pattern,
             loop_song: Some(false),
+            ..Default::default()
         });
         if let Some(range) = region {
             controller
@@ -776,6 +791,7 @@ mod tests {
             muted: false,
             solo: false,
             group: String::new(),
+            voice: Default::default(),
             timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId(track),
             source: ChannelSource::Sampler(SamplerSettings::default()),

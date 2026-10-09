@@ -148,6 +148,68 @@ fn analysis_actual_batch_undo_redo_save_reopen_preserves_original_and_committed_
 }
 
 #[test]
+fn analysis_applied_outputs_preserve_the_source_output_route() {
+    for output in [
+        windfall_project::ClipAudioOutput::Mixer,
+        windfall_project::ClipAudioOutput::Direct,
+    ] {
+        let rig = Rig::new();
+        let (clip, _, _) = fixture(&rig);
+        rig.session
+            .dispatch(
+                windfall_project::Command::UpdateAudioClips {
+                    updates: vec![windfall_project::AudioClipUpdate {
+                        id: clip,
+                        patch: windfall_project::AudioClipPatch {
+                            output: Some(output),
+                            ..Default::default()
+                        },
+                    }],
+                },
+                None,
+            )
+            .unwrap();
+        let job = ready(&rig, clip);
+        let result = rig.session.analysis_apply(apply(&job, false)).unwrap();
+        let applied = rig.project();
+        let applied_clip = applied
+            .playlist
+            .clips
+            .iter()
+            .find(|clip| Some(&clip.id.0) == result.created.last())
+            .unwrap();
+        assert!(matches!(
+            applied_clip.content,
+            windfall_project::ClipContent::Audio { output: actual, .. } if actual == output
+        ));
+    }
+}
+
+#[test]
+fn analysis_apply_refuses_a_superseded_engine_plan_without_consuming_review() {
+    let rig = Rig::new();
+    let (clip, _, _) = fixture(&rig);
+    let job = ready(&rig, clip);
+    let hold = rig.session.hold("analysis:prepared");
+    let request = apply(&job, false);
+    let worker = rig.session.background(move |s| s.analysis_apply(request));
+    hold.wait();
+    let before = rig.session.document_snapshot();
+    let pool = rig.session.state().pool.clone();
+    // Advance only the engine's publication generation. Document/source guards
+    // remain current, so the prepared engine lease must be the refusing guard.
+    rig.session.controller().set_project(&before.project, &pool);
+    hold.release();
+    let error = worker.join().unwrap().unwrap_err();
+    assert!(error.contains("analysis:stale"), "{error}");
+    assert_eq!(rig.session.document_snapshot(), before);
+    assert_eq!(
+        rig.session.analysis_status(&job.job).unwrap().status,
+        AnalysisStatus::Ready
+    );
+}
+
+#[test]
 fn analysis_capture_rechecks_document_loaded_identity_and_recording_authority() {
     for change in ["edit", "source", "recording"] {
         let rig = Rig::new();
@@ -877,7 +939,7 @@ fn analysis_junction_retarget_after_hash_cannot_install_a_changed_source_namespa
 
 #[cfg(windows)]
 #[test]
-fn analysis_substituted_drive_retarget_after_hash_cannot_install_a_changed_source() {
+fn analysis_substituted_drive_is_refused_before_capture_and_after_retarget() {
     let rig = Rig::new();
     let (_, source, original) = fixture(&rig);
     let first = rig.folder.path().join("dos-first");
@@ -925,13 +987,9 @@ fn analysis_substituted_drive_retarget_after_hash_cannot_install_a_changed_sourc
     let original_file_identity =
         crate::library::file_identity(&first.join("original.wav")).unwrap();
     let source_length = std::fs::metadata(&source).unwrap().len();
-    let job = ready(&rig, clip);
-    let hold = rig.session.hold("analysis:prepared");
-    let r = apply(&job, false);
-    let worker = rig
-        .session
-        .background(move |session| session.analysis_apply(r));
-    hold.wait(); // real source hash/identity passed; all old source handles live
+    let error = rig.session.analysis_submit(request(clip)).unwrap_err();
+    assert!(error.contains("analysis:sourceNamespace"), "{error}");
+    assert!(error.contains("substituted or chained"), "{error}");
     assert_eq!(std::fs::read(&source).unwrap(), original);
     assert_eq!(rig.session.document_snapshot(), before);
     drive.push(format!(r"\??\{}", second.display())).unwrap();
@@ -951,15 +1009,72 @@ fn analysis_substituted_drive_retarget_after_hash_cannot_install_a_changed_sourc
     );
     assert_eq!(rig.session.document_snapshot(), before);
     assert_eq!(std::fs::read(first.join("original.wav")).unwrap(), original);
-    eprintln!(
-        "R2_DOS old real Session effective source remapped at analysis:prepared while original handles remain live"
-    );
-    hold.release();
-    assert!(
-        worker.join().unwrap().is_err(),
-        "remapped DOS drive source was applied"
-    );
+    let error = rig.session.analysis_submit(request(clip)).unwrap_err();
+    assert!(error.contains("analysis:sourceNamespace"), "{error}");
     assert_eq!(rig.session.document_snapshot(), before);
+    assert_eq!(
+        rig.session
+            .inner
+            .analysis
+            .test_manager()
+            .usage()
+            .retained_jobs,
+        0
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn analysis_direct_volume_drive_mapping_is_retained_through_final_apply() {
+    use std::path::{Component, Prefix};
+    let rig = Rig::new();
+    let (_, path, original) = fixture(&rig);
+    let path = std::path::Path::new(&path);
+    let letter = match path.components().next().unwrap() {
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => char::from(letter),
+            _ => panic!("Fixture must be on a local drive"),
+        },
+        _ => panic!("Fixture must be absolute"),
+    };
+    let target = dos_device::query(&format!("{letter}:")).unwrap().unwrap()[0].clone();
+    let mut drive = dos_device::Drive::new(target.clone());
+    let relative = path.strip_prefix(format!(r"{letter}:\")).unwrap();
+    let source = format!(r"{}\{}", drive.name(), relative.display());
+    let result = rig
+        .session
+        .add_audio_clip_from_file(
+            &source,
+            ClipPlace {
+                track: None,
+                start: 0,
+                mixer_track: None,
+            },
+        )
+        .unwrap();
+    let job = ready(&rig, ClipId(*result.created.last().unwrap()));
+    let hold = rig.session.hold("analysis:prepared");
+    let request = apply(&job, false);
+    let worker = rig.session.background(move |s| s.analysis_apply(request));
+    hold.wait();
+    // A local DOS retarget attempt must not replace the effective mapping while
+    // production SourceFile owns it, even though the original NT object lives.
+    let replacement = format!(r"\??\{}", rig.folder.path().display());
+    let _retarget = drive.push(replacement.clone());
+    assert_eq!(dos_device::query(drive.name()).unwrap().unwrap()[0], target);
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    hold.release();
+    worker.join().unwrap().unwrap();
+    assert_eq!(
+        rig.session.analysis_status(&job.job).unwrap().status,
+        AnalysisStatus::Consumed
+    );
+    // Authority is process-volatile, and releases after the successful apply.
+    drive.push(replacement.clone()).unwrap();
+    assert_eq!(
+        dos_device::query(drive.name()).unwrap().unwrap()[0],
+        replacement
+    );
 }
 fn model() -> AnalysisModel {
     AnalysisModel {

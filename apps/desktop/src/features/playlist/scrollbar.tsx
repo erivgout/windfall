@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react"
 import { clamp } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
+import { physicalLimits } from "./row-geometry"
 import type { GridMetrics } from "./metrics"
 
 const MIN_THUMB_PX = 28
@@ -57,7 +58,7 @@ function extentOf(metrics: GridMetrics, axis: "time" | "tracks"): Extent {
     : {
         start: viewport.scrollRow,
         visible: viewport.height / viewport.rowHeight,
-        total: limits.rowCount,
+        total: physicalLimits(viewport, limits.rowCount),
       }
 }
 

@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, useState } from "react"
 
 import type { Automation } from "@/bindings"
 import { ContextActions } from "@/components/context-actions"
@@ -12,6 +12,7 @@ import { useAutomationClipCounts } from "../selectors"
 import { usePlaylistStore } from "../store"
 import { automationMenu } from "./menu"
 import { renameAutomation } from "./ops"
+import { matchingAutomationIds } from "./picker-filter"
 
 const AutomationRow = memo(function AutomationRow({
   automation,
@@ -78,6 +79,7 @@ const AutomationRow = memo(function AutomationRow({
  * curve.
  */
 export function AutomationSection() {
+  const [query, setQuery] = useState("")
   const automations = useProjectStore((state) => state.project.automations)
   // The target's words follow the names of channels, tracks and effects.
   const channels = useProjectStore((state) => state.project.channels)
@@ -86,6 +88,14 @@ export function AutomationSection() {
   const brush = usePlaylistStore((state) => state.brush)
   const counts = useAutomationClipCounts()
   const source = { channels, mixer, settings }
+  const items = automations.map((automation) => ({
+    id: automation.id,
+    name: automation.name,
+    target: describeTarget(source, automation.target),
+    automation,
+  }))
+  const matchingIds = new Set(matchingAutomationIds(items, query))
+  const visibleItems = items.filter((item) => matchingIds.has(item.id))
 
   return (
     <PickerSection title="Automation">
@@ -99,11 +109,26 @@ export function AutomationSection() {
           aria-label="Automation to place"
           className="flex flex-col"
         >
-          {automations.map((automation) => (
+          <label className="flex flex-col gap-1 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+            Filter automations
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key.startsWith("Arrow")) event.stopPropagation()
+              }}
+              className="h-7 w-full min-w-0 rounded-md border border-input bg-input/20 px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+            />
+          </label>
+          {visibleItems.length === 0 && (
+            <PickerEmpty>No automations match.</PickerEmpty>
+          )}
+          {visibleItems.map(({ automation, target }) => (
             <AutomationRow
               key={automation.id}
               automation={automation}
-              target={describeTarget(source, automation.target)}
+              target={target}
               selected={
                 brush.type === "automation" &&
                 brush.automation === automation.id

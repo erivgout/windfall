@@ -241,14 +241,45 @@ pub fn encode_event(event: HostEvent, frames: usize) -> Result<[u32; EVENT_WORDS
             words[4] = value.to_bits() as u32;
             words[5] = (value.to_bits() >> 32) as u32;
         }
-        HostEvent::NoteOnInstance { id, key, channel, velocity, .. }
-        | HostEvent::NoteOffInstance { id, key, channel, velocity, .. } => {
-            words[0] = if matches!(event, HostEvent::NoteOnInstance { .. }) { 5 } else { 6 };
-            words[2] = id; words[3] = u32::from(key); words[4] = u32::from(channel); words[5] = velocity.to_bits();
+        HostEvent::NoteOnInstance {
+            id,
+            key,
+            channel,
+            velocity,
+            ..
         }
-        HostEvent::NoteExpression { id, key, channel, kind, value, .. } => {
-            words[0] = 7; words[2] = id; words[3] = u32::from(key); words[4] = u32::from(channel); words[5] = kind as u32;
-            words[6] = value.to_bits() as u32; words[7] = (value.to_bits() >> 32) as u32;
+        | HostEvent::NoteOffInstance {
+            id,
+            key,
+            channel,
+            velocity,
+            ..
+        } => {
+            words[0] = if matches!(event, HostEvent::NoteOnInstance { .. }) {
+                5
+            } else {
+                6
+            };
+            words[2] = id;
+            words[3] = u32::from(key);
+            words[4] = u32::from(channel);
+            words[5] = velocity.to_bits();
+        }
+        HostEvent::NoteExpression {
+            id,
+            key,
+            channel,
+            kind,
+            value,
+            ..
+        } => {
+            words[0] = 7;
+            words[2] = id;
+            words[3] = u32::from(key);
+            words[4] = u32::from(channel);
+            words[5] = kind as u32;
+            words[6] = value.to_bits() as u32;
+            words[7] = (value.to_bits() >> 32) as u32;
         }
     }
     Ok(words)
@@ -284,13 +315,37 @@ pub fn decode_event(words: [u32; EVENT_WORDS], frames: usize) -> Result<HostEven
             value: f64::from_bits(pair(words[4], words[5])),
         },
         5 | 6 if words[3] <= 127 && words[4] <= 15 && words[6..].iter().all(|word| *word == 0) => {
-            let time = words[1]; let id = words[2]; let key = words[3] as u8; let channel = words[4] as u8; let velocity = f32::from_bits(words[5]);
-            if words[0] == 5 { HostEvent::NoteOnInstance { time, id, key, channel, velocity } }
-            else { HostEvent::NoteOffInstance { time, id, key, channel, velocity } }
+            let time = words[1];
+            let id = words[2];
+            let key = words[3] as u8;
+            let channel = words[4] as u8;
+            let velocity = f32::from_bits(words[5]);
+            if words[0] == 5 {
+                HostEvent::NoteOnInstance {
+                    time,
+                    id,
+                    key,
+                    channel,
+                    velocity,
+                }
+            } else {
+                HostEvent::NoteOffInstance {
+                    time,
+                    id,
+                    key,
+                    channel,
+                    velocity,
+                }
+            }
         }
         7 if words[3] <= 127 && words[4] <= 15 => HostEvent::NoteExpression {
-            time: words[1], id: words[2], key: words[3] as u8, channel: words[4] as u8,
-            kind: crate::NoteExpressionKind::from_raw(words[5]).ok_or(ProtocolError::Event)?, value: f64::from_bits(pair(words[6], words[7])) },
+            time: words[1],
+            id: words[2],
+            key: words[3] as u8,
+            channel: words[4] as u8,
+            kind: crate::NoteExpressionKind::from_raw(words[5]).ok_or(ProtocolError::Event)?,
+            value: f64::from_bits(pair(words[6], words[7])),
+        },
         _ => return Err(ProtocolError::Event),
     };
     encode_event(event, frames)?;
@@ -431,12 +486,12 @@ mod tests {
         assert_eq!(SLOT_WORDS * 4 % 64, 0);
     }
     #[test]
-    fn mapping_v1_v2_v3_never_downgrade_the_v4_reset_contract() {
+    fn earlier_mapping_versions_never_downgrade_the_v6_reset_and_sidechain_contract() {
         let mut header = config().header().unwrap();
-        assert_eq!(header[1], 4);
+        assert_eq!(header[1], 6);
         assert_eq!(header[OWNER_COMPLETIONS], 0);
         assert_eq!(header[TIMELINE_EPOCH], 1);
-        for version in [1, 2, 3] {
+        for version in [1, 2, 3, 4, 5] {
             header[1] = version;
             assert_eq!(
                 Config::from_header(&header, REGION_BYTES),
@@ -472,13 +527,13 @@ mod tests {
             assert!(decode_event(encoded, event.time() as usize).is_err());
         }
         for words in [
-            [99, 0, 0, 0, 0, 0],
-            [1, 0, 128, 0, 0, 0],
-            [1, 0, 0, 16, 0, 0],
-            [1, 0, 0, 0, f32::NAN.to_bits(), 0],
-            [3, 0, 1, 0, 0, 0],
-            [4, 0, u32::MAX, 0, 0, 0],
-            [4, 0, 1, 0, 0, (f64::INFINITY.to_bits() >> 32) as u32],
+            [99, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 128, 0, 0, 0, 0, 0],
+            [1, 0, 0, 16, 0, 0, 0, 0],
+            [1, 0, 0, 0, f32::NAN.to_bits(), 0, 0, 0],
+            [3, 0, 1, 0, 0, 0, 0, 0],
+            [4, 0, u32::MAX, 0, 0, 0, 0, 0],
+            [4, 0, 1, 0, 0, (f64::INFINITY.to_bits() >> 32) as u32, 0, 0],
         ] {
             assert!(decode_event(words, 64).is_err());
         }

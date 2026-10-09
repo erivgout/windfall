@@ -38,6 +38,10 @@ loopStart?: number,
  */
 loopEnd?: number, 
 /**
+ * Playback crossfade at the loop seam, 0 to 1. Zero preserves the dry loop.
+ */
+loopCrossfade?: number, 
+/**
  * With no envelope a one-shot ignores note length, which drum hits want.
  * Loops use a short release when this is absent; an envelope gates either.
  */

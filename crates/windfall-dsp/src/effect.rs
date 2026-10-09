@@ -5,13 +5,54 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::drive::{
+    DriveChain, DriveChainParams, GuitarRack, GuitarRackParams, Overdrive, OverdriveParams,
+    Waveshaper, WaveshaperParams,
+};
+use crate::multiband::{
+    BandSplit, BandSplitParams, BassHarmonics, BassHarmonicsParams, Exciter, ExciterParams,
+    MultibandCompressor, MultibandCompressorParams, MultibandMaximizer, MultibandMaximizerParams,
+    OneKnob, OneKnobParams, TransientShaper, TransientShaperParams, TransientSplit,
+    TransientSplitParams,
+};
+use crate::spatial::{
+    BandDelay, BandDelayParams, HyperChorus, HyperChorusParams, Room, RoomParams, Spreader,
+    SpreaderParams, StackedFlanger, StackedFlangerParams, StereoEnhancer, StereoEnhancerParams,
+    VintageChorus, VintageChorusParams, VintagePhaser, VintagePhaserParams,
+};
+
+use crate::performance::{
+    PerformanceRack, PerformanceRackParams, Scratch, ScratchParams, TimeTransport,
+    TimeTransportParams, VolumeGate, VolumeGateParams,
+};
+
 use crate::balance::{Balance, BalanceParams};
 use crate::channel_mute::{ChannelMute, ChannelMuteParams};
+use crate::control::{EnvelopeFollower, EnvelopeFollowerParams};
+use crate::control::{NoteEnvelope, NoteEnvelopeParams};
+use crate::control::{PanLfo, PanLfoParams};
+use crate::control::{XyPad, XyPadParams};
+use crate::control::{XyzPad, XyzPadParams};
 use crate::dc_block::{DcBlock, DcBlockParams};
 use crate::distortion::{DISTORTION_LATENCY_SAMPLES, Distortion, DistortionParams};
+use crate::echo_bank::{EchoBank, EchoBankParams};
+use crate::eqbank::{FilterBank, FilterBankParams};
+use crate::eqbank::{MorphEq, MorphEqParams};
+use crate::eqbank::{SevenBand, SevenBandParams};
+use crate::frequency_delay::{FrequencyDelay, FrequencyDelayParams};
+use crate::lush::{LushSpace, LushSpaceParams};
+use crate::mastering::{StageStack, StageStackParams};
 use crate::polarity::{Polarity, PolarityParams};
+use crate::sendtap::{SendTap, SendTapParams};
 use crate::soft_clipper::{SoftClipper, SoftClipperParams};
+use crate::spectral::{
+    CONVOLUTION_PARTITION, Convolver, ConvolverParams, FREQUENCY_SHIFTER_LATENCY, FrequencyShifter,
+    FrequencyShifterParams, PITCH_SHIFT_LATENCY, PitchCorrect, PitchCorrectParams, PitchShift,
+    PitchShiftParams, Vocoder, VocoderParams,
+};
 use crate::stereo_matrix::{StereoMatrix, StereoMatrixParams};
+use crate::surface::{ControlSurface, ControlSurfaceParams};
+use crate::tuner::{Tuner, TunerParams};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -82,7 +123,14 @@ pub trait Effect: Send {
     /// which may be anything from 1 up.
     fn process(&mut self, left: &mut [f32], right: &mut [f32]);
     /// Optional detector-only stereo input; processors opt in explicitly.
-    fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], _key: Option<&[[f32; 2]]>) { self.process(left, right); }
+    fn process_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        _key: Option<&[[f32; 2]]>,
+    ) {
+        self.process(left, right);
+    }
 
     /// Samples by which the output lags the input, for delay compensation.
     /// It can change when parameters change, so read it after
@@ -157,6 +205,14 @@ impl GainReductionMeter {
     }
 }
 
+fn performance_sample_rate(sample_rate: f32) -> f32 {
+    if sample_rate.is_finite() {
+        sample_rate.clamp(1.0, 384_000.0)
+    } else {
+        48_000.0
+    }
+}
+
 /// Which effect an [`AnyEffect`] or an [`EffectParams`] holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -181,10 +237,54 @@ pub enum EffectKind {
     Chorus,
     Flanger,
     Phaser,
+    BandSplit,
+    MultibandCompressor,
+    MultibandMaximizer,
+    TransientShaper,
+    TransientSplit,
+    OneKnob,
+    BassHarmonics,
+    Exciter,
+    Waveshaper,
+    Overdrive,
+    GuitarRack,
+    DriveChain,
+    VintageChorus,
+    HyperChorus,
+    VintagePhaser,
+    StackedFlanger,
+    BandDelay,
+    Room,
+    Spreader,
+    StereoEnhancer,
+    VolumeGate,
+    TimeTransport,
+    Scratch,
+    PerformanceRack,
+    Convolver,
+    FrequencyShifter,
+    PitchShift,
+    PitchCorrect,
+    Vocoder,
+    EchoBank,
+    FrequencyDelay,
+    SevenBand,
+    MorphEq,
+    FilterBank,
+    XyPad,
+    XyzPad,
+    PanLfo,
+    EnvelopeFollower,
+    NoteEnvelope,
+    LushSpace,
+    Tuner,
+    StageStack,
+    ControlSurface,
+    SendTap,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 19] = [
+    pub const ALL: [EffectKind; 63] = [
         EffectKind::Eq,
         EffectKind::Compressor,
         EffectKind::Limiter,
@@ -204,6 +304,50 @@ impl EffectKind {
         EffectKind::Chorus,
         EffectKind::Flanger,
         EffectKind::Phaser,
+        EffectKind::BandSplit,
+        EffectKind::MultibandCompressor,
+        EffectKind::MultibandMaximizer,
+        EffectKind::TransientShaper,
+        EffectKind::TransientSplit,
+        EffectKind::OneKnob,
+        EffectKind::BassHarmonics,
+        EffectKind::Exciter,
+        EffectKind::Waveshaper,
+        EffectKind::Overdrive,
+        EffectKind::GuitarRack,
+        EffectKind::DriveChain,
+        EffectKind::VintageChorus,
+        EffectKind::HyperChorus,
+        EffectKind::VintagePhaser,
+        EffectKind::StackedFlanger,
+        EffectKind::BandDelay,
+        EffectKind::Room,
+        EffectKind::Spreader,
+        EffectKind::StereoEnhancer,
+        EffectKind::VolumeGate,
+        EffectKind::TimeTransport,
+        EffectKind::Scratch,
+        EffectKind::PerformanceRack,
+        EffectKind::Convolver,
+        EffectKind::FrequencyShifter,
+        EffectKind::PitchShift,
+        EffectKind::PitchCorrect,
+        EffectKind::Vocoder,
+        EffectKind::EchoBank,
+        EffectKind::FrequencyDelay,
+        EffectKind::SevenBand,
+        EffectKind::MorphEq,
+        EffectKind::FilterBank,
+        EffectKind::XyPad,
+        EffectKind::XyzPad,
+        EffectKind::PanLfo,
+        EffectKind::EnvelopeFollower,
+        EffectKind::NoteEnvelope,
+        EffectKind::LushSpace,
+        EffectKind::Tuner,
+        EffectKind::StageStack,
+        EffectKind::ControlSurface,
+        EffectKind::SendTap,
     ];
 
     /// The effect's name as shown to the user.
@@ -228,6 +372,50 @@ impl EffectKind {
             EffectKind::Chorus => ChorusParams::NAME,
             EffectKind::Flanger => FlangerParams::NAME,
             EffectKind::Phaser => PhaserParams::NAME,
+            EffectKind::BandSplit => BandSplitParams::NAME,
+            EffectKind::MultibandCompressor => MultibandCompressorParams::NAME,
+            EffectKind::MultibandMaximizer => MultibandMaximizerParams::NAME,
+            EffectKind::TransientShaper => TransientShaperParams::NAME,
+            EffectKind::TransientSplit => TransientSplitParams::NAME,
+            EffectKind::OneKnob => OneKnobParams::NAME,
+            EffectKind::BassHarmonics => BassHarmonicsParams::NAME,
+            EffectKind::Exciter => ExciterParams::NAME,
+            EffectKind::Waveshaper => WaveshaperParams::NAME,
+            EffectKind::Overdrive => OverdriveParams::NAME,
+            EffectKind::GuitarRack => GuitarRackParams::NAME,
+            EffectKind::DriveChain => DriveChainParams::NAME,
+            EffectKind::VintageChorus => VintageChorusParams::NAME,
+            EffectKind::HyperChorus => HyperChorusParams::NAME,
+            EffectKind::VintagePhaser => VintagePhaserParams::NAME,
+            EffectKind::StackedFlanger => StackedFlangerParams::NAME,
+            EffectKind::BandDelay => BandDelayParams::NAME,
+            EffectKind::Room => RoomParams::NAME,
+            EffectKind::Spreader => SpreaderParams::NAME,
+            EffectKind::StereoEnhancer => StereoEnhancerParams::NAME,
+            EffectKind::VolumeGate => VolumeGateParams::NAME,
+            EffectKind::TimeTransport => TimeTransportParams::NAME,
+            EffectKind::Scratch => ScratchParams::NAME,
+            EffectKind::PerformanceRack => PerformanceRackParams::NAME,
+            EffectKind::Convolver => ConvolverParams::NAME,
+            EffectKind::FrequencyShifter => FrequencyShifterParams::NAME,
+            EffectKind::PitchShift => PitchShiftParams::NAME,
+            EffectKind::PitchCorrect => PitchCorrectParams::NAME,
+            EffectKind::Vocoder => VocoderParams::NAME,
+            EffectKind::EchoBank => EchoBankParams::NAME,
+            EffectKind::FrequencyDelay => FrequencyDelayParams::NAME,
+            EffectKind::SevenBand => SevenBandParams::NAME,
+            EffectKind::MorphEq => MorphEqParams::NAME,
+            EffectKind::FilterBank => FilterBankParams::NAME,
+            EffectKind::XyPad => XyPadParams::NAME,
+            EffectKind::XyzPad => XyzPadParams::NAME,
+            EffectKind::PanLfo => PanLfoParams::NAME,
+            EffectKind::EnvelopeFollower => EnvelopeFollowerParams::NAME,
+            EffectKind::NoteEnvelope => NoteEnvelopeParams::NAME,
+            EffectKind::LushSpace => LushSpaceParams::NAME,
+            EffectKind::Tuner => TunerParams::NAME,
+            EffectKind::StageStack => StageStackParams::NAME,
+            EffectKind::ControlSurface => ControlSurfaceParams::NAME,
+            EffectKind::SendTap => SendTapParams::NAME,
         }
     }
 
@@ -253,6 +441,50 @@ impl EffectKind {
             EffectKind::Chorus => ChorusParams::descriptors(),
             EffectKind::Flanger => FlangerParams::descriptors(),
             EffectKind::Phaser => PhaserParams::descriptors(),
+            EffectKind::BandSplit => BandSplitParams::descriptors(),
+            EffectKind::MultibandCompressor => MultibandCompressorParams::descriptors(),
+            EffectKind::MultibandMaximizer => MultibandMaximizerParams::descriptors(),
+            EffectKind::TransientShaper => TransientShaperParams::descriptors(),
+            EffectKind::TransientSplit => TransientSplitParams::descriptors(),
+            EffectKind::OneKnob => OneKnobParams::descriptors(),
+            EffectKind::BassHarmonics => BassHarmonicsParams::descriptors(),
+            EffectKind::Exciter => ExciterParams::descriptors(),
+            EffectKind::Waveshaper => WaveshaperParams::descriptors(),
+            EffectKind::Overdrive => OverdriveParams::descriptors(),
+            EffectKind::GuitarRack => GuitarRackParams::descriptors(),
+            EffectKind::DriveChain => DriveChainParams::descriptors(),
+            EffectKind::VintageChorus => VintageChorusParams::descriptors(),
+            EffectKind::HyperChorus => HyperChorusParams::descriptors(),
+            EffectKind::VintagePhaser => VintagePhaserParams::descriptors(),
+            EffectKind::StackedFlanger => StackedFlangerParams::descriptors(),
+            EffectKind::BandDelay => BandDelayParams::descriptors(),
+            EffectKind::Room => RoomParams::descriptors(),
+            EffectKind::Spreader => SpreaderParams::descriptors(),
+            EffectKind::StereoEnhancer => StereoEnhancerParams::descriptors(),
+            EffectKind::VolumeGate => VolumeGateParams::descriptors(),
+            EffectKind::TimeTransport => TimeTransportParams::descriptors(),
+            EffectKind::Scratch => ScratchParams::descriptors(),
+            EffectKind::PerformanceRack => PerformanceRackParams::descriptors(),
+            EffectKind::Convolver => ConvolverParams::descriptors(),
+            EffectKind::FrequencyShifter => FrequencyShifterParams::descriptors(),
+            EffectKind::PitchShift => PitchShiftParams::descriptors(),
+            EffectKind::PitchCorrect => PitchCorrectParams::descriptors(),
+            EffectKind::Vocoder => VocoderParams::descriptors(),
+            EffectKind::EchoBank => EchoBankParams::descriptors(),
+            EffectKind::FrequencyDelay => FrequencyDelayParams::descriptors(),
+            EffectKind::SevenBand => SevenBandParams::descriptors(),
+            EffectKind::MorphEq => MorphEqParams::descriptors(),
+            EffectKind::FilterBank => FilterBankParams::descriptors(),
+            EffectKind::XyPad => XyPadParams::descriptors(),
+            EffectKind::XyzPad => XyzPadParams::descriptors(),
+            EffectKind::PanLfo => PanLfoParams::descriptors(),
+            EffectKind::EnvelopeFollower => EnvelopeFollowerParams::descriptors(),
+            EffectKind::NoteEnvelope => NoteEnvelopeParams::descriptors(),
+            EffectKind::LushSpace => LushSpaceParams::descriptors(),
+            EffectKind::Tuner => TunerParams::descriptors(),
+            EffectKind::StageStack => StageStackParams::descriptors(),
+            EffectKind::ControlSurface => ControlSurfaceParams::descriptors(),
+            EffectKind::SendTap => SendTapParams::descriptors(),
         }
     }
 
@@ -279,6 +511,57 @@ impl EffectKind {
             | EffectKind::Chorus
             | EffectKind::Flanger
             | EffectKind::Phaser => 0,
+            EffectKind::BandSplit => 0,
+            EffectKind::MultibandCompressor => 0,
+            EffectKind::MultibandMaximizer => {
+                2 * ms_to_samples(1.0, crate::balance::rate(sample_rate).max(8.0)) as usize
+            }
+            EffectKind::TransientShaper => 0,
+            EffectKind::TransientSplit => 0,
+            EffectKind::OneKnob => {
+                2 * ms_to_samples(1.0, crate::balance::rate(sample_rate).max(8.0)) as usize
+            }
+            EffectKind::BassHarmonics => crate::multiband::HARMONICS_LATENCY_SAMPLES,
+            EffectKind::Exciter => crate::multiband::HARMONICS_LATENCY_SAMPLES,
+            EffectKind::Waveshaper => 0,
+            EffectKind::Overdrive => 0,
+            EffectKind::GuitarRack => 0,
+            EffectKind::DriveChain => 0,
+            EffectKind::VintageChorus => 0,
+            EffectKind::HyperChorus => 0,
+            EffectKind::VintagePhaser => 0,
+            EffectKind::StackedFlanger => 0,
+            EffectKind::BandDelay => 0,
+            EffectKind::Room => 0,
+            EffectKind::Spreader => 0,
+            EffectKind::StereoEnhancer => 0,
+            EffectKind::VolumeGate => 0,
+            EffectKind::TimeTransport => 0,
+            EffectKind::Scratch => 0,
+            EffectKind::PerformanceRack => performance_sample_rate(sample_rate).floor() as usize,
+            EffectKind::Convolver => CONVOLUTION_PARTITION,
+            EffectKind::FrequencyShifter => FREQUENCY_SHIFTER_LATENCY,
+            EffectKind::PitchShift => PITCH_SHIFT_LATENCY,
+            EffectKind::PitchCorrect => {
+                let rate = crate::blocks::math::clean(sample_rate, 8_000.0, 384_000.0, 48_000.0);
+                256 * (rate / 6_000.0).round().max(1.0) as usize + PITCH_SHIFT_LATENCY
+            }
+            EffectKind::Vocoder => 0,
+            EffectKind::EchoBank => 0,
+            EffectKind::FrequencyDelay => 0,
+            EffectKind::SevenBand => 0,
+            EffectKind::MorphEq => 0,
+            EffectKind::FilterBank => 0,
+            EffectKind::XyPad => 0,
+            EffectKind::XyzPad => 0,
+            EffectKind::PanLfo => 0,
+            EffectKind::EnvelopeFollower => 0,
+            EffectKind::NoteEnvelope => 0,
+            EffectKind::LushSpace => 0,
+            EffectKind::Tuner => 0,
+            EffectKind::StageStack => 0,
+            EffectKind::ControlSurface => 0,
+            EffectKind::SendTap => 0,
         }
     }
 
@@ -306,12 +589,89 @@ impl EffectKind {
             EffectKind::Chorus => EffectParams::Chorus(ChorusParams::default()),
             EffectKind::Flanger => EffectParams::Flanger(FlangerParams::default()),
             EffectKind::Phaser => EffectParams::Phaser(PhaserParams::default()),
+            EffectKind::BandSplit => EffectParams::BandSplit(BandSplitParams::default()),
+            EffectKind::MultibandCompressor => {
+                EffectParams::MultibandCompressor(MultibandCompressorParams::default())
+            }
+            EffectKind::MultibandMaximizer => {
+                EffectParams::MultibandMaximizer(MultibandMaximizerParams::default())
+            }
+            EffectKind::TransientShaper => {
+                EffectParams::TransientShaper(TransientShaperParams::default())
+            }
+            EffectKind::TransientSplit => {
+                EffectParams::TransientSplit(TransientSplitParams::default())
+            }
+            EffectKind::OneKnob => EffectParams::OneKnob(OneKnobParams::default()),
+            EffectKind::BassHarmonics => {
+                EffectParams::BassHarmonics(BassHarmonicsParams::default())
+            }
+            EffectKind::Exciter => EffectParams::Exciter(ExciterParams::default()),
+            EffectKind::Waveshaper => EffectParams::Waveshaper(WaveshaperParams::default()),
+            EffectKind::Overdrive => EffectParams::Overdrive(OverdriveParams::default()),
+            EffectKind::GuitarRack => EffectParams::GuitarRack(GuitarRackParams::default()),
+            EffectKind::DriveChain => EffectParams::DriveChain(DriveChainParams::default()),
+            EffectKind::VintageChorus => {
+                EffectParams::VintageChorus(VintageChorusParams::default())
+            }
+            EffectKind::HyperChorus => EffectParams::HyperChorus(HyperChorusParams::default()),
+            EffectKind::VintagePhaser => {
+                EffectParams::VintagePhaser(VintagePhaserParams::default())
+            }
+            EffectKind::StackedFlanger => {
+                EffectParams::StackedFlanger(StackedFlangerParams::default())
+            }
+            EffectKind::BandDelay => EffectParams::BandDelay(BandDelayParams::default()),
+            EffectKind::Room => EffectParams::Room(RoomParams::default()),
+            EffectKind::Spreader => EffectParams::Spreader(SpreaderParams::default()),
+            EffectKind::StereoEnhancer => {
+                EffectParams::StereoEnhancer(StereoEnhancerParams::default())
+            }
+            EffectKind::VolumeGate => EffectParams::VolumeGate(VolumeGateParams::default()),
+            EffectKind::TimeTransport => {
+                EffectParams::TimeTransport(TimeTransportParams::default())
+            }
+            EffectKind::Scratch => EffectParams::Scratch(ScratchParams::default()),
+            EffectKind::PerformanceRack => {
+                EffectParams::PerformanceRack(PerformanceRackParams::default())
+            }
+            EffectKind::Convolver => EffectParams::Convolver(ConvolverParams::default()),
+            EffectKind::FrequencyShifter => {
+                EffectParams::FrequencyShifter(FrequencyShifterParams::default())
+            }
+            EffectKind::PitchShift => EffectParams::PitchShift(PitchShiftParams::default()),
+            EffectKind::PitchCorrect => EffectParams::PitchCorrect(PitchCorrectParams::default()),
+            EffectKind::Vocoder => EffectParams::Vocoder(VocoderParams::default()),
+            EffectKind::EchoBank => EffectParams::EchoBank(EchoBankParams::default()),
+            EffectKind::FrequencyDelay => {
+                EffectParams::FrequencyDelay(FrequencyDelayParams::default())
+            }
+            EffectKind::SevenBand => EffectParams::SevenBand(SevenBandParams::default()),
+            EffectKind::MorphEq => EffectParams::MorphEq(MorphEqParams::default()),
+            EffectKind::FilterBank => EffectParams::FilterBank(FilterBankParams::default()),
+            EffectKind::XyPad => EffectParams::XyPad(XyPadParams::default()),
+            EffectKind::XyzPad => EffectParams::XyzPad(XyzPadParams::default()),
+            EffectKind::PanLfo => EffectParams::PanLfo(PanLfoParams::default()),
+            EffectKind::EnvelopeFollower => {
+                EffectParams::EnvelopeFollower(EnvelopeFollowerParams::default())
+            }
+            EffectKind::NoteEnvelope => EffectParams::NoteEnvelope(NoteEnvelopeParams::default()),
+            EffectKind::LushSpace => EffectParams::LushSpace(LushSpaceParams::default()),
+            EffectKind::Tuner => EffectParams::Tuner(TunerParams::default()),
+            EffectKind::StageStack => EffectParams::StageStack(StageStackParams::default()),
+            EffectKind::ControlSurface => {
+                EffectParams::ControlSurface(ControlSurfaceParams::default())
+            }
+            EffectKind::SendTap => EffectParams::SendTap(SendTapParams::default()),
         }
     }
 }
 
 /// The settings of any one effect. This is what a project stores for an
 /// effect slot.
+// Inline fixed-size parameters remain Copy for allocation-free realtime updates;
+// boxing the convolver impulse would change that contract and parameter ownership.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
@@ -335,6 +695,50 @@ pub enum EffectParams {
     Chorus(ChorusParams),
     Flanger(FlangerParams),
     Phaser(PhaserParams),
+    BandSplit(BandSplitParams),
+    MultibandCompressor(MultibandCompressorParams),
+    MultibandMaximizer(MultibandMaximizerParams),
+    TransientShaper(TransientShaperParams),
+    TransientSplit(TransientSplitParams),
+    OneKnob(OneKnobParams),
+    BassHarmonics(BassHarmonicsParams),
+    Exciter(ExciterParams),
+    Waveshaper(WaveshaperParams),
+    Overdrive(OverdriveParams),
+    GuitarRack(GuitarRackParams),
+    DriveChain(DriveChainParams),
+    VintageChorus(VintageChorusParams),
+    HyperChorus(HyperChorusParams),
+    VintagePhaser(VintagePhaserParams),
+    StackedFlanger(StackedFlangerParams),
+    BandDelay(BandDelayParams),
+    Room(RoomParams),
+    Spreader(SpreaderParams),
+    StereoEnhancer(StereoEnhancerParams),
+    VolumeGate(VolumeGateParams),
+    TimeTransport(TimeTransportParams),
+    Scratch(ScratchParams),
+    PerformanceRack(PerformanceRackParams),
+    Convolver(ConvolverParams),
+    FrequencyShifter(FrequencyShifterParams),
+    PitchShift(PitchShiftParams),
+    PitchCorrect(PitchCorrectParams),
+    Vocoder(VocoderParams),
+    EchoBank(EchoBankParams),
+    FrequencyDelay(FrequencyDelayParams),
+    SevenBand(SevenBandParams),
+    MorphEq(MorphEqParams),
+    FilterBank(FilterBankParams),
+    XyPad(XyPadParams),
+    XyzPad(XyzPadParams),
+    PanLfo(PanLfoParams),
+    EnvelopeFollower(EnvelopeFollowerParams),
+    NoteEnvelope(NoteEnvelopeParams),
+    LushSpace(LushSpaceParams),
+    Tuner(TunerParams),
+    StageStack(StageStackParams),
+    ControlSurface(ControlSurfaceParams),
+    SendTap(SendTapParams),
 }
 
 /// Runs `$body` with `$params` bound to the settings inside an
@@ -361,6 +765,50 @@ macro_rules! each_params {
             EffectParams::Chorus($params) => $body,
             EffectParams::Flanger($params) => $body,
             EffectParams::Phaser($params) => $body,
+            EffectParams::BandSplit($params) => $body,
+            EffectParams::MultibandCompressor($params) => $body,
+            EffectParams::MultibandMaximizer($params) => $body,
+            EffectParams::TransientShaper($params) => $body,
+            EffectParams::TransientSplit($params) => $body,
+            EffectParams::OneKnob($params) => $body,
+            EffectParams::BassHarmonics($params) => $body,
+            EffectParams::Exciter($params) => $body,
+            EffectParams::Waveshaper($params) => $body,
+            EffectParams::Overdrive($params) => $body,
+            EffectParams::GuitarRack($params) => $body,
+            EffectParams::DriveChain($params) => $body,
+            EffectParams::VintageChorus($params) => $body,
+            EffectParams::HyperChorus($params) => $body,
+            EffectParams::VintagePhaser($params) => $body,
+            EffectParams::StackedFlanger($params) => $body,
+            EffectParams::BandDelay($params) => $body,
+            EffectParams::Room($params) => $body,
+            EffectParams::Spreader($params) => $body,
+            EffectParams::StereoEnhancer($params) => $body,
+            EffectParams::VolumeGate($params) => $body,
+            EffectParams::TimeTransport($params) => $body,
+            EffectParams::Scratch($params) => $body,
+            EffectParams::PerformanceRack($params) => $body,
+            EffectParams::Convolver($params) => $body,
+            EffectParams::FrequencyShifter($params) => $body,
+            EffectParams::PitchShift($params) => $body,
+            EffectParams::PitchCorrect($params) => $body,
+            EffectParams::Vocoder($params) => $body,
+            EffectParams::EchoBank($params) => $body,
+            EffectParams::FrequencyDelay($params) => $body,
+            EffectParams::SevenBand($params) => $body,
+            EffectParams::MorphEq($params) => $body,
+            EffectParams::FilterBank($params) => $body,
+            EffectParams::XyPad($params) => $body,
+            EffectParams::XyzPad($params) => $body,
+            EffectParams::PanLfo($params) => $body,
+            EffectParams::EnvelopeFollower($params) => $body,
+            EffectParams::NoteEnvelope($params) => $body,
+            EffectParams::LushSpace($params) => $body,
+            EffectParams::Tuner($params) => $body,
+            EffectParams::StageStack($params) => $body,
+            EffectParams::ControlSurface($params) => $body,
+            EffectParams::SendTap($params) => $body,
         }
     };
 }
@@ -387,6 +835,50 @@ impl EffectParams {
             EffectParams::Chorus(_) => EffectKind::Chorus,
             EffectParams::Flanger(_) => EffectKind::Flanger,
             EffectParams::Phaser(_) => EffectKind::Phaser,
+            EffectParams::BandSplit(_) => EffectKind::BandSplit,
+            EffectParams::MultibandCompressor(_) => EffectKind::MultibandCompressor,
+            EffectParams::MultibandMaximizer(_) => EffectKind::MultibandMaximizer,
+            EffectParams::TransientShaper(_) => EffectKind::TransientShaper,
+            EffectParams::TransientSplit(_) => EffectKind::TransientSplit,
+            EffectParams::OneKnob(_) => EffectKind::OneKnob,
+            EffectParams::BassHarmonics(_) => EffectKind::BassHarmonics,
+            EffectParams::Exciter(_) => EffectKind::Exciter,
+            EffectParams::Waveshaper(_) => EffectKind::Waveshaper,
+            EffectParams::Overdrive(_) => EffectKind::Overdrive,
+            EffectParams::GuitarRack(_) => EffectKind::GuitarRack,
+            EffectParams::DriveChain(_) => EffectKind::DriveChain,
+            EffectParams::VintageChorus(_) => EffectKind::VintageChorus,
+            EffectParams::HyperChorus(_) => EffectKind::HyperChorus,
+            EffectParams::VintagePhaser(_) => EffectKind::VintagePhaser,
+            EffectParams::StackedFlanger(_) => EffectKind::StackedFlanger,
+            EffectParams::BandDelay(_) => EffectKind::BandDelay,
+            EffectParams::Room(_) => EffectKind::Room,
+            EffectParams::Spreader(_) => EffectKind::Spreader,
+            EffectParams::StereoEnhancer(_) => EffectKind::StereoEnhancer,
+            EffectParams::VolumeGate(_) => EffectKind::VolumeGate,
+            EffectParams::TimeTransport(_) => EffectKind::TimeTransport,
+            EffectParams::Scratch(_) => EffectKind::Scratch,
+            EffectParams::PerformanceRack(_) => EffectKind::PerformanceRack,
+            EffectParams::Convolver(_) => EffectKind::Convolver,
+            EffectParams::FrequencyShifter(_) => EffectKind::FrequencyShifter,
+            EffectParams::PitchShift(_) => EffectKind::PitchShift,
+            EffectParams::PitchCorrect(_) => EffectKind::PitchCorrect,
+            EffectParams::Vocoder(_) => EffectKind::Vocoder,
+            EffectParams::EchoBank(_) => EffectKind::EchoBank,
+            EffectParams::FrequencyDelay(_) => EffectKind::FrequencyDelay,
+            EffectParams::SevenBand(_) => EffectKind::SevenBand,
+            EffectParams::MorphEq(_) => EffectKind::MorphEq,
+            EffectParams::FilterBank(_) => EffectKind::FilterBank,
+            EffectParams::XyPad(_) => EffectKind::XyPad,
+            EffectParams::XyzPad(_) => EffectKind::XyzPad,
+            EffectParams::PanLfo(_) => EffectKind::PanLfo,
+            EffectParams::EnvelopeFollower(_) => EffectKind::EnvelopeFollower,
+            EffectParams::NoteEnvelope(_) => EffectKind::NoteEnvelope,
+            EffectParams::LushSpace(_) => EffectKind::LushSpace,
+            EffectParams::Tuner(_) => EffectKind::Tuner,
+            EffectParams::StageStack(_) => EffectKind::StageStack,
+            EffectParams::ControlSurface(_) => EffectKind::ControlSurface,
+            EffectParams::SendTap(_) => EffectKind::SendTap,
         }
     }
 
@@ -414,6 +906,72 @@ impl EffectParams {
             EffectParams::Chorus(params) => EffectParams::Chorus(params.sanitized()),
             EffectParams::Flanger(params) => EffectParams::Flanger(params.sanitized()),
             EffectParams::Phaser(params) => EffectParams::Phaser(params.sanitized()),
+            EffectParams::BandSplit(params) => EffectParams::BandSplit(params.sanitized()),
+            EffectParams::MultibandCompressor(params) => {
+                EffectParams::MultibandCompressor(params.sanitized())
+            }
+            EffectParams::MultibandMaximizer(params) => {
+                EffectParams::MultibandMaximizer(params.sanitized())
+            }
+            EffectParams::TransientShaper(params) => {
+                EffectParams::TransientShaper(params.sanitized())
+            }
+            EffectParams::TransientSplit(params) => {
+                EffectParams::TransientSplit(params.sanitized())
+            }
+            EffectParams::OneKnob(params) => EffectParams::OneKnob(params.sanitized()),
+            EffectParams::BassHarmonics(params) => EffectParams::BassHarmonics(params.sanitized()),
+            EffectParams::Exciter(params) => EffectParams::Exciter(params.sanitized()),
+            EffectParams::Waveshaper(params) => EffectParams::Waveshaper(params.sanitized()),
+            EffectParams::Overdrive(params) => EffectParams::Overdrive(params.sanitized()),
+            EffectParams::GuitarRack(params) => EffectParams::GuitarRack(params.sanitized()),
+            EffectParams::DriveChain(params) => EffectParams::DriveChain(params.sanitized()),
+            EffectParams::VintageChorus(params) => EffectParams::VintageChorus(params.sanitized()),
+            EffectParams::HyperChorus(params) => EffectParams::HyperChorus(params.sanitized()),
+            EffectParams::VintagePhaser(params) => EffectParams::VintagePhaser(params.sanitized()),
+            EffectParams::StackedFlanger(params) => {
+                EffectParams::StackedFlanger(params.sanitized())
+            }
+            EffectParams::BandDelay(params) => EffectParams::BandDelay(params.sanitized()),
+            EffectParams::Room(params) => EffectParams::Room(params.sanitized()),
+            EffectParams::Spreader(params) => EffectParams::Spreader(params.sanitized()),
+            EffectParams::StereoEnhancer(params) => {
+                EffectParams::StereoEnhancer(params.sanitized())
+            }
+            EffectParams::VolumeGate(params) => EffectParams::VolumeGate(params.sanitized()),
+            EffectParams::TimeTransport(params) => EffectParams::TimeTransport(params.sanitized()),
+            EffectParams::Scratch(params) => EffectParams::Scratch(params.sanitized()),
+            EffectParams::PerformanceRack(params) => {
+                EffectParams::PerformanceRack(params.sanitized())
+            }
+            EffectParams::Convolver(params) => EffectParams::Convolver(params.sanitized()),
+            EffectParams::FrequencyShifter(params) => {
+                EffectParams::FrequencyShifter(params.sanitized())
+            }
+            EffectParams::PitchShift(params) => EffectParams::PitchShift(params.sanitized()),
+            EffectParams::PitchCorrect(params) => EffectParams::PitchCorrect(params.sanitized()),
+            EffectParams::Vocoder(params) => EffectParams::Vocoder(params.sanitized()),
+            EffectParams::EchoBank(params) => EffectParams::EchoBank(params.sanitized()),
+            EffectParams::FrequencyDelay(params) => {
+                EffectParams::FrequencyDelay(params.sanitized())
+            }
+            EffectParams::SevenBand(params) => EffectParams::SevenBand(params.sanitized()),
+            EffectParams::MorphEq(params) => EffectParams::MorphEq(params.sanitized()),
+            EffectParams::FilterBank(params) => EffectParams::FilterBank(params.sanitized()),
+            EffectParams::XyPad(params) => EffectParams::XyPad(params.sanitized()),
+            EffectParams::XyzPad(params) => EffectParams::XyzPad(params.sanitized()),
+            EffectParams::PanLfo(params) => EffectParams::PanLfo(params.sanitized()),
+            EffectParams::EnvelopeFollower(params) => {
+                EffectParams::EnvelopeFollower(params.sanitized())
+            }
+            EffectParams::NoteEnvelope(params) => EffectParams::NoteEnvelope(params.sanitized()),
+            EffectParams::LushSpace(params) => EffectParams::LushSpace(params.sanitized()),
+            EffectParams::Tuner(params) => EffectParams::Tuner(params.sanitized()),
+            EffectParams::StageStack(params) => EffectParams::StageStack(params.sanitized()),
+            EffectParams::ControlSurface(params) => {
+                EffectParams::ControlSurface(params.sanitized())
+            }
+            EffectParams::SendTap(params) => EffectParams::SendTap(params.sanitized()),
         }
     }
 
@@ -443,6 +1001,73 @@ impl EffectParams {
             | EffectParams::Chorus(_)
             | EffectParams::Flanger(_)
             | EffectParams::Phaser(_) => 0,
+            EffectParams::BandSplit(_) => 0,
+            EffectParams::MultibandCompressor(_) => 0,
+            EffectParams::MultibandMaximizer(_) => {
+                2 * ms_to_samples(1.0, crate::balance::rate(sample_rate).max(8.0)) as usize
+            }
+            EffectParams::TransientShaper(_) => 0,
+            EffectParams::TransientSplit(_) => 0,
+            EffectParams::OneKnob(_) => {
+                2 * ms_to_samples(1.0, crate::balance::rate(sample_rate).max(8.0)) as usize
+            }
+            EffectParams::BassHarmonics(_) => crate::multiband::HARMONICS_LATENCY_SAMPLES,
+            EffectParams::Exciter(_) => crate::multiband::HARMONICS_LATENCY_SAMPLES,
+            EffectParams::Waveshaper(_) => 0,
+            EffectParams::Overdrive(_) => 0,
+            EffectParams::GuitarRack(_) => 0,
+            EffectParams::DriveChain(_) => 0,
+            EffectParams::VintageChorus(_) => 0,
+            EffectParams::HyperChorus(_) => 0,
+            EffectParams::VintagePhaser(_) => 0,
+            EffectParams::StackedFlanger(_) => 0,
+            EffectParams::BandDelay(_) => 0,
+            EffectParams::Room(_) => 0,
+            EffectParams::Spreader(_) => 0,
+            EffectParams::StereoEnhancer(_) => 0,
+            EffectParams::VolumeGate(_) => 0,
+            EffectParams::TimeTransport(_) => 0,
+            EffectParams::Scratch(_) => 0,
+            EffectParams::PerformanceRack(params) => {
+                // The registry has no tempo input; processors start at 120 BPM.
+                let rate = performance_sample_rate(sample_rate) as f64;
+                (rate * 0.5 * params.sanitized().loop_beats as f64)
+                    .round()
+                    .max(1.0)
+                    .min(rate.floor()) as usize
+            }
+            EffectParams::Convolver(_) => EffectKind::Convolver.max_latency_samples(sample_rate),
+            EffectParams::FrequencyShifter(_) => {
+                EffectKind::FrequencyShifter.max_latency_samples(sample_rate)
+            }
+            EffectParams::PitchShift(_) => EffectKind::PitchShift.max_latency_samples(sample_rate),
+            EffectParams::PitchCorrect(_) => {
+                EffectKind::PitchCorrect.max_latency_samples(sample_rate)
+            }
+            EffectParams::Vocoder(_) => EffectKind::Vocoder.max_latency_samples(sample_rate),
+            EffectParams::EchoBank(_) => EffectKind::EchoBank.max_latency_samples(sample_rate),
+            EffectParams::FrequencyDelay(_) => {
+                EffectKind::FrequencyDelay.max_latency_samples(sample_rate)
+            }
+            EffectParams::SevenBand(_) => EffectKind::SevenBand.max_latency_samples(sample_rate),
+            EffectParams::MorphEq(_) => EffectKind::MorphEq.max_latency_samples(sample_rate),
+            EffectParams::FilterBank(_) => EffectKind::FilterBank.max_latency_samples(sample_rate),
+            EffectParams::XyPad(_) => EffectKind::XyPad.max_latency_samples(sample_rate),
+            EffectParams::XyzPad(_) => EffectKind::XyzPad.max_latency_samples(sample_rate),
+            EffectParams::PanLfo(_) => EffectKind::PanLfo.max_latency_samples(sample_rate),
+            EffectParams::EnvelopeFollower(_) => {
+                EffectKind::EnvelopeFollower.max_latency_samples(sample_rate)
+            }
+            EffectParams::NoteEnvelope(_) => {
+                EffectKind::NoteEnvelope.max_latency_samples(sample_rate)
+            }
+            EffectParams::LushSpace(_) => EffectKind::LushSpace.max_latency_samples(sample_rate),
+            EffectParams::Tuner(_) => EffectKind::Tuner.max_latency_samples(sample_rate),
+            EffectParams::StageStack(_) => EffectKind::StageStack.max_latency_samples(sample_rate),
+            EffectParams::ControlSurface(_) => {
+                EffectKind::ControlSurface.max_latency_samples(sample_rate)
+            }
+            EffectParams::SendTap(_) => EffectKind::SendTap.max_latency_samples(sample_rate),
         }
     }
 
@@ -487,6 +1112,50 @@ pub enum AnyEffect {
     Chorus(Box<Chorus>),
     Flanger(Box<Flanger>),
     Phaser(Box<Phaser>),
+    BandSplit(Box<BandSplit>),
+    MultibandCompressor(Box<MultibandCompressor>),
+    MultibandMaximizer(Box<MultibandMaximizer>),
+    TransientShaper(Box<TransientShaper>),
+    TransientSplit(Box<TransientSplit>),
+    OneKnob(Box<OneKnob>),
+    BassHarmonics(Box<BassHarmonics>),
+    Exciter(Box<Exciter>),
+    Waveshaper(Box<Waveshaper>),
+    Overdrive(Box<Overdrive>),
+    GuitarRack(Box<GuitarRack>),
+    DriveChain(Box<DriveChain>),
+    VintageChorus(Box<VintageChorus>),
+    HyperChorus(Box<HyperChorus>),
+    VintagePhaser(Box<VintagePhaser>),
+    StackedFlanger(Box<StackedFlanger>),
+    BandDelay(Box<BandDelay>),
+    Room(Box<Room>),
+    Spreader(Box<Spreader>),
+    StereoEnhancer(Box<StereoEnhancer>),
+    VolumeGate(Box<VolumeGate>),
+    TimeTransport(Box<TimeTransport>),
+    Scratch(Box<Scratch>),
+    PerformanceRack(Box<PerformanceRack>),
+    Convolver(Box<Convolver>),
+    FrequencyShifter(Box<FrequencyShifter>),
+    PitchShift(Box<PitchShift>),
+    PitchCorrect(Box<PitchCorrect>),
+    Vocoder(Box<Vocoder>),
+    EchoBank(Box<EchoBank>),
+    FrequencyDelay(Box<FrequencyDelay>),
+    SevenBand(Box<SevenBand>),
+    MorphEq(Box<MorphEq>),
+    FilterBank(Box<FilterBank>),
+    XyPad(Box<XyPad>),
+    XyzPad(Box<XyzPad>),
+    PanLfo(Box<PanLfo>),
+    EnvelopeFollower(Box<EnvelopeFollower>),
+    NoteEnvelope(Box<NoteEnvelope>),
+    LushSpace(Box<LushSpace>),
+    Tuner(Box<Tuner>),
+    StageStack(Box<StageStack>),
+    ControlSurface(Box<ControlSurface>),
+    SendTap(Box<SendTap>),
 }
 
 /// Runs `$body` with `$effect` bound to the effect inside an [`AnyEffect`].
@@ -512,6 +1181,50 @@ macro_rules! each_effect {
             AnyEffect::Chorus($effect) => $body,
             AnyEffect::Flanger($effect) => $body,
             AnyEffect::Phaser($effect) => $body,
+            AnyEffect::BandSplit($effect) => $body,
+            AnyEffect::MultibandCompressor($effect) => $body,
+            AnyEffect::MultibandMaximizer($effect) => $body,
+            AnyEffect::TransientShaper($effect) => $body,
+            AnyEffect::TransientSplit($effect) => $body,
+            AnyEffect::OneKnob($effect) => $body,
+            AnyEffect::BassHarmonics($effect) => $body,
+            AnyEffect::Exciter($effect) => $body,
+            AnyEffect::Waveshaper($effect) => $body,
+            AnyEffect::Overdrive($effect) => $body,
+            AnyEffect::GuitarRack($effect) => $body,
+            AnyEffect::DriveChain($effect) => $body,
+            AnyEffect::VintageChorus($effect) => $body,
+            AnyEffect::HyperChorus($effect) => $body,
+            AnyEffect::VintagePhaser($effect) => $body,
+            AnyEffect::StackedFlanger($effect) => $body,
+            AnyEffect::BandDelay($effect) => $body,
+            AnyEffect::Room($effect) => $body,
+            AnyEffect::Spreader($effect) => $body,
+            AnyEffect::StereoEnhancer($effect) => $body,
+            AnyEffect::VolumeGate($effect) => $body,
+            AnyEffect::TimeTransport($effect) => $body,
+            AnyEffect::Scratch($effect) => $body,
+            AnyEffect::PerformanceRack($effect) => $body,
+            AnyEffect::Convolver($effect) => $body,
+            AnyEffect::FrequencyShifter($effect) => $body,
+            AnyEffect::PitchShift($effect) => $body,
+            AnyEffect::PitchCorrect($effect) => $body,
+            AnyEffect::Vocoder($effect) => $body,
+            AnyEffect::EchoBank($effect) => $body,
+            AnyEffect::FrequencyDelay($effect) => $body,
+            AnyEffect::SevenBand($effect) => $body,
+            AnyEffect::MorphEq($effect) => $body,
+            AnyEffect::FilterBank($effect) => $body,
+            AnyEffect::XyPad($effect) => $body,
+            AnyEffect::XyzPad($effect) => $body,
+            AnyEffect::PanLfo($effect) => $body,
+            AnyEffect::EnvelopeFollower($effect) => $body,
+            AnyEffect::NoteEnvelope($effect) => $body,
+            AnyEffect::LushSpace($effect) => $body,
+            AnyEffect::Tuner($effect) => $body,
+            AnyEffect::StageStack($effect) => $body,
+            AnyEffect::ControlSurface($effect) => $body,
+            AnyEffect::SendTap($effect) => $body,
         }
     };
 }
@@ -540,6 +1253,50 @@ impl AnyEffect {
             EffectKind::Chorus => AnyEffect::Chorus(Box::default()),
             EffectKind::Flanger => AnyEffect::Flanger(Box::default()),
             EffectKind::Phaser => AnyEffect::Phaser(Box::default()),
+            EffectKind::BandSplit => AnyEffect::BandSplit(Box::default()),
+            EffectKind::MultibandCompressor => AnyEffect::MultibandCompressor(Box::default()),
+            EffectKind::MultibandMaximizer => AnyEffect::MultibandMaximizer(Box::default()),
+            EffectKind::TransientShaper => AnyEffect::TransientShaper(Box::default()),
+            EffectKind::TransientSplit => AnyEffect::TransientSplit(Box::default()),
+            EffectKind::OneKnob => AnyEffect::OneKnob(Box::default()),
+            EffectKind::BassHarmonics => AnyEffect::BassHarmonics(Box::default()),
+            EffectKind::Exciter => AnyEffect::Exciter(Box::default()),
+            EffectKind::Waveshaper => AnyEffect::Waveshaper(Box::default()),
+            EffectKind::Overdrive => AnyEffect::Overdrive(Box::default()),
+            EffectKind::GuitarRack => AnyEffect::GuitarRack(Box::default()),
+            EffectKind::DriveChain => AnyEffect::DriveChain(Box::default()),
+            EffectKind::VintageChorus => AnyEffect::VintageChorus(Box::default()),
+            EffectKind::HyperChorus => AnyEffect::HyperChorus(Box::default()),
+            EffectKind::VintagePhaser => AnyEffect::VintagePhaser(Box::default()),
+            EffectKind::StackedFlanger => AnyEffect::StackedFlanger(Box::default()),
+            EffectKind::BandDelay => AnyEffect::BandDelay(Box::default()),
+            EffectKind::Room => AnyEffect::Room(Box::default()),
+            EffectKind::Spreader => AnyEffect::Spreader(Box::default()),
+            EffectKind::StereoEnhancer => AnyEffect::StereoEnhancer(Box::default()),
+            EffectKind::VolumeGate => AnyEffect::VolumeGate(Box::default()),
+            EffectKind::TimeTransport => AnyEffect::TimeTransport(Box::default()),
+            EffectKind::Scratch => AnyEffect::Scratch(Box::default()),
+            EffectKind::PerformanceRack => AnyEffect::PerformanceRack(Box::default()),
+            EffectKind::Convolver => AnyEffect::Convolver(Box::default()),
+            EffectKind::FrequencyShifter => AnyEffect::FrequencyShifter(Box::default()),
+            EffectKind::PitchShift => AnyEffect::PitchShift(Box::default()),
+            EffectKind::PitchCorrect => AnyEffect::PitchCorrect(Box::default()),
+            EffectKind::Vocoder => AnyEffect::Vocoder(Box::default()),
+            EffectKind::EchoBank => AnyEffect::EchoBank(Box::default()),
+            EffectKind::FrequencyDelay => AnyEffect::FrequencyDelay(Box::default()),
+            EffectKind::SevenBand => AnyEffect::SevenBand(Box::default()),
+            EffectKind::MorphEq => AnyEffect::MorphEq(Box::default()),
+            EffectKind::FilterBank => AnyEffect::FilterBank(Box::default()),
+            EffectKind::XyPad => AnyEffect::XyPad(Box::default()),
+            EffectKind::XyzPad => AnyEffect::XyzPad(Box::default()),
+            EffectKind::PanLfo => AnyEffect::PanLfo(Box::default()),
+            EffectKind::EnvelopeFollower => AnyEffect::EnvelopeFollower(Box::default()),
+            EffectKind::NoteEnvelope => AnyEffect::NoteEnvelope(Box::default()),
+            EffectKind::LushSpace => AnyEffect::LushSpace(Box::default()),
+            EffectKind::Tuner => AnyEffect::Tuner(Box::default()),
+            EffectKind::StageStack => AnyEffect::StageStack(Box::default()),
+            EffectKind::ControlSurface => AnyEffect::ControlSurface(Box::default()),
+            EffectKind::SendTap => AnyEffect::SendTap(Box::default()),
         };
         effect.set_params(params);
         effect
@@ -566,6 +1323,50 @@ impl AnyEffect {
             AnyEffect::Chorus(_) => EffectKind::Chorus,
             AnyEffect::Flanger(_) => EffectKind::Flanger,
             AnyEffect::Phaser(_) => EffectKind::Phaser,
+            AnyEffect::BandSplit(_) => EffectKind::BandSplit,
+            AnyEffect::MultibandCompressor(_) => EffectKind::MultibandCompressor,
+            AnyEffect::MultibandMaximizer(_) => EffectKind::MultibandMaximizer,
+            AnyEffect::TransientShaper(_) => EffectKind::TransientShaper,
+            AnyEffect::TransientSplit(_) => EffectKind::TransientSplit,
+            AnyEffect::OneKnob(_) => EffectKind::OneKnob,
+            AnyEffect::BassHarmonics(_) => EffectKind::BassHarmonics,
+            AnyEffect::Exciter(_) => EffectKind::Exciter,
+            AnyEffect::Waveshaper(_) => EffectKind::Waveshaper,
+            AnyEffect::Overdrive(_) => EffectKind::Overdrive,
+            AnyEffect::GuitarRack(_) => EffectKind::GuitarRack,
+            AnyEffect::DriveChain(_) => EffectKind::DriveChain,
+            AnyEffect::VintageChorus(_) => EffectKind::VintageChorus,
+            AnyEffect::HyperChorus(_) => EffectKind::HyperChorus,
+            AnyEffect::VintagePhaser(_) => EffectKind::VintagePhaser,
+            AnyEffect::StackedFlanger(_) => EffectKind::StackedFlanger,
+            AnyEffect::BandDelay(_) => EffectKind::BandDelay,
+            AnyEffect::Room(_) => EffectKind::Room,
+            AnyEffect::Spreader(_) => EffectKind::Spreader,
+            AnyEffect::StereoEnhancer(_) => EffectKind::StereoEnhancer,
+            AnyEffect::VolumeGate(_) => EffectKind::VolumeGate,
+            AnyEffect::TimeTransport(_) => EffectKind::TimeTransport,
+            AnyEffect::Scratch(_) => EffectKind::Scratch,
+            AnyEffect::PerformanceRack(_) => EffectKind::PerformanceRack,
+            AnyEffect::Convolver(_) => EffectKind::Convolver,
+            AnyEffect::FrequencyShifter(_) => EffectKind::FrequencyShifter,
+            AnyEffect::PitchShift(_) => EffectKind::PitchShift,
+            AnyEffect::PitchCorrect(_) => EffectKind::PitchCorrect,
+            AnyEffect::Vocoder(_) => EffectKind::Vocoder,
+            AnyEffect::EchoBank(_) => EffectKind::EchoBank,
+            AnyEffect::FrequencyDelay(_) => EffectKind::FrequencyDelay,
+            AnyEffect::SevenBand(_) => EffectKind::SevenBand,
+            AnyEffect::MorphEq(_) => EffectKind::MorphEq,
+            AnyEffect::FilterBank(_) => EffectKind::FilterBank,
+            AnyEffect::XyPad(_) => EffectKind::XyPad,
+            AnyEffect::XyzPad(_) => EffectKind::XyzPad,
+            AnyEffect::PanLfo(_) => EffectKind::PanLfo,
+            AnyEffect::EnvelopeFollower(_) => EffectKind::EnvelopeFollower,
+            AnyEffect::NoteEnvelope(_) => EffectKind::NoteEnvelope,
+            AnyEffect::LushSpace(_) => EffectKind::LushSpace,
+            AnyEffect::Tuner(_) => EffectKind::Tuner,
+            AnyEffect::StageStack(_) => EffectKind::StageStack,
+            AnyEffect::ControlSurface(_) => EffectKind::ControlSurface,
+            AnyEffect::SendTap(_) => EffectKind::SendTap,
         }
     }
 
@@ -629,6 +1430,128 @@ impl AnyEffect {
                 effect.set_params(params)
             }
             (AnyEffect::Phaser(effect), EffectParams::Phaser(params)) => effect.set_params(params),
+            (AnyEffect::BandSplit(effect), EffectParams::BandSplit(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::MultibandCompressor(effect), EffectParams::MultibandCompressor(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::MultibandMaximizer(effect), EffectParams::MultibandMaximizer(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::TransientShaper(effect), EffectParams::TransientShaper(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::TransientSplit(effect), EffectParams::TransientSplit(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::OneKnob(effect), EffectParams::OneKnob(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::BassHarmonics(effect), EffectParams::BassHarmonics(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Exciter(effect), EffectParams::Exciter(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Waveshaper(effect), EffectParams::Waveshaper(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Overdrive(effect), EffectParams::Overdrive(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::GuitarRack(effect), EffectParams::GuitarRack(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::DriveChain(effect), EffectParams::DriveChain(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::VintageChorus(effect), EffectParams::VintageChorus(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::HyperChorus(effect), EffectParams::HyperChorus(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::VintagePhaser(effect), EffectParams::VintagePhaser(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::StackedFlanger(effect), EffectParams::StackedFlanger(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::BandDelay(effect), EffectParams::BandDelay(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Room(effect), EffectParams::Room(params)) => effect.set_params(params),
+            (AnyEffect::Spreader(effect), EffectParams::Spreader(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::StereoEnhancer(effect), EffectParams::StereoEnhancer(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::VolumeGate(effect), EffectParams::VolumeGate(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::TimeTransport(effect), EffectParams::TimeTransport(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Scratch(effect), EffectParams::Scratch(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::PerformanceRack(effect), EffectParams::PerformanceRack(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Convolver(effect), EffectParams::Convolver(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::FrequencyShifter(effect), EffectParams::FrequencyShifter(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::PitchShift(effect), EffectParams::PitchShift(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::PitchCorrect(effect), EffectParams::PitchCorrect(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Vocoder(effect), EffectParams::Vocoder(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::EchoBank(effect), EffectParams::EchoBank(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::FrequencyDelay(effect), EffectParams::FrequencyDelay(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::SevenBand(effect), EffectParams::SevenBand(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::MorphEq(effect), EffectParams::MorphEq(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::FilterBank(effect), EffectParams::FilterBank(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::XyPad(effect), EffectParams::XyPad(params)) => effect.set_params(params),
+            (AnyEffect::XyzPad(effect), EffectParams::XyzPad(params)) => effect.set_params(params),
+            (AnyEffect::PanLfo(effect), EffectParams::PanLfo(params)) => effect.set_params(params),
+            (AnyEffect::EnvelopeFollower(effect), EffectParams::EnvelopeFollower(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::NoteEnvelope(effect), EffectParams::NoteEnvelope(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::LushSpace(effect), EffectParams::LushSpace(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::Tuner(effect), EffectParams::Tuner(params)) => effect.set_params(params),
+            (AnyEffect::StageStack(effect), EffectParams::StageStack(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::ControlSurface(effect), EffectParams::ControlSurface(params)) => {
+                effect.set_params(params)
+            }
+            (AnyEffect::SendTap(effect), EffectParams::SendTap(params)) => {
+                effect.set_params(params)
+            }
             _ => return false,
         }
         true
@@ -643,7 +1566,12 @@ impl AnyEffect {
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         each_effect!(self, effect => effect.process(left, right));
     }
-    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
+    pub fn process_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
+    ) {
         each_effect!(self, effect => effect.process_sidechain(left, right, key));
     }
 
@@ -903,15 +1831,26 @@ impl EffectSlot {
 
     /// Processes one block in place. Blocks longer than the `max_block`
     /// given to [`EffectSlot::prepare`] are worked through in pieces.
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_sidechain(left, right, None);
+    }
 
-    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
+    pub fn process_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
+    ) {
         let frames = left.len().min(right.len());
         let piece = self.scratch_left.len().max(1);
         let mut start = 0;
         while start < frames {
             let end = (start + piece).min(frames);
-            self.process_piece(&mut left[start..end], &mut right[start..end], key.and_then(|key| key.get(start..end)));
+            self.process_piece(
+                &mut left[start..end],
+                &mut right[start..end],
+                key.and_then(|key| key.get(start..end)),
+            );
             start = end;
         }
     }
@@ -1008,5 +1947,87 @@ impl EffectSlot {
         // A fade can finish inside this piece. Waking must clear stale state
         // even if no subsequent fully dry block arrived before re-enabling.
         self.dormant = self.wet.is_settled() && self.wet.value() == 0.0;
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[test]
+    fn every_effect_kind_round_trips_and_dispatches() {
+        assert_eq!(EffectKind::ALL[0], EffectKind::Eq);
+        assert_eq!(EffectKind::ALL[18], EffectKind::Phaser);
+        for kind in EffectKind::ALL {
+            let params = kind.default_params();
+            let tag = serde_json::to_value(kind).unwrap();
+            let json = serde_json::to_value(params).unwrap();
+            assert_eq!(json["type"], tag);
+            let loaded: EffectParams = serde_json::from_value(json).unwrap();
+            assert_eq!(loaded, params);
+            let bare: EffectParams =
+                serde_json::from_value(serde_json::json!({ "type": tag })).unwrap();
+            assert_eq!(bare, params);
+            assert_eq!(params.sanitized(), params);
+            for (index, info) in kind.descriptors().iter().enumerate() {
+                assert_eq!(params.get(index), Some(info.default));
+                let mut changed = params;
+                assert!(changed.set(index, info.default));
+                assert_eq!(changed, params);
+            }
+            let mut effect = AnyEffect::new(&params);
+            assert_eq!(effect.kind(), kind);
+            effect.prepare(48_000.0, 64);
+            assert!(effect.set_params(&params));
+            let wrong =
+                EffectKind::ALL[(kind as usize + 1) % EffectKind::ALL.len()].default_params();
+            assert!(!effect.set_params(&wrong));
+            assert_eq!(effect.latency_samples(), params.latency_samples(48_000.0));
+            assert!(effect.latency_samples() <= kind.max_latency_samples(48_000.0));
+            effect.set_tempo(120.0);
+            effect.process_sidechain(&mut [0.0; 64], &mut [0.0; 64], None);
+            let _ = (
+                effect.warm_up_samples(),
+                effect.delay_readiness_samples(),
+                effect.latency_transition_samples_remaining(),
+                effect.tail_samples(),
+                effect.gap_samples(),
+                effect.gain_reduction(),
+            );
+            effect.reset();
+        }
+    }
+
+    #[test]
+    fn new_effect_latency_queries_match_prepared_processors() {
+        for kind in &EffectKind::ALL[19..] {
+            for rate in [
+                1.0,
+                8_000.0,
+                44_100.0,
+                48_000.0,
+                96_000.0,
+                384_000.0,
+                f32::NAN,
+            ] {
+                let params = kind.default_params();
+                let mut effect = AnyEffect::new(&params);
+                effect.prepare(rate, 1);
+                assert_eq!(
+                    effect.latency_samples(),
+                    params.latency_samples(rate),
+                    "{kind:?} at {rate}"
+                );
+                if *kind == EffectKind::PerformanceRack {
+                    assert!(effect.latency_samples() <= kind.max_latency_samples(rate));
+                } else {
+                    assert_eq!(
+                        effect.latency_samples(),
+                        kind.max_latency_samples(rate),
+                        "{kind:?} at {rate}"
+                    );
+                }
+            }
+        }
     }
 }

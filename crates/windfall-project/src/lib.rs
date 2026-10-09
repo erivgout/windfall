@@ -3,6 +3,8 @@
 //! One [`Document`] holds the single copy of a project that the UI and the
 //! audio engine both follow. Every edit is a [`Command`] dispatched to it.
 
+pub mod arrangement;
+pub use arrangement::ArrangementBook;
 pub mod automation;
 mod audio_comp;
 pub use audio_comp::AudioCompSegment;
@@ -10,6 +12,8 @@ mod take_groups;
 pub use take_groups::{AudioTakeGroup, AudioTakeLane, AudioTakeRef, TakeCompRange};
 pub mod curve_lfo;
 pub use curve_lfo::{CurveLfo, CurveLfoWave};
+pub mod channel_voice;
+pub use channel_voice::*;
 mod check;
 pub mod command;
 pub mod document;
@@ -20,6 +24,8 @@ mod lower;
 mod mixer_preset;
 pub use mixer_preset::MixerTrackPreset;
 pub mod model;
+pub mod notebook;
+pub use notebook::{Notebook, NotebookPage};
 pub mod note_timing;
 pub mod note_curves;
 pub use note_curves::{NoteCurveInsert, NoteCurveParameter, NoteCurvePoint, NoteExpressionCurve};

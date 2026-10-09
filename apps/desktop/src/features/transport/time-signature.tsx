@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button"
 import {
   Popover,
   PopoverContent,
@@ -15,8 +16,13 @@ import {
 } from "@/components/ui/select"
 import type { TimeSignature } from "@/bindings"
 import { useHint } from "@/lib/store/hint"
-import { dispatch } from "@/lib/store/project"
+import { dispatch, useProjectStore } from "@/lib/store/project"
 import { useSettings } from "@/lib/store/selectors"
+
+import { nextDenominatorScale } from "./denominator-scale"
+import { nextNumeratorScale } from "./numerator-scale"
+import { nextSignaturePreset } from "./signature-preset-step"
+import { nextSignature, SIGNATURE_PRESETS } from "./signature-presets"
 
 const NUMERATORS = Array.from({ length: 16 }, (_, index) => index + 1)
 const DENOMINATORS = [2, 4, 8, 16]
@@ -97,6 +103,180 @@ export function TimeSignatureField() {
               change({ ...timeSignature, denominator })
             }
           />
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Halve beats per bar"
+            disabled={
+              nextNumeratorScale(timeSignature.numerator, "half") === null
+            }
+            onClick={() => {
+              const latest =
+                useProjectStore.getState().project.settings.timeSignature
+              const next = nextNumeratorScale(latest.numerator, "half")
+              if (next !== null) {
+                void dispatch({
+                  type: "updateSettings",
+                  patch: {
+                    timeSignature: {
+                      numerator: next,
+                      denominator: latest.denominator,
+                    },
+                  },
+                })
+              }
+            }}
+          >
+            Halve beats
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Double beats per bar"
+            disabled={
+              nextNumeratorScale(timeSignature.numerator, "double") === null
+            }
+            onClick={() => {
+              const latest =
+                useProjectStore.getState().project.settings.timeSignature
+              const next = nextNumeratorScale(latest.numerator, "double")
+              if (next !== null) {
+                void dispatch({
+                  type: "updateSettings",
+                  patch: {
+                    timeSignature: {
+                      numerator: next,
+                      denominator: latest.denominator,
+                    },
+                  },
+                })
+              }
+            }}
+          >
+            Double beats
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Halve beat unit"
+            disabled={
+              nextDenominatorScale(timeSignature.denominator, "half") === null
+            }
+            onClick={() => {
+              const latest =
+                useProjectStore.getState().project.settings.timeSignature
+              const next = nextDenominatorScale(latest.denominator, "half")
+              if (next !== null) {
+                void dispatch({
+                  type: "updateSettings",
+                  patch: {
+                    timeSignature: {
+                      numerator: latest.numerator,
+                      denominator: next,
+                    },
+                  },
+                })
+              }
+            }}
+          >
+            Halve unit
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Double beat unit"
+            disabled={
+              nextDenominatorScale(timeSignature.denominator, "double") === null
+            }
+            onClick={() => {
+              const latest =
+                useProjectStore.getState().project.settings.timeSignature
+              const next = nextDenominatorScale(latest.denominator, "double")
+              if (next !== null) {
+                void dispatch({
+                  type: "updateSettings",
+                  patch: {
+                    timeSignature: {
+                      numerator: latest.numerator,
+                      denominator: next,
+                    },
+                  },
+                })
+              }
+            }}
+          >
+            Double unit
+          </Button>
+        </div>
+        <div className="grid grid-cols-4 gap-1">
+          {SIGNATURE_PRESETS.map((preset) => {
+            const next = nextSignature(timeSignature, preset)
+
+            return (
+              <Button
+                key={preset.label}
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={next === null}
+                onClick={() => {
+                  if (next !== null) change(next)
+                }}
+              >
+                {preset.label}
+              </Button>
+            )
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Choose the previous time signature preset"
+            disabled={nextSignaturePreset(timeSignature, "previous") === null}
+            onClick={() => {
+              const latest =
+                useProjectStore.getState().project.settings.timeSignature
+              const next = nextSignaturePreset(latest, "previous")
+              if (next !== null) {
+                void dispatch({
+                  type: "updateSettings",
+                  patch: { timeSignature: next },
+                })
+              }
+            }}
+          >
+            Previous
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Choose the next time signature preset"
+            disabled={nextSignaturePreset(timeSignature, "next") === null}
+            onClick={() => {
+              const latest =
+                useProjectStore.getState().project.settings.timeSignature
+              const next = nextSignaturePreset(latest, "next")
+              if (next !== null) {
+                void dispatch({
+                  type: "updateSettings",
+                  patch: { timeSignature: next },
+                })
+              }
+            }}
+          >
+            Next
+          </Button>
         </div>
       </PopoverContent>
     </Popover>

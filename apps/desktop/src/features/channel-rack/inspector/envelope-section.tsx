@@ -7,6 +7,7 @@ import {
   percentUnit,
   powerScale,
 } from "@/components/audio"
+import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import type { SamplerChannel } from "@/lib/channel-source"
 import { useHint } from "@/lib/store/hint"
@@ -15,7 +16,11 @@ import { onProjectReplaced } from "@/lib/store/replaced"
 import { clamp, colorToCss } from "@/lib/units"
 
 import { useGestureValue } from "../use-gesture-value"
+import { nextEnvelopePreset } from "./envelope-preset-step"
+import { ENVELOPE_PRESETS, nextEnvelope } from "./envelope-presets"
+import { nextEnvelopeScale } from "./envelope-scale"
 import { Section } from "./parts"
+import { nextSustainScale } from "./sustain-scale"
 
 /** What a sampler gets when its envelope is first turned on. */
 export const DEFAULT_ENVELOPE: Envelope = {
@@ -141,6 +146,110 @@ function EnvelopeControls({
           {...gesture}
           {...releaseHint}
         />
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {ENVELOPE_PRESETS.map(({ label, envelope: preset }) => (
+          <Button
+            key={label}
+            variant="outline"
+            size="sm"
+            disabled={nextEnvelope(value, preset) === null}
+            onClick={() => {
+              const next = nextEnvelope(value, preset)
+              if (next !== null) {
+                void dispatch({
+                  type: "setSamplerEnvelope",
+                  id,
+                  envelope: next,
+                })
+              }
+            }}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        {(
+          [
+            ["Previous", "previous"],
+            ["Next", "next"],
+          ] as const
+        ).map(([label, direction]) => (
+          <Button
+            key={direction}
+            variant="outline"
+            size="sm"
+            aria-label={`Choose the ${direction} envelope preset`}
+            disabled={nextEnvelopePreset(value, direction) === null}
+            onClick={() => {
+              const next = nextEnvelopePreset(value, direction)
+              if (next !== null) {
+                void dispatch({
+                  type: "setSamplerEnvelope",
+                  id,
+                  envelope: next,
+                })
+              }
+            }}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        {(
+          [
+            ["Half", 0.5],
+            ["Double", 2],
+          ] as const
+        ).map(([label, factor]) => (
+          <Button
+            key={label}
+            variant="outline"
+            size="sm"
+            disabled={nextEnvelopeScale(value, factor) === null}
+            onClick={() => {
+              const next = nextEnvelopeScale(value, factor)
+              if (next !== null) {
+                void dispatch({
+                  type: "setSamplerEnvelope",
+                  id,
+                  envelope: next,
+                })
+              }
+            }}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        {(
+          [
+            ["Halve sustain", 0.5],
+            ["Double sustain", 2],
+          ] as const
+        ).map(([label, factor]) => (
+          <Button
+            key={label}
+            variant="outline"
+            size="sm"
+            disabled={nextSustainScale(value, factor) === null}
+            onClick={() => {
+              const next = nextSustainScale(value, factor)
+              if (next !== null) {
+                void dispatch({
+                  type: "setSamplerEnvelope",
+                  id,
+                  envelope: next,
+                })
+              }
+            }}
+          >
+            {label}
+          </Button>
+        ))}
       </div>
     </>
   )

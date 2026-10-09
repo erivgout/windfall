@@ -42,6 +42,8 @@ import { playlist, project, useClipCount } from "./selectors"
 import { PlaylistSession } from "./session"
 import { gridSpecFor } from "./snap"
 import { usePlaylistStore } from "./store"
+import { TrackGridSurface } from "./track-grid-surface"
+import { documentRowFor, trackRowsNow } from "./track-rows"
 
 const CLIP_MENU: ContextItem[] = [
   "playlist.editPattern",
@@ -52,8 +54,11 @@ const CLIP_MENU: ContextItem[] = [
   contextSeparator,
   "playlist.cut",
   "playlist.copy",
+  "playlist.selectMatchingClips",
   "playlist.duplicate",
+  "playlist.makeUnique",
   "playlist.muteClips",
+  "playlist.bounceSelectedClips",
   contextSeparator,
   "playlist.clipInspector",
   // How much of its range an automation clip shows, when one is selected.
@@ -90,6 +95,12 @@ export function hintFor(tool: Tool, pattern: string): string {
       return "Click or drag across clips to delete them"
     case "mute":
       return "Click or drag across clips to mute or unmute. Right-click deletes"
+    case "slip":
+      return `Drag content inside a fixed clip. ${free}. Right-click deletes`
+    case "playback":
+      return `Click or drag to seek the transport. ${free}. Escape ends scrubbing`
+    case "slice":
+      return `Drag a vertical cut, release to split clips. ${free}. Escape cancels`
     default: {
       const _exhaustive: never = tool
       return _exhaustive
@@ -178,10 +189,14 @@ export function PlaylistGrid({ metrics }: { metrics: GridMetrics }) {
   const showRevealed = useCallback(() => {
     const id = usePlaylistStore.getState().reveal
     if (id === null) return
-    const { clips, tracks } = playlist()
+    const { clips } = playlist()
     const clip = clips.find((item) => item.id === id)
     if (clip) {
-      const row = tracks.findIndex((track) => track.id === clip.track)
+      const row = trackRowsNow().trackRows.get(clip.track)
+      if (row === undefined) {
+        usePlaylistStore.getState().setReveal(null)
+        return
+      }
       // A curve needs a tall row to be drawn in.
       if (clip.content.type === "automation" && !metrics.tall) {
         metrics.toggleTall()
@@ -193,8 +208,9 @@ export function PlaylistGrid({ metrics }: { metrics: GridMetrics }) {
 
   const onReady = useCallback(
     (view: TimeGridView) => {
-      const detach = metrics.attach(view)
-      const session = new PlaylistSession(view, metrics)
+      const surface = new TrackGridSurface(view)
+      const detach = metrics.attach(surface)
+      const session = new PlaylistSession(surface, metrics)
       session.onCursor = (cursor) => {
         view.element.style.cursor = cursor
       }
@@ -212,6 +228,7 @@ export function PlaylistGrid({ metrics }: { metrics: GridMetrics }) {
         }),
         () => session.destroy(),
         detach,
+        () => surface.destroy(),
       ]
       viewRef.current = view
       sessionRef.current = session
@@ -292,8 +309,10 @@ export function PlaylistGrid({ metrics }: { metrics: GridMetrics }) {
     sessionRef.current?.previewDrop(null)
     const sample = readSampleDrag(event)
     if (!place || !sample) return
+    const row = documentRowFor(place.row)
+    if (row === undefined) return
     containerRef.current?.focus({ preventScroll: true })
-    void addAudioFile(sample.path, place, sample.browser)
+    void addAudioFile(sample.path, { ...place, row }, sample.browser)
   }
 
   return (

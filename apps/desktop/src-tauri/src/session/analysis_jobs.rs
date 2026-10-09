@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use windfall_analysis as native;
 use windfall_core::samples_per_tick;
-use windfall_engine::{Controller, SamplePool};
+use windfall_engine::{ProjectPublicationIntent, SamplePool};
 use windfall_ipc::{
     AnalysisApply, AnalysisArtifact, AnalysisCapability, AnalysisJob, AnalysisModel,
     AnalysisOutputRole, AnalysisProvenance, AnalysisReview, AnalysisStatus, AnalysisSubmit,
@@ -363,8 +363,9 @@ impl Binding {
                 .is_some_and(|audio| audio.identity() == self.stamp.source_identity)
     }
 }
-// Windows retains root-to-leaf ordinary namespace and file authority throughout
-// the final guarded check. Reparse paths fail closed before publication.
+// Windows retains the effective direct-volume DOS object, root-to-leaf ordinary
+// namespace and file authority throughout the final guarded check. Reparse and
+// substituted/chained drive paths fail closed before publication.
 // Other platforms retain exact immutable loaded-source guards;
 // external filesystem writes after the off-State recheck are not interprocess
 // transactions there, and are explicitly outside the saved document mutation.
@@ -788,7 +789,15 @@ impl Session {
         {
             return Err(error("stale", "The actual source file changed."));
         }
-        let (mut document, original_pool, loading, loaded, failed, sampler_request) = {
+        let (
+            mut document,
+            original_pool,
+            loading,
+            loaded,
+            failed,
+            sampler_request,
+            project_preparation,
+        ) = {
             let _recording = self.recording_idle()?;
             let state = self.state();
             if !binding.current(&state) {
@@ -806,6 +815,7 @@ impl Session {
                 self.inner
                     .sampler_ticket
                     .load(std::sync::atomic::Ordering::Acquire),
+                self.project_preparation(&state),
             )
         };
         let lease = manager
@@ -852,7 +862,12 @@ impl Session {
         {
             return Err(error("invalid", "Output falls outside song."));
         }
-        let ClipContent::Audio { mixer_track, .. } = binding.clip.content else {
+        let ClipContent::Audio {
+            mixer_track,
+            output,
+            ..
+        } = binding.clip.content
+        else {
             return Err(error("invalid", "Expected audio clip."));
         };
         let mut next_id = document.project().next_id;
@@ -906,6 +921,8 @@ impl Session {
                     content: ClipContent::Audio {
                         sample,
                         mixer_track,
+                        output,
+                        normalize: false,
                         gain: 1.0,
                         pan: 0.0,
                         fade_in: 0,
@@ -927,12 +944,14 @@ impl Session {
         document
             .dispatch(command.clone(), None)
             .map_err(|e| error("invalid", e))?;
-        let plan = Controller::prepare_project(document.project(), &pool).map_err(|e| match e {
-            windfall_engine::sampler_processing::SamplerPreparationError::Cancelled => {
-                error("cancelled", e)
-            }
-            _ => error("samplerPreparation", e),
-        })?;
+        let mut plan = project_preparation
+            .prepare(document.project(), &pool, ProjectPublicationIntent::Edit)
+            .map_err(|e| match e {
+                windfall_engine::ProjectPreparationError::Sampler(
+                    windfall_engine::sampler_processing::SamplerPreparationError::Cancelled,
+                ) => error("cancelled", e),
+                _ => error("samplerPreparation", e),
+            })?;
         work.check().map_err(native_error)?;
         #[cfg(test)]
         self.pause("analysis:prepared");
@@ -940,6 +959,7 @@ impl Session {
         // Keep the vector allocation until after all final guards, while moving
         // the already prepared shared handles into the live pool.
         let mut sources = sources.into_iter();
+        let retirement;
         let final_result = {
             let _recording = self.recording_idle()?;
             let mut state = self.state();
@@ -975,10 +995,18 @@ impl Session {
             #[cfg(not(test))]
             let checked = prepared.check_eligibility(&binding.stamp, &model);
             checked.map_err(native_error)?;
+            // Admission borrows the ready engine owner before document mutation;
+            // stale stream/provider/plan tickets cannot become successful edits.
+            let prepared_pool = plan.pool().clone();
+            let publication = plan
+                .publication(self, &state)
+                .map_err(|e| error("stale", e))?;
             let applied = state
                 .document
                 .dispatch(command, None)
                 .map_err(|e| error("invalid", e))?;
+            self.commit_prepared_parameters(&state, &applied.touched);
+            retirement = publication.install();
             for (sample, decoded) in sources.by_ref() {
                 state.pool.insert(sample, decoded);
                 state.loaded.insert(sample);
@@ -986,7 +1014,7 @@ impl Session {
             }
             let result = DispatchResult {
                 created: applied.created,
-                patch: self.publish_prepared(&mut state, &applied.touched, plan),
+                patch: self.publish_prepared(&mut state, &applied.touched, &prepared_pool),
             };
             #[cfg(test)]
             let mut assets = None;
@@ -1009,6 +1037,8 @@ impl Session {
             (result, assets)
         };
         // No large candidate/input/progress/file retirement under final guards.
+        let mut retirement = retirement;
+        self.retire_project(&mut retirement);
         drop(file);
         drop(output_files);
         drop(document);

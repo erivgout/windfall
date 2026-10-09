@@ -35,6 +35,10 @@ export class FakeSurface implements EditorSurface {
   marquee: Marquee | null = null
   invalidations = 0
 
+  setViewport(viewport: Viewport) {
+    this.viewport = viewport
+  }
+
   setItems(items: IndexedBatch | null) {
     this.items = items
   }
@@ -115,6 +119,8 @@ export async function startRoll(
   const unregisterEarlier = registry.register(options.earlier ?? [])
   const unregister = registerPianoRollActions()
   usePianoRollStore.setState(usePianoRollStore.getInitialState(), true)
+  // Piano editing fixtures use step cells regardless of the shared session default.
+  usePianoRollStore.getState().setSnap("step")
   writeClipboard(null)
   forgetSavedViews()
   useUiStore.getState().showCenterTab("pianoRoll")

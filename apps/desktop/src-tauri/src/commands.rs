@@ -9,7 +9,10 @@
 //! thread.
 
 use tauri::ipc::{Channel, Invoke};
-use tauri::{State, WebviewWindow};
+use tauri::{
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
+};
 use windfall_ipc::{
     AudioHost, AudioSettings, BrowserEntry, BrowserRoot, EngineStatus, ExportOptions,
     FlpImportOptions, FlpImportPreview, RealtimeFrame, SampleInfo, TransportPatch, TransportState,
@@ -102,22 +105,39 @@ async fn analysis_shutdown(session: State<'_, Session>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn mixer_waveform_tracks(session: State<'_, Session>, tracks: Vec<TrackId>, generation: u64, revision: u64) -> Result<(), String> {
+fn mixer_waveform_tracks(
+    session: State<'_, Session>,
+    tracks: Vec<TrackId>,
+    generation: u64,
+    revision: u64,
+) -> Result<(), String> {
     session.mixer_waveform_tracks(tracks, generation, revision)
 }
 
 #[tauri::command]
-async fn mixer_preset_capture(session: State<'_, Session>, id: TrackId, generation: u64, revision: u64) -> Result<windfall_project::MixerTrackPreset, String> {
+async fn mixer_preset_capture(
+    session: State<'_, Session>,
+    id: TrackId,
+    generation: u64,
+    revision: u64,
+) -> Result<windfall_project::MixerTrackPreset, String> {
     let session = session.inner().clone();
     blocking(move || session.mixer_preset_capture(id, generation, revision)).await
 }
 #[tauri::command]
-async fn mixer_preset_write(session: State<'_, Session>, path: String, preset: windfall_project::MixerTrackPreset) -> Result<String, String> {
+async fn mixer_preset_write(
+    session: State<'_, Session>,
+    path: String,
+    preset: windfall_project::MixerTrackPreset,
+) -> Result<String, String> {
     let session = session.inner().clone();
     blocking(move || session.mixer_preset_write(path, preset)).await
 }
 #[tauri::command]
-async fn mixer_preset_read(session: State<'_, Session>, path: String) -> Result<windfall_project::MixerTrackPreset, String> {
+async fn mixer_preset_read(
+    session: State<'_, Session>,
+    path: String,
+) -> Result<windfall_project::MixerTrackPreset, String> {
     let session = session.inner().clone();
     blocking(move || session.mixer_preset_read(path)).await
 }
@@ -162,7 +182,12 @@ fn document_snapshot(session: State<'_, Session>) -> DocumentSnapshot {
 }
 
 #[tauri::command]
-fn current_mixer_target(session: State<'_, Session>, track: Option<TrackId>, generation: u64, revision: u64) -> Result<(), String> {
+fn current_mixer_target(
+    session: State<'_, Session>,
+    track: Option<TrackId>,
+    generation: u64,
+    revision: u64,
+) -> Result<(), String> {
     session.current_mixer_target(track, generation, revision)
 }
 
@@ -668,6 +693,15 @@ async fn export_audio(session: State<'_, Session>, options: ExportOptions) -> Re
 }
 
 #[tauri::command]
+async fn bounce_selected_clips(
+    session: State<'_, Session>,
+    clips: Vec<windfall_project::ClipId>,
+) -> Result<DispatchResult, String> {
+    let session = session.inner().clone();
+    blocking(move || session.bounce_selected_clips(clips)).await
+}
+
+#[tauri::command]
 fn export_cancel(session: State<'_, Session>) {
     session.export_cancel();
 }
@@ -701,6 +735,17 @@ async fn export_midi(
 ) -> Result<String, String> {
     let session = session.inner().clone();
     blocking(move || session.export_midi(&path, options)).await
+}
+
+/// Writes a piano-roll score without touching the project or audio engine.
+#[tauri::command]
+async fn write_sheet_music(path: String, xml: String) -> Result<String, String> {
+    blocking(move || {
+        std::fs::write(&path, xml.as_bytes())
+            .map_err(|error| format!("Could not save sheet music: {error}"))?;
+        Ok(path)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -780,9 +825,70 @@ async fn plugin_editor(
     .await
 }
 
+fn panel_title(id: &str) -> Result<&'static str, String> {
+    match id {
+        "browser" => Ok("Browser"),
+        "mixer" => Ok("Mixer"),
+        "channelRack" => Ok("Channel rack"),
+        "playlist" => Ok("Playlist"),
+        "pianoRoll" => Ok("Piano roll"),
+        _ => Err(format!("Unknown panel: {id}")),
+    }
+}
+
+// Creating a WebView2 window in a synchronous command can deadlock on Windows.
+#[tauri::command]
+async fn detach_panel(app: AppHandle, id: String) -> Result<(), String> {
+    let title = panel_title(&id)?;
+    let label = format!("panel-{id}");
+    if let Some(window) = app.get_webview_window(&label) {
+        return window.set_focus().map_err(|error| error.to_string());
+    }
+    let window = WebviewWindowBuilder::new(
+        &app,
+        label,
+        WebviewUrl::App(format!("index.html?view=panel&id={id}").into()),
+    )
+    .title(title)
+    .inner_size(960.0, 640.0)
+    .build()
+    .map_err(|error| error.to_string())?;
+    window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed)
+            && let Some(main) = app.get_webview_window("main")
+            && let Err(error) = main.emit("panel-docked", &id)
+        {
+            log::warn!("Could not notify the main window that {id} docked: {error}");
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn dock_panel(app: AppHandle, id: String) -> Result<(), String> {
+    panel_title(&id)?;
+    if let Some(window) = app.get_webview_window(&format!("panel-{id}")) {
+        window.close().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// The handler for every command above.
 pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
+        analysis_capability,
+        analysis_model_import,
+        analysis_submit,
+        analysis_status,
+        analysis_cancel,
+        analysis_cancel_preparation,
+        analysis_forget,
+        analysis_retry_cleanup,
+        analysis_review,
+        analysis_apply,
+        analysis_shutdown,
+        detach_panel,
+        dock_panel,
         current_mixer_target,
         mixer_waveform_tracks,
         mixer_preset_capture,
@@ -864,12 +970,14 @@ pub fn handler() -> impl Fn(Invoke) -> bool + Send + Sync + 'static {
         set_channel_sample_from_file,
         add_audio_clip_from_file,
         add_audio_clip_from_sample,
+        bounce_selected_clips,
         export_audio,
         export_cancel,
         midi_preview,
         import_midi,
         midi_discard,
         export_midi,
+        write_sheet_music,
         plugins_state,
         plugins_scan,
         plugins_add_folder,
@@ -919,17 +1027,23 @@ async fn recording_inputs(
     blocking(move || Ok(session.recording_inputs())).await
 }
 #[tauri::command]
-async fn input_monitor_start(session: State<'_, Session>) -> Result<windfall_ipc::InputMonitorState, String> {
+async fn input_monitor_start(
+    session: State<'_, Session>,
+) -> Result<windfall_ipc::InputMonitorState, String> {
     let session = session.inner().clone();
     blocking(move || session.input_monitor_start()).await
 }
 #[tauri::command]
-async fn input_monitor_stop(session: State<'_, Session>) -> Result<windfall_ipc::InputMonitorState, String> {
+async fn input_monitor_stop(
+    session: State<'_, Session>,
+) -> Result<windfall_ipc::InputMonitorState, String> {
     let session = session.inner().clone();
     blocking(move || Ok(session.input_monitor_stop())).await
 }
 #[tauri::command]
-async fn input_monitor_state(session: State<'_, Session>) -> Result<windfall_ipc::InputMonitorState, String> {
+async fn input_monitor_state(
+    session: State<'_, Session>,
+) -> Result<windfall_ipc::InputMonitorState, String> {
     let session = session.inner().clone();
     blocking(move || Ok(session.input_monitor_state())).await
 }
@@ -948,7 +1062,10 @@ async fn recording_start(
     blocking(move || session.recording_start(source, start, track)).await
 }
 #[tauri::command]
-async fn recording_stop(session: State<'_, Session>, takes: Option<windfall_ipc::RecordingTakeSelection>) -> Result<DispatchResult, String> {
+async fn recording_stop(
+    session: State<'_, Session>,
+    takes: Option<windfall_ipc::RecordingTakeSelection>,
+) -> Result<DispatchResult, String> {
     let session = session.inner().clone();
     blocking(move || session.recording_stop_with_selection(takes)).await
 }

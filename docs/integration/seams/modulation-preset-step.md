@@ -1,0 +1,1 @@
+The piano-roll modulation lane steps each chosen note from Low toward High. Low stays low when moved previous. High stays high when moved next. A value between two presets moves to the neighboring preset. A note with no expression counts as Center. The other modulation axis stays as it is. A note already at the end stays as it is while another chosen note can still move.

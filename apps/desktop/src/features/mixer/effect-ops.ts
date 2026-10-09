@@ -16,7 +16,9 @@ import {
 } from "@/lib/store"
 import { clamp } from "@/lib/units"
 
+import { effectEnableUpdates } from "./effect-enable"
 import { useEffectsUi } from "./effects-ui"
+import { selectedMixerTracks } from "./mixer-ui"
 
 /*
  * Everything the mixer does to effects, in one place. The slots on a
@@ -187,6 +189,31 @@ export async function setEffectEnabled(id: EffectId, enabled: boolean) {
 export async function toggleEffect(id: EffectId) {
   const found = findEffect(id)
   if (found) await setEffectEnabled(id, !found.slot.enabled)
+}
+
+async function setSelectedEffectsEnabled(enabled: boolean): Promise<void> {
+  const updates = effectEnableUpdates(selectedMixerTracks(), enabled)
+  if (updates.length === 0) return
+  await dispatch({
+    type: "batch",
+    label: enabled ? "Enable mixer effects" : "Bypass mixer effects",
+    commands: updates.map(({ track, effect }) => ({
+      type: "updateEffect",
+      track,
+      effect,
+      patch: { enabled },
+    })),
+  })
+}
+
+/** Bypasses the selected tracks' effects as one undo step. */
+export function bypassSelectedEffects(): Promise<void> {
+  return setSelectedEffectsEnabled(false)
+}
+
+/** Enables the selected tracks' effects as one undo step. */
+export function enableSelectedEffects(): Promise<void> {
+  return setSelectedEffectsEnabled(true)
 }
 
 /** Copies an effect right after itself and selects the copy. */

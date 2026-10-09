@@ -1,4 +1,4 @@
-import type { MixerTrack, MixerTrackPatch, TrackId } from "@/bindings"
+import type { Command, MixerTrack, MixerTrackPatch, TrackId } from "@/bindings"
 import {
   askConfirm,
   dispatch,
@@ -219,6 +219,20 @@ export function unmuteAll() {
     mixerTracks().filter((track) => track.muted),
     { muted: false }
   )
+}
+
+/** Returns every fader and pan to unity as a single undo step. */
+export async function resetLevels(): Promise<void> {
+  const commands: Command[] = []
+  for (const track of mixerTracks()) {
+    const patch: MixerTrackPatch = {}
+    if (track.volume !== 1) patch.volume = 1
+    if (track.pan !== 0) patch.pan = 0
+    if (patch.volume === undefined && patch.pan === undefined) continue
+    commands.push({ type: "updateMixerTrack", id: track.id, patch })
+  }
+  if (commands.length === 0) return
+  await dispatch({ type: "batch", label: "Reset mixer levels", commands })
 }
 
 export function unsoloAll() {

@@ -125,6 +125,7 @@ describe("paramGroups", () => {
       "Auto makeup",
       "Detector",
       "Mix",
+      "External sidechain",
     ])
   })
 

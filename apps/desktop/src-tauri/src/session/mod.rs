@@ -74,11 +74,13 @@ mod edit;
 mod export;
 mod files;
 mod flp;
+mod input_monitor;
 mod library;
 mod midi;
-mod mixer_presets;
 mod midi_hardware;
-mod input_monitor;
+mod mixer_presets;
+mod playlist_bounce;
+mod preparation;
 mod realtime;
 mod recording;
 mod sampler_processing;
@@ -169,6 +171,7 @@ struct Inner {
     /// Successful guarded Play owner; accessed only while State is held.
     timeline_play_request: std::sync::atomic::AtomicU64,
     archive_job: Mutex<Option<Arc<AtomicBool>>>,
+    analysis: analysis_jobs::Service,
     midi_hardware: Mutex<Option<Arc<windfall_engine::midi_hardware::Runtime>>>,
     midi_configuring: Mutex<()>,
     /// Serializes editor workers and retains at most one bounded clip view.
@@ -196,6 +199,8 @@ struct Inner {
     cache: SampleCache,
     factory_dir: PathBuf,
     recording: Mutex<Option<recording::Take>>,
+    recording_finishing: AtomicBool,
+    recording_finish_cancelled: AtomicBool,
     input_monitors: Mutex<input_monitor::Monitors>,
     input_monitor_signature: Arc<std::sync::atomic::AtomicU64>,
     exporting: AtomicBool,
@@ -391,6 +396,7 @@ impl Session {
                 timeline_request: std::sync::atomic::AtomicU64::new(0),
                 timeline_play_request: std::sync::atomic::AtomicU64::new(0),
                 archive_job: Mutex::new(None),
+                analysis,
                 midi_hardware: Mutex::new(None),
                 midi_configuring: Mutex::new(()),
                 audio_editor: Mutex::new(audio_editor::Editor::default()),
@@ -426,6 +432,8 @@ impl Session {
                 cache,
                 factory_dir,
                 recording: Mutex::new(None),
+                recording_finishing: AtomicBool::new(false),
+                recording_finish_cancelled: AtomicBool::new(false),
                 input_monitors: Mutex::new(input_monitor::Monitors::default()),
                 input_monitor_signature: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 exporting: AtomicBool::new(false),

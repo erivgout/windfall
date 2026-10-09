@@ -213,9 +213,195 @@ const DEMO_JSON: &str = r#"{
 }
 "#;
 
+// Current writer schema; DEMO_JSON remains the legacy reader fixture.
+const CURRENT_DEMO_JSON: &str = r#"{
+  "formatVersion": 1,
+  "nextId": 8,
+  "settings": {
+    "name": "Demo",
+    "tempoBpm": 120.0,
+    "timeSignature": {
+      "numerator": 4,
+      "denominator": 4
+    },
+    "swing": 0.0
+  },
+  "samples": [
+    {
+      "id": 2,
+      "name": "Kick",
+      "path": {
+        "kind": "factory",
+        "path": "drums/kick.wav"
+      }
+    }
+  ],
+  "channels": [
+    {
+      "voice": {
+        "arpeggiator": {
+          "mode": "off",
+          "rate": "sixteenth",
+          "gate": 0.75,
+          "rangeOctaves": 1
+        },
+        "echo": {
+          "enabled": false,
+          "time": {
+            "unit": "milliseconds",
+            "ms": 250.0
+          },
+          "feedback": 0.5,
+          "pitchSemitones": 0,
+          "repeats": 3
+        },
+        "polyphony": {
+          "maxVoices": 32,
+          "monoLegato": false,
+          "portamentoMs": 0.0
+        },
+        "envelopes": {
+          "filter": {
+            "enabled": false,
+            "attackMs": 2.0,
+            "decayMs": 200.0,
+            "sustain": 0.8,
+            "releaseMs": 150.0,
+            "depth": 0.0
+          },
+          "pitch": {
+            "enabled": false,
+            "attackMs": 2.0,
+            "decayMs": 200.0,
+            "sustain": 0.8,
+            "releaseMs": 150.0,
+            "depth": 0.0
+          },
+          "pan": {
+            "enabled": false,
+            "attackMs": 2.0,
+            "decayMs": 200.0,
+            "sustain": 0.8,
+            "releaseMs": 150.0,
+            "depth": 0.0
+          },
+          "lfo": {
+            "enabled": false,
+            "shape": "sine",
+            "target": "filter",
+            "rateHz": 5.0,
+            "depth": 0.0
+          }
+        }
+      },
+      "id": 3,
+      "name": "Kick",
+      "color": 15026253,
+      "volume": 0.8,
+      "pan": 0.0,
+      "muted": false,
+      "solo": false,
+      "mixerTrack": 4,
+      "source": {
+        "type": "sampler",
+        "sample": 2,
+        "rootKey": 60,
+        "tune": 0.0,
+        "gain": 1.0,
+        "start": 0.0,
+        "end": 1.0,
+        "reverse": false,
+        "envelope": null,
+        "cutSelf": false,
+        "cutGroup": 0
+      }
+    }
+  ],
+  "patterns": [
+    {
+      "id": 1,
+      "name": "Pattern 1",
+      "color": 15026253,
+      "lengthSteps": 16,
+      "lanes": [
+        {
+          "channel": 3,
+          "notes": [
+            {
+              "id": 5,
+              "start": 960,
+              "length": 240,
+              "key": 60,
+              "velocity": 0.8,
+              "pan": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "mixer": {
+    "tracks": [
+      {
+        "current": false,
+        "id": 0,
+        "name": "Master",
+        "color": 9145752,
+        "volume": 1.0,
+        "pan": 0.0,
+        "muted": false,
+        "solo": false,
+        "output": null,
+        "sends": [],
+        "effects": [],
+        "latencyOffsetMs": 0.0
+      },
+      {
+        "current": false,
+        "id": 4,
+        "name": "Kick",
+        "color": 15026253,
+        "volume": 1.0,
+        "pan": 0.0,
+        "muted": false,
+        "solo": false,
+        "output": 0,
+        "sends": [],
+        "effects": [],
+        "latencyOffsetMs": 0.0
+      }
+    ]
+  },
+  "playlist": {
+    "tracks": [
+      {
+        "id": 6,
+        "name": "Track 1",
+        "muted": false
+      }
+    ],
+    "clips": [
+      {
+        "id": 7,
+        "track": 6,
+        "start": 0,
+        "length": 3840,
+        "offset": 0,
+        "muted": false,
+        "content": {
+          "type": "pattern",
+          "pattern": 1
+        }
+      }
+    ]
+  },
+  "automations": []
+}
+"#;
+
 #[test]
 fn the_json_is_camel_case_and_stable() {
-    assert_eq!(to_json(&demo_project()).unwrap(), DEMO_JSON);
+    assert_eq!(to_json(&demo_project()).unwrap(), CURRENT_DEMO_JSON);
 }
 
 #[test]
@@ -242,7 +428,7 @@ fn a_file_from_before_mixer_tracks_had_effects_still_loads() {
     assert_eq!(project, demo_project());
     assert!(project.mixer.tracks.iter().all(|t| t.effects.is_empty()));
     // Saved again, it is in the format of today.
-    assert_eq!(to_json(&project).unwrap(), DEMO_JSON);
+    assert_eq!(to_json(&project).unwrap(), CURRENT_DEMO_JSON);
 }
 
 #[test]
@@ -288,7 +474,7 @@ fn save_then_load_gives_the_same_project() {
     let project = demo_project();
     save(&project, &path).unwrap();
     assert_eq!(load(&path).unwrap(), project);
-    assert_eq!(fs::read_to_string(&path).unwrap(), DEMO_JSON);
+    assert_eq!(fs::read_to_string(&path).unwrap(), CURRENT_DEMO_JSON);
 }
 
 fn file_names(folder: &Path) -> Vec<String> {
@@ -980,6 +1166,7 @@ fn a_file_from_before_audio_clips_and_automation_still_loads() {
                 sample: SampleId(2),
                 mixer_track: TrackId(4),
                 output: Default::default(),
+                normalize: false,
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

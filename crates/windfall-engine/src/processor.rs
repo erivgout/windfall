@@ -8,6 +8,8 @@ use windfall_core::AudioBuffer;
 use windfall_project::TrackId;
 
 use crate::automation::{self, GRID, Look};
+use crate::channel_voice::{ArpeggiatorMode, NoteEvent, NoteEventKind, admit_note};
+use crate::channel_voice_runtime::{Generator, Owner};
 use crate::clips::ClipPlayer;
 use crate::controller::Controller;
 use crate::message::{GARBAGE_HEADROOM, Garbage, Message, retire};
@@ -19,6 +21,7 @@ use crate::shared::Shared;
 use crate::state::{Fades, PlanState};
 use crate::stems::Taps;
 use crate::voice::{Note, Origin, Stretch, VoicePool};
+use windfall_dsp::NoteInstanceId;
 
 /// Turns the current plan into audio: sequencer, sampler voices,
 /// instruments, effects and mixer.
@@ -31,6 +34,7 @@ use crate::voice::{Note, Origin, Stretch, VoicePool};
 /// and whatever arrives from the [`Controller`] owning heap memory is sent
 /// back to it to be dropped.
 pub struct Processor {
+    spectrum: Option<crate::spectrum::SpectrumTap>,
     sample_rate: u32,
     /// Frames processed so far. It is the engine's clock.
     frame: u64,
@@ -101,6 +105,7 @@ impl Processor {
     ) -> Self {
         let sample_rate = sample_rate.max(1);
         Self {
+            spectrum: None,
             sample_rate,
             frame: 0,
             state,
@@ -135,13 +140,22 @@ impl Processor {
         self.sample_rate
     }
 
-    pub(crate) fn output_frame(&self) -> u64 { self.frame }
+    /// Installed during off-audio attachment, before processing can begin.
+    pub(crate) fn set_spectrum(&mut self, spectrum: crate::spectrum::SpectrumTap) {
+        self.spectrum = Some(spectrum);
+    }
+
+    pub(crate) fn output_frame(&self) -> u64 {
+        self.frame
+    }
     /// Configure off the callback, before the device starts processing.
     pub(crate) fn set_output_channels(&mut self, channels: usize) {
         self.hardware_output = Some(crate::hardware_output::HardwareOutput::new(channels));
     }
     pub(crate) fn hardware_samples(&self) -> &[f32] {
-        self.hardware_output.as_ref().map_or(&[], |output| output.samples())
+        self.hardware_output
+            .as_ref()
+            .map_or(&[], |output| output.samples())
     }
 
     /// Fills `out`, interleaved stereo, with the next `out.len() / 2` frames.
@@ -154,7 +168,9 @@ impl Processor {
         self.voices.sweep(&self.plan, &mut self.garbage);
         self.clips.sweep(&self.plan, &mut self.garbage);
         self.handle_messages();
-        if let Some(output) = &mut self.hardware_output { output.rewind(); }
+        if let Some(output) = &mut self.hardware_output {
+            output.rewind();
+        }
         if let Some(taps) = &mut self.taps {
             taps.rewind();
         }
@@ -166,7 +182,9 @@ impl Processor {
             self.finish_count_in();
             self.apply_navigation(&mut navigation_left);
             let most = self.next_block(rest.len());
-            let most = self.count_in.as_ref().map_or(most, |count| most.min(count.end().saturating_sub(self.frame).max(1) as usize));
+            let most = self.count_in.as_ref().map_or(most, |count| {
+                most.min(count.end().saturating_sub(self.frame).max(1) as usize)
+            });
             let next = self.navigation_boundary().map_or(most, |(frame, _, _)| {
                 most.min(frame.saturating_sub(self.frame).max(1) as usize)
             });
@@ -177,8 +195,10 @@ impl Processor {
         self.finish_count_in();
         self.apply_navigation(&mut navigation_left);
         self.publish_automation();
-        self.shared
-            .publish_transport(self.transport_sequence, self.sequencer.playing() || self.count_in.is_some());
+        self.shared.publish_transport(
+            self.transport_sequence,
+            self.sequencer.playing() || self.count_in.is_some(),
+        );
         // The playhead is where the sound now leaving the engine was in the
         // song, which is behind what is being worked out by the latency of
         // the instruments and effects.
@@ -345,6 +365,18 @@ impl Processor {
     }
 
     fn handle(&mut self, message: Message) {
+        if matches!(
+            &message,
+            Message::SetPlan { .. }
+                | Message::Play { .. }
+                | Message::Stop { .. }
+                | Message::Seek(_)
+                | Message::SetTransport { .. }
+                | Message::CountIn { .. }
+        ) && let Some(spectrum) = &mut self.spectrum
+        {
+            spectrum.reset();
+        }
         // A stale hardware note must not even release a stopped song's
         // automation hold. Discard it before any transport/tail side effects.
         if let Message::HardwareNote { epoch, .. } = &message {
@@ -383,24 +415,67 @@ impl Processor {
             self.hold = None;
         }
         match message {
-            Message::CountIn { sequence, bars, capture } => {
+            Message::CountIn {
+                sequence,
+                bars,
+                capture,
+            } => {
                 self.sequencer.set_recording(capture.is_some());
                 self.transport_sequence = sequence;
                 self.hold_for_good = false;
                 self.sequencer.stop();
+                for channel in 0..self.state.channel_voice.len() {
+                    self.reset_channel_voice(channel);
+                }
                 self.end_sequenced();
                 let tick = self.sequencer.tick(&self.plan, now);
                 let song = self.sequencer.mode() == windfall_ipc::PlayMode::Song;
-                let (signature, meters) = if song { (self.plan.signature, &self.plan.meters) }
-                    else { self.sequencer.pattern(&self.plan).map_or((self.plan.signature, &self.plan.meters), |pattern| (pattern.signature, &pattern.meters)) };
-                let signature = meters.as_ref().ok().and_then(|meters| meters.iter().rev().find(|segment| f64::from(segment.start_tick()) <= tick)).map_or(signature, |segment| segment.signature());
-                let tempo = if song { self.plan.tempo_map.as_ref().map_or(self.plan.tempo_bpm, |map| map.tempo_at(tick)) } else { self.plan.tempo_bpm };
+                let (signature, meters) = if song {
+                    (self.plan.signature, &self.plan.meters)
+                } else {
+                    self.sequencer
+                        .pattern(&self.plan)
+                        .map_or((self.plan.signature, &self.plan.meters), |pattern| {
+                            (pattern.signature, &pattern.meters)
+                        })
+                };
+                let signature = meters
+                    .as_ref()
+                    .ok()
+                    .and_then(|meters| {
+                        meters
+                            .iter()
+                            .rev()
+                            .find(|segment| f64::from(segment.start_tick()) <= tick)
+                    })
+                    .map_or(signature, |segment| segment.signature());
+                let tempo = if song {
+                    self.plan
+                        .tempo_map
+                        .as_ref()
+                        .map_or(self.plan.tempo_bpm, |map| map.tempo_at(tick))
+                } else {
+                    self.plan.tempo_bpm
+                };
                 let beats = u32::from(signature.numerator) * u32::from(bars);
-                let frames_per_beat = f64::from(self.sample_rate) * 60.0 * 4.0 / (tempo * f64::from(signature.denominator));
-                let count = crate::metronome::CountIn { start: now, frames_per_beat, beats, beats_per_bar: u32::from(signature.numerator), emitted: 0 };
-                if let Some(ticket) = capture { self.shared.recording_clock.schedule(ticket, count.end().saturating_add(self.state.latency as u64)); }
+                let frames_per_beat = f64::from(self.sample_rate) * 60.0 * 4.0
+                    / (tempo * f64::from(signature.denominator));
+                let count = crate::metronome::CountIn {
+                    start: now,
+                    frames_per_beat,
+                    beats,
+                    beats_per_bar: u32::from(signature.numerator),
+                    emitted: 0,
+                };
+                if let Some(ticket) = capture {
+                    self.shared
+                        .recording_clock
+                        .schedule(ticket, count.end().saturating_add(self.state.latency));
+                }
                 self.count_in = Some(count);
-                self.shared.count_in_remaining.store(beats, Ordering::Release);
+                self.shared
+                    .count_in_remaining
+                    .store(beats, Ordering::Release);
             }
             Message::SetPlan { plan, state } => self.adopt(plan, state),
             Message::Play {
@@ -477,10 +552,8 @@ impl Processor {
                 }
             }
             Message::NoteOff { channel, key } => {
-                self.voices.release_live(channel, key);
-                let index = self.plan.channel(channel);
-                if let Some(unit) = index.and_then(|index| self.state.instrument(index)) {
-                    unit.release_live(key);
+                if let Some(index) = self.plan.channel(channel) {
+                    self.release_input(index, key, Origin::Live);
                 }
             }
             Message::HardwareNote {
@@ -492,13 +565,8 @@ impl Processor {
                 self.sync_hardware_epoch();
                 if epoch == self.hardware_epoch {
                     if velocity == 0 {
-                        self.voices.release_origin(channel, key, Origin::Hardware);
-                        if let Some(unit) = self
-                            .plan
-                            .channel(channel)
-                            .and_then(|i| self.state.instrument(i))
-                        {
-                            unit.release_hardware(key);
+                        if let Some(index) = self.plan.channel(channel) {
+                            self.release_input(index, key, Origin::Hardware);
                         }
                     } else if let Some(channel) = self.plan.channel(channel) {
                         self.start(
@@ -523,16 +591,20 @@ impl Processor {
             Message::SetInputMonitors(monitors) => {
                 let old = std::mem::replace(&mut self.input_monitors, monitors);
                 retire(&mut self.garbage, Garbage::InputMonitors(old));
-            },
+            }
             Message::SetDiskTaps(taps) => {
-                let old = std::mem::replace(&mut self.disk_taps, taps); retire(&mut self.garbage, Garbage::DiskTaps(old));
-            },
+                let old = std::mem::replace(&mut self.disk_taps, taps);
+                retire(&mut self.garbage, Garbage::DiskTaps(old));
+            }
         }
         // Whatever moved the playhead moved the clock under the notes that
         // are still sounding.
         let shift = self.sequencer.take_clock_shift();
         if shift != 0.0 {
             self.voices.shift_ends(shift);
+            for runtime in &mut self.state.channel_voice {
+                runtime.move_ends(&|end| end + shift);
+            }
             for unit in self.state.instrument_units() {
                 unit.shift_ends(shift);
             }
@@ -573,7 +645,9 @@ impl Processor {
                 },
             )
         });
-        if self.sequencer.navigation_enabled() && self.shared.recording_clock.active_ticket().is_none() {
+        if self.sequencer.navigation_enabled()
+            && self.shared.recording_clock.active_ticket().is_none()
+        {
             for point in &self.plan.navigation {
                 if self.ignored_pause == Some(point.tick)
                     || (point.looping && (region.is_some() || !self.sequencer.song_looping()))
@@ -627,11 +701,20 @@ impl Processor {
                         .sequencer
                         .region()
                         .map_or(destination, |r| destination.min(r.end));
-                    let recording_wrap = self.sequencer.region().is_some_and(|r| tick == r.end && destination == r.start)
+                    let recording_wrap = self
+                        .sequencer
+                        .region()
+                        .is_some_and(|r| tick == r.end && destination == r.start)
                         && self.sequencer.wrap_recording_region(&self.plan);
-                    if !recording_wrap { self.sequencer.seek(f64::from(destination), &self.plan, self.frame); }
+                    if !recording_wrap {
+                        self.sequencer
+                            .seek(f64::from(destination), &self.plan, self.frame);
+                    }
                     let shift = self.sequencer.take_clock_shift();
                     self.voices.shift_ends(shift);
+                    for runtime in &mut self.state.channel_voice {
+                        runtime.move_ends(&|end| end + shift);
+                    }
                     for unit in self.state.instrument_units() {
                         unit.shift_ends(shift);
                     }
@@ -668,7 +751,79 @@ impl Processor {
 
     /// Starts a note on frame `now`: on its channel's instrument if it has
     /// one, and as a sampler voice otherwise, including per-voice expression.
-    fn start(&mut self, mut note: Note, now: u64) {
+    fn start(&mut self, note: Note, now: u64) {
+        let channel = note.channel;
+        if self.state.channel_voice[channel].settings.arpeggiator.mode != ArpeggiatorMode::Off
+            && note.expression.articulation != windfall_dsp::NoteArticulation::Slide
+        {
+            self.state.channel_voice[channel].chord_on(note);
+            return;
+        }
+        // Live echo requires a duration; held notes deliberately remain dry.
+        if note.end.is_finite()
+            && note.expression.articulation != windfall_dsp::NoteArticulation::Slide
+        {
+            let duration = self
+                .sequencer
+                .clock()
+                .frame_of(note.end)
+                .saturating_sub(now)
+                .max(1) as usize;
+            let bpm = self.state.tempo();
+            self.state.channel_voice[channel].schedule_echo(
+                note,
+                duration,
+                f64::from(self.sample_rate),
+                bpm,
+            );
+        }
+        self.start_output(note, now, None);
+    }
+
+    fn release_instance(&mut self, channel: usize, id: NoteInstanceId) {
+        if let Some(unit) = self.state.instrument(channel) {
+            unit.release_instance(id);
+        } else {
+            self.voices
+                .release_instance(self.plan.channels[channel].id, id);
+        }
+    }
+
+    fn release_input(&mut self, channel: usize, key: u8, origin: Origin) {
+        self.state.channel_voice[channel].chord_off(key, origin);
+        for slot in 0..self.state.channel_voice[channel].owners.len() {
+            if let Some(owner) = self.state.channel_voice[channel].owners[slot]
+                && owner.generated.is_none()
+                && owner.note.key == key
+                && owner.note.origin == origin
+            {
+                if let Some(unit) = self.state.instrument(channel) {
+                    unit.release_instance(owner.instance);
+                } else {
+                    self.voices
+                        .key_up_instance(self.plan.channels[channel].id, owner.instance);
+                }
+                self.state.channel_voice[channel].owners[slot] = None;
+                self.state.channel_voice[channel].held.note_off(key);
+            }
+        }
+    }
+
+    fn reset_channel_voice(&mut self, channel: usize) {
+        for slot in 0..self.state.channel_voice[channel].owners.len() {
+            if let Some(owner) = self.state.channel_voice[channel].owners[slot] {
+                self.release_instance(channel, owner.instance);
+            }
+        }
+        self.voices
+            .reset_channel_modulation(self.plan.channels[channel].id);
+        if let Some(unit) = self.state.instrument(channel) {
+            unit.reset_channel_modulation();
+        }
+        self.state.channel_voice[channel].reset();
+    }
+
+    fn start_output(&mut self, mut note: Note, now: u64, generated: Option<(Generator, u64)>) {
         let clock = self.sequencer.clock();
         let at = clock.tick_at(now);
         if let Some(source) = note.source.filter(|source| source.active) {
@@ -678,26 +833,123 @@ impl Processor {
         let glide_end = if self.sequencer.in_song() {
             let pass = self.sequencer.pass_start();
             pass + self.plan.warp(self.plan.unwarp(at - pass) + glide_ticks)
-        } else { at + glide_ticks };
+        } else {
+            at + glide_ticks
+        };
         if note.expression.articulation == windfall_dsp::NoteArticulation::Slide {
             if let Some(unit) = self.state.instrument(note.channel) {
                 unit.slide_notes(note.key, note.expression, at, note.end, note.origin);
             } else {
-                self.voices.slide_notes(self.plan.channels[note.channel].id, note.key, note.expression, at, note.end, note.origin);
+                self.voices.slide_notes(
+                    self.plan.channels[note.channel].id,
+                    note.key,
+                    note.expression,
+                    at,
+                    note.end,
+                    note.origin,
+                );
             }
             return;
         }
-        match self.state.instrument(note.channel) {
-            Some(unit) => {
-                unit.start_note_source(note.key, note.velocity, note.pan, note.expression, note.end, note.origin, at, glide_end, note.source);
+        let channel = note.channel;
+        self.state.channel_voice[channel].expire(clock, now);
+        let settings = self.state.channel_voice[channel].settings.polyphony;
+        let decision = admit_note(
+            &mut self.state.channel_voice[channel].held,
+            note.key,
+            settings,
+        );
+        let mono = if !decision.retrigger {
+            self.state.channel_voice[channel]
+                .owners
+                .iter()
+                .flatten()
+                .next()
+                .copied()
+        } else {
+            None
+        };
+        for &key in decision.released_keys() {
+            for slot in 0..self.state.channel_voice[channel].owners.len() {
+                if let Some(owner) = self.state.channel_voice[channel].owners[slot]
+                    && owner.note.key == key
+                {
+                    if mono.is_none() {
+                        self.release_instance(channel, owner.instance);
+                    }
+                    self.state.channel_voice[channel].owners[slot] = None;
+                }
             }
-            None => self.voices.start(&self.plan, &mut self.garbage, note, now, clock, glide_end),
+        }
+        let envelopes = self.state.channel_voice[channel].envelopes;
+        let coefficient = self.state.channel_voice[channel].glide;
+        let instance = if let Some(owner) = mono {
+            let moved = if let Some(unit) = self.state.instrument(channel) {
+                unit.retarget_instance(owner.instance, note, at, glide_end)
+            } else {
+                self.voices
+                    .retarget_instance(&self.plan, owner.instance, note, at, glide_end)
+            };
+            moved.then_some(owner.instance)
+        } else {
+            None
+        };
+        let instance = instance.or_else(|| match self.state.instrument(channel) {
+            Some(unit) => unit.start_note_source(
+                note.key,
+                note.velocity,
+                note.pan,
+                note.expression,
+                note.end,
+                note.origin,
+                at,
+                glide_end,
+                note.source,
+            ),
+            None => self.voices.start(
+                &self.plan,
+                &mut self.garbage,
+                note,
+                now,
+                clock,
+                glide_end,
+                envelopes,
+                coefficient,
+            ),
+        });
+        if let Some(instance) = instance {
+            if let Some(slot) = self.state.channel_voice[channel]
+                .owners
+                .iter_mut()
+                .find(|slot| slot.is_none())
+            {
+                *slot = Some(Owner {
+                    note,
+                    instance,
+                    generated,
+                });
+            }
+        } else {
+            self.state.channel_voice[channel].held.note_off(note.key);
         }
     }
 
-    /// Ends what the sequencer started, because playback jumped away from
-    /// under it. Notes played by hand carry on.
+    /// Ends sequenced notes and flushes the channel voice tools after a jump.
     fn end_sequenced(&mut self) {
+        if let Some(spectrum) = &mut self.spectrum {
+            spectrum.reset();
+        }
+        for channel in 0..self.state.channel_voice.len() {
+            for slot in 0..self.state.channel_voice[channel].owners.len() {
+                if let Some(owner) = self.state.channel_voice[channel].owners[slot]
+                    && (owner.note.origin == Origin::Sequenced || owner.generated.is_some())
+                {
+                    self.release_instance(channel, owner.instance);
+                    self.state.channel_voice[channel].owners[slot] = None;
+                }
+            }
+            self.state.channel_voice[channel].end_sequenced();
+        }
         self.voices.fade_origin(Origin::Sequenced);
         for unit in self.state.instrument_units() {
             unit.end_sequenced();
@@ -711,6 +963,16 @@ impl Processor {
     /// back from changing at once.
     fn adopt(&mut self, plan: Arc<Plan>, mut state: Box<PlanState>) {
         let now = self.frame;
+        for channel in 0..self.plan.channels.len() {
+            let old = &self.plan.channels[channel];
+            if plan.channel(old.id).is_none_or(|index| {
+                plan.channels[index].voice != old.voice
+                    || plan.channels[index].instrument.map(|params| params.kind())
+                        != old.instrument.map(|params| params.kind())
+            }) {
+                self.reset_channel_voice(channel);
+            }
+        }
         self.voices.rebind(&plan, &self.plan, &self.state, now);
         self.clips.rebind(&plan, now, self.fades.ramp);
         let sounding = self.voices.destinations();
@@ -728,12 +990,17 @@ impl Processor {
             let origin = self.sequencer.pass_start();
             let moved = |end: f64| Sequencer::moved(&plan, &self.plan, origin, end);
             self.voices.move_ends(moved);
+            for runtime in &mut state.channel_voice {
+                runtime.move_ends(&moved);
+            }
             for unit in state.instrument_units() {
                 unit.move_ends(moved);
             }
         }
         let old_plan = std::mem::replace(&mut self.plan, plan);
-        for unit in state.instrument_units() { unit.refresh_curve_sources(&self.plan); }
+        for unit in state.instrument_units() {
+            unit.refresh_curve_sources(&self.plan);
+        }
         let old_state = std::mem::replace(&mut self.state, state);
         retire(&mut self.garbage, Garbage::Plan(old_plan));
         retire(&mut self.garbage, Garbage::State(old_state));
@@ -784,19 +1051,31 @@ impl Processor {
         // Failed preparations are refused on the control side. Keep this
         // internal invariant fail-closed without manufacturing native anchors.
         let in_song = self.sequencer.mode() == windfall_ipc::PlayMode::Song;
-        let (base_signature, selected_meters) = if in_song { (self.plan.signature, &self.plan.meters) }
-            else { self.sequencer.pattern(&self.plan).map_or((self.plan.signature, &self.plan.meters), |pattern| (pattern.signature, &pattern.meters)) };
+        let (base_signature, selected_meters) = if in_song {
+            (self.plan.signature, &self.plan.meters)
+        } else {
+            self.sequencer
+                .pattern(&self.plan)
+                .map_or((self.plan.signature, &self.plan.meters), |pattern| {
+                    (pattern.signature, &pattern.meters)
+                })
+        };
         let Ok(meters) = selected_meters else {
             out.fill([0.0; 2]);
             return;
         };
         let tick = self.sequencer.tick(&self.plan, self.frame);
-        let warped = if in_song { self
-            .plan
-            .tempo_map
-            .as_ref()
-            .map_or(tick, |map| map.warp(tick)) } else { tick };
-        let segment = meters[..meters.partition_point(|segment| f64::from(segment.start_tick()) <= tick)].last();
+        let warped = if in_song {
+            self.plan
+                .tempo_map
+                .as_ref()
+                .map_or(tick, |map| map.warp(tick))
+        } else {
+            tick
+        };
+        let segment = meters
+            [..meters.partition_point(|segment| f64::from(segment.start_tick()) <= tick)]
+            .last();
         let signature = segment.map_or(base_signature, |segment| segment.signature());
         let transport = crate::plugins::PluginTransport {
             playing: self.sequencer.playing(),
@@ -833,7 +1112,9 @@ impl Processor {
         let end = base + frames as u64;
         self.mixer.clear(self.plan.tracks.len(), frames);
         for monitor in &mut self.input_monitors {
-            if let Some(track) = self.plan.track_ids.get(monitor.settings.track.0) { monitor.render(&mut self.mixer.track_mut(track)[..frames]); }
+            if let Some(track) = self.plan.track_ids.get(monitor.settings.track.0) {
+                monitor.render(&mut self.mixer.track_mut(track)[..frames]);
+            }
         }
         self.metronome.clear_block();
 
@@ -899,42 +1180,192 @@ impl Processor {
         }
         self.render_voices(base, rendered, frames);
 
-        self.mixer
-            .mix(&self.plan, &mut self.state, &self.shared, base, out, &mut self.disk_taps);
+        self.mixer.mix(
+            &self.plan,
+            &mut self.state,
+            &self.shared,
+            base,
+            out,
+            &mut self.disk_taps,
+        );
         if let Some(taps) = &mut self.taps {
             taps.collect(&mut self.mixer, frames);
         }
-        self.mixer.publish_waveforms(&self.plan, &self.shared, base, self.sample_rate, out);
+        self.mixer
+            .publish_waveforms(&self.plan, &self.shared, base, self.sample_rate, out);
         self.metronome.mix(out);
         self.finish_output(base, out);
+        if let Some(spectrum) = &mut self.spectrum {
+            spectrum.publish(
+                out,
+                base,
+                self.sample_rate,
+                self.state.latency,
+                Arc::as_ptr(&self.plan) as usize,
+            );
+        }
         self.collect_hardware(base, out);
         self.frame = end;
     }
 
     fn collect_hardware(&mut self, base: u64, out: &[Frame]) {
-        let Some(output) = &mut self.hardware_output else { return; };
+        let Some(output) = &mut self.hardware_output else {
+            return;
+        };
         let first = output.position();
-        let master = self.plan.tracks[0].external_output.unwrap_or(windfall_project::ExternalOutputRoute { left: 0, right: (output.channels() > 1).then_some(1), exclusive: false });
-        for (offset, frame) in out.iter().enumerate() { output.add(master, first + offset, *frame); }
+        let master =
+            self.plan.tracks[0]
+                .external_output
+                .unwrap_or(windfall_project::ExternalOutputRoute {
+                    left: 0,
+                    right: (output.channels() > 1).then_some(1),
+                    exclusive: false,
+                });
+        for (offset, frame) in out.iter().enumerate() {
+            output.add(master, first + offset, *frame);
+        }
         for (index, track) in self.plan.tracks.iter().enumerate().skip(1) {
-            let Some(route) = track.external_output else { continue; };
+            let Some(route) = track.external_output else {
+                continue;
+            };
             let frames = out.len();
             output.scratch[..frames].copy_from_slice(&self.mixer.track_mut(index)[..frames]);
-            if let Some(line) = &mut self.state.external[index].line { line.process(&mut output.scratch[..frames]); }
+            if let Some(line) = &mut self.state.external[index].line {
+                line.process(&mut output.scratch[..frames]);
+            }
             for offset in 0..frames {
-                let mut frame = output.scratch[offset]; let gain = self.output_gain.at(base + offset as u64);
-                frame[0] *= gain; frame[1] *= gain;
+                let mut frame = output.scratch[offset];
+                let gain = self.output_gain.at(base + offset as u64);
+                frame[0] *= gain;
+                frame[1] *= gain;
                 output.add(route, first + offset, frame);
             }
         }
         output.advance(out.len());
     }
 
+    fn generated_event(
+        &mut self,
+        channel: usize,
+        generator: Generator,
+        event: NoteEvent,
+        now: u64,
+    ) {
+        if event.kind == NoteEventKind::Off {
+            for slot in 0..self.state.channel_voice[channel].owners.len() {
+                if let Some(owner) = self.state.channel_voice[channel].owners[slot]
+                    && owner.generated == Some((generator, event.id))
+                {
+                    self.release_instance(channel, owner.instance);
+                    self.state.channel_voice[channel]
+                        .held
+                        .note_off(owner.note.key);
+                    self.state.channel_voice[channel].owners[slot] = None;
+                }
+            }
+            if generator == Generator::Echo {
+                self.state.channel_voice[channel].forget_echo(event.id);
+            }
+        } else if let Some(source) = self.state.channel_voice[channel].source(generator, event) {
+            let note = Note {
+                key: event.note.key,
+                velocity: event.note.velocity,
+                end: f64::INFINITY,
+                ..source
+            };
+            self.start_output(note, now, Some((generator, event.id)));
+        }
+    }
+
     fn render_voices(&mut self, base: u64, from: usize, to: usize) {
+        if self.state.channel_voice.iter().all(|runtime| {
+            runtime.settings.arpeggiator.mode == ArpeggiatorMode::Off
+                && runtime.echo.pending_events() == 0
+        }) {
+            self.render_voice_audio(base, from, to);
+            return;
+        }
+        // One-frame subblocks make source chord changes and generated releases exact.
+        // Both processor scratch batches were reserved by PlanState::try_build.
+        for frame in from..to {
+            let now = base + frame as u64;
+            let clock = self.sequencer.clock();
+            let bpm = self.state.tempo();
+            for channel in 0..self.state.channel_voice.len() {
+                let runtime = &mut self.state.channel_voice[channel];
+                runtime.expire(clock, now);
+                runtime.arp.process_block(
+                    f64::from(self.sample_rate),
+                    bpm,
+                    1,
+                    &mut runtime.arp_events,
+                );
+                for index in 0..runtime.arp_events.as_slice().len() {
+                    let event = runtime.arp_events.as_slice()[index];
+                    if event.kind == NoteEventKind::On
+                        && let Some(source) = runtime.source(Generator::Arp, event)
+                    {
+                        let duration = runtime.arp.gate_frames();
+                        runtime.schedule_echo(
+                            Note {
+                                key: event.note.key,
+                                velocity: event.note.velocity,
+                                ..source
+                            },
+                            duration,
+                            f64::from(self.sample_rate),
+                            bpm,
+                        );
+                    }
+                }
+                runtime.echo.process_block(1, &mut runtime.echo_events);
+                // Merge chronologically, off before on for the shared frame.
+                for kind in [NoteEventKind::Off, NoteEventKind::On] {
+                    for generator in [Generator::Arp, Generator::Echo] {
+                        let len = match generator {
+                            Generator::Arp => self.state.channel_voice[channel]
+                                .arp_events
+                                .as_slice()
+                                .len(),
+                            Generator::Echo => self.state.channel_voice[channel]
+                                .echo_events
+                                .as_slice()
+                                .len(),
+                        };
+                        for index in 0..len {
+                            let event = match generator {
+                                Generator::Arp => {
+                                    self.state.channel_voice[channel].arp_events.as_slice()[index]
+                                }
+                                Generator::Echo => {
+                                    self.state.channel_voice[channel].echo_events.as_slice()[index]
+                                }
+                            };
+                            if event.kind == kind {
+                                self.generated_event(channel, generator, event, now);
+                            }
+                        }
+                    }
+                }
+            }
+            self.render_voice_audio(base, frame, frame + 1);
+        }
+    }
+
+    fn render_voice_audio(&mut self, base: u64, from: usize, to: usize) {
         if from < to {
             if let Some(count) = &mut self.count_in {
-                self.metronome.render_count_in(count, &self.shared, base, from, to, self.sample_rate);
-            } else { self.metronome.render(from, to); }
+                self.metronome.render_count_in(
+                    count,
+                    &self.shared,
+                    base,
+                    from,
+                    to,
+                    self.sample_rate,
+                );
+            } else {
+                self.metronome.render(from, to);
+            }
             let clock = self.sequencer.clock();
             self.voices.render(
                 &self.plan,
@@ -947,7 +1378,8 @@ impl Processor {
                     frames: from..to,
                 },
             );
-            self.state.render_instrument_curves(&self.plan, clock, base, from..to);
+            self.state
+                .render_instrument_curves(&self.plan, clock, base, from..to);
             self.clips.render(
                 &self.plan,
                 clock,
@@ -967,7 +1399,11 @@ impl Processor {
     }
 
     fn finish_count_in(&mut self) {
-        if self.count_in.as_ref().is_some_and(|count| self.frame >= count.end()) {
+        if self
+            .count_in
+            .as_ref()
+            .is_some_and(|count| self.frame >= count.end())
+        {
             self.cancel_count_in();
             self.sequencer.play(&self.plan, self.frame, None, None);
         }

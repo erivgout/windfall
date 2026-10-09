@@ -68,8 +68,8 @@
 //!   any other note on its channel would cut.
 //! - On an instrument channel a note starts on its frame and is let go on
 //!   its tick, as on a sampler with an envelope. Its velocity is the
-//!   instrument's velocity. Its pan is not used: an instrument places its
-//!   own voices. A key holds one note at a time, so of two overlapping
+//!   instrument's velocity. Per-note pan places the instrument voice. A key
+//!   holds one note at a time, so of two overlapping
 //!   notes on one key the key comes up when the one that started later
 //!   ends.
 //! - Stopping fades every instrument out in a few milliseconds. Seeking
@@ -118,6 +118,8 @@
 
 pub mod analyzers;
 mod automation;
+pub mod channel_voice;
+mod channel_voice_runtime;
 mod clip_processing;
 mod clips;
 mod controller;
@@ -143,6 +145,7 @@ mod render;
 pub mod sampler_processing;
 mod sequencer;
 mod shared;
+mod spectrum;
 mod waveform_meter;
 mod state;
 mod stems;
@@ -167,7 +170,7 @@ pub use stems::{
     Stem, StemError, StemMode, StemOptions, Streamed, render_stems, render_streaming,
     render_streaming_checked, stems,
 };
-pub use voice::PREVIEW_GAIN_DB;
+pub use voice::{PREVIEW_GAIN_DB, loop_crossfade_mix};
 
 /// Lets the unit tests of code that runs on the audio thread count its
 /// allocator calls.
@@ -179,3 +182,6 @@ static ALLOCATOR: test_alloc::CountingAllocator = test_alloc::CountingAllocator;
 pub mod audio_edit;
 /// Bounded native audio input capture.
 pub mod recording;
+
+#[cfg(test)]
+mod qa_recording_mixer;

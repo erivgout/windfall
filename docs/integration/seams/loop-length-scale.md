@@ -1,0 +1,1 @@
+The sampler loop section halves or doubles the loop length by moving the end toward or away from the start. The start stays where it is. Double stops at the end of the sample. A loop that already fills the sample stays full when doubled. The buttons do not turn the loop on. Crossfade stays as it is.

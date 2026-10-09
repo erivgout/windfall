@@ -229,6 +229,7 @@ mod tests {
                 sample: SampleId(3),
                 mixer_track: TrackId::MASTER,
                 output: Default::default(),
+                normalize: false,
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

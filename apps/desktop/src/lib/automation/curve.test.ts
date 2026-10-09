@@ -116,9 +116,9 @@ describe("the range of a target", () => {
         checked += 1
       })
     }
-    // Includes utilities, filters, 16 lo-fi controls and 22 modulation controls.
-    expect(fixtures.ranges).toHaveLength(187)
-    expect(checked).toBe(187 * 9)
+    // All generated effect and instrument ranges, nine samples per range.
+    expect(fixtures.ranges).toHaveLength(1622)
+    expect(checked).toBe(1622 * 9)
     expect(worstForward).toBeLessThan(RANGE_TOLERANCE)
     expect(worstBack).toBeLessThan(RANGE_TOLERANCE)
   })

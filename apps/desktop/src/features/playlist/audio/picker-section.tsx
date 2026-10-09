@@ -1,6 +1,6 @@
 import { AudioWave01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { memo } from "react"
+import { memo, useState } from "react"
 
 import type { SampleAsset } from "@/bindings"
 import { ContextActions, type ContextItem } from "@/components/context-actions"
@@ -8,6 +8,7 @@ import { useHint } from "@/lib/store/hint"
 import { useProjectStore } from "@/lib/store/project"
 
 import { PICKER_ROW, PickerEmpty, PickerSection } from "../picker-section"
+import { matchingPatternIds } from "../pattern-filter"
 import { songTick } from "../ops"
 import { useAudioClipCounts } from "../selectors"
 import { usePlaylistStore } from "../store"
@@ -106,9 +107,12 @@ const SampleRow = memo(function SampleRow({
  * that is picked becomes the brush, as a pattern does.
  */
 export function AudioSection() {
+  const [query, setQuery] = useState("")
   const samples = useProjectStore((state) => state.project.samples)
   const brush = usePlaylistStore((state) => state.brush)
   const counts = useAudioClipCounts()
+  const matchingIds = new Set(matchingPatternIds(samples, query))
+  const visibleSamples = samples.filter((sample) => matchingIds.has(sample.id))
 
   return (
     <PickerSection title="Audio">
@@ -118,7 +122,22 @@ export function AudioSection() {
         </PickerEmpty>
       ) : (
         <div role="group" aria-label="Sound to place" className="flex flex-col">
-          {samples.map((sample) => (
+          <label className="flex flex-col gap-1 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+            Filter sounds
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key.startsWith("Arrow")) event.stopPropagation()
+              }}
+              className="h-7 w-full min-w-0 rounded-md border border-input bg-input/20 px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+            />
+          </label>
+          {visibleSamples.length === 0 && (
+            <PickerEmpty>No sounds match.</PickerEmpty>
+          )}
+          {visibleSamples.map((sample) => (
             <SampleRow
               key={sample.id}
               sample={sample}

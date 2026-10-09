@@ -213,6 +213,9 @@ export const MENUS: MenuSpec[] = [
           "playlist.toolSelect",
           "playlist.toolErase",
           "playlist.toolMute",
+          "playlist.toolSlip",
+          "playlist.toolPlayback",
+          "playlist.toolSlice",
           separator,
           "playlist.zoomIn",
           "playlist.zoomOut",
@@ -239,7 +242,7 @@ export const MENUS: MenuSpec[] = [
   },
   {
     title: "Help",
-    entries: ["help.shortcuts", "help.about"],
+    entries: ["help.gettingStarted", "help.shortcuts", "help.about"],
   },
 ]
 

@@ -11,6 +11,12 @@ import { useProjectStore } from "@/lib/store/project"
 import { onProjectReplaced } from "@/lib/store/replaced"
 import { useUiStore } from "@/lib/store/ui"
 import { MAX_PATTERN_STEPS, MAX_SONG_TICKS, PPQ, TICKS_PER_STEP } from "@/lib/units"
+import { nextWaveformCenterScale } from "./waveform-center-scale"
+import { nextWaveformFit } from "./waveform-fit-step"
+import { nextWaveformHeightScale } from "./waveform-height-scale"
+import { nextWaveformLengthScale } from "./waveform-length-scale"
+import { nextWaveformOpacityScale } from "./waveform-opacity-scale"
+import { nextWaveformStartScale } from "./waveform-start-scale"
 
 type Fit = "seconds" | "pattern" | "custom"
 type HelperSettings = { sample: SampleId | null; visible: boolean; fit: Fit; start: number; length: number; anchorKey: number; height: number; opacity: number }
@@ -95,13 +101,89 @@ export function WaveformHelperControl() {
           <SelectTrigger aria-label="Waveform helper time mapping"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>
             <SelectItem value="seconds">Original duration at project tempo</SelectItem><SelectItem value="pattern">Fit to pattern</SelectItem><SelectItem value="custom">Custom length</SelectItem>
           </SelectGroup></SelectContent>
-        </Select></Field>
+        </Select>
+          <div className="flex gap-1">
+            <Button type="button" variant="outline" size="sm" aria-label="Choose the previous waveform time mapping" disabled={nextWaveformFit(helper.fit, "previous") === null} onClick={() => {
+              const latest = useWaveformHelper.getState()
+              const next = nextWaveformFit(latest.fit, "previous")
+              if (next !== null) latest.configure({ fit: next })
+            }}>Previous</Button>
+            <Button type="button" variant="outline" size="sm" aria-label="Choose the next waveform time mapping" disabled={nextWaveformFit(helper.fit, "next") === null} onClick={() => {
+              const latest = useWaveformHelper.getState()
+              const next = nextWaveformFit(latest.fit, "next")
+              if (next !== null) latest.configure({ fit: next })
+            }}>Next</Button>
+          </div>
+        </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field><FieldLabel>Start (ticks)</FieldLabel><NumberField value={helper.start} min={-maxTicks} max={maxTicks} step={1} coarseStep={60} aria-label="Waveform helper start" onValueChange={(start) => helper.configure({ start: Math.round(start) })} /></Field>
-          {helper.fit === "custom" && <Field><FieldLabel>Length (ticks)</FieldLabel><NumberField value={helper.length} min={1} max={MAX_SONG_TICKS} step={1} coarseStep={240} aria-label="Waveform helper length" onValueChange={(length) => helper.configure({ length: Math.round(length) })} /></Field>}
-          <Field><FieldLabel>Center MIDI key</FieldLabel><NumberField value={helper.anchorKey} min={0} max={127} step={1} aria-label="Waveform helper center key" onValueChange={(anchorKey) => helper.configure({ anchorKey: Math.round(anchorKey) })} /></Field>
-          <Field><FieldLabel>Height (rows)</FieldLabel><NumberField value={helper.height} min={2} max={128} step={1} aria-label="Waveform helper height" onValueChange={(height) => helper.configure({ height: Math.round(height) })} /></Field>
-          <Field><FieldLabel>Opacity (%)</FieldLabel><NumberField value={helper.opacity * 100} min={1} max={60} step={1} aria-label="Waveform helper opacity" onValueChange={(opacity) => helper.configure({ opacity: opacity / 100 })} /></Field>
+          <Field><FieldLabel>Start (ticks)</FieldLabel><NumberField value={helper.start} min={-maxTicks} max={maxTicks} step={1} coarseStep={60} aria-label="Waveform helper start" onValueChange={(start) => helper.configure({ start: Math.round(start) })} />
+            <div className="flex gap-1">
+              <Button type="button" variant="outline" size="sm" aria-label="Halve waveform start" disabled={nextWaveformStartScale(helper.start, "half") === null} onClick={() => {
+                const latest = useWaveformHelper.getState()
+                const next = nextWaveformStartScale(latest.start, "half")
+                if (next !== null) latest.configure({ start: next })
+              }}>Half</Button>
+              <Button type="button" variant="outline" size="sm" aria-label="Double waveform start" disabled={nextWaveformStartScale(helper.start, "double") === null} onClick={() => {
+                const latest = useWaveformHelper.getState()
+                const next = nextWaveformStartScale(latest.start, "double")
+                if (next !== null) latest.configure({ start: next })
+              }}>Double</Button>
+            </div>
+          </Field>
+          {helper.fit === "custom" && <Field><FieldLabel>Length (ticks)</FieldLabel><NumberField value={helper.length} min={1} max={MAX_SONG_TICKS} step={1} coarseStep={240} aria-label="Waveform helper length" onValueChange={(length) => helper.configure({ length: Math.round(length) })} />
+            <div className="flex gap-1">
+              <Button type="button" variant="outline" size="sm" aria-label="Halve waveform length" disabled={nextWaveformLengthScale(helper.length, "half") === null} onClick={() => {
+                const latest = useWaveformHelper.getState()
+                if (latest.fit !== "custom") return
+                const next = nextWaveformLengthScale(latest.length, "half")
+                if (next !== null) latest.configure({ length: next })
+              }}>Half</Button>
+              <Button type="button" variant="outline" size="sm" aria-label="Double waveform length" disabled={nextWaveformLengthScale(helper.length, "double") === null} onClick={() => {
+                const latest = useWaveformHelper.getState()
+                if (latest.fit !== "custom") return
+                const next = nextWaveformLengthScale(latest.length, "double")
+                if (next !== null) latest.configure({ length: next })
+              }}>Double</Button>
+            </div>
+          </Field>}
+          <Field><FieldLabel>Center MIDI key</FieldLabel><NumberField value={helper.anchorKey} min={0} max={127} step={1} aria-label="Waveform helper center key" onValueChange={(anchorKey) => helper.configure({ anchorKey: Math.round(anchorKey) })} />
+            <div className="flex gap-1">
+              <Button type="button" variant="outline" size="sm" aria-label="Halve distance from C5" disabled={nextWaveformCenterScale(helper.anchorKey, "half") === null} onClick={() => {
+                const latest = useWaveformHelper.getState()
+                const next = nextWaveformCenterScale(latest.anchorKey, "half")
+                if (next !== null) latest.configure({ anchorKey: next })
+              }}>Half</Button>
+              <Button type="button" variant="outline" size="sm" aria-label="Double distance from C5" disabled={nextWaveformCenterScale(helper.anchorKey, "double") === null} onClick={() => {
+                const latest = useWaveformHelper.getState()
+                const next = nextWaveformCenterScale(latest.anchorKey, "double")
+                if (next !== null) latest.configure({ anchorKey: next })
+              }}>Double</Button>
+            </div>
+          </Field>
+          <Field><FieldLabel>Height (rows)</FieldLabel><NumberField value={helper.height} min={2} max={128} step={1} aria-label="Waveform helper height" onValueChange={(height) => helper.configure({ height: Math.round(height) })} />
+            <div className="flex gap-1">
+              <Button type="button" variant="outline" size="sm" disabled={nextWaveformHeightScale(helper.height, "half") === null} onClick={() => {
+                const next = nextWaveformHeightScale(useWaveformHelper.getState().height, "half")
+                if (next !== null) useWaveformHelper.getState().configure({ height: next })
+              }}>Half</Button>
+              <Button type="button" variant="outline" size="sm" disabled={nextWaveformHeightScale(helper.height, "double") === null} onClick={() => {
+                const next = nextWaveformHeightScale(useWaveformHelper.getState().height, "double")
+                if (next !== null) useWaveformHelper.getState().configure({ height: next })
+              }}>Double</Button>
+            </div>
+          </Field>
+          <Field><FieldLabel>Opacity (%)</FieldLabel><NumberField value={helper.opacity * 100} min={1} max={60} step={1} aria-label="Waveform helper opacity" onValueChange={(opacity) => helper.configure({ opacity: opacity / 100 })} />
+            <div className="flex gap-1">
+              <Button type="button" variant="outline" size="sm" aria-label="Halve waveform opacity" disabled={nextWaveformOpacityScale(helper.opacity, "half") === null} onClick={() => {
+                const next = nextWaveformOpacityScale(useWaveformHelper.getState().opacity, "half")
+                if (next !== null) useWaveformHelper.getState().configure({ opacity: next })
+              }}>Half</Button>
+              <Button type="button" variant="outline" size="sm" aria-label="Double waveform opacity" disabled={nextWaveformOpacityScale(helper.opacity, "double") === null} onClick={() => {
+                const next = nextWaveformOpacityScale(useWaveformHelper.getState().opacity, "double")
+                if (next !== null) useWaveformHelper.getState().configure({ opacity: next })
+              }}>Double</Button>
+            </div>
+          </Field>
         </div>
         {asset && (!loaded || loaded.status === "loading") && <p role="status" className="text-xs text-muted-foreground">Loading waveform…</p>}
         {loaded?.status === "error" && <p role="alert" className="text-xs text-destructive">{loaded.message}</p>}

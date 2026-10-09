@@ -52,6 +52,7 @@ fn a_project_opens_in_the_mode_it_was_saved_in() {
             mode: Some(PlayMode::Song),
             pattern: Some(PatternId(second)),
             loop_song: Some(true),
+            ..TransportPatch::default()
         })
         .unwrap();
     let snapshot = session.document_snapshot();

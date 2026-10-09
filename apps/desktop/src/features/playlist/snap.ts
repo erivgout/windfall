@@ -1,6 +1,7 @@
-import type { TimeSignature } from "@/bindings"
+import type { MeterChange, TimeSignature } from "@/bindings"
 import type { TimeGridSpec } from "@/lib/canvas"
 import { ticksPerBar, ticksPerBeat } from "@/lib/time"
+import { meterSegments } from "@/lib/timeline"
 import { TICKS_PER_STEP } from "@/lib/units"
 
 export type SnapMode = "none" | "step" | "beat" | "bar"
@@ -42,8 +43,19 @@ export function nudgeTicks(mode: SnapMode, signature: TimeSignature): number {
  */
 export function gridSpecFor(
   mode: SnapMode,
-  signature: TimeSignature
+  signature: TimeSignature,
+  meters: readonly MeterChange[] = []
 ): TimeGridSpec {
+  if (meters.length > 0) {
+    return {
+      ...gridSpecFor(mode, signature),
+      segments: meterSegments(signature, meters).map((segment) => ({
+        ...gridSpecFor(mode, segment.signature),
+        start: segment.start,
+        end: segment.end,
+      })),
+    }
+  }
   const beat = ticksPerBeat(signature)
   switch (mode) {
     case "bar":

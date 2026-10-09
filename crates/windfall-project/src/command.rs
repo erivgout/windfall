@@ -37,8 +37,71 @@ use crate::model::{
     rename_all_fields = "camelCase"
 )]
 #[ts(export)]
+// Keep parameter payloads inline in the public command API; boxing adds an
+// allocation to parameter edits and changes Rust callers' construction contract.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
-    AddNotesWithCurves { pattern: PatternId, channel: ChannelId, notes: Vec<NoteInit>, curves: Vec<crate::NoteCurveInsert> },
+    /// Creates an arrangement ID from the document allocator.
+    AddArrangement {
+        name: String,
+        clips: Vec<ClipId>,
+        tracks: Vec<PlaylistTrackId>,
+    },
+    RenameArrangement {
+        id: crate::arrangement::ArrangementId,
+        name: String,
+    },
+    SetArrangementReferences {
+        id: crate::arrangement::ArrangementId,
+        clips: Vec<ClipId>,
+        tracks: Vec<PlaylistTrackId>,
+    },
+    /// Changes the active metadata ID; playback still uses the single playlist.
+    SwitchArrangement {
+        id: crate::arrangement::ArrangementId,
+    },
+    RemoveArrangement {
+        id: crate::arrangement::ArrangementId,
+    },
+    AddTrackGroup {
+        name: String,
+        parent: Option<crate::arrangement::TrackGroupId>,
+    },
+    RenameTrackGroup {
+        id: crate::arrangement::TrackGroupId,
+        name: String,
+    },
+    MoveTrackGroup {
+        id: crate::arrangement::TrackGroupId,
+        parent: Option<crate::arrangement::TrackGroupId>,
+    },
+    MoveTrackToGroup {
+        track: PlaylistTrackId,
+        parent: Option<crate::arrangement::TrackGroupId>,
+    },
+    RemoveTrackGroup {
+        id: crate::arrangement::TrackGroupId,
+    },
+    AddClipGroup {
+        clips: Vec<ClipId>,
+    },
+    RemoveClipGroup {
+        id: crate::arrangement::ClipGroupId,
+    },
+    LinkTrack {
+        track: PlaylistTrackId,
+        kind: Option<crate::arrangement::TrackKind>,
+    },
+    /// Copies the chosen clip's source and redirects only that clip. Creates the source ID.
+    MakeUnique {
+        clip: ClipId,
+    },
+    AddNotesWithCurves {
+        pattern: PatternId,
+        channel: ChannelId,
+        notes: Vec<NoteInit>,
+        curves: Vec<crate::NoteCurveInsert>,
+    },
     SetNoteExpressionCurves {
         pattern: PatternId,
         channel: ChannelId,
@@ -46,18 +109,53 @@ pub enum Command {
         expected_curves: Vec<crate::NoteExpressionCurve>,
         curves: Vec<crate::NoteExpressionCurve>,
     },
-    SetPluginSidechainInput { target: crate::PluginTarget, input: Option<u32> },
-    SetSidechain { from: TrackId, to: TrackId, #[ts(optional)] gain: Option<f32> },
-    ApplyMixerTrackPreset { id: TrackId, expected: crate::MixerTrack, preset: crate::MixerTrackPreset, name_color: bool },
-    MoveMixerTracks { expected: Vec<TrackId>, ids: Vec<TrackId>, before: Option<TrackId> },
-    SetTrackParam { id: TrackId, param: u32, value: f32 },
+    SetPluginSidechainInput {
+        target: crate::PluginTarget,
+        input: Option<u32>,
+    },
+    SetSidechain {
+        from: TrackId,
+        to: TrackId,
+        #[ts(optional)]
+        gain: Option<f32>,
+    },
+    ApplyMixerTrackPreset {
+        id: TrackId,
+        expected: crate::MixerTrack,
+        preset: crate::MixerTrackPreset,
+        name_color: bool,
+    },
+    MoveMixerTracks {
+        expected: Vec<TrackId>,
+        ids: Vec<TrackId>,
+        before: Option<TrackId>,
+    },
+    SetTrackParam {
+        id: TrackId,
+        param: u32,
+        value: f32,
+    },
     /// Creates the saved follow-selection utility, or selects its existing id.
     EnsureCurrentMixerTrack,
-    SetTrackExternalOutput { id: TrackId, route: Option<crate::ExternalOutputRoute> },
-    CreateAudioTakeGroup { name: String, lanes: Vec<crate::AudioTakeLane> },
-    RenameAudioTakeGroup { id: u32, name: String },
-    RemoveAudioTakeGroup { id: u32 },
-    AuditionAudioTakeGroup { id: u32, pass: Option<u16> },
+    SetTrackExternalOutput {
+        id: TrackId,
+        route: Option<crate::ExternalOutputRoute>,
+    },
+    CreateAudioTakeGroup {
+        name: String,
+        lanes: Vec<crate::AudioTakeLane>,
+    },
+    RenameAudioTakeGroup {
+        id: u32,
+        name: String,
+    },
+    RemoveAudioTakeGroup {
+        id: u32,
+    },
+    AuditionAudioTakeGroup {
+        id: u32,
+        pass: Option<u16>,
+    },
     CompAudioTakeGroup {
         expected: crate::AudioTakeGroup,
         sources: Vec<crate::Clip>,
@@ -131,6 +229,10 @@ pub enum Command {
     UpdateSettings {
         patch: SettingsPatch,
     },
+    /// Replaces all saved notebook pages in one undo step. Trims titles only.
+    ReplaceNotebook {
+        notebook: crate::Notebook,
+    },
 
     // Sample pool
     /// Registers an audio file. Creates a [`SampleId`]. If a sample with the
@@ -197,6 +299,11 @@ pub enum Command {
     /// other channel, no audio clip and no other track. A track that was
     /// given a name of its own keeps it, and so does the track a channel
     /// leaves in the same command.
+    /// Replaces all channel voice tools in one undoable edit.
+    SetChannelVoiceSettings {
+        id: ChannelId,
+        settings: crate::ChannelVoiceSettings,
+    },
     UpdateChannel {
         id: ChannelId,
         patch: ChannelPatch,
@@ -591,6 +698,12 @@ pub struct SettingsPatch {
     #[ts(optional)]
     pub name: Option<String>,
     #[ts(optional)]
+    pub author: Option<String>,
+    #[ts(optional)]
+    pub genre: Option<String>,
+    #[ts(optional)]
+    pub comments: Option<String>,
+    #[ts(optional)]
     pub tempo_bpm: Option<f64>,
     #[ts(optional)]
     pub time_signature: Option<TimeSignature>,
@@ -647,6 +760,8 @@ pub struct SamplerPatch {
     pub loop_start: Option<f32>,
     #[ts(optional)]
     pub loop_end: Option<f32>,
+    #[ts(optional)]
+    pub loop_crossfade: Option<f32>,
     #[ts(optional)]
     pub cut_self: Option<bool>,
     #[ts(optional)]
@@ -754,6 +869,12 @@ pub struct PlaylistTrackPatch {
     pub name: Option<String>,
     #[ts(optional)]
     pub muted: Option<bool>,
+    #[ts(optional)]
+    pub solo: Option<bool>,
+    #[ts(optional)]
+    pub color: Option<u32>,
+    #[ts(optional)]
+    pub height: Option<u32>,
 }
 
 /// A clip to add.
@@ -824,6 +945,8 @@ pub struct AudioClipPatch {
     pub output: Option<crate::ClipAudioOutput>,
     #[ts(optional)]
     pub gain: Option<f32>,
+    #[ts(optional)]
+    pub normalize: Option<bool>,
     #[ts(optional)]
     pub pan: Option<f32>,
     #[ts(optional)]

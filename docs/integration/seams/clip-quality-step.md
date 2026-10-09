@@ -1,0 +1,1 @@
+The playlist clip stretch controls step quality from Fast through Standard toward High. Fast stays fast when moved previous. High stays high when moved next. Playback mode, the duration multiplier, formants, and pitch stay as they are. This is not an undo step; Apply remains the undo step.

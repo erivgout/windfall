@@ -6,6 +6,8 @@ import { ContextActions } from "@/components/context-actions"
 import { INSPECTOR_KEEPS, useShortcutScope } from "@/lib/actions"
 import { isInstrumentChannel, isSamplerChannel } from "@/lib/channel-source"
 import { useChannel, useChannelCount } from "@/lib/store/selectors"
+import { dispatch } from "@/lib/store/project"
+import { ChannelVoicePanel } from "../voice"
 import { useUiStore } from "@/lib/store/ui"
 import { colorToCss } from "@/lib/units"
 
@@ -90,6 +92,17 @@ export function ChannelInspector() {
                 <InstrumentSection channel={channel} />
               )
             )}
+            <ChannelVoicePanel
+              key={`${channel.id}:${JSON.stringify(channel.voice)}`}
+              initialSettings={channel.voice}
+              onChange={(settings) => {
+                void dispatch({
+                  type: "setChannelVoiceSettings",
+                  id: channel.id,
+                  settings,
+                })
+              }}
+            />
             <KeyboardSection channel={channel} />
             <TimingSection channel={channel} />
             <RoutingSection channel={channel} />

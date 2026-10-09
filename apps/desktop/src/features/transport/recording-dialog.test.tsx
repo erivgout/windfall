@@ -11,6 +11,7 @@ beforeEach(async () => {
   const app = await startTestApp()
   backend = app.backend
   cleanup = app.stop
+  useRecordingStore.setState(useRecordingStore.getInitialState(), true)
   useRecordingStore.setState({
     open: false,
     busy: false,
@@ -61,7 +62,21 @@ it("selects native channels and shows capture errors without losing the discard 
   const user = userEvent.setup()
   await user.click(screen.getByRole("button", { name: "Start recording" }))
   expect(start).toHaveBeenCalledWith(
-    { host: "Fake", device: "Synthetic", left: 0, right: null },
+    {
+      host: "Fake",
+      device: "Synthetic",
+      left: 0,
+      right: null,
+      alignment: {
+        synchronize: true,
+        driftCorrection: true,
+        offsetMs: 0,
+        inputSampleRate: null,
+      },
+      loopRecording: undefined,
+      monitor: undefined,
+      armedTracks: false,
+    },
     960,
     null
   )
@@ -79,5 +94,14 @@ it("explains that browser preview cannot capture audio", async () => {
   render(<RecordingDialog />)
   await openRecording()
   expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled()
-  expect(screen.getByText(/Hardware input\/output latency/)).toBeVisible()
+  expect(
+    screen.getByText(
+      /No audio inputs found\. Recording needs the native desktop app/
+    )
+  ).toBeVisible()
+  expect(
+    screen.getByText(
+      /Driver timestamps supply automatic input\/output latency alignment/
+    )
+  ).toBeVisible()
 })

@@ -8,6 +8,7 @@ import PlaylistPanel from "@/features/playlist"
 import type { CenterTab, PanelId } from "@/lib/store/ui"
 
 export type { PanelId }
+export { isPanelId } from "@/lib/store/ui"
 
 type PanelInfo = {
   title: string
@@ -43,7 +44,3 @@ export const PANELS: Record<PanelId, PanelInfo> = {
 }
 
 export const CENTER_TABS: CenterTab[] = ["channelRack", "playlist", "pianoRoll"]
-
-export function isPanelId(value: string | null): value is PanelId {
-  return value !== null && value in PANELS
-}

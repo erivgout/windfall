@@ -625,7 +625,11 @@ fn open(
     let default = device
         .default_output_config()
         .map_err(|error| format!("could not read the output format of \"{name}\": {error}"))?;
-    let preferred = choose_channel_config(&device, choose_config(&device, default, settings.sample_rate), settings.output_channels)?;
+    let preferred = choose_channel_config(
+        &device,
+        choose_config(&device, default, settings.sample_rate),
+        settings.output_channels,
+    )?;
     let fallback = choose_channel_config(&device, default, settings.output_channels)?;
     let buffer = settings
         .buffer_frames
@@ -733,18 +737,101 @@ fn fit_buffer(frames: u32, supported: &SupportedBufferSize) -> u32 {
     .max(1)
 }
 
-fn choose_channel_config(device: &cpal::Device, preferred: SupportedStreamConfig, requested: Option<u16>) -> Result<SupportedStreamConfig, String> {
+fn choose_channel_config(
+    device: &cpal::Device,
+    preferred: SupportedStreamConfig,
+    requested: Option<u16>,
+) -> Result<SupportedStreamConfig, String> {
     let most = crate::hardware_output::MAX_OUTPUT_CHANNELS as u16;
     if requested.is_some_and(|channels| channels == 0 || channels > most) {
         return Err(format!("Choose 1–{most} output channels"));
     }
-    if preferred.channels() <= most && requested.is_none_or(|channels| channels == preferred.channels()) { return Ok(preferred); }
+    if preferred.channels() <= most
+        && requested.is_none_or(|channels| channels == preferred.channels())
+    {
+        return Ok(preferred);
+    }
     let rate = preferred.sample_rate();
-    device.supported_output_configs().map_err(|error| error.to_string())?
-        .filter(|range| writable(range.sample_format()) && range.channels() <= most && requested.is_none_or(|channels| range.channels() == channels))
-        .map(|range| { let chosen = rate.clamp(range.min_sample_rate(), range.max_sample_rate()); (chosen.abs_diff(rate), range.with_sample_rate(chosen)) })
-        .min_by_key(|(distance, _)| *distance).map(|(_, config)| config)
-        .ok_or_else(|| "The selected device does not offer the requested output channel layout".into())
+    device
+        .supported_output_configs()
+        .map_err(|error| error.to_string())?
+        .filter(|range| {
+            writable(range.sample_format())
+                && range.channels() <= most
+                && requested.is_none_or(|channels| range.channels() == channels)
+        })
+        .map(|range| {
+            let chosen = rate.clamp(range.min_sample_rate(), range.max_sample_rate());
+            (chosen.abs_diff(rate), range.with_sample_rate(chosen))
+        })
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, config)| config)
+        .ok_or_else(|| {
+            "The selected device does not offer the requested output channel layout".into()
+        })
+}
+
+enum BuildFailure {
+    Driver(String),
+    Preparation(crate::ProjectPreparationError),
+}
+
+fn prepared_attachment(
+    controller: &Controller,
+    sample_rate: u32,
+) -> Result<
+    (
+        Processor,
+        crate::project_preparation::AttachmentAdmission,
+        crate::ProjectRetirement,
+    ),
+    crate::ProjectPreparationError,
+> {
+    use crate::ProjectPreparationError;
+    use crate::project_preparation::{AttachmentMode, PublicationRefusal};
+    controller.shared().recording_clock.reset_output();
+    for attempt in 1..=3 {
+        match controller.try_attach(sample_rate, AttachmentMode::Device) {
+            Ok(prepared) => return Ok(prepared),
+            Err(
+                error @ (ProjectPreparationError::IdentityChanged
+                | ProjectPreparationError::Publication(PublicationRefusal::StalePlan)),
+            ) => {
+                if attempt == 3 {
+                    return Err(ProjectPreparationError::AttachmentRetries {
+                        attempts: attempt,
+                        reason: Box::new(error),
+                    });
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded attachment retry")
+}
+
+fn finish_start<T>(
+    controller: &Controller,
+    admission: crate::project_preparation::AttachmentAdmission,
+    stream: T,
+    started: Result<(), String>,
+) -> Result<T, String> {
+    let result = started.and_then(|()| {
+        controller
+            .complete_attachment(admission)
+            .map_err(|error| error.to_string())
+    });
+    match result {
+        Ok(()) => Ok(stream),
+        Err(error) => {
+            let closing = controller
+                .begin_close(false)
+                .map_err(|error| error.to_string())?;
+            drop(stream);
+            controller.finish_close(closing);
+            Err(error)
+        }
+    }
 }
 
 fn build(
@@ -771,7 +858,9 @@ fn build(
         sample_rate: config.sample_rate(),
         buffer_size: buffer.map_or(BufferSize::Default, BufferSize::Fixed),
     };
-    let mut processor = controller.attach(config.sample_rate());
+    let (mut processor, admission, retirement) =
+        prepared_attachment(controller, config.sample_rate()).map_err(BuildFailure::Preparation)?;
+    drop(retirement);
     processor.set_output_channels(usize::from(config.channels()));
     let mut feeder = Feeder {
         processor,
@@ -786,7 +875,11 @@ fn build(
             stream_config,
             format,
             move |data: &mut cpal::Data, info: &cpal::OutputCallbackInfo| {
-                feeder.shared.recording_clock.publish_output(feeder.processor.output_frame(), feeder.processor.sample_rate(), info.timestamp());
+                feeder.shared.recording_clock.publish_output(
+                    feeder.processor.output_frame(),
+                    feeder.processor.sample_rate(),
+                    info.timestamp(),
+                );
                 feeder.fill(data);
             },
             move |error: cpal::Error| reporter.report(error),
@@ -798,7 +891,10 @@ fn build(
         Err(error) => {
             // CPAL has dropped its failed Feeder before returning. Starting
             // fenced document publication throughout that destruction.
-            controller.detach();
+            let closing = controller
+                .begin_close(false)
+                .map_err(|error| BuildFailure::Driver(error.to_string()))?;
+            controller.finish_close(closing);
             Err(BuildFailure::Driver(error.to_string()))
         }
     }
@@ -964,7 +1060,11 @@ fn describe(device: &cpal::Device, is_default: bool) -> AudioDevice {
     let mut sample_rates = Vec::new();
     let mut output_channels = Vec::new();
     for range in device.supported_output_configs().into_iter().flatten() {
-        if writable(range.sample_format()) && usize::from(range.channels()) <= crate::hardware_output::MAX_OUTPUT_CHANNELS { output_channels.push(range.channels()); }
+        if writable(range.sample_format())
+            && usize::from(range.channels()) <= crate::hardware_output::MAX_OUTPUT_CHANNELS
+        {
+            output_channels.push(range.channels());
+        }
         sample_rates.extend(
             STANDARD_RATES
                 .into_iter()
@@ -973,7 +1073,8 @@ fn describe(device: &cpal::Device, is_default: bool) -> AudioDevice {
     }
     sample_rates.sort_unstable();
     sample_rates.dedup();
-    output_channels.sort_unstable(); output_channels.dedup();
+    output_channels.sort_unstable();
+    output_channels.dedup();
     // Buffer sizes are in frames, so a range only means something at one
     // sample rate. The one reported is for the device's default format.
     let buffer_range =
@@ -1110,6 +1211,8 @@ mod tests {
                         name: "device".into(),
                         state: vec![],
                         parameters: vec![],
+                        sidechain_input: None,
+                        auxiliary_inputs: Vec::new(),
                     },
                 },
                 None,

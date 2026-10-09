@@ -1,0 +1,1 @@
+The recording dialog halves or doubles the loop-take length by moving the end tick. The playlist start stays where it is. Half keeps at least one tick. Double stops at the song limit. The buttons are hidden while loop recording is off, and a scale does not turn it on. They stay disabled while recording or while the dialog is busy.

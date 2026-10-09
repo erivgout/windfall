@@ -1,9 +1,11 @@
 //! From FL Studio's own instruments to Windfall's.
 //!
-//! One instrument has an equivalent so far: the three-oscillator synth FL
-//! Studio writes into a project as "3x Osc" becomes Windfall's subtractive
-//! synth, which has three oscillators of its own. Every other instrument
-//! becomes a silent placeholder channel.
+//! The three-oscillator synth FL Studio writes as "3x Osc" becomes
+//! Windfall's subtractive synth, with its numeric settings carried over.
+//! The names in `DEFAULT_INSTRUMENTS` select registered instruments with
+//! sanitized defaults; their patch settings are not decoded. Other names
+//! remain silent placeholders. The mappings and limits are documented in
+//! `docs/integration/seams/flp-instruments.md`.
 //!
 //! The order of the 3x Osc's numbers comes from DawVert
 //! `data_main/datadef/fl_studio.ddef`, and what they mean from DawVert
@@ -12,14 +14,49 @@
 //! Studio 9 fit: 92 bytes, with the two mix levels where a project that
 //! "turns oscillator 3 down" has a zero.
 
-use windfall_dsp::{InstrumentParams, ParamSet, SynthParams, VoiceMode, Waveform};
+use windfall_dsp::{InstrumentKind, InstrumentParams, ParamSet, SynthParams, VoiceMode, Waveform};
 
 use crate::model::{Channel, EnvelopeLfo};
 use crate::plugin::Numbers;
 use crate::units::envelope_ms;
 
-/// The internal name of the instrument this module translates.
+/// The internal name of the instrument whose state this module decodes.
 const THREE_OSC: &str = "3x osc";
+
+const PATCH_SETTINGS_NOT_DECODED: &str =
+    "its patch settings were not decoded, so it starts from Windfall's defaults";
+
+/// Import keys only: these are FL Studio's internal names, not Windfall names.
+/// Each kind is registered and is the stand-in documented in the DSP seams.
+const DEFAULT_INSTRUMENTS: &[(&str, InstrumentKind)] = &[
+    ("Fruity DX10", InstrumentKind::FourOp),
+    ("Sytrus", InstrumentKind::MatrixFm),
+    ("Toxic Biohazard", InstrumentKind::RingHybrid),
+    ("Harmless", InstrumentKind::HarmonicStack),
+    ("Morphine", InstrumentKind::PartialMorph),
+    ("Ogun", InstrumentKind::Inharmonic),
+    ("Harmor", InstrumentKind::Resynth),
+    ("Autogun", InstrumentKind::SeedPatch),
+    ("BeepMap", InstrumentKind::ScanSynth),
+    ("Plucked!", InstrumentKind::Pluck),
+    ("BooBass", InstrumentKind::FingerBass),
+    ("Sakura", InstrumentKind::AcousticString),
+    ("Fruity Kick", InstrumentKind::Kick),
+    ("Drumaxx", InstrumentKind::DrumRack),
+    ("Drumpad", InstrumentKind::DrumRack),
+    ("Fruity DrumSynth Live", InstrumentKind::DrumVoice),
+    ("Fruity Slicer", InstrumentKind::SliceMap),
+    ("Slicex", InstrumentKind::SliceDeck),
+    ("Fruity Granulizer", InstrumentKind::GrainCloud),
+    ("Wave Traveller", InstrumentKind::WaveRide),
+    ("Transistor Bass", InstrumentKind::AcidLine),
+    ("SimSynth", InstrumentKind::TripleOsc),
+    ("Poizone", InstrumentKind::TripleOsc),
+    ("Sawer", InstrumentKind::WaveLane),
+    ("FLEX", InstrumentKind::MacroVoice),
+    ("GMS", InstrumentKind::MacroVoice),
+    ("Speech Synthesizer", InstrumentKind::SpeechVoice),
+];
 
 /// An FL Studio instrument as a Windfall instrument.
 #[derive(Debug, Clone)]
@@ -34,10 +71,17 @@ pub(crate) struct Translated {
 /// nothing that stands for it.
 pub(crate) fn translate(channel: &Channel) -> Option<Translated> {
     let plugin = channel.plugin.as_ref()?;
-    if !plugin.internal_name.trim().eq_ignore_ascii_case(THREE_OSC) {
-        return None;
+    let name = plugin.internal_name.trim();
+    if name.eq_ignore_ascii_case(THREE_OSC) {
+        return Some(three_osc(Numbers(&plugin.state), channel));
     }
-    Some(three_osc(Numbers(&plugin.state), channel))
+    let (_, kind) = DEFAULT_INSTRUMENTS
+        .iter()
+        .find(|(source, _)| source.eq_ignore_ascii_case(name))?;
+    Some(Translated {
+        params: kind.default_params().sanitized(),
+        notes: vec![PATCH_SETTINGS_NOT_DECODED],
+    })
 }
 
 /// FL Studio's oscillator shapes, in the order of the numbers it stores:
@@ -183,7 +227,10 @@ mod tests {
 
     fn synth(channel: &Channel) -> (SynthParams, Vec<&'static str>) {
         let translated = translate(channel).expect("a synth");
-        let InstrumentParams::SubtractiveSynth(params) = translated.params;
+        let params = match translated.params {
+            InstrumentParams::SubtractiveSynth(params) => params,
+            _ => panic!("expected the subtractive synth"),
+        };
         (params, translated.notes)
     }
 
@@ -294,6 +341,88 @@ mod tests {
             InstrumentParams::SubtractiveSynth(params),
             InstrumentParams::SubtractiveSynth(params.sanitized())
         );
+    }
+
+    #[test]
+    fn registered_stand_ins_use_sanitized_defaults_without_decoding_patches() {
+        let expected = [
+            ("Fruity DX10", InstrumentKind::FourOp),
+            ("Sytrus", InstrumentKind::MatrixFm),
+            ("Toxic Biohazard", InstrumentKind::RingHybrid),
+            ("Harmless", InstrumentKind::HarmonicStack),
+            ("Morphine", InstrumentKind::PartialMorph),
+            ("Ogun", InstrumentKind::Inharmonic),
+            ("Harmor", InstrumentKind::Resynth),
+            ("Autogun", InstrumentKind::SeedPatch),
+            ("BeepMap", InstrumentKind::ScanSynth),
+            ("Plucked!", InstrumentKind::Pluck),
+            ("BooBass", InstrumentKind::FingerBass),
+            ("Sakura", InstrumentKind::AcousticString),
+            ("Fruity Kick", InstrumentKind::Kick),
+            ("Drumaxx", InstrumentKind::DrumRack),
+            ("Drumpad", InstrumentKind::DrumRack),
+            ("Fruity DrumSynth Live", InstrumentKind::DrumVoice),
+            ("Fruity Slicer", InstrumentKind::SliceMap),
+            ("Slicex", InstrumentKind::SliceDeck),
+            ("Fruity Granulizer", InstrumentKind::GrainCloud),
+            ("Wave Traveller", InstrumentKind::WaveRide),
+            ("Transistor Bass", InstrumentKind::AcidLine),
+            ("SimSynth", InstrumentKind::TripleOsc),
+            ("Poizone", InstrumentKind::TripleOsc),
+            ("Sawer", InstrumentKind::WaveLane),
+            ("FLEX", InstrumentKind::MacroVoice),
+            ("GMS", InstrumentKind::MacroVoice),
+            ("Speech Synthesizer", InstrumentKind::SpeechVoice),
+        ];
+        for (name, kind) in expected {
+            for internal_name in [
+                name.to_owned(),
+                format!("  {}\t", name.to_ascii_uppercase()),
+            ] {
+                for state in [Vec::new(), vec![255; 92]] {
+                    let mut channel = channel(state);
+                    channel.plugin.as_mut().unwrap().internal_name = internal_name.clone();
+                    let translated = translate(&channel).expect(name);
+                    assert_eq!(translated.params.kind(), kind, "{name}");
+                    assert_eq!(
+                        translated.params,
+                        kind.default_params().sanitized(),
+                        "{name}"
+                    );
+                    assert_eq!(translated.notes, [PATCH_SETTINGS_NOT_DECODED], "{name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn three_osc_still_decodes_with_case_and_whitespace_variations() {
+        let mut channel = channel(state([(0, 2, -12, 50); 3], (64, 0), [0; 4]));
+        channel.plugin.as_mut().unwrap().internal_name = "  3X oSC\t".to_owned();
+        let (params, _) = synth(&channel);
+        assert_eq!(params.oscillators[0].waveform, Waveform::Square);
+        assert_eq!(params.oscillators[0].coarse, -12);
+        assert_eq!(params.oscillators[0].fine_cents, 50.0);
+        assert_eq!(params.oscillators[2].level, 0.0);
+    }
+
+    #[test]
+    fn names_without_a_documented_registered_stand_in_remain_placeholders() {
+        for name in [
+            "BassDrum",
+            "DirectWave",
+            "SoundFont",
+            "Fruity Soundfont Player",
+            "FL Keys",
+            "FPC",
+            "Kepler",
+            "MiniSynth",
+            "Fruity Slicer 2",
+        ] {
+            let mut channel = channel(Vec::new());
+            channel.plugin.as_mut().unwrap().internal_name = name.to_owned();
+            assert!(translate(&channel).is_none(), "{name}");
+        }
     }
 
     #[test]

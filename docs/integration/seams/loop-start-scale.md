@@ -1,0 +1,1 @@
+The sampler loop section halves or doubles the loop length by moving the start. The end stays where it is. Double stops at the beginning of the sample. A loop that already begins at the start of the sample stays there when doubled. The buttons do not turn the loop on. The existing Halve length and Double length buttons still move the end.

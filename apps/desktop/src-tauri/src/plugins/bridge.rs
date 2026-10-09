@@ -331,6 +331,9 @@ impl Drop for Audio {
     }
 }
 impl HostedEffect for Audio {
+    fn set_sidechain_input(&mut self, input: Option<u32>) {
+        self.process.set_sidechain_input(input);
+    }
     fn adopt_parameters(&mut self, parameters: &[PluginParameter]) {
         let (epoch, sequence, desired) = self.process.collection_frontier();
         let mut changed = false;
@@ -375,10 +378,14 @@ impl HostedEffect for Audio {
         self.publish(false);
     }
     fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_sidechain(left, right, None);
+    }
+    fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         if self.offline {
-            if let Err(error) = self.process.process_offline(
+            if let Err(error) = self.process.process_offline_sidechain(
                 left,
                 right,
+                key,
                 std::time::Instant::now() + Duration::from_secs(2),
                 &AtomicBool::new(false),
             ) {
@@ -391,7 +398,7 @@ impl HostedEffect for Audio {
                 self.process.signals().failed.store(true, Ordering::Release);
             }
         } else {
-            self.process.process(left, right);
+            self.process.process_sidechain(left, right, key);
         }
         self.publish(false);
         self.acknowledge();
@@ -451,6 +458,126 @@ mod tests {
         protocol::*,
         slots::{InputBlock, LocalWords, OutputBlock, Region},
     };
+
+    fn native_selected_sidechain_reaches_desktop_facade(vst3: bool) {
+        for offline in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join(if vst3 {
+                "detector.vst3"
+            } else {
+                "detector.clap"
+            });
+            std::fs::copy(std::env::var_os("WINDFALL_BRIDGE_FIXTURE").unwrap(), &path).unwrap();
+            let binding = PluginBinding {
+                target: windfall_project::PluginTarget::Effect {
+                    effect: windfall_project::EffectId(9123),
+                },
+                format: if vst3 { "vst3" } else { "clap" }.into(),
+                id: if vst3 {
+                    "00000000000000000000000000000016"
+                } else {
+                    "org.windfall.test.sidechain"
+                }
+                .into(),
+                path: path.to_string_lossy().into_owned(),
+                name: "Native detector".into(),
+                state: Vec::new(),
+                parameters: Vec::new(),
+                sidechain_input: Some(1),
+                auxiliary_inputs: vec![windfall_project::PluginAuxInput {
+                    index: 1,
+                    name: "Detector".into(),
+                    channels: 1,
+                }],
+            };
+            let controls = super::super::runtime::parameter_controls(&binding);
+            let options = options(
+                PathBuf::from(std::env::var_os("WINDFALL_DESKTOP_BRIDGE_HELPER").unwrap()),
+                &binding,
+                windfall_plugin_host::paths::plugin_file_identity(&path).unwrap(),
+                9123,
+                1,
+                48_000,
+                offline,
+            )
+            .unwrap();
+            let render_error = Arc::new(Mutex::new(None));
+            let (record, mut audio) =
+                launch(options, binding, controls, None, render_error.clone()).unwrap();
+            let key = [[0.25, 0.75]; DEFAULT_BLOCK];
+            // Mono detector folds the supplied stereo key to 0.5. A missing
+            // explicitly selected native bus must remain silent; None chooses
+            // the first auxiliary port. Plain process must clear prior key PCM.
+            for (selected, with_key, expected) in [
+                (Some(1), true, [0.6, 0.7]),
+                (Some(2), true, [0.1, 0.2]),
+                (None, true, [0.6, 0.7]),
+                (Some(1), false, [0.1, 0.2]),
+            ] {
+                assert_eq!(
+                    crate::test_alloc::allocator_calls(|| HostedEffect::set_sidechain_input(
+                        &mut audio, selected
+                    )),
+                    0
+                );
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                let mut calls = 0;
+                loop {
+                    let mut left = [0.1; DEFAULT_BLOCK];
+                    let mut right = [0.2; DEFAULT_BLOCK];
+                    let mut process = || {
+                        if with_key {
+                            HostedEffect::process_sidechain(
+                                &mut audio,
+                                &mut left,
+                                &mut right,
+                                Some(&key),
+                            );
+                        } else {
+                            HostedEffect::process(&mut audio, &mut left, &mut right);
+                        }
+                    };
+                    if offline {
+                        process();
+                    } else {
+                        assert_eq!(crate::test_alloc::allocator_calls(process), 0);
+                    }
+                    calls += 1;
+                    assert!(render_error.lock().unwrap().is_none());
+                    assert!(!record.control.status().failed);
+                    if calls >= 8
+                        && left.iter().all(|value| (*value - expected[0]).abs() < 1e-6)
+                        && right
+                            .iter()
+                            .all(|value| (*value - expected[1]).abs() < 1e-6)
+                    {
+                        assert!(audio.process.health().completed_blocks > 0);
+                        break;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "vst3={vst3}, offline={offline}, selected={selected:?}, key={with_key}, PCM={:?}/{:?}",
+                        &left[..4],
+                        &right[..4]
+                    );
+                    if !offline {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+            }
+            drop(audio);
+            assert!(record.control.terminate().reaped);
+        }
+    }
+
+    #[test]
+    fn native_clap_selected_sidechain_reaches_desktop_facade_live_and_offline() {
+        native_selected_sidechain_reaches_desktop_facade(false);
+    }
+    #[test]
+    fn native_vst3_selected_sidechain_reaches_desktop_facade_live_and_offline() {
+        native_selected_sidechain_reaches_desktop_facade(true);
+    }
     #[test]
     fn adoption_records_only_equivalence_and_waits_for_a_later_complete_proof() {
         let parameter = PluginParameter {
@@ -464,6 +591,8 @@ mod tests {
             automatable: true,
         };
         let binding = PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target: windfall_project::PluginTarget::Effect {
                 effect: windfall_project::EffectId(1),
             },
@@ -628,6 +757,8 @@ mod tests {
             automatable: true,
         };
         let binding = PluginBinding {
+            sidechain_input: None,
+            auxiliary_inputs: Vec::new(),
             target: windfall_project::PluginTarget::Instrument {
                 channel: windfall_project::ChannelId(9001),
             },

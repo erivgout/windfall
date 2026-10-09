@@ -69,22 +69,6 @@ pub struct TimelinePlaybackState {
     pub navigation_overflows: u32,
 }
 
-/// Session-only timeline playback state; no musical edit or undo entry.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct TimelinePlaybackState {
-    /// Transient, exact JS-safe monotonic publication number. Never wraps.
-    #[ts(type = "number")]
-    pub request: u64,
-    #[ts(type = "number")]
-    pub generation: u64,
-    #[ts(type = "number")]
-    pub revision: u64,
-    pub region: Option<windfall_project::TickRange>,
-    pub navigation_overflows: u32,
-}
-
 /// A change to the transport. `None` leaves a field alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", default)]
@@ -107,6 +91,26 @@ pub struct TransportPatch {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct RealtimeFrame {
+    /// Existing analyzer's uncentered, normalized zero-lag stereo correlation,
+    /// finite and in -1..=1. Absent when no valid correlation is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub correlation: Option<f32>,
+    /// At most 64 ascending, uniformly grouped FFT bands from DC through
+    /// Nyquist. Each is summed mean-square power averaged across valid
+    /// stereo channels, not dB. Empty when no valid snapshot is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<f32>>", optional)]
+    pub spectrum: Vec<f32>,
+    /// Short analyzer history, flattened row-major with the oldest valid row
+    /// first. At most 16 rows and 64 columns; each row follows `spectrum`'s
+    /// finite, nonnegative mean-square band contract. Invalid slices are
+    /// omitted. Empty (and omitted on the wire) when no slice is valid.
+    /// Columns match nonempty `spectrum`; the current engine uses 64 columns
+    /// even when the current spectrum is invalid and only older rows remain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<f32>>", optional)]
+    pub spectrogram: Vec<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<MixerWaveform>>", optional)]
     pub waveforms: Vec<MixerWaveform>,

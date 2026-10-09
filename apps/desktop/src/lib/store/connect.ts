@@ -33,6 +33,9 @@ export function connectStores(): () => void {
   const disconnect = [
     watchCurrentSource(),
     watchMixerWaveforms(),
+    backend.onPanelDocked((id) =>
+      useUiStore.getState().removeDetachedPanel(id)
+    ),
     backend.onProjectPatch((patch) => {
       receivePatch(patch)
       if (patch.mixer || patch.channels) refreshLatencySoon()

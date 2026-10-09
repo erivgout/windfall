@@ -334,9 +334,9 @@ describe("moving points", () => {
     await curve(automation, [point(0, 0), point(BAR, 0.5), point(2 * BAR, 1)])
     const { session, stop: end } = tallSession()
     await pull(session, spot(BAR, 0.5), spot(3 * BAR + 500, 0.5))
-    expect(points().map((item) => item.tick)).toEqual([0, 2 * BAR, 2 * BAR])
-    await pull(session, spot(2 * BAR, 0.5), spot(-900, 0.5))
-    expect(points().map((item) => item.tick)).toEqual([0, 0, 2 * BAR])
+    expect(points().map((item) => item.tick)).toEqual([0, 2 * BAR - 1, 2 * BAR])
+    await pull(session, spot(2 * BAR - 1, 0.5), spot(-900, 0.5))
+    expect(points().map((item) => item.tick)).toEqual([0, 1, 2 * BAR])
     end()
   })
 

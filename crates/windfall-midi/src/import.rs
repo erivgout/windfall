@@ -14,10 +14,10 @@ use std::fmt;
 use windfall_project::{
     AutomationId, AutomationPoint, AutomationRange, AutomationTarget, ChannelId, ChannelPatch,
     ClipContent, ClipInit, Command, DEFAULT_KEY, InstrumentKind, MAX_AUTOMATION_POINTS,
-    MAX_MIXER_TRACKS, MAX_PATTERN_TICKS, MAX_SONG_TICKS, MAX_TEMPO_BPM, MIN_TEMPO_BPM, NoteInit,
-    PatternId, PatternPatch, PlaylistTrackId, Project, SampleId, SamplePath, SettingsPatch,
-    TICKS_PER_STEP, TimeSignature, Timeline, PatternTimelineEdit, MeterChange, MeterChangeId,
-    MarkerKind, TimelineMarker, TimelineMarkerId,
+    MAX_MIXER_SIGNAL_TRACKS, MAX_PATTERN_TICKS, MAX_SONG_TICKS, MAX_TEMPO_BPM, MIN_TEMPO_BPM,
+    MarkerKind, MeterChange, MeterChangeId, NoteInit, PatternId, PatternPatch, PatternTimelineEdit,
+    PlaylistTrackId, Project, SampleId, SamplePath, SettingsPatch, TICKS_PER_STEP, TimeSignature,
+    Timeline, TimelineMarker, TimelineMarkerId,
 };
 
 use crate::gm::{DrumKit, program_name};
@@ -443,9 +443,13 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
             tempo_bpm: None,
             time_signature: signature.filter(|_| options.time_signature),
             meters: Vec::new(),
-            markers: song.markers.iter().filter(|marker| marker.tick < MAX_SONG_TICKS)
+            markers: song
+                .markers
+                .iter()
+                .filter(|marker| marker.tick < MAX_SONG_TICKS)
                 .filter_map(|marker| marker_name(&marker.text).map(|name| (marker.tick, name)))
-                .take(windfall_project::MAX_TIMELINE_ITEMS).collect(),
+                .take(windfall_project::MAX_TIMELINE_ITEMS)
+                .collect(),
             length,
             samples: Vec::new(),
             channels: Vec::new(),
@@ -458,10 +462,18 @@ pub fn import(song: &MidiSong, options: &ImportOptions) -> ImportPlan {
         limit,
         segment,
         share,
-        source_meters: if options.time_signature { song.time_signatures.iter().map(|event| {
-            let signature = fit_signature(event.numerator, event.denominator);
-            (event.tick, signature.numerator, signature.denominator)
-        }).take(windfall_project::MAX_TIMELINE_ITEMS).collect() } else { Vec::new() },
+        source_meters: if options.time_signature {
+            song.time_signatures
+                .iter()
+                .map(|event| {
+                    let signature = fit_signature(event.numerator, event.denominator);
+                    (event.tick, signature.numerator, signature.denominator)
+                })
+                .take(windfall_project::MAX_TIMELINE_ITEMS)
+                .collect()
+        } else {
+            Vec::new()
+        },
         room: MAX_IMPORTED_NOTES,
         fitted: Fitted::default(),
         drums: Vec::new(),
@@ -539,8 +551,14 @@ fn clean_name(name: &str) -> Option<String> {
 fn marker_name(name: &str) -> Option<String> {
     let mut result = String::new();
     for character in name.trim().chars() {
-        let character = if character.is_control() { ' ' } else { character };
-        if result.len() + character.len_utf8() > 256 { break; }
+        let character = if character.is_control() {
+            ' '
+        } else {
+            character
+        };
+        if result.len() + character.len_utf8() > 256 {
+            break;
+        }
         result.push(character);
     }
     let result = result.trim().to_owned();
@@ -774,12 +792,27 @@ impl Builder<'_> {
             let length = self.segment.min(self.plan.length - start);
             let length_steps = length / TICKS_PER_STEP;
             let timeline = LocalTimeline {
-                signature: self.options.time_signature.then(|| self.source_meters.iter().rev()
-                    .find(|(tick, _, _)| *tick <= start).map(|(_, numerator, denominator)| (*numerator, *denominator)).unwrap_or((4, 4))),
-                meters: self.source_meters.iter().filter(|(tick, _, _)| *tick > start && *tick < start + length)
-                    .map(|(tick, numerator, denominator)| (*tick - start, *numerator, *denominator)).collect(),
-                markers: self.plan.markers.iter().filter(|(tick, _)| *tick >= start && *tick < start + length)
-                    .map(|(tick, name)| (*tick - start, name.clone())).collect(),
+                signature: self.options.time_signature.then(|| {
+                    self.source_meters
+                        .iter()
+                        .rev()
+                        .find(|(tick, _, _)| *tick <= start)
+                        .map(|(_, numerator, denominator)| (*numerator, *denominator))
+                        .unwrap_or((4, 4))
+                }),
+                meters: self
+                    .source_meters
+                    .iter()
+                    .filter(|(tick, _, _)| *tick > start && *tick < start + length)
+                    .map(|(tick, numerator, denominator)| (*tick - start, *numerator, *denominator))
+                    .collect(),
+                markers: self
+                    .plan
+                    .markers
+                    .iter()
+                    .filter(|(tick, _)| *tick >= start && *tick < start + length)
+                    .map(|(tick, name)| (*tick - start, name.clone()))
+                    .collect(),
             };
             let mut content = Vec::new();
             for lane in &mut lanes {
@@ -795,8 +828,25 @@ impl Builder<'_> {
                 plan.patterns.push(PlannedPattern {
                     name: String::new(),
                     length_steps,
-                    time_signature: timeline.signature.map(|(numerator, denominator)| TimeSignature { numerator, denominator }),
-                    meters: timeline.meters.iter().map(|&(tick, numerator, denominator)| (tick, TimeSignature { numerator, denominator })).collect(),
+                    time_signature: timeline.signature.map(|(numerator, denominator)| {
+                        TimeSignature {
+                            numerator,
+                            denominator,
+                        }
+                    }),
+                    meters: timeline
+                        .meters
+                        .iter()
+                        .map(|&(tick, numerator, denominator)| {
+                            (
+                                tick,
+                                TimeSignature {
+                                    numerator,
+                                    denominator,
+                                },
+                            )
+                        })
+                        .collect(),
                     markers: timeline.markers.clone(),
                     lanes: content.iter().map(planned_lane).collect(),
                 });
@@ -940,7 +990,10 @@ impl Builder<'_> {
         left(Unsupported::Aftertouch, pressure);
         left(Unsupported::ProgramChanges, programs);
         left(Unsupported::KeySignatures, song.key_signatures.len());
-        left(Unsupported::Markers, song.markers.len().saturating_sub(self.plan.markers.len()));
+        left(
+            Unsupported::Markers,
+            song.markers.len().saturating_sub(self.plan.markers.len()),
+        );
 
         if let Some((changes, kept)) = fitted.tempo_thinned {
             list.push(Adjustment::TempoChangesThinned { changes, kept });
@@ -963,7 +1016,11 @@ fn planned_lane((channel, hits): &LaneHits) -> PlannedLane {
                 key: hit.key,
                 velocity: Some(velocity_from_midi(hit.velocity)),
                 pan: None,
-                expression: Some(windfall_project::NoteExpression { release: f32::from(hit.release.min(127)) / 128.0, color_group: Some(hit.midi_channel), ..Default::default() }),
+                expression: Some(windfall_project::NoteExpression {
+                    release: f32::from(hit.release.min(127)) / 128.0,
+                    color_group: Some(hit.midi_channel),
+                    ..Default::default()
+                }),
             })
             .collect(),
     }
@@ -1004,7 +1061,12 @@ impl ImportPlan {
     pub fn commands(&self, project: &Project) -> Vec<Command> {
         let mut ids = Ids {
             next: project.next_id,
-            mixer_tracks: project.mixer.tracks.len(),
+            mixer_tracks: project
+                .mixer
+                .tracks
+                .iter()
+                .filter(|track| !track.current)
+                .count(),
         };
         let mut commands = Vec::new();
         if self.tempo_bpm.is_some() || self.time_signature.is_some() {
@@ -1082,15 +1144,44 @@ impl ImportPlan {
             });
             let mut timeline = Timeline::default();
             if let Some(signature) = pattern.time_signature {
-                commands.push(Command::EditPatternTimeline { pattern: id, expected: timeline.clone(), expected_signature: None, edit: PatternTimelineEdit::SetSignature { signature: Some(signature) } });
+                commands.push(Command::EditPatternTimeline {
+                    pattern: id,
+                    expected: timeline.clone(),
+                    expected_signature: None,
+                    edit: PatternTimelineEdit::SetSignature {
+                        signature: Some(signature),
+                    },
+                });
             }
             for &(tick, signature) in &pattern.meters {
-                commands.push(Command::EditPatternTimeline { pattern: id, expected: timeline.clone(), expected_signature: pattern.time_signature, edit: PatternTimelineEdit::AddMeter { tick, signature } });
-                timeline.meters.push(MeterChange { id: MeterChangeId(ids.take()), tick, signature });
+                commands.push(Command::EditPatternTimeline {
+                    pattern: id,
+                    expected: timeline.clone(),
+                    expected_signature: pattern.time_signature,
+                    edit: PatternTimelineEdit::AddMeter { tick, signature },
+                });
+                timeline.meters.push(MeterChange {
+                    id: MeterChangeId(ids.take()),
+                    tick,
+                    signature,
+                });
             }
             for (tick, name) in &pattern.markers {
-                commands.push(Command::EditPatternTimeline { pattern: id, expected: timeline.clone(), expected_signature: pattern.time_signature, edit: PatternTimelineEdit::AddMarker { tick: *tick, name: name.clone() } });
-                timeline.markers.push(TimelineMarker { id: TimelineMarkerId(ids.take()), tick: *tick, name: name.clone(), kind: MarkerKind::Named });
+                commands.push(Command::EditPatternTimeline {
+                    pattern: id,
+                    expected: timeline.clone(),
+                    expected_signature: pattern.time_signature,
+                    edit: PatternTimelineEdit::AddMarker {
+                        tick: *tick,
+                        name: name.clone(),
+                    },
+                });
+                timeline.markers.push(TimelineMarker {
+                    id: TimelineMarkerId(ids.take()),
+                    tick: *tick,
+                    name: name.clone(),
+                    kind: MarkerKind::Named,
+                });
             }
             for lane in &pattern.lanes {
                 let Some(&channel) = channels.get(lane.channel) else {
@@ -1163,7 +1254,15 @@ impl ImportPlan {
                     .map(|&(tick, signature)| Command::AddMeterChange { tick, signature }),
             );
         }
-        commands.extend(self.markers.iter().map(|(tick, name)| Command::AddTimelineMarker { tick: *tick, name: name.clone(), kind: MarkerKind::Named }));
+        commands.extend(
+            self.markers
+                .iter()
+                .map(|(tick, name)| Command::AddTimelineMarker {
+                    tick: *tick,
+                    name: name.clone(),
+                    kind: MarkerKind::Named,
+                }),
+        );
         commands
     }
 }
@@ -1190,7 +1289,7 @@ impl Ids {
     /// A new channel gets a mixer track of its own, which takes the id
     /// after the channel's, for as long as the mixer has room.
     fn take_mixer_track(&mut self) {
-        if self.mixer_tracks < MAX_MIXER_TRACKS {
+        if self.mixer_tracks < MAX_MIXER_SIGNAL_TRACKS {
             self.mixer_tracks += 1;
             self.skip(1);
         }

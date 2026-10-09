@@ -259,7 +259,7 @@ describe("menus and popovers", () => {
               const clip = project().playlist.clips[0]
               usePlaylistStore.getState().select([clip.id])
             })
-            fireEvent.click(button(/^Mixer track:/))
+            fireEvent.click(button(/^Playback route:/))
           },
           pick: () => screen.getByRole("menuitem", { name: "Kick" }),
         },

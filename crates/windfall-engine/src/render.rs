@@ -116,6 +116,7 @@ pub fn render_reporting(
             dropped_clips: 0,
             sampler_error: None,
             timeline_error: Some(error),
+            plugin_error: None,
         };
     }
     let prepared_pool = match pool.prepare_samplers(project, &mut || true, &mut |_, _, _| {}) {
@@ -126,6 +127,7 @@ pub fn render_reporting(
                 audio: AudioBuffer::from_interleaved(sample_rate, 2, Vec::new()),
                 dropped_clips: 0,
                 sampler_error: Some(error),
+                plugin_error: None,
             };
         }
     };
@@ -168,6 +170,7 @@ pub fn render_reporting(
         mode: Some(options.mode),
         pattern,
         loop_song: Some(false),
+        ..Default::default()
     });
     if let Some(range) = region {
         controller
@@ -186,6 +189,7 @@ pub fn render_reporting(
             dropped_clips: 0,
             sampler_error: None,
             plugin_error: Some(error),
+            timeline_error: None,
         };
     }
     let latency = controller.latency_frames() as usize;
@@ -265,44 +269,14 @@ impl RenderOptions {
 pub enum RenderError {
     Timeline(String),
     Sampler(crate::sampler_processing::SamplerPreparationError),
+    Plugin(String),
 }
 impl std::fmt::Display for RenderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Timeline(error) => f.write_str(error),
             Self::Sampler(error) => error.fmt(f),
-        }
-    }
-}
-impl std::error::Error for RenderError {}
-impl From<crate::sampler_processing::SamplerPreparationError> for RenderError {
-    fn from(error: crate::sampler_processing::SamplerPreparationError) -> Self {
-        Self::Sampler(error)
-    }
-}
-
-impl RenderOptions {
-    pub fn check_region(&self) -> Result<(), String> {
-        if let Some(range) = self.region {
-            if self.mode != PlayMode::Song {
-                return Err("a timeline export region requires song mode".to_owned());
-            }
-            range.check()?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub enum RenderError {
-    Timeline(String),
-    Sampler(crate::sampler_processing::SamplerPreparationError),
-}
-impl std::fmt::Display for RenderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Timeline(error) => f.write_str(error),
-            Self::Sampler(error) => error.fmt(f),
+            Self::Plugin(error) => f.write_str(error),
         }
     }
 }
@@ -442,6 +416,8 @@ mod plugin_error_tests {
                         name: "Fault".into(),
                         state: Vec::new(),
                         parameters: Vec::new(),
+                        sidechain_input: None,
+                        auxiliary_inputs: Vec::new(),
                     },
                 },
                 None,
@@ -505,7 +481,7 @@ mod plugin_error_tests {
             },
             &mut |_| true,
         );
-        assert!(matches!(result, Err(crate::StemError::Plugin(_))));
+        assert!(matches!(result, Err(crate::RenderError::Plugin(_))));
         assert!(!prefix.is_empty() && prefix.iter().any(|sample| *sample > 0.1));
         let convenience =
             crate::render_streaming(&project, &pool, &options, &mut |_| true, &mut |_| true);
@@ -555,7 +531,7 @@ mod plugin_error_tests {
                 }
             },
         );
-        assert!(matches!(streamed, Err(crate::StemError::Plugin(_))));
+        assert!(matches!(streamed, Err(crate::RenderError::Plugin(_))));
         assert!(error_provider.render_error().is_none());
     }
 }

@@ -1,0 +1,1 @@
+The piano-roll length commands step each selected note from a 16th toward a whole note. A 16th stays a 16th when moved previous. A whole note stays a whole note when moved next. A length between two presets moves to the neighboring preset. A note already at the end stays as it is while another selected note can still move. Start and key stay as they are.

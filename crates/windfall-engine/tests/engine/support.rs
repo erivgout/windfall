@@ -6,10 +6,10 @@ use windfall_engine::{Controller, Processor, SamplePool};
 use windfall_ipc::{PlayMode, TransportPatch};
 use windfall_project::{Automation, AutomationId, AutomationPoint, AutomationTarget};
 use windfall_project::{
-    Channel, ChannelId, ChannelSource, Clip, ClipContent, ClipId, DEFAULT_KEY, EffectId,
-    EffectParams, EffectSlot, InstrumentParams, Lane, MixerTrack, Note, NoteId, Pattern, PatternId,
+    Channel, ChannelId, ChannelSource, Clip, ClipContent, ClipId, EffectId, EffectParams,
+    EffectSlot, InstrumentParams, Lane, MixerTrack, Note, NoteId, Pattern, PatternId,
     PlaylistTrack, PlaylistTrackId, Project, SampleAsset, SampleId, SamplePath, SamplerSettings,
-    TrackId,
+    TrackId, DEFAULT_KEY,
 };
 
 /// A project under construction together with its decoded samples.
@@ -88,6 +88,7 @@ impl Rig {
             muted: false,
             solo: false,
             group: String::new(),
+            voice: Default::default(),
             timing: windfall_project::ChannelTiming::default(),
             mixer_track: track,
             source: ChannelSource::Sampler(SamplerSettings {
@@ -161,6 +162,7 @@ impl Rig {
             muted: false,
             solo: false,
             group: String::new(),
+            voice: Default::default(),
             timing: windfall_project::ChannelTiming::default(),
             mixer_track: track,
             source: ChannelSource::Instrument {
@@ -174,12 +176,13 @@ impl Rig {
         let ChannelSource::Instrument { params } = &mut self.channel_mut(id).source else {
             panic!("the channel is not an instrument");
         };
-        let InstrumentParams::SubtractiveSynth(synth) = params;
-        synth
+        match params {
+            InstrumentParams::SubtractiveSynth(synth) => synth,
+            _ => panic!("expected the subtractive synth"),
+        }
     }
 
     pub fn track_mut(&mut self, id: TrackId) -> &mut MixerTrack {
-        dock: windfall_project::MixerDock::default(),
         self.project
             .mixer
             .tracks
@@ -200,8 +203,8 @@ impl Rig {
         let id = PatternId(self.id());
         self.project.patterns.push(Pattern {
             note_curves: Vec::new(),
-        time_signature: None,
-        timeline: Default::default(),
+            time_signature: None,
+            timeline: Default::default(),
             id,
             name: String::new(),
             color: 0,
@@ -276,6 +279,9 @@ impl Rig {
             id,
             name: String::new(),
             muted: false,
+            solo: false,
+            color: 0,
+            height: 0,
         });
         id
     }
@@ -329,6 +335,7 @@ impl Rig {
                 sample,
                 mixer_track,
                 output: Default::default(),
+                normalize: false,
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,
@@ -353,6 +360,7 @@ impl Rig {
         let ClipContent::Audio {
             sample,
             mixer_track,
+            normalize,
             gain,
             pan,
             fade_in,
@@ -378,6 +386,7 @@ impl Rig {
         self.clip_mut(id).content = ClipContent::Audio {
             sample,
             mixer_track: settings.mixer_track,
+            normalize,
             gain: settings.gain,
             pan: settings.pan,
             fade_in: settings.fade_in,

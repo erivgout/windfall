@@ -60,6 +60,10 @@ fn guarded(work: impl FnOnce()) -> usize {
 }
 fn fixture(format: &str) -> PathBuf {
     if let Some(source) = std::env::var_os("WINDFALL_BRIDGE_FIXTURE") {
+        // Publish each shared DLL completely before another test can load it.
+        // Windows prevents overwriting a DLL once any helper has mapped it.
+        static COPY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _copy = COPY.lock().unwrap();
         let folder = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("bridge-fixture-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
@@ -137,6 +141,84 @@ fn wait_failed(control: &Control) {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(control.status().failed);
+}
+
+#[test]
+fn fresh_helper_describes_native_metadata_state_and_refuses_playback_disruption() {
+    for format in ["clap", "vst3"] {
+        let id = if format == "clap" {
+            common::GAIN.to_owned()
+        } else {
+            vst_id(0)
+        };
+        let (control, mut audio) = launch(
+            format,
+            &id,
+            Kind::Effect,
+            vec![gain(format)],
+            Duration::from_secs(2),
+        );
+        let (state, metadata, layout) = control.describe(Duration::from_secs(2)).unwrap();
+        let host = PluginHost::windfall();
+        let module = host.load(&fixture(format)).unwrap();
+        let mut reference = module.create(&id).unwrap();
+        reference
+            .load_state(&PluginState::from_bytes(state))
+            .unwrap();
+        assert_eq!(layout, *reference.layout());
+        let expected: Vec<_> = reference
+            .params()
+            .iter()
+            .filter(|param| !param.hidden)
+            .cloned()
+            .collect();
+        assert_eq!(metadata.len(), expected.len());
+        for (received, native) in metadata.iter().zip(expected) {
+            assert_eq!(received.spec.id, native.id);
+            assert_eq!(received.name, native.name);
+            assert_eq!(received.automatable, native.automatable);
+            assert_eq!(
+                (received.spec.min, received.spec.max),
+                (native.min, native.max)
+            );
+            assert_eq!(
+                (received.spec.read_only, received.spec.stepped),
+                (native.read_only, native.stepped)
+            );
+            assert_eq!(
+                received.spec.value,
+                reference.param_value(native.id).unwrap_or(native.default)
+            );
+        }
+        let mut left = [1.0; 64];
+        let mut right = left;
+        for _ in 0..8 {
+            left.fill(1.0);
+            right.fill(1.0);
+            audio.process(&mut left, &mut right);
+            std::thread::sleep(Duration::from_millis(3));
+        }
+        assert!(audio.health().completed_blocks > 0);
+        assert!(
+            control
+                .describe(Duration::from_secs(2))
+                .unwrap_err()
+                .contains("fresh unprocessed")
+        );
+        assert!(
+            !control.status().failed,
+            "refused inspection must not retire playback"
+        );
+        let captured = control
+            .capture(
+                1,
+                audio.desired_generation(),
+                &[gain(format)],
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        assert!(!captured.state.is_empty());
+    }
 }
 
 #[test]

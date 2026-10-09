@@ -14,6 +14,7 @@
 //! [`ImportReport`] says which. The modules beside this one each convert a
 //! part and say in their own documentation what they keep.
 
+mod arrangements;
 mod channels;
 mod effects;
 mod mixer;
@@ -21,6 +22,7 @@ mod patterns;
 mod playlist;
 mod synth;
 mod timeline;
+mod voice;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -151,8 +153,11 @@ pub fn convert(flp: &FlpProject, options: &ConvertOptions) -> Conversion {
     builder.mixer();
     builder.channels();
     builder.patterns();
-    builder.playlist();
+    let playlist = builder.playlist();
     builder.timeline();
+    if let Some(playlist) = playlist {
+        builder.arrangements(playlist);
+    }
     builder.leftovers();
     builder.finish()
 }
@@ -464,8 +469,8 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// What has no part of its own: other arrangements, markers, recorded
-    /// control changes, and the things the reader could not place.
+    /// What has no part of its own: recorded control changes and the things
+    /// the reader could not place.
     fn leftovers(&mut self) {
         let section = ReportSection::Other;
         let flp = self.flp;
@@ -479,24 +484,6 @@ impl<'a> Builder<'a> {
                 format!("Event {id} ({what}) was not interpreted or converted."),
             );
         }
-        let main = flp.main_arrangement().map(|arrangement| arrangement.index);
-        let others = flp
-            .arrangements
-            .iter()
-            .filter(|arrangement| Some(arrangement.index) != main)
-            .count();
-        if others > 0 {
-            self.report.count(section, Outcome::Dropped, others as u32);
-            self.report.say(
-                section,
-                Outcome::Dropped,
-                format!(
-                    "The project has {} arrangements. Windfall has one playlist, so the selected arrangement was brought over and the other {others} left out.",
-                    others + 1
-                ),
-            );
-        }
-
         let recorded: usize = flp
             .patterns
             .iter()

@@ -112,6 +112,15 @@ pub struct ControlParameter {
     pub read_only: bool,
     pub stepped: bool,
 }
+
+/// Native inspector metadata returned by the creating helper owner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DescribedParameter {
+    pub spec: ControlParameter,
+    pub name: String,
+    pub automatable: bool,
+}
 impl From<ParameterSpec> for ControlParameter {
     fn from(value: ParameterSpec) -> Self {
         Self {
@@ -140,6 +149,11 @@ impl From<ControlParameter> for ParameterSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Message {
+    Describe,
+    Described {
+        parameters: Vec<DescribedParameter>,
+        layout: crate::PluginLayout,
+    },
     Load {
         mapping: String,
         settings: Settings,
@@ -203,14 +217,45 @@ impl Packet {
         }
         checked_state_size(self.state.len())?;
         if !self.state.is_empty() {
-            if !matches!(self.body, Message::Load { .. } | Message::Captured { .. }) {
+            if !matches!(
+                self.body,
+                Message::Load { .. } | Message::Captured { .. } | Message::Described { .. }
+            ) {
                 return Err(invalid("state on an unsupported control message"));
             }
             PluginState::from_bytes(self.state.clone())
                 .content()
                 .map_err(|_| invalid("malformed native state container"))?;
         }
+        if let Message::Described { parameters, layout } = &self.body {
+            let mut ids = std::collections::BTreeSet::new();
+            if parameters.len() > super::protocol::PARAM_CAPACITY
+                || parameters.iter().any(|parameter| {
+                    !ParameterSpec::from(parameter.spec).valid()
+                        || !ids.insert(parameter.spec.id)
+                        || parameter.name.len() > 4096
+                        || parameter.name.contains('\0')
+                })
+                || layout.audio_inputs.len() > crate::MAX_PORTS as usize
+                || layout.audio_outputs.len() > crate::MAX_PORTS as usize
+                || layout
+                    .audio_inputs
+                    .iter()
+                    .chain(&layout.audio_outputs)
+                    .any(|port| {
+                        port.channels > crate::MAX_PORT_CHANNELS
+                            || port.name.len() > 4096
+                            || port.name.contains('\0')
+                    })
+                || self.state.is_empty()
+            {
+                return Err(invalid("malformed native discovery metadata"));
+            }
+        }
         Ok(())
+    }
+    pub(crate) fn check_encoding(&self) -> io::Result<()> {
+        self.header().map(|_| ())
     }
     fn header(&self) -> io::Result<([u8; PREFIX], Vec<u8>)> {
         self.validate()?;
@@ -357,6 +402,87 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn described() -> Packet {
+        let mut packet = Packet::new(
+            1,
+            Owner {
+                session: 1,
+                token: 1,
+                revision: 1,
+                binding: 1,
+            },
+            Message::Described {
+                parameters: vec![DescribedParameter {
+                    spec: ControlParameter {
+                        id: 7,
+                        min: 0.0,
+                        max: 2.0,
+                        value: 0.75,
+                        read_only: false,
+                        stepped: false,
+                    },
+                    name: "Native gain".into(),
+                    automatable: true,
+                }],
+                layout: crate::PluginLayout::default(),
+            },
+        );
+        packet.state = PluginState::native(&[1, 2, 3]).into_bytes();
+        packet
+    }
+    #[test]
+    fn discovery_metadata_roundtrips_with_native_state_and_rejects_invalid_shapes() {
+        let packet = described();
+        let mut encoded = Vec::new();
+        packet.write_bounded(&mut encoded, || Ok(())).unwrap();
+        let ReadStep::Packet(received) = Decoder::default()
+            .poll_step(&mut std::io::Cursor::new(encoded))
+            .unwrap()
+        else {
+            panic!("complete described reply must decode")
+        };
+        let received = *received;
+        assert_eq!(received.state, packet.state);
+        let Message::Described { parameters, .. } = received.body else {
+            panic!("metadata type")
+        };
+        assert_eq!(parameters[0].name, "Native gain");
+        assert_eq!(parameters[0].spec.value, 0.75);
+        assert!(parameters[0].automatable);
+        let mut duplicate = described();
+        let Message::Described { parameters, .. } = &mut duplicate.body else {
+            unreachable!()
+        };
+        parameters.push(parameters[0].clone());
+        assert!(duplicate.validate().is_err());
+        let mut invalid = described();
+        let Message::Described { parameters, .. } = &mut invalid.body else {
+            unreachable!()
+        };
+        parameters[0].spec.value = f64::NAN;
+        assert!(invalid.validate().is_err());
+        let mut missing = described();
+        missing.state.clear();
+        assert!(missing.validate().is_err());
+    }
+    #[test]
+    fn discovery_metadata_obeys_existing_control_packet_budget() {
+        let mut packet = described();
+        let Message::Described { parameters, .. } = &mut packet.body else {
+            unreachable!()
+        };
+        let prototype = parameters[0].clone();
+        *parameters = (0..super::super::protocol::PARAM_CAPACITY)
+            .map(|id| {
+                let mut parameter = prototype.clone();
+                parameter.spec.id = id as u32;
+                parameter.name = "n".repeat(4096);
+                parameter
+            })
+            .collect();
+        assert!(packet.validate().is_ok());
+        assert!(packet.check_encoding().is_err());
+    }
     #[test]
     fn incomplete_reads_report_progress_and_eof_is_a_failure_not_idle() {
         let mut bytes = Vec::new();

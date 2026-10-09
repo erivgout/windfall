@@ -1,0 +1,1 @@
+The waveform helper halves or doubles its height in rows. Half uses the whole number of rows at or below half, and 2 rows stays 2 rows. Double stops at 128 rows. The reference start, length, center key, and opacity stay as they are. Notes stay as they are. This is session state for the reference drawing, not an undo step.

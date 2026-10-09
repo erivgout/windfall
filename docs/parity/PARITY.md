@@ -6,7 +6,7 @@
 > Notes may mention FL names for the same purpose. They are Image-Line's names and are never used as Windfall
 > names. `TBD` in the Windfall column means the Windfall name has not been chosen yet.
 
-As of 2026-10-08. Sources:
+As of 2026-10-09. Sources:
 
 - <https://www.image-line.com/fl-studio/compare-editions>
 - <https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/>
@@ -14,36 +14,36 @@ As of 2026-10-08. Sources:
 
 ## Summary
 
-**93 of 342 rows accounted for (27.2%).** A row is accounted for when it is done or won't do.
+**138 of 342 rows accounted for (40.4%).** A row is accounted for when it is done or won't do.
 
 | Status | Rows |
 | --- | --- |
-| Todo | 208 |
-| In progress | 41 |
-| Done | 91 |
+| Todo | 100 |
+| In progress | 104 |
+| Done | 136 |
 | Won't do | 2 |
 
 | Area | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
-| Core features | 23 | 12 | 8 | 2 | 1 |
-| Main windows | 113 | 47 | 13 | 52 | 1 |
-| Instruments | 41 | 38 | 2 | 1 | 0 |
-| Effects | 80 | 59 | 5 | 16 | 0 |
-| Visual and video | 7 | 7 | 0 | 0 | 0 |
+| Core features | 23 | 11 | 7 | 4 | 1 |
+| Main windows | 113 | 6 | 25 | 81 | 1 |
+| Instruments | 41 | 16 | 18 | 7 | 0 |
+| Effects | 80 | 29 | 32 | 19 | 0 |
+| Visual and video | 7 | 6 | 1 | 0 | 0 |
 | Audio editors | 3 | 2 | 1 | 0 | 0 |
 | File formats and plugin hosting | 36 | 15 | 7 | 14 | 0 |
-| Workflow, MIDI and settings | 39 | 28 | 5 | 6 | 0 |
+| Workflow, MIDI and settings | 39 | 15 | 13 | 11 | 0 |
 
 | Phase | Rows | Todo | In progress | Done | Won't do |
 | --- | --- | --- | --- | --- | --- |
 | 0. Spike | 1 | 0 | 1 | 0 | 0 |
-| 1. Make a beat | 39 | 6 | 7 | 24 | 2 |
-| 2. Write a song | 99 | 40 | 18 | 41 | 0 |
-| 3. Record and edit audio | 34 | 16 | 7 | 11 | 0 |
+| 1. Make a beat | 39 | 0 | 6 | 31 | 2 |
+| 2. Write a song | 99 | 5 | 26 | 68 | 0 |
+| 3. Record and edit audio | 34 | 7 | 14 | 13 | 0 |
 | 4. Plugins and files | 13 | 6 | 6 | 1 | 0 |
-| 5. The long tail | 129 | 113 | 2 | 14 | 0 |
-| 6. Extras | 24 | 24 | 0 | 0 | 0 |
-| 7. Release | 3 | 3 | 0 | 0 | 0 |
+| 5. The long tail | 129 | 60 | 47 | 22 | 0 |
+| 6. Extras | 24 | 20 | 3 | 1 | 0 |
+| 7. Release | 3 | 2 | 1 | 0 | 0 |
 
 ## Core features
 
@@ -51,12 +51,12 @@ As of 2026-10-08. Sources:
 | --- | --- | --- | --- | --- |
 | Lifetime Free Updates | Free updates | 7 | todo | Windfall is free under GPL-3.0; this row closes when auto-update ships. |
 | Stem Separation | Stem separation | 5 | todo | unverified: lowest edition. The compare table ticks Producer, but the purchase box on the same page shows it locked below Signature. Candidate basis: Demucs (MIT). |
-| Audio Recording | Audio recording | 3 | in-progress | Native mono/stereo input capture streams to WAV and creates a normal playlist clip with undo/save support. Start/stop/discard, channel selection, overflow/error rejection and ownership guards are tested with synthetic capture. Placement uses a chosen start tick; input/output latency and separate device clocks are uncompensated. Hardware capture, monitoring, count-in and multitrack takes remain. See docs/RECORDING.md. |
+| Audio Recording | Audio recording | 3 | in-progress | Source includes synchronized mono/stereo and multitrack WAV capture, native-rate/drift correction, routed input monitoring, count-in, retained loop passes, take groups and comping. Printed takes use Direct output and external port assignments are implemented. Current QA distinguishes synthetic software checks from remaining physical capture, duplex latency/drift, device failure and platform acceptance. See docs/qa/2026-10-09-recording-mixer.md. |
 | Audio Clips | Audio clips | 2 | done | Playlist audio clips support gain, pan, fades, reverse, tape-style pitch and independent spectral stretch/pitch. Prepared immutable audio is shared by playback/export; source files remain unchanged. Completed input takes become ordinary clips with undo/save support. |
 | Loop Starter | Loop starter | 6 | todo | Needs Windfall's own CC0 loop content; FL's loops cannot be reused. |
 | FL Studio Mobile Rack + FX | TBD | 5 | todo | A Windfall equivalent would be a rack of Windfall's own modules. FL 2026 added a SoundFont player and a note arpeggiator module. |
 | Audio Logger | Audio logger | 3 | todo | unverified: edition availability (the compare page leaves every edition cell blank). New in FL Studio 2026. |
-| Chord Generator | Chord progression generator | 6 | todo | The manual calls it the Chord Progression Tool. Not named in the plan's phase table, so placed in phase 6. |
+| Chord Generator | Chord progression generator | 6 | done | Verified by QA 2026-10-09: Stopped keyboard step entry, saved project metadata/export author tags and key/mood chord insertion verified through mounted document controls and complementary native persistence/export checks. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Gopher | Assistant | 6 | todo | The plan's phase-6 assistant. Control of the app and plugins is marked experimental in FL 2026. |
 | Denoising | Denoising | 5 | todo | Candidate basis: RNNoise (BSD). In FL this lives in the audio editor's noise removal and vocal denoiser tools. |
 | Sound Content | Factory sound library | 1 | wont-do | Reason: Image-Line owns its bundled samples, loops and presets, so they can never be shipped. Windfall ships its own content under CC0 or a similar license. |
@@ -64,7 +64,7 @@ As of 2026-10-08. Sources:
 | Mixer | Mixer | 2 | in-progress | Umbrella row; the basic mixer lands in phase 1 and routing, sends and effect slots in phase 2 (win-mixer-* rows). Tracks, routing, sends, effect slots, meters and delay compensation are in. Sidechain, track EQ and track presets are separate rows. |
 | Full Song Arrangement | Playlist | 2 | done | Pattern, audio and automation clips on the playlist, with song mode. |
 | Automation Clips | Automation clips | 2 | in-progress | Curves with bends and holds for volume, pan, sends, effect and instrument settings, effect mix and tempo. No LFO or step drawing modes yet. |
-| Time signature changes | Time signature changes | 2 | in-progress | Checked persisted song meter maps, shortened-bar conversions, MIDI/FLP song maps and anchored engine/CLAP/VST3 transport metadata are integrated. Undo, legacy loading, native ABI bar boundaries and malformed-map publication refusal are tested. Per-pattern signatures, scalar snap/grid refinement, combined native plugin/device acceptance and P1 off-lock preparation remain open. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-review-rounds.md. |
+| Time signature changes | Time signature changes | 2 | done | Verified by QA 2026-10-09: Chord-map note/expression randomization and independent song/pattern marker/meter maps verified through mounted controls, atomic history/save and actual native/MIDI timing/export. Evidence: docs/qa/2026-10-09-piano-contracts.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | MIDI Support | MIDI input | 3 | in-progress | Native MIDI input auditions one explicit channel with note-on/off, sustain, channel filtering and bounded queue cleanup. Note recording, controller mapping, timestamp/sample-clock alignment and physical hardware verification remain pending. See docs/MIDI-HARDWARE.md. |
 | MIDI Out | MIDI output | 3 | in-progress | Optional single-port live-note forwarding balances retriggers/releases and clears held hardware notes on route/device changes and panic. Pattern/playlist output, controller messages, clock and a dedicated MIDI-out channel remain pending; no physical output verification is claimed. See docs/MIDI-HARDWARE.md. |
 | VST2, VST3, Audio Unit and CLAP support | Plugin hosting | 4 | in-progress | Windows desktop CLAP instruments/effects, isolated CLAP/VST3 scanning, parameter automation, editors and saved state are integrated. VST3 processor-return/capture foundation is tested, while production desktop additions await remaining lifecycle/event safeguards. Native macOS/Linux desktop hosting, AU and audio crash containment remain pending. The plan covers CLAP, VST3 and AU, not VST2. See docs/plugins/desktop-integration.md and docs/plugins/vst3-desktop.md. |
@@ -79,44 +79,44 @@ As of 2026-10-08. Sources:
 | --- | --- | --- | --- | --- |
 | Channel Rack | Channel rack | 1 | done |  |
 | Step sequencer | Step sequencer | 1 | done |  |
-| Graph editor | Step graph editor | 1 | todo |  |
+| Graph editor | Step graph editor | 1 | done | Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Channel mute, solo, pan and volume | Channel controls | 1 | done |  |
 | Channel target mixer track selector | Channel-to-mixer routing | 1 | done | Windfall plans automatic routing: each new channel gets its own mixer track. New channels get their own mixer track; the routing badge on each row shows and changes it. |
 | Patterns and pattern selector | Patterns | 1 | done |  |
-| Swing (global and per channel) | Swing | 1 | in-progress | Global swing only; no per-channel swing mix yet. |
-| Channel groups and filter | Channel groups | 1 | todo |  |
+| Swing (global and per channel) | Swing | 1 | done | Verified by QA 2026-10-09: Saved swing mix, signed note offset and truncation verified through mounted controls and exact native/MIDI onset measurements. Evidence: docs/qa/2026-10-09-channel-timing.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Channel groups and filter | Channel groups | 1 | done | Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Channel button menu (clone, replace, insert, delete, rename, color) | Channel menu | 1 | done |  |
-| Fill each N steps and Advanced Fill tool | Step fill tools | 1 | in-progress | Fill every 2, 4 or 8 steps and shift left or right. No advanced fill tool yet. |
+| Fill each N steps and Advanced Fill tool | Step fill tools | 1 | done | Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Cut and Cut-by groups | Cut groups | 1 | done |  |
 | Channel sampler: loop points and ping-pong loop | Sample looping | 1 | done | Persisted forward and ping-pong loops with inspector points relative to the trimmed sample, reverse-aware bounds, fractional boundary interpolation and note release. Undo/save/load, playback/export parity and zero callback allocations are tested. No hardware audio verification; details and limits are in docs/SAMPLER-LOOPS.md. |
-| Channel sampler: precomputed effects | Sample pre-processing | 1 | todo |  |
+| Channel sampler: precomputed effects | Sample pre-processing | 1 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Mini piano roll preview | Note preview in rack | 2 | done | Integrated bounded authoritative note thumbnails replace step buttons automatically or by explicit choice. Canonical menu/shortcuts/context actions open the guarded current piano lane without changing document/history. Independent R2, composed shared-WASM tests and browser zoom/scroll/focus checks pass; current full UI CI passes. See docs/RACK-NOTE-PREVIEW.md and docs/integration/2026-10-08-completion-audit.md. |
-| Send to Piano roll | Steps to notes | 2 | todo |  |
+| Send to Piano roll | Steps to notes | 2 | done | Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Channel settings: envelopes, LFOs and filter | Channel envelopes and LFOs | 2 | in-progress | Volume envelope on the sampler only. |
-| Channel settings: arpeggiator | Channel arpeggiator | 2 | todo |  |
-| Channel settings: echo delay | Note echo | 2 | todo |  |
-| Channel settings: polyphony and portamento | Channel polyphony and glide | 2 | todo |  |
-| Channel settings: gate, shift and swing mix | Channel note timing | 2 | todo |  |
+| Channel settings: arpeggiator | Channel arpeggiator | 2 | done | Verified by QA 2026-10-09: Saved non-destructive channel arpeggiation, voice caps and glide verified through mounted controls and public audible scheduling/admission tests. Evidence: docs/qa/2026-10-09-recording-mixer.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Channel settings: echo delay | Note echo | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Channel settings: polyphony and portamento | Channel polyphony and glide | 2 | done | Verified by QA 2026-10-09: Saved non-destructive channel arpeggiation, voice caps and glide verified through mounted controls and public audible scheduling/admission tests. Evidence: docs/qa/2026-10-09-recording-mixer.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Channel settings: gate, shift and swing mix | Channel note timing | 2 | done | Verified by QA 2026-10-09: Saved swing mix, signed note offset and truncation verified through mounted controls and exact native/MIDI onset measurements. Evidence: docs/qa/2026-10-09-channel-timing.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Channel sampler: time-stretch and pitch modes | Sample time-stretch | 3 | in-progress | Native sampler spectral preparation persists independent duration/pitch, quality/formant and explicit key-range settings, with a strict 256 MiB retained-bank budget and silent unsupported keys. Tape remains the legacy default. Full combined native/UI baseline, callback-allocation checks and exact bindings passed. Independent review found four transaction/publication cases; sampler and browser owners are repairing them. Browser Apply honestly refuses DSP and preserves settings/history; musical listening remains unverified. See docs/SAMPLER-STRETCH.md and docs/integration/2026-10-07-native-editing-midi.md. |
 | Layer channel (Fruity Layer) | Layer channel | 5 | todo | Listed in the manual's plugin index, not on the compare page. The manual points to the modular rack as the more flexible alternative. |
 | Piano roll: Draw tool | Piano roll draw tool | 2 | done |  |
-| Piano roll: Paint tool and drum sequencer mode | Piano roll paint tool | 2 | in-progress | Paint tool is in. No drum sequencer mode yet. |
+| Piano roll: Paint tool and drum sequencer mode | Piano roll paint tool | 2 | done | Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Piano roll: Delete tool | Piano roll delete tool | 2 | done |  |
-| Piano roll: Mute tool | Piano roll mute tool | 2 | todo |  |
-| Piano roll: Slice tool | Piano roll slice tool | 2 | todo |  |
+| Piano roll: Mute tool | Piano roll mute tool | 2 | done | Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Piano roll: Slice tool | Piano roll slice tool | 2 | done | Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Piano roll: Select tool | Piano roll select tool | 2 | done |  |
-| Piano roll: Zoom tool | Piano roll zoom tool | 2 | todo |  |
-| Piano roll: Playback (scrub) tool | Piano roll scrub tool | 2 | todo |  |
+| Piano roll: Zoom tool | Piano roll zoom tool | 2 | done | Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Piano roll: Playback (scrub) tool | Piano roll scrub tool | 2 | done | Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Piano roll: Chord stamp | Chord stamp | 2 | done | Chord and scale menu stamps preview/place atomically with checked key/tick limits, undo and stale-lane/project guards. Delayed choice, right-click, rejected capture, Escape/blur/tool/history cancellation repairs are accepted in independent R4 and root/browser checks. Current full UI CI passes. See docs/PIANO-SCALES.md, docs/PIANO-STAMP-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Piano roll: preview keyboard and key labels | Preview keyboard | 2 | done |  |
-| Piano roll: event editor lane and note properties | Note property lane | 2 | in-progress | Velocity and pan lanes. Other note properties are not in the model yet. |
-| Piano roll: slide and portamento notes | Slide notes | 2 | todo |  |
-| Piano roll: note colors (16 color groups) | Note colors | 2 | todo |  |
-| Piano roll: ghost notes | Ghost notes | 2 | done |  |
+| Piano roll: event editor lane and note properties | Note property lane | 2 | in-progress | Source includes velocity/pan/release/fine-pitch/modulation X/Y lanes and bulk note-properties dialog with captured native transactions. Stored expression reaches built-in voices, clipboard/transforms and MIDI release import/export. Runtime instance identity and hosted/live expression remain separate implementation work. Artifact builds, QA and reviews deferred. See docs/NOTE-EXPRESSION.md. |
+| Piano roll: slide and portamento notes | Slide notes | 2 | in-progress | Source implementation: native sampler/built-in slides and portamento, musical-tick glides, draw/paint and captured-selection controls, FL slide import. Hosted-plugin/MIDI pitch transport remains. All checks/artifact builds deferred by user; see docs/NOTE-ARTICULATION.md. |
+| Piano roll: note colors (16 color groups) | Note colors | 2 | in-progress | Source implementation: 16 persisted color/MIDI groups, draw/paint/stamp picker, selection recoloring/selection by group, velocity-shaded canvas, native glide group targeting, MIDI/FL import/export and CLAP/VST3 channel-event routing with owner-exchange replay. Live MIDI output remains. All checks/artifact builds deferred by user; see docs/NOTE-COLORS.md. |
+| Piano roll: ghost notes | Ghost notes | 2 | done | Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Piano roll: scale highlighting and snap to scale | Scale highlighting | 2 | done | Validated root/scale preferences, opt-in row highlighting and deterministic pitch snap are implemented. Group moves preserve intervals through a documented anchor policy; enabling guidance leaves existing notes unchanged. Combined focused tests, lint and build pass; independent review found no actionable scale/snap issue. See docs/PIANO-SCALES.md. |
 | Piano roll: snap to grid | Piano roll snap | 2 | done |  |
-| Piano roll: time markers and per-pattern time signatures | Pattern markers | 2 | todo |  |
-| Piano roll: waveform helper view | Waveform helper | 2 | todo |  |
+| Piano roll: time markers and per-pattern time signatures | Pattern markers | 2 | done | Verified by QA 2026-10-09: Chord-map note/expression randomization and independent song/pattern marker/meter maps verified through mounted controls, atomic history/save and actual native/MIDI timing/export. Evidence: docs/qa/2026-10-09-piano-contracts.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Piano roll: waveform helper view | Waveform helper | 2 | in-progress | Source implementation: project-audio waveform reference behind notes/ghosts, original/pattern/custom duration, signed offset and height/center/opacity controls, cached native peaks and shared renderer underlay. No runtime/QA checks ran under the user's feature-first priority; see docs/PIANO-WAVEFORM-HELPER.md. |
 | Piano roll: Quantizer tool | Quantize | 2 | done | Selected-note starts/ends now quantize to grid or original repeating grooves with adjustable strength through one atomic Rust command. Native, real-WASM, UI, undo/redo and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Articulator tool and Quick legato | Articulate | 2 | in-progress | Selected-note legato and staccato length transformations are implemented with atomic undo and stale-review guards. Portamento phrasing remains pending. See docs/PIANO-TOOLS.md. |
 | Piano roll: Chopper tool and Quick chop | Chop | 2 | done | Selected notes split at absolute grid boundaries or a bounded user-authored repeating tick/gate/velocity pattern, preserving partial edges and atomic undo. Custom-pattern implementation, independent rhythm review and combined artifact/native/UI acceptance passed. Revision-gap and selection recovery remain guarded. See docs/PIANO-RHYTHM.md and docs/DOCUMENT-REPLIES.md. |
@@ -127,66 +127,66 @@ As of 2026-10-08. Sources:
 | Piano roll: Claw machine tool | Rhythm reshaper | 2 | done | Bounded Euclidean interval cells remove, add or shift selected notes with phase/period controls, duplicate suppression and atomic undo. Implementation, independent rhythm review and combined artifact/native/UI acceptance passed. See docs/PIANO-RHYTHM.md. |
 | Piano roll: Key limiter tool | Key limiter | 2 | done | Selected notes transpose and clamp or fold by octaves into a chosen MIDI-key range. Native, real-WASM, UI and persistence checks pass. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
 | Piano roll: Flip tool | Flip | 2 | done | Selected notes mirror in time or pitch with atomic undo, native/shared-WASM parity and persistence tests. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
-| Piano roll: Randomizer tool | Randomize | 2 | todo |  |
+| Piano roll: Randomizer tool | Randomize | 2 | done | Verified by QA 2026-10-09: Chord-map note/expression randomization and independent song/pattern marker/meter maps verified through mounted controls, atomic history/save and actual native/MIDI timing/export. Evidence: docs/qa/2026-10-09-piano-contracts.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Piano roll: Scale levels tool | Scale levels | 2 | done | Selected velocities scale while retaining relative differences until clipping at full velocity. Other note properties are preserved. See docs/PIANO-TOOLS.md. Three independent piano/transport review rounds are closed after document-reply repairs; combined UI tests pass. See docs/DOCUMENT-REPLIES.md. |
-| Piano roll: LFO tool | LFO tool | 2 | todo |  |
-| Piano roll: Riff machine | Riff generator | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
+| Piano roll: LFO tool | LFO tool | 2 | in-progress | Source implementation: six-shape musical LFO with phase/center/depth/width/seed, shared native event-onset sampling and continuous automation range writer, captured undo edits and UI shape preview. Continuous per-note expression and recorded pattern events remain separate work. All checks/artifact builds deferred by user; see docs/CURVE-LFO.md. |
+| Piano roll: Riff machine | Riff generator | 6 | in-progress | Not named in the plan's phase table, so placed in phase 6. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Piano roll scripting (Python) | Piano roll scripting | 6 | todo | Part of the plan's phase-6 scripting. |
-| Piano roll: export as score sheet | Sheet music export | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
+| Piano roll: export as score sheet | Sheet music export | 6 | in-progress | Not named in the plan's phase table, so placed in phase 6. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Playlist: pattern clips | Pattern clips | 2 | done |  |
 | Playlist: Draw tool | Playlist draw tool | 2 | done |  |
 | Playlist: Paint tool | Playlist paint tool | 2 | done |  |
 | Playlist: Delete tool | Playlist delete tool | 2 | done |  |
 | Playlist: Mute tool | Playlist mute tool | 2 | done |  |
-| Playlist: Slip edit tool | Slip edit | 2 | todo |  |
-| Playlist: Slice tool | Playlist slice tool | 2 | in-progress | One selected audio clip can be split at reviewed grid/transient markers into source-linked clips in one undo step, retaining trim/reverse/tape pitch/routing. Drawn-line slicing across clip types remains pending. See docs/SLICER.md. |
+| Playlist: Slip edit tool | Slip edit | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Playlist: Slice tool | Playlist slice tool | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Playlist: Select tool | Playlist select tool | 2 | done |  |
-| Playlist: Zoom tool | Playlist zoom tool | 2 | done | Dragging a ruler region zooms the playlist using logical coordinates, with Escape/focus/selection preservation and replacement guards. Actual shared-WASM tests cover 75–200% scaling, DPR and scroll; composed UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
-| Playlist: Playback tool | Playlist scrub tool | 2 | todo |  |
-| Playlist tracks (name, color, mute, solo, resize) | Playlist tracks | 2 | in-progress | Name, mute and reordering. No color, solo or per-track resize yet. |
-| Playlist: track grouping | Track groups | 2 | todo |  |
-| Playlist: instrument tracks and audio tracks | Linked tracks | 2 | todo |  |
+| Playlist: Zoom tool | Playlist zoom tool | 2 | done | Dragging a ruler region zooms the playlist using logical coordinates, with Escape/focus/selection preservation and replacement guards. Actual shared-WASM tests cover 75â€“200% scaling, DPR and scroll; composed UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
+| Playlist: Playback tool | Playlist scrub tool | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Playlist tracks (name, color, mute, solo, resize) | Playlist tracks | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Playlist: track grouping | Track groups | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Playlist: instrument tracks and audio tracks | Linked tracks | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Playlist: time markers | Time markers | 2 | done | Named, loop, skip and pause markers persist and edit through checked undoable commands. Bounded real engine navigation, tempo/PDC/stopped-skip tails and buffered/stream/stem parity pass; canonical UI/lifetime tests and independent source reviews are accepted. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
-| Playlist: arrangements | Arrangements | 2 | todo |  |
+| Playlist: arrangements | Arrangements | 2 | in-progress | QA 2026-10-09: active arrangement filtering, new-track/clip enrollment, removal pruning and atomic history/save validation verified by six native integration cases and shared-WASM checks. Independent alternative clip positions are still absent. See docs/qa/2026-10-09-arrangement-repair.md. |
 | Playlist: clip source menu and picker panel | Clip picker | 2 | done | Patterns, audio and automations can each be picked as the brush. |
-| Playlist: clip grouping | Clip groups | 2 | todo |  |
-| Playlist: make unique | Make unique | 2 | todo |  |
+| Playlist: clip grouping | Clip groups | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Playlist: make unique | Make unique | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Playlist: snap | Playlist snap | 2 | done |  |
 | Playlist: timeline selection and loop region | Loop region | 2 | done | Highlighted regions drive playback/loop and linear export with canonical request/source/revision guards, transport supersession and reload/cancel recovery. Native WAV duration/content/PDC/tail, destination/staging failure checks and shared-WASM UI races pass. Fresh full UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md. |
-| Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | in-progress | Fade in, fade out and gain handles. No automatic crossfades yet. |
-| Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | in-progress | Per-instance gain, pan, tape/spectral pitch, reverse, fades and independent playlist stretch are implemented. Native audio-editor normalization creates a unique derived WAV with undo; a direct non-destructive normalize property remains pending. See docs/AUDIO-EDITOR.md and docs/ARCHITECTURE.md. |
+| Playlist: audio clip fades, crossfades and gain handles | Clip fades and gain | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Playlist: audio clip properties (gain, pan, pitch, reverse, normalize) | Audio clip properties | 2 | done | Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Playlist: automation clip editing (curve shapes, step mode, LFO mode) | Automation curve editor | 2 | in-progress | Points, bends and holds are edited in the clip. No LFO mode or multi-point selection yet. |
 | Event editor | Event automation editor | 2 | todo |  |
 | Playlist: audio clip stretch and pitch-shift | Audio clip stretch | 3 | done | Playlist inspector offers independent spectral duration/pitch, quality and approximate formants alongside default tape playback. DSP prepares off session/audio threads, with bounded cached immutable buffers, trim/fade/reverse handling and undo/save support. Playback/export match exactly; callback allocation tests cover loops, seeks and plan changes. Sampler integration remains separate. See crates/windfall-stretch/VALIDATION.md. |
 | Playlist: detect tempo and fit to tempo | Tempo detection | 3 | done | Playlist inspector detects tempo candidates and fits clips using a chosen/manual source BPM or beat count. Half/double-beat ambiguity and empty results are reported; scores are not probabilities. Fit applies independent spectral stretch as one undo step, adjusting trims/length/fades. Fitting does not follow later project tempo changes automatically. |
-| Playlist: consolidate (freeze) tracks | Bounce in place | 3 | todo |  |
+| Playlist: consolidate (freeze) tracks | Bounce in place | 3 | in-progress | Selected-clip bounce is implemented with captured source guards, active-layout enrollment, source muting and Direct output. QA repairs exclude unselected overlapping clips and avoid applying Master processing twice. Native rendering evidence is being collected; a direct track-consolidate workflow remains open. See docs/qa/2026-10-09-playlist-workflow.md. |
 | Playlist: Deverb | Reverb removal | 5 | todo | Machine-learning feature not named in the plan; no candidate basis identified. |
 | Mixer: insert tracks, master track and current track | Mixer tracks | 1 | done | FL has 500 insert tracks, one master and one current track. |
 | Mixer: track fader, pan, mute and solo | Track level controls | 1 | done |  |
 | Mixer: peak meters | Level meters | 1 | done | The phase-0 spike already shows live meters. |
 | Mixer: 10 effect slots per track | Effect slots | 2 | done |  |
 | Mixer: track routing and send levels | Routing and sends | 2 | done |  |
-| Mixer: sidechain routing | Sidechain | 2 | todo |  |
-| Mixer: integrated 3-band track EQ | Track EQ | 2 | todo |  |
-| Mixer: phase invert, swap left/right and stereo separation | Track stereo utilities | 2 | todo |  |
-| Mixer: plugin delay compensation (automatic and manual) | Plugin delay compensation | 2 | in-progress | Automatic compensation across the whole routing graph. No manual offset yet. |
-| Mixer: track docks and layout views | Mixer layouts | 2 | todo |  |
-| Mixer: track states (presets) | Mixer track presets | 2 | todo |  |
-| Mixer: waveform meter view | Waveform meters | 2 | todo |  |
-| Mixer: multi-track selection | Multi-track selection | 2 | todo |  |
-| Mixer: external audio input and output per track | Track audio I/O | 3 | todo |  |
-| Mixer: track record arm and disk recording | Record arm | 3 | todo |  |
-| Mixer: render tracks to wave files | Render mixer tracks | 3 | todo |  |
+| Mixer: sidechain routing | Sidechain | 2 | in-progress | QA 2026-10-09: detector-only public engine acceptance and mounted selection workflows pass; the desktop bridge now forwards selected keys, and real mono-aux CLAP/VST3 cases pass. Full completion still requires actual multiple/wider auxiliary buses, saved selection reapplication across native-owner exchange, and live detector/PDC/history transitions. See docs/qa/2026-10-09-sidechain-acceptance.md and docs/qa/2026-10-09-completion-audit.md. |
+| Mixer: integrated 3-band track EQ | Track EQ | 2 | done | Verified by QA 2026-10-09: Post-slot track EQ/polarity/swap/width verified with measured native PCM and mounted controls; selected/armed offline rendering verifies captured requests, real files and actual stems. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Mixer: phase invert, swap left/right and stereo separation | Track stereo utilities | 2 | done | Verified by QA 2026-10-09: Post-slot track EQ/polarity/swap/width verified with measured native PCM and mounted controls; selected/armed offline rendering verifies captured requests, real files and actual stems. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Mixer: plugin delay compensation (automatic and manual) | Plugin delay compensation | 2 | in-progress | Automatic graph compensation and saved signed manual latency corrections are implemented. New QA covers correction validation, atomic history and persistence; measured manual-offset send/print/external alignment remains acceptance work. See docs/qa/2026-10-09-recording-mixer.md. |
+| Mixer: track docks and layout views | Mixer layouts | 2 | done | Verified by QA 2026-10-09: All eight saved layouts, three docks, grouped adjustments/routing/movement, stale refusal, keyboard ranges and independent scrolling verified; actual browser resize/scrollbar geometry accepted. Evidence: docs/qa/2026-10-09-mixer-ui.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Mixer: track states (presets) | Mixer track presets | 2 | in-progress | Versioned capture/save/load and captured-destination replacement with fresh effect IDs are implemented. New QA covers built-in replacement, validation, routing preservation, history and persistence. Hosted plugin state/assets and native preset publication acceptance remain open. See docs/qa/2026-10-09-recording-mixer.md. |
+| Mixer: waveform meter view | Waveform meters | 2 | in-progress | QA 2026-10-09: bounded native waveform publication and mounted extrema drawing/mode/clear/release behavior verified. Actual native/view source-selection, subscription and device-callback smoke remains an explicit ANALYZER-TAPS.md / ANALYZER-INTEGRATION.md gate. See docs/qa/2026-10-09-completion-audit.md. |
+| Mixer: multi-track selection | Multi-track selection | 2 | done | Verified by QA 2026-10-09: All eight saved layouts, three docks, grouped adjustments/routing/movement, stale refusal, keyboard ranges and independent scrolling verified; actual browser resize/scrollbar geometry accepted. Evidence: docs/qa/2026-10-09-mixer-ui.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Mixer: external audio input and output per track | Track audio I/O | 3 | in-progress | Saved hardware input routes, standalone monitoring and mono/stereo external outputs are implemented. Physical device port/open-count checks, multitrack monitoring and external replacement/copy alignment remain acceptance gates. See docs/qa/2026-10-09-recording-mixer.md. |
+| Mixer: track record arm and disk recording | Record arm | 3 | in-progress | Saved arms and dry/post-effects/post-fader disk recording, shared multitrack keep, Direct printed playback and take associations are implemented. Native rendered-capture alignment/tail and hardware input acceptance remain open. See docs/qa/2026-10-09-recording-mixer.md. |
+| Mixer: render tracks to wave files | Render mixer tracks | 3 | done | Verified by QA 2026-10-09: Post-slot track EQ/polarity/swap/width verified with measured native PCM and mounted controls; selected/armed offline rendering verifies captured requests, real files and actual stems. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Browser: folder tree | Browser | 1 | done |  |
 | Browser: sample preview | Sample preview | 1 | done |  |
 | Browser: waveform preview | Waveform preview | 1 | done | Inline waveforms were added in FL Studio 2026. |
 | Browser: search | Browser search | 1 | done | Recursive bounded native indexing and shared Rust wildcard/Boolean filename/path queries are integrated with cancellation, generation checks and stale-result refusal. Browser R4/sampler R3 composed review is accepted; native and actual shared-WASM UI checks pass. See docs/BROWSER-LIBRARY.md, docs/BROWSER-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Browser: drag and drop | Drag and drop | 1 | done |  |
-| Browser: project backups folder | Backups list | 1 | todo |  |
+| Browser: project backups folder | Backups list | 1 | done | Verified by QA 2026-10-09: Computer-keyboard audition/release and dated backup listing/open workflows verified through mounted UI and complementary public native audio or actual filesystem acceptance. Evidence: docs/qa/2026-10-09-completion-audit.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Browser: tags | Tags | 2 | done | Normalized per-file tags persist atomically in local metadata and filter searches together with favorites. Corrupt/write-refused metadata is preserved and reported. Browser R4 composed review, native roundtrip and shared-WASM UI checks pass. See docs/BROWSER-LIBRARY.md and docs/integration/2026-10-08-completion-audit.md. |
 | Browser: starred items | Favorites | 2 | done | Per-file favorites persist across restart/root removal and appear in the Starred filtered view, combined with queries/tags. Browser R4 composed review and native/mock/UI checks pass. See docs/BROWSER-LIBRARY.md and docs/integration/2026-10-08-completion-audit.md. |
-| Browser: current project tab | Project tab | 2 | todo |  |
-| Project picker | Project overview | 2 | todo |  |
+| Browser: current project tab | Project tab | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Project picker | Project overview | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Browser: plugin database | Plugin database | 4 | todo |  |
 | Plugin picker | Plugin picker | 4 | todo |  |
 | Browser: Library and Sounds tabs (FL Cloud content) | Online content tabs | 1 | wont-do | Reason: These tabs deliver Image-Line's own samples, loops and presets, some of them paid, which can never be shipped. Windfall's browser indexes the user's folders and Windfall's own CC0 content instead. |
@@ -195,44 +195,44 @@ As of 2026-10-08. Sources:
 
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
-| Drumaxx | TBD | 5 | todo |  |
-| Harmor | TBD | 5 | todo |  |
+| Drumaxx | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Harmor | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Kepler Exo | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
-| Morphine | TBD | 5 | todo |  |
-| Ogun | TBD | 5 | todo |  |
+| Morphine | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Ogun | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Poizone | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
-| Sakura | TBD | 5 | todo |  |
+| Sakura | TBD | 5 | done | Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Sawer | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
-| Toxic Biohazard | TBD | 5 | todo | Candidate basis: Dexed (GPL-3.0). |
-| Transistor Bass | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
+| Toxic Biohazard | TBD | 5 | in-progress | Candidate basis: Dexed (GPL-3.0). QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Transistor Bass | TBD | 5 | done | Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | DirectWave Full | TBD | 5 | todo |  |
-| Harmless | TBD | 5 | todo |  |
+| Harmless | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Kepler | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
-| Slicex | TBD | 5 | todo |  |
+| Slicex | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | SoundFont Player | TBD | 5 | todo |  |
-| Sytrus | TBD | 5 | todo | Candidate basis: Dexed (GPL-3.0). |
+| Sytrus | TBD | 5 | in-progress | Candidate basis: Dexed (GPL-3.0). QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | 3x OSC | Subtractive synth | 2 | done | The plan's phase-2 subtractive synth. |
-| Autogun | TBD | 5 | todo |  |
+| Autogun | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | BassDrum | TBD | 5 | todo |  |
-| BeepMap | TBD | 5 | todo |  |
-| BooBass | TBD | 5 | todo |  |
+| BeepMap | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| BooBass | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Channel Sampler | TBD | 1 | in-progress | The plan's phase-1 sampler. One-shot and gated playback, tuning, trim, reverse, volume envelope, cut groups, persisted forward/ping-pong loops and editable loop points. Prepared independent spectral duration/pitch is undergoing combined integration and review; filter and further modulation controls remain unfinished. See docs/SAMPLER-LOOPS.md and docs/SAMPLER-STRETCH.md. |
 | DirectWave Player | TBD | 5 | todo |  |
-| Drumpad | TBD | 5 | todo |  |
+| Drumpad | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | FLEX | TBD | 5 | todo | Its preset packs are Image-Line content; a Windfall equivalent needs its own. Candidate basis: Vital or Surge XT (GPL-3.0). |
-| Fruity DrumSynth Live | TBD | 5 | todo |  |
-| Fruity DX10 | TBD | 5 | todo | Candidate basis: Dexed (GPL-3.0). |
-| Fruity Granulizer | TBD | 5 | todo |  |
-| Fruity Kick | TBD | 5 | todo | The manual calls it Fruit Kick. |
+| Fruity DrumSynth Live | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Fruity DX10 | TBD | 5 | done | Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Fruity Granulizer | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Fruity Kick | TBD | 5 | done | Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Fruity Pad Controller (FPC) | TBD | 5 | todo | Its bundled kits are Image-Line content; needs own. |
-| Fruity Slicer | TBD | 5 | todo | May share one Windfall plugin with the phase-3 slicer. |
+| Fruity Slicer | TBD | 5 | in-progress | May share one Windfall plugin with the phase-3 slicer. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Slicer 2 | TBD | 3 | in-progress | Shared Rust grid/transient analysis and reviewed linked-source playlist slices provide the detector foundation. Independent note triggering, playable slice mapping and a slicer instrument remain pending. Fades, spectral stretch, swing and tempo-automated projects are explicitly refused. See docs/SLICER.md. |
 | GMS | TBD | 5 | todo | The manual names it Groove Machine Synth. |
 | MiniSynth | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
-| Plucked! | TBD | 5 | todo |  |
-| SimSynth | TBD | 5 | todo | Candidate basis: Surge XT (GPL-3.0). |
+| Plucked! | TBD | 5 | done | Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| SimSynth | TBD | 5 | done | Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Speech Synthesizer | TBD | 5 | todo | Windows only in FL. |
-| Wave Traveller | TBD | 5 | todo |  |
+| Wave Traveller | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | FL Keys | TBD | 5 | todo | Its samples are Image-Line content; needs own. |
 | Dashboard | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin kept for old projects, superseded by Control Surface. |
 | Fruity Vibrator | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Windows only in FL. |
@@ -241,68 +241,68 @@ As of 2026-10-08. Sources:
 
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
-| Transmitter | TBD | 5 | todo | New in FL Studio 2026. |
+| Transmitter | TBD | 5 | in-progress | New in FL Studio 2026. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | LuxeVerb | TBD | 5 | todo |  |
-| Pitch Shifter | TBD | 5 | todo | Candidate basis: Signalsmith Stretch (MIT). |
-| Transient Processor | TBD | 5 | todo |  |
+| Pitch Shifter | TBD | 5 | in-progress | Candidate basis: Signalsmith Stretch (MIT). QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Transient Processor | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Emphasis | TBD | 5 | todo |  |
-| Transporter | TBD | 5 | todo |  |
-| Gross Beat | TBD | 5 | todo |  |
-| Hardcore (11 Guitar FX) | TBD | 5 | todo |  |
-| Low Lifter | TBD | 5 | todo |  |
-| Pitcher | TBD | 5 | todo | Needs real-time pitch detection. |
-| Vintage Chorus | TBD | 5 | todo |  |
-| Vintage Phaser | TBD | 5 | todo |  |
-| Frequency Shifter | TBD | 5 | todo |  |
-| Hyper Chorus | TBD | 5 | todo |  |
-| Maximus | TBD | 5 | todo |  |
-| Multiband Delay | Frequency delay | 5 | in-progress | A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet. |
-| Spreader | TBD | 5 | todo |  |
-| Vocodex | TBD | 5 | todo |  |
+| Transporter | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Gross Beat | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Hardcore (11 Guitar FX) | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Low Lifter | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Pitcher | TBD | 5 | in-progress | Needs real-time pitch detection. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Vintage Chorus | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Vintage Phaser | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Frequency Shifter | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Hyper Chorus | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Maximus | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Multiband Delay | Frequency delay | 5 | in-progress | QA 2026-10-09: registered FrequencyDelay has sixteen independent delay/level/pan bands; measured DSP and public native integration verified. Dedicated drawn sixteen-band editor, fallible host admission and saturating aggregate-tail acceptance remain open under DELAY-FAMILY.md. This is distinct from the three-band BandDelay. See docs/qa/2026-10-09-delay-bank.md. |
+| Spreader | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Vocodex | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Control Surface | TBD | 5 | todo |  |
-| Distructor | TBD | 5 | todo |  |
-| Effector (12 FX) | TBD | 5 | todo |  |
+| Distructor | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Effector (12 FX) | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | EQUO | TBD | 5 | todo |  |
-| Frequency Splitter | TBD | 5 | todo |  |
+| Frequency Splitter | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Balance | Balance | 5 | done | Integrated chain-position gain/balance processor, generic controls, checked persistence/history and automation. Signal/RT, PDC and live/offline/stem tests pass; utility R7 and root composition are accepted. See docs/UTILITY-EFFECTS.md, docs/UTILITY-REPAIRS.md and docs/integration/2026-10-08-completion-audit.md. |
-| Fruity Blood Overdrive | TBD | 5 | todo |  |
+| Fruity Blood Overdrive | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Chorus | Chorus | 5 | done | Original three-voice stereo modulated delay with independent rates, depth, base delay, stereo phase and mix. All controls persist, undo and automate through the generic editor; real engine live/offline/both stem modes and callback allocation guards pass. Independently reviewed, including the shared frame-clock contract; combined parent WASM/UI tests pass. See docs/MODULATION-EFFECTS.md. This is the basic chorus row; specialist chorus variants remain separate. |
 | Fruity Compressor | Compressor | 2 | done | Phase-2 core compressor per the plan. |
-| Fruity Convolver | TBD | 5 | todo | Impulse responses shipped with FL are Image-Line content; needs own. |
-| Fruity Delay 2 | TBD | 5 | todo |  |
-| Fruity Delay 3 | Delay | 2 | in-progress | Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row. |
-| Fruity Delay Bank | Echo bank | 5 | in-progress | A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet. |
+| Fruity Convolver | TBD | 5 | in-progress | Impulse responses shipped with FL are Image-Line content; needs own. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Fruity Delay 2 | TBD | 5 | done | Verified by QA 2026-10-09: Stereo/filter/modulated echo contracts verified through measured DSP/public runtime, saved parameters and mounted editor controls including modulation rate/depth. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Fruity Delay 3 | Delay | 2 | done | Verified by QA 2026-10-09: Stereo/filter/modulated echo contracts verified through measured DSP/public runtime, saved parameters and mounted editor controls including modulation rate/depth. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Fruity Delay Bank | Echo bank | 5 | in-progress | QA 2026-10-09: registered eight-unit EchoBank with chaining/filtering, saved controls and public native runtime integration verified. Dedicated linked eight-unit editing, fallible host admission and saturating aggregate-tail acceptance remain open under DELAY-FAMILY.md. See docs/qa/2026-10-09-delay-bank.md. |
 | Fruity Fast Dist | Drive distortion | 5 | done | Distinct drive/shape/output distortion processor with measured oversampled alias reduction and CPU throughput. Controls, persistence/history, automation, reported 32-frame PDC, callback guards and live/offline/stem parity pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Filter | TBD | 5 | todo |  |
 | Fruity Flanger | Flanger | 5 | done | Original short modulated stereo delay with signed feedback/polarity, stereo phase and mix. Independent impulse/comb references, automation, reset/partition and tail tests cover the real DSP. All controls persist and undo; combined live/offline/both stem and actual shared-WASM generic UI checks pass with zero callback allocation. See docs/MODULATION-EFFECTS.md. Through-zero and specialist flanging remain separate. |
-| Fruity Flangus | TBD | 5 | todo |  |
+| Fruity Flangus | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Formula Controller | TBD | 5 | todo |  |
 | Fruity HTML NoteBook | TBD | 5 | todo |  |
 | Fruity Limiter | Limiter | 2 | in-progress | Lookahead peak limiting, latency compensation and gain-reduction readout are implemented. The row still requires compression/gate modes and scrolling level history; those are pending dynamics/analyzer work. |
 | Fruity Love Philter | TBD | 5 | todo |  |
 | Fruity LSD | TBD | 5 | todo | Windows only in FL (built on Microsoft DirectX). |
-| Fruity Multiband Compressor | TBD | 5 | todo |  |
+| Fruity Multiband Compressor | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity NoteBook | TBD | 5 | todo |  |
-| Fruity NoteBook 2 | TBD | 5 | todo |  |
+| Fruity NoteBook 2 | TBD | 5 | done | Verified by QA 2026-10-09: Plain multi-page notebook editing, history, limits, replacement and native disk roundtrip verified. Playback-following Notebook1 remains separate. Evidence: docs/qa/2026-10-09-notebook.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Fruity PanOMatic | TBD | 5 | todo |  |
 | Fruity Parametric EQ | TBD | 5 | todo |  |
 | Fruity Parametric EQ2 | Parametric EQ | 2 | in-progress | Seven-band EQ processing and interactive filter-response editing are implemented. The displayed response is calculated from parameters; a live audio spectrum is still pending. See roadmap T8. |
 | Fruity Phaser | Phaser | 5 | done | Original stereo allpass cascade sweeps notches with frequency endpoints, rate, signed feedback, stereo phase and mix. Independent allpass/feedback references, frame-clock automation and retained-history tail reentry pass; the reviewed reentry discontinuity is fixed without relaxing its bound. Persistence/history, actual generic UI/shared-WASM and live/offline/both stem modes pass. See docs/MODULATION-EFFECTS.md. |
 | Fruity Reeverb 2 | Reverb | 2 | done | Phase-2 core reverb per the plan. |
-| Fruity Scratcher | TBD | 5 | todo |  |
+| Fruity Scratcher | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Send | TBD | 5 | todo |  |
 | Fruity Soft Clipper | Soft clipper | 5 | done | Distinct soft-knee peak-rounding processor with ceiling/knee controls, tested odd/monotone/bounded transfer, persistence/history and automation. Callback and render parity checks pass; utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Squeeze | Lo-fi reduction | 5 | done | Distinct quantization, rate reduction, drive, timed preservation/replacement and resonant pre/post filtering with 16 persisted/automatable controls. Independent signal, callback, live/offline/stem and shared-WASM UI checks pass; Standards/Spec reviews and parent composition accepted. Finite activity and intentional aliasing policies are documented; device/listening/platform qualification remains separate. See docs/LOFI.md. |
-| Fruity Stereo Enhancer | TBD | 5 | todo |  |
+| Fruity Stereo Enhancer | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Stereo Shaper | Stereo matrix | 5 | done | Stereo and mid/side matrix, signed coefficients, encode/decode and independent channel delays are integrated. Controls/history, bounded priming/tap transitions, shared-delay PDC and live/offline/stem tests pass. Latency-changing delay automation and varying-branch transient cancellation retain the documented host limits. Utility R7/root composition accepted. See docs/UTILITY-EFFECTS.md and docs/UTILITY-REPAIRS.md. |
-| Fruity Vocoder | TBD | 5 | todo |  |
-| Fruity WaveShaper | TBD | 5 | todo |  |
+| Fruity Vocoder | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Fruity WaveShaper | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity X-Y Controller | TBD | 5 | todo |  |
 | Fruity X-Y-Z Controller | TBD | 5 | todo |  |
 | Patcher | TBD | 4 | todo | The plan's phase-4 modular plugin rack. |
 | Fruity Peak Controller | TBD | 5 | todo |  |
 | Razer Chroma | TBD | 5 | todo | Depends on Razer's own SDK; check its license against GPL-3.0 before starting. |
-| Soundgoodizer | TBD | 5 | todo |  |
+| Soundgoodizer | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Tuner | TBD | 5 | todo |  |
 | VFX Color Mapper | TBD | 5 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. |
 | VFX Envelope | TBD | 5 | todo | Only works inside FL's modular rack (Patcher); depends on fx-patcher. |
@@ -320,7 +320,7 @@ As of 2026-10-08. Sources:
 | Fruity Free Filter | Selectable filter | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Integrated selectable lowpass/highpass/bandpass/notch/low-shelf/peak/high-shelf processor with continuous live histories and interruption-safe mode ramps. All modes/controls, persistence/history/automation, generic UI and independent signal/RT/render tests pass. E1 downstream R4 is accepted. See docs/FILTER-FAMILY.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Mute 2 | Channel mute | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Independent left/right/both channel mutes work at any effect-chain position, with smoothed automation, persistence/history and generic controls. Signal/RT/render and accepted utility repair checks pass. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
 | Fruity Phase Inverter | Polarity | 5 | done | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Independent left/right polarity inversion is integrated with smoothed switching, controls, persistence/history and automation. Signal/RT/live-offline checks and accepted utility repair tests pass. See docs/UTILITY-EFFECTS.md and docs/integration/2026-10-08-completion-audit.md. |
-| Fruity Reeverb | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. |
+| Fruity Reeverb | TBD | 5 | in-progress | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 
 ## Visual and video
 
@@ -331,7 +331,7 @@ As of 2026-10-08. Sources:
 | Fruity dB Meter | TBD | 5 | todo |  |
 | Fruity Spectroman | TBD | 5 | todo |  |
 | Video Visualizer (ZGameEditor) | TBD | 6 | todo | The plan's phase-6 visualizer. The manual names it ZGameEditor Visualizer. |
-| Wave Candy | TBD | 5 | todo |  |
+| Wave Candy | TBD | 5 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Fruity Dance | TBD | 5 | todo | manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. Its default character art is Image-Line's; a Windfall equivalent needs its own artwork. |
 
 ## Audio editors
@@ -388,29 +388,29 @@ As of 2026-10-08. Sources:
 | FL feature | Windfall | Phase | Status | Notes |
 | --- | --- | --- | --- | --- |
 | Audio settings (driver, device, sample rate, buffer length) | Audio settings | 0 | in-progress | The plan uses cpal: WASAPI and ASIO on Windows, CoreAudio on macOS, ALSA, JACK and PipeWire on Linux. Device, sample rate and buffer through WASAPI, CoreAudio, ALSA and JACK. ASIO is behind a build feature that is off. |
-| Transport (play, stop, record, pattern/song mode, song position) | Transport | 1 | in-progress | Play, stop, pattern/song mode and song position are available. Record opens native input/channel selection and explicit start/stop/discard controls. Initial capture uses manual playlist placement without hardware latency/clock compensation; monitoring, count-in and multitrack takes remain. |
+| Transport (play, stop, record, pattern/song mode, song position) | Transport | 1 | in-progress | Play, stop, pattern/song mode and song position are available. Native recording feature-pass source now adds timestamped synchronized capture, count-in, input monitoring and loop take selection. Multitrack workflows remain. Artifacts and all new QA deferred. See docs/RECORDING.md. |
 | Tempo and tempo tapper | Tempo | 1 | done | Transport typing/dragging and review-and-Apply tap tempo are implemented. Bounded estimator, keyboard repeat guards, reset/cancel, one-step undo/redo/save/open and stale-project reply tests pass. Existing tempo automation retains playback control. See docs/TAP-TEMPO.md. |
-| Metronome | Metronome | 1 | todo |  |
-| Typing keyboard to piano keyboard | Typing keyboard | 1 | todo |  |
+| Metronome | Metronome | 1 | done | Verified by QA 2026-10-09: Public native runtime verifies audible beat clicks; physical recording and count-in remain separate open rows. Evidence: docs/qa/2026-10-09-recording-mixer.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Typing keyboard to piano keyboard | Typing keyboard | 1 | done | Verified by QA 2026-10-09: Computer-keyboard audition/release and dated backup listing/open workflows verified through mounted UI and complementary public native audio or actual filesystem acceptance. Evidence: docs/qa/2026-10-09-completion-audit.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Themes | Light and dark themes | 1 | done | Light and dark themes. |
 | Interface scaling | Interface scaling | 1 | in-progress | Whole-application scaling with persisted preferences and coherent canvas/control coordinates is being implemented in an isolated T3 task. Native third-party editor content scaling remains a required plugin-host integration; application-only browser checks will not complete this row. |
 | Hint bar | Hints | 1 | done |  |
 | Output meter and CPU/memory panels | Status meters | 1 | done | Master output, engine load/dropouts and bounded native resident Host RAM readout with explicit accounting scope, unavailable/error recovery and lifecycle-safe polling. Windows native and shared-WASM UI checks pass; independent Standards/Spec reviews accepted. macOS/Linux runtime execution remains a platform gate. See docs/TOOLBAR-MEMORY.md. |
 | Undo and edit history | Undo history | 2 | done | The plan calls for linear undo with a visible history list. |
 | Multithreaded processing | Multi-core mixing | 2 | todo |  |
-| Global snap | Global snap | 2 | todo |  |
-| Detached windows | Detachable panels | 2 | todo |  |
+| Global snap | Global snap | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Detached windows | Detachable panels | 2 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Keyboard and mouse shortcuts | Shortcuts with optional FL keymap | 2 | done | Shortcuts are scoped to the focused panel. An optional preset follows FL Studio's keys. |
-| Tools menu macros | Utility commands | 2 | todo | Maps to named commands in Windfall's command palette. |
-| Project info (title, author, genre, comments) | Project info | 2 | todo |  |
+| Tools menu macros | Utility commands | 2 | done | Verified by QA 2026-10-09: Verified one-click utilities: reset levels, switch every clip's stretch mode, mute empty tracks and unsolo; property/history/save conservation verified. Unused-channel selection and unused-clip purge are not claimed. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Project info (title, author, genre, comments) | Project info | 2 | done | Verified by QA 2026-10-09: Stopped keyboard step entry, saved project metadata/export author tags and key/mood chord insertion verified through mounted document controls and complementary native persistence/export checks. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
 | Project settings (time signature, timebase, panning law) | Project settings | 2 | in-progress | Tempo, time signature and swing. |
 | MIDI settings (input and output devices, ports, controller type) | MIDI settings | 3 | in-progress | Persisted native input/output device and MIDI-channel settings, port refresh/reconnect, unavailable saved-device handling, runtime audition destination and Panic MIDI controls are implemented. Controller profiles, MIDI learn and physical hardware verification remain pending. Browser simulation reports native-only capability. See docs/MIDI-HARDWARE.md. |
 | Note recording from MIDI input | Note recording | 3 | todo |  |
-| Step editing (step entry) | Step entry | 3 | todo |  |
-| Score logger (dump score log to pattern) | Note logger | 3 | todo |  |
-| Recording count-in | Count-in | 3 | todo |  |
-| Loop recording (takes) | Loop recording | 3 | todo |  |
-| Automation recording | Automation recording | 3 | todo |  |
+| Step editing (step entry) | Step entry | 3 | done | Verified by QA 2026-10-09: Stopped keyboard step entry, saved project metadata/export author tags and key/mood chord insertion verified through mounted document controls and complementary native persistence/export checks. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md. |
+| Score logger (dump score log to pattern) | Note logger | 3 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
+| Recording count-in | Count-in | 3 | in-progress | Native meter/tempo count-in, pre-opened timestamped ADC capture, exact DAC-frame start, progress and zero-bar synchronized recording are implemented in source. Native-rate conversion, independent clock drift fitting, signed offsets and stop-tail draining are included. Artifacts and all QA deferred. See docs/METRONOME-COUNT-IN.md and docs/RECORDING-ALIGNMENT.md. |
+| Loop recording (takes) | Loop recording | 3 | in-progress | Loop pass selection, atomic kept-source attachment, saved take groups and synchronized comp editing are implemented. Capture-to-keep, pass boundaries and real device acceptance remain open; do not infer complete recording QA from the general suite. See docs/qa/2026-10-09-recording-mixer.md. |
+| Automation recording | Automation recording | 3 | in-progress | QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Link to controller (remote control settings, mapping formula, smoothing) | Controller mapping | 3 | todo |  |
 | Multilink to controllers | Multi-link mapping | 3 | todo |  |
 | Pickup (takeover) mode | Pickup mode | 3 | todo |  |
@@ -422,7 +422,7 @@ As of 2026-10-08. Sources:
 | MIDI scripting (Python device scripts) | Controller scripting | 6 | todo | Part of the plan's phase-6 scripting. |
 | Preconfigured controller support | Controller profiles | 6 | todo | Windfall would deliver these as controller scripts. |
 | Touch controllers (virtual keyboard and drum pads) | Touch keyboard and pads | 6 | todo | Not named in the plan's phase table, so placed in phase 6. |
-| Chord detection panel | Chord display | 6 | todo | New in FL Studio 2026. Not named in the plan's phase table, so placed in phase 6. |
+| Chord detection panel | Chord display | 6 | in-progress | New in FL Studio 2026. Not named in the plan's phase table, so placed in phase 6. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |
 | Mastering on export (FL Cloud) | Automatic mastering | 6 | todo | Runs as Image-Line's online service; a Windfall version would have to run locally. Not named in the plan's phase table, so placed in phase 6. |
 | Interface languages | Translations | 7 | todo |  |
-| Help menu and guided tutorials | Help and tutorials | 7 | todo | Guided tutorials were added in FL Studio 2026. |
+| Help menu and guided tutorials | Help and tutorials | 7 | in-progress | Guided tutorials were added in FL Studio 2026. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates. |

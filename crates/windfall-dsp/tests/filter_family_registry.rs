@@ -80,7 +80,22 @@ fn signal(seed: usize, n: usize) -> Vec<f32> {
 
 #[test]
 fn kinds_are_appended_and_have_distinct_tags_names_defaults_and_controls() {
-    assert_eq!(EffectKind::ALL.len(), 19);
+    assert_eq!(EffectKind::ALL.len(), 63);
+    // Later effect families append without displacing this family's slots.
+    let mut tags = std::collections::BTreeSet::new();
+    for (index, kind) in EffectKind::ALL.iter().enumerate() {
+        assert_eq!(*kind as usize, index);
+        assert!(tags.insert(serde_json::to_string(kind).unwrap()));
+        let mut controls = std::collections::BTreeSet::new();
+        for info in kind.descriptors() {
+            assert!(
+                controls.insert(info.id),
+                "{} has duplicate control {}",
+                kind.name(),
+                info.id
+            );
+        }
+    }
     assert_eq!(EffectKind::ALL[12..15], KINDS);
     // Preserve the previous registration order and discriminants used by
     // test/random settings and existing enum consumers.

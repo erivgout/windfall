@@ -8,6 +8,15 @@ use crate::mp3::{self, Mp3Settings, Mp3Writer};
 use crate::vorbis::{self, VorbisWriter};
 use crate::wav::{self, WavSampleFormat, WavWriter};
 
+/// Project information carried by audio exports. Empty fields are omitted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioTags<'a> {
+    pub title: &'a str,
+    pub author: &'a str,
+    pub genre: &'a str,
+    pub comments: &'a str,
+}
+
 /// The audio file formats Windfall writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AudioFormat {
@@ -115,22 +124,43 @@ impl Encoder {
         sample_rate: u32,
         channels: u16,
     ) -> Result<Self, CodecError> {
-        let inner =
-            match *settings {
-                EncoderSettings::Mp3 { settings } => {
-                    Inner::Mp3(Mp3Writer::create(path, sample_rate, channels, settings)?)
-                }
-                EncoderSettings::Wav { format } => {
-                    Inner::Wav(WavWriter::create(path, sample_rate, channels, format)?)
-                }
-                EncoderSettings::Flac { depth, level } => {
-                    let writer = FlacWriter::create(path, sample_rate, channels, depth, level)?;
-                    Inner::Flac(Box::new(writer))
-                }
-                EncoderSettings::Vorbis { quality } => Inner::Vorbis(Box::new(
-                    VorbisWriter::create(path, sample_rate, channels, quality)?,
-                )),
-            };
+        Self::open_with_tags(path, settings, sample_rate, channels, &AudioTags::default())
+    }
+
+    /// Starts a file with project tags for WAV, FLAC, Ogg Vorbis, or MP3.
+    pub fn open_with_tags(
+        path: impl AsRef<Path>,
+        settings: &EncoderSettings,
+        sample_rate: u32,
+        channels: u16,
+        tags: &AudioTags<'_>,
+    ) -> Result<Self, CodecError> {
+        let inner = match *settings {
+            EncoderSettings::Mp3 { settings } => Inner::Mp3(Mp3Writer::create_with_tags(
+                path,
+                sample_rate,
+                channels,
+                settings,
+                tags,
+            )?),
+            EncoderSettings::Wav { format } => Inner::Wav(WavWriter::create_with_tags(
+                path,
+                sample_rate,
+                channels,
+                format,
+                tags,
+            )?),
+            EncoderSettings::Flac { depth, level } => {
+                let writer =
+                    FlacWriter::create_with_tags(path, sample_rate, channels, depth, level, tags)?;
+                Inner::Flac(Box::new(writer))
+            }
+            EncoderSettings::Vorbis { quality } => {
+                let writer =
+                    VorbisWriter::create_with_tags(path, sample_rate, channels, quality, tags)?;
+                Inner::Vorbis(Box::new(writer))
+            }
+        };
         Ok(Self { inner })
     }
 

@@ -130,7 +130,7 @@ impl ParameterControl {
         self.generation.fetch_add(1, Ordering::Release);
         self.observe_document(value);
     }
-    fn observe_document(&self, value: f32) {
+    pub(super) fn observe_document(&self, value: f32) {
         use std::sync::atomic::Ordering;
         // One bounded read matches the committed generation/value pair. A
         // stale plan with different values cannot acknowledge newer intent.
@@ -1031,8 +1031,19 @@ impl Runtime {
                 let result = control.describe(Duration::from_secs(2));
                 control.terminate();
                 drop(audio);
-                let (state, parameters) = result?;
+                let (state, parameters, layout) = result?;
                 binding.state = state;
+                binding.auxiliary_inputs = layout
+                    .audio_inputs
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(_, input)| !input.main && input.channels > 0)
+                    .map(|(index, input)| windfall_project::PluginAuxInput {
+                        index: index as u32,
+                        name: input.name,
+                        channels: input.channels,
+                    })
+                    .collect();
                 binding.parameters = parameters
                     .into_iter()
                     .map(|parameter| windfall_project::PluginParameter {
@@ -1052,9 +1063,17 @@ impl Runtime {
         }
         self.call(move |owner| {
             let mut instance = Self::create(owner, &binding)?;
-            binding.auxiliary_inputs = instance.layout().audio_inputs.iter().enumerate()
+            binding.auxiliary_inputs = instance
+                .layout()
+                .audio_inputs
+                .iter()
+                .enumerate()
                 .filter(|(_, input)| !input.main && input.channels > 0)
-                .map(|(index, input)| windfall_project::PluginAuxInput { index: index as u32, name: input.name.clone(), channels: input.channels })
+                .map(|(index, input)| windfall_project::PluginAuxInput {
+                    index: index as u32,
+                    name: input.name.clone(),
+                    channels: input.channels,
+                })
                 .collect();
             let params = instance.params().to_vec();
             binding.parameters = params
@@ -1461,6 +1480,10 @@ impl Runtime {
     }
 }
 
+// Preserve inline preallocated instrument note storage across the existing
+// owner/callback exchange. Boxing this variant would introduce another heap
+// owner and retirement step into that allocation-free transfer contract.
+#[allow(clippy::large_enum_variant)]
 enum Adapter {
     Effect(PluginEffect),
     Instrument(PluginInstrument),
@@ -1505,10 +1528,26 @@ struct ExpressionOwner {
     dirty: bool,
 }
 impl ExpressionOwner {
-    const EMPTY: Self = Self { id: windfall_dsp::NoteInstanceId(0), native: 0, key: 0, channel: 0,
-        velocity: 0.0, pan: 0.0, pitch: 0.0, expression: windfall_dsp::NoteExpression::NEUTRAL, started: false, dirty: false };
-    fn controls(self) -> windfall_plugin_host::PluginNoteControls { windfall_plugin_host::PluginNoteControls {
-        pan: self.pan, pitch: self.pitch, modulation_x: self.expression.modulation_x, modulation_y: self.expression.modulation_y } }
+    const EMPTY: Self = Self {
+        id: windfall_dsp::NoteInstanceId(0),
+        native: 0,
+        key: 0,
+        channel: 0,
+        velocity: 0.0,
+        pan: 0.0,
+        pitch: 0.0,
+        expression: windfall_dsp::NoteExpression::NEUTRAL,
+        started: false,
+        dirty: false,
+    };
+    fn controls(self) -> windfall_plugin_host::PluginNoteControls {
+        windfall_plugin_host::PluginNoteControls {
+            pan: self.pan,
+            pitch: self.pitch,
+            modulation_x: self.expression.modulation_x,
+            modulation_y: self.expression.modulation_y,
+        }
+    }
 }
 
 struct Audio {
@@ -1553,7 +1592,9 @@ impl Audio {
         let Some(adapter) = ownership.as_mut().and_then(AudioOwnership::current_mut) else {
             return;
         };
-        if let Adapter::Effect(effect) = adapter { effect.processor().set_sidechain_input(*sidechain_input); }
+        if let Adapter::Effect(effect) = adapter {
+            effect.processor().set_sidechain_input(*sidechain_input);
+        }
         if let Adapter::Instrument(instrument) = adapter
             && *reconcile_notes
         {
@@ -1562,15 +1603,33 @@ impl Audio {
                     return;
                 }
                 replayed.fill(0.0);
-                for note in expression_owners.iter_mut() { note.started = false; note.dirty = true; }
+                for note in expression_owners.iter_mut() {
+                    note.started = false;
+                    note.dirty = true;
+                }
                 *reset_notes = false;
             }
             let mut complete = true;
             for note in expression_owners.iter_mut().filter(|note| note.native != 0) {
                 let accepted = if !note.started {
-                    instrument.note_on_instance(note.native, note.key, note.channel, note.velocity, note.controls())
-                } else if note.dirty { instrument.set_note_controls(note.native, note.controls()) } else { true };
-                if accepted { note.started = true; note.dirty = false; } else { complete = false; }
+                    instrument.note_on_instance(
+                        note.native,
+                        note.key,
+                        note.channel,
+                        note.velocity,
+                        note.controls(),
+                    )
+                } else if note.dirty {
+                    instrument.set_note_controls(note.native, note.controls())
+                } else {
+                    true
+                };
+                if accepted {
+                    note.started = true;
+                    note.dirty = false;
+                } else {
+                    complete = false;
+                }
             }
             for key in 0..16 * 128 {
                 if replayed[key] != held[key] {
@@ -1663,7 +1722,9 @@ impl Drop for Audio {
     }
 }
 impl HostedEffect for Audio {
-    fn set_sidechain_input(&mut self, input: Option<u32>) { self.sidechain_input = input; }
+    fn set_sidechain_input(&mut self, input: Option<u32>) {
+        self.sidechain_input = input;
+    }
     fn adopt_parameters(&mut self, parameters: &[windfall_project::PluginParameter]) {
         for control in self.controls.iter() {
             if let Some(param) = parameters.iter().find(|param| param.id == control.id) {
@@ -1709,7 +1770,9 @@ impl HostedEffect for Audio {
             None => {}
         }
     }
-    fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
+    fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_sidechain(left, right, None);
+    }
     fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
         // Reconcile after engine commands and note expirations, immediately
         // before sounding. A boundary alone must never resurrect a released key.
@@ -1793,93 +1856,235 @@ mod capture_ack_tests;
 #[path = "ownership_tests.rs"]
 pub(crate) mod ownership_tests;
 impl HostedInstrument for Audio {
-    fn supports_note_instances(&self) -> bool { self.note_instances }
-    fn supports_note_channels(&self) -> bool { true }
-    fn supports_note_pitch(&self) -> bool { self.note_pitch }
+    fn supports_note_instances(&self) -> bool {
+        self.note_instances
+    }
+    fn supports_note_channels(&self) -> bool {
+        true
+    }
+    fn supports_note_pitch(&self) -> bool {
+        self.note_pitch
+    }
 
-    fn note_on_instance(&mut self, id: windfall_dsp::NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: windfall_dsp::NoteExpression) {
+    fn note_on_instance(
+        &mut self,
+        id: windfall_dsp::NoteInstanceId,
+        key: u8,
+        velocity: f32,
+        pan: f32,
+        expression: windfall_dsp::NoteExpression,
+    ) {
         let expression = expression.clamped();
-        if !self.note_instances { self.start_on_channel(key, expression.color_group.unwrap_or(0), velocity); return; }
-        if id.0 == 0 || !velocity.is_finite() { return; }
-        if velocity <= 0.0 { self.end_instance(id); return; }
+        if !self.note_instances {
+            self.start_on_channel(key, expression.color_group.unwrap_or(0), velocity);
+            return;
+        }
+        if id.0 == 0 || !velocity.is_finite() {
+            return;
+        }
+        if velocity <= 0.0 {
+            self.end_instance(id);
+            return;
+        }
         self.end_instance(id);
-        let slot = self.expression_owners.iter().position(|note| note.native == 0).unwrap_or_else(|| {
-            self.expression_owners.iter().enumerate().min_by_key(|(_, note)| note.id.0).map_or(0, |(index, _)| index)
-        });
-        if self.expression_owners.is_empty() { return; }
-        if self.expression_owners[slot].native != 0 { self.end_instance(self.expression_owners[slot].id); }
+        let slot = self
+            .expression_owners
+            .iter()
+            .position(|note| note.native == 0)
+            .unwrap_or_else(|| {
+                self.expression_owners
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, note)| note.id.0)
+                    .map_or(0, |(index, _)| index)
+            });
+        if self.expression_owners.is_empty() {
+            return;
+        }
+        if self.expression_owners[slot].native != 0 {
+            self.end_instance(self.expression_owners[slot].id);
+        }
         let native = loop {
             let next = self.next_note_id;
-            self.next_note_id = if next == i32::MAX as u32 { windfall_plugin_host::FIRST_NOTE_INSTANCE_ID } else { next + 1 };
-            if !self.expression_owners.iter().any(|note| note.native == next) { break next; }
+            self.next_note_id = if next == i32::MAX as u32 {
+                windfall_plugin_host::FIRST_NOTE_INSTANCE_ID
+            } else {
+                next + 1
+            };
+            if !self
+                .expression_owners
+                .iter()
+                .any(|note| note.native == next)
+            {
+                break next;
+            }
         };
-        self.expression_owners[slot] = ExpressionOwner { id, native, key: key.min(127), channel: expression.color_group.unwrap_or(0),
-            velocity: velocity.clamp(0.0, 1.0), pan: if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 },
-            pitch: f32::from(key.min(127)) + expression.fine_pitch_cents / 100.0, expression, started: false, dirty: true };
+        self.expression_owners[slot] = ExpressionOwner {
+            id,
+            native,
+            key: key.min(127),
+            channel: expression.color_group.unwrap_or(0),
+            velocity: velocity.clamp(0.0, 1.0),
+            pan: if pan.is_finite() {
+                pan.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            },
+            pitch: f32::from(key.min(127)) + expression.fine_pitch_cents / 100.0,
+            expression,
+            started: false,
+            dirty: true,
+        };
         self.publish_expression_owner(slot);
     }
     fn note_off_instance(&mut self, id: windfall_dsp::NoteInstanceId, key: u8) {
-        if self.note_instances { self.end_instance(id); } else { self.end_on_channel(key, 0); }
+        if self.note_instances {
+            self.end_instance(id);
+        } else {
+            self.end_on_channel(key, 0);
+        }
     }
     fn note_off_on_channel(&mut self, id: windfall_dsp::NoteInstanceId, key: u8, channel: u8) {
-        if self.note_instances { self.end_instance(id); } else { self.end_on_channel(key, channel); }
+        if self.note_instances {
+            self.end_instance(id);
+        } else {
+            self.end_on_channel(key, channel);
+        }
     }
-    fn set_note_expression(&mut self, id: windfall_dsp::NoteInstanceId, pan: f32, expression: windfall_dsp::NoteExpression) {
-        let Some(slot) = self.expression_owners.iter().position(|note| note.native != 0 && note.id == id) else { return; };
+    fn set_note_expression(
+        &mut self,
+        id: windfall_dsp::NoteInstanceId,
+        pan: f32,
+        expression: windfall_dsp::NoteExpression,
+    ) {
+        let Some(slot) = self
+            .expression_owners
+            .iter()
+            .position(|note| note.native != 0 && note.id == id)
+        else {
+            return;
+        };
         let expression = expression.clamped();
         let note = &mut self.expression_owners[slot];
         let key = f32::from(note.key);
-        note.pitch = (note.pitch + (expression.fine_pitch_cents - note.expression.fine_pitch_cents) / 100.0).clamp(key - 120.0, key + 120.0);
+        note.pitch = (note.pitch
+            + (expression.fine_pitch_cents - note.expression.fine_pitch_cents) / 100.0)
+            .clamp(key - 120.0, key + 120.0);
         note.expression = expression;
-        note.pan = if pan.is_finite() { pan.clamp(-1.0, 1.0) } else { 0.0 };
+        note.pan = if pan.is_finite() {
+            pan.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
         note.dirty = true;
         self.publish_expression_owner(slot);
     }
     fn set_note_pitch(&mut self, id: windfall_dsp::NoteInstanceId, pitch: f32) {
-        let Some(slot) = self.expression_owners.iter().position(|note| note.native != 0 && note.id == id) else { return; };
-        if !pitch.is_finite() { return; }
+        let Some(slot) = self
+            .expression_owners
+            .iter()
+            .position(|note| note.native != 0 && note.id == id)
+        else {
+            return;
+        };
+        if !pitch.is_finite() {
+            return;
+        }
         let key = f32::from(self.expression_owners[slot].key);
         self.expression_owners[slot].pitch = pitch.clamp(key - 120.0, key + 120.0);
         self.expression_owners[slot].dirty = true;
         self.publish_expression_owner(slot);
     }
-    fn note_on(&mut self, key: u8, velocity: f32) { self.start_on_channel(key, 0, velocity); }
-    fn note_off(&mut self, key: u8) { self.end_on_channel(key, 0); }
+    fn note_on(&mut self, key: u8, velocity: f32) {
+        self.start_on_channel(key, 0, velocity);
+    }
+    fn note_off(&mut self, key: u8) {
+        self.end_on_channel(key, 0);
+    }
     fn all_notes_off(&mut self) {
         self.held.fill(0.0);
         self.expression_owners.fill(ExpressionOwner::EMPTY);
         if !self.reconcile_notes {
-            let accepted = if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() { adapter.all_notes_off() } else { false };
-            if !accepted { self.reconcile_notes = true; self.reset_notes = true; }
-        } else { self.reset_notes = true; }
+            let accepted = if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() {
+                adapter.all_notes_off()
+            } else {
+                false
+            };
+            if !accepted {
+                self.reconcile_notes = true;
+                self.reset_notes = true;
+            }
+        } else {
+            self.reset_notes = true;
+        }
     }
     fn voices(&self) -> usize {
         if self.reconcile_notes {
             return self.held.iter().filter(|velocity| **velocity > 0.0).count()
-                + self.expression_owners.iter().filter(|note| note.native != 0).count();
+                + self
+                    .expression_owners
+                    .iter()
+                    .filter(|note| note.native != 0)
+                    .count();
         }
-        match self.adapter() { Some(Adapter::Instrument(adapter)) => adapter.active_voices(), _ => 0 }
+        match self.adapter() {
+            Some(Adapter::Instrument(adapter)) => adapter.active_voices(),
+            _ => 0,
+        }
     }
 }
 
 impl Audio {
     fn publish_expression_owner(&mut self, slot: usize) {
-        if self.reconcile_notes { return; }
+        if self.reconcile_notes {
+            return;
+        }
         let note = self.expression_owners[slot];
         let accepted = if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() {
-            if note.started { adapter.set_note_controls(note.native, note.controls()) }
-            else { adapter.note_on_instance(note.native, note.key, note.channel, note.velocity, note.controls()) }
-        } else { false };
-        if accepted { self.expression_owners[slot].started = true; self.expression_owners[slot].dirty = false; }
-        else { self.reconcile_notes = true; if self.adapter().is_none() { self.reset_notes = true; } }
+            if note.started {
+                adapter.set_note_controls(note.native, note.controls())
+            } else {
+                adapter.note_on_instance(
+                    note.native,
+                    note.key,
+                    note.channel,
+                    note.velocity,
+                    note.controls(),
+                )
+            }
+        } else {
+            false
+        };
+        if accepted {
+            self.expression_owners[slot].started = true;
+            self.expression_owners[slot].dirty = false;
+        } else {
+            self.reconcile_notes = true;
+            if self.adapter().is_none() {
+                self.reset_notes = true;
+            }
+        }
     }
     fn end_instance(&mut self, id: windfall_dsp::NoteInstanceId) {
-        let Some(slot) = self.expression_owners.iter().position(|note| note.native != 0 && note.id == id) else { return; };
+        let Some(slot) = self
+            .expression_owners
+            .iter()
+            .position(|note| note.native != 0 && note.id == id)
+        else {
+            return;
+        };
         let note = self.expression_owners[slot];
         self.expression_owners[slot] = ExpressionOwner::EMPTY;
         if note.started {
-            let accepted = if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() { adapter.note_off_instance(note.native, note.expression.release) } else { false };
-            if !accepted { self.reconcile_notes = true; self.reset_notes = true; }
+            let accepted = if let Some(Adapter::Instrument(adapter)) = self.adapter_mut() {
+                adapter.note_off_instance(note.native, note.expression.release)
+            } else {
+                false
+            };
+            if !accepted {
+                self.reconcile_notes = true;
+                self.reset_notes = true;
+            }
         }
     }
     fn start_on_channel(&mut self, key: u8, channel: u8, velocity: f32) {
@@ -2070,10 +2275,10 @@ impl PluginFactory for Runtime {
                 controls: Arc::new([]),
                 held: [0.0; 16 * 128],
                 replayed: [0.0; 16 * 128],
-                    expression_owners: Box::new([]),
-                    next_note_id: windfall_plugin_host::FIRST_NOTE_INSTANCE_ID,
-                    note_instances: false,
-                    note_pitch: false,
+                expression_owners: Box::new([]),
+                next_note_id: windfall_plugin_host::FIRST_NOTE_INSTANCE_ID,
+                note_instances: false,
+                note_pitch: false,
                 reconcile_notes: false,
                 reset_notes: false,
                 transport: None,
@@ -2183,10 +2388,14 @@ impl PluginFactory for Runtime {
                     controls,
                     held: [0.0; 16 * 128],
                     replayed: [0.0; 16 * 128],
-                    expression_owners: vec![ExpressionOwner::EMPTY; windfall_plugin_host::MAX_NOTE_INSTANCES].into_boxed_slice(),
+                    expression_owners: vec![
+                        ExpressionOwner::EMPTY;
+                        windfall_plugin_host::MAX_NOTE_INSTANCES
+                    ]
+                    .into_boxed_slice(),
                     next_note_id: windfall_plugin_host::FIRST_NOTE_INSTANCE_ID,
-                    note_instances: note_instances,
-                    note_pitch: note_pitch,
+                    note_instances,
+                    note_pitch,
                     reconcile_notes: false,
                     reset_notes: false,
                     transport: None,
@@ -2208,10 +2417,14 @@ impl PluginFactory for Runtime {
                 controls: Arc::new([]),
                 held: [0.0; 16 * 128],
                 replayed: [0.0; 16 * 128],
-                    expression_owners: vec![ExpressionOwner::EMPTY; windfall_plugin_host::MAX_NOTE_INSTANCES].into_boxed_slice(),
-                    next_note_id: windfall_plugin_host::FIRST_NOTE_INSTANCE_ID,
-                    note_instances: false,
-                    note_pitch: false,
+                expression_owners: vec![
+                    ExpressionOwner::EMPTY;
+                    windfall_plugin_host::MAX_NOTE_INSTANCES
+                ]
+                .into_boxed_slice(),
+                next_note_id: windfall_plugin_host::FIRST_NOTE_INSTANCE_ID,
+                note_instances: false,
+                note_pitch: false,
                 reconcile_notes: false,
                 reset_notes: false,
                 transport: None,

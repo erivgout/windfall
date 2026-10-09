@@ -2,7 +2,8 @@ import type { HitPart } from "@/lib/canvas"
 
 import type { InnerHit } from "./inner"
 
-export type Tool = "draw" | "paint" | "select" | "erase" | "mute"
+export type Tool =
+  "draw" | "paint" | "select" | "erase" | "mute" | "slip" | "playback" | "slice"
 
 export const TOOLS: readonly Tool[] = [
   "draw",
@@ -10,6 +11,9 @@ export const TOOLS: readonly Tool[] = [
   "select",
   "erase",
   "mute",
+  "slip",
+  "playback",
+  "slice",
 ]
 
 /** What was under the pointer when a button went down. */
@@ -33,11 +37,17 @@ export type Press = {
 export type Intent =
   | { kind: "none" }
   | { kind: "pan" }
+  /** Seek the transport at the pointer throughout the gesture. */
+  | { kind: "playback" }
+  /** Split every clip crossing a vertical line when the button is released. */
+  | { kind: "slice" }
   /** Drag a box around clips. `additive` keeps what was already selected. */
   | { kind: "marquee"; additive: boolean }
   | { kind: "move"; id: number; additive: boolean }
   | { kind: "trim-start"; id: number }
   | { kind: "resize-end"; id: number }
+  /** Slide a clip's content inside its fixed window. */
+  | { kind: "slip"; id: number }
   /** Put one clip of the brush where the button is released. */
   | { kind: "place" }
   /** Lay clips of the brush back to back along the stroke. */
@@ -113,10 +123,11 @@ function onInner(
  * and what is under the pointer. The modifiers follow `lib/edit-modifiers`.
  *
  * - Middle button pans.
- * - Ctrl+drag on empty grid selects with a box in every tool. On a clip,
- *   Ctrl leaves the press a move, which the drop turns into a copy.
+ * - Ctrl+drag on empty grid selects with a box except in Playback. On a clip,
+ *   Ctrl leaves the press a move in Draw, Paint and Select, which the drop
+ *   turns into a copy. Slip keeps the press a content slide.
  * - Shift adds the pressed clip to the selection, or the box's clips.
- * - Right button deletes, except in the Select tool where it opens a menu.
+ * - Right button deletes, except Select opens a menu and Playback ignores it.
  *   On a point of a curve it deletes the point, or opens the point's menu;
  *   on the rest of a curve it does nothing, so a near miss of a point does
  *   not delete the clip.
@@ -130,6 +141,7 @@ export function intentFor(press: Press): Intent {
   const inner = hit && editsClips ? (press.inner ?? null) : null
   if (button === 1) return { kind: "pan" }
   if (button === 2) {
+    if (tool === "playback") return { kind: "none" }
     if (hit && inner?.kind === "point") {
       return tool === "select"
         ? { kind: "point-menu", id: hit.id, index: inner.index }
@@ -143,7 +155,8 @@ export function intentFor(press: Press): Intent {
   if (button !== 0) return { kind: "none" }
   // The Erase and Mute tools do nothing else to a clip, so there Ctrl
   // selects on a clip as well.
-  if (mod && !(hit && editsClips)) return { kind: "marquee", additive: shift }
+  if (mod && tool !== "playback" && !(hit && (editsClips || tool === "slip")))
+    return { kind: "marquee", additive: shift }
   // With Ctrl a press anywhere on a clip is the clip's: a move, or a copy.
   if (hit && inner && !mod) {
     const intent = onInner(hit, inner)
@@ -161,6 +174,12 @@ export function intentFor(press: Press): Intent {
       return { kind: "erase" }
     case "mute":
       return { kind: "mute" }
+    case "playback":
+      return { kind: "playback" }
+    case "slice":
+      return { kind: "slice" }
+    case "slip":
+      return hit ? { kind: "slip", id: hit.id } : { kind: "none" }
     default: {
       const _exhaustive: never = tool
       return _exhaustive
@@ -176,6 +195,9 @@ export function cursorFor(
 ): string {
   if (tool === "erase") return part ? "not-allowed" : "default"
   if (tool === "mute") return part ? "pointer" : "default"
+  if (tool === "slip") return part ? "ew-resize" : "default"
+  if (tool === "playback") return "crosshair"
+  if (tool === "slice") return "crosshair"
   const edge = part === "start-edge" || part === "end-edge"
   if (inner) {
     if (inner.kind === "fade") return "ew-resize"

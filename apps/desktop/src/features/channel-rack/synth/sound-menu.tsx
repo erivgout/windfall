@@ -17,10 +17,13 @@ import {
   useActions,
   useAppState,
 } from "@/lib/actions"
+import { instrumentParams } from "@/lib/channel-source"
 import { useHint } from "@/lib/store/hint"
 
 import { synthSoundActionId } from "../actions"
+import { loadInstrumentSound, selectedChannel } from "../channel-ops"
 import { matchingPreset, SYNTH_PRESETS, type SynthSettings } from "./presets"
+import { nextSynthSoundPreset } from "./synth-sound-preset-step"
 
 // Rendered only while the menu is open, so it can follow the app state.
 function SoundItems() {
@@ -28,6 +31,15 @@ function SoundItems() {
   const state = useAppState()
   const find = (id: string) => actions.find((action) => action.id === id)
   const init = find("channel.initInstrument")
+  const params = instrumentParams(selectedChannel())
+  const previous =
+    params?.type === "subtractiveSynth"
+      ? nextSynthSoundPreset(params, "previous")
+      : null
+  const next =
+    params?.type === "subtractiveSynth"
+      ? nextSynthSoundPreset(params, "next")
+      : null
 
   return (
     <>
@@ -53,6 +65,40 @@ function SoundItems() {
           </DropdownMenuItem>
         )
       })}
+      <DropdownMenuItem
+        disabled={!previous}
+        onClick={() => {
+          const channel = selectedChannel()
+          const params = instrumentParams(channel)
+          if (!channel || params?.type !== "subtractiveSynth") return
+          const next = nextSynthSoundPreset(params, "previous")
+          if (!next) return
+          void loadInstrumentSound(
+            channel.id,
+            next.params,
+            `Load sound: ${next.name}`
+          )
+        }}
+      >
+        Previous sound
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        disabled={!next}
+        onClick={() => {
+          const channel = selectedChannel()
+          const params = instrumentParams(channel)
+          if (!channel || params?.type !== "subtractiveSynth") return
+          const next = nextSynthSoundPreset(params, "next")
+          if (!next) return
+          void loadInstrumentSound(
+            channel.id,
+            next.params,
+            `Load sound: ${next.name}`
+          )
+        }}
+      >
+        Next sound
+      </DropdownMenuItem>
       <p className="px-2 py-1.5 text-muted-foreground">
         A sound replaces every setting of the synth. Undo brings the old ones
         back.

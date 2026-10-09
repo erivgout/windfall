@@ -9,6 +9,8 @@ import type {
   Project,
 } from "@/bindings"
 import descriptors from "@/bindings/descriptors.json"
+import { createDefaultChannelVoiceSettings } from "@/features/channel-rack/voice/settings"
+import { DEFAULT_TRACK_PROCESSING } from "@/lib/track-processing"
 
 import { SimDocument } from "./document"
 import { buildProject, demoProject, emptyProject } from "./project"
@@ -113,6 +115,65 @@ function fullProject() {
     type: "addPluginInstrument",
     plugin: pluginBinding(),
   }).created
+  const [pluginEffect] = scratch.dispatch({
+    type: "addPluginEffect",
+    track: ids.track,
+    plugin: pluginBinding(),
+  }).created
+  scratch.dispatch({
+    type: "addArrangement",
+    name: "Original",
+    clips: [],
+    tracks: [],
+  })
+  const [arrangement] = scratch.dispatch({
+    type: "addArrangement",
+    name: "Alternate",
+    clips: [],
+    tracks: [],
+  }).created
+  const [group] = scratch.dispatch({
+    type: "addTrackGroup",
+    name: "Drums",
+    parent: null,
+  }).created
+  const [parentGroup] = scratch.dispatch({
+    type: "addTrackGroup",
+    name: "Band",
+    parent: null,
+  }).created
+  const [clipGroup] = scratch.dispatch({
+    type: "addClipGroup",
+    clips: [ids.clip, ids.audioClip],
+  }).created
+  scratch.dispatch({
+    type: "setChannelGroup",
+    channels: [ids.channel],
+    group: "Drums",
+  })
+  const sourceAudio = scratch
+    .project()
+    .playlist.clips.find((clip) => clip.id === ids.audioClip)!
+  const [spareAudioClip] = scratch.dispatch({
+    type: "addClips",
+    clips: [
+      {
+        track: ids.lowerTrack,
+        start: 1920,
+        length: 1920,
+        content: sourceAudio.content,
+      },
+    ],
+  }).created
+  const [takeGroup] = scratch.dispatch({
+    type: "createAudioTakeGroup",
+    name: "Takes",
+    lanes: [{ name: "Mic", takes: [{ pass: 1, clip: ids.audioClip }] }],
+  }).created
+  scratch.dispatch({
+    type: "updateClips",
+    updates: [{ id: ids.audioClip, patch: { muted: true } }],
+  })
   const withPlugin = scratch.project()
   scratch.dispose()
   const pattern = withPlugin.patterns[0]
@@ -123,7 +184,30 @@ function fullProject() {
   )!.notes[0]
   return {
     project: withPlugin,
-    ids: { ...ids, pattern: pattern.id, note, selectedNote, pluginChannel },
+    ids: {
+      ...ids,
+      pattern: pattern.id,
+      note,
+      selectedNote,
+      pluginChannel,
+      pluginEffect,
+      arrangement,
+      group,
+      parentGroup,
+      clipGroup,
+      takeGroup,
+      spareAudioClip,
+      project: withPlugin,
+      mixerTrack: withPlugin.mixer.tracks.find(
+        (track) => track.id === ids.track
+      )!,
+      sourceClip: withPlugin.playlist.clips.find(
+        (clip) => clip.id === ids.audioClip
+      )!,
+      audioTakeGroup: withPlugin.playlist.takeGroups!.find(
+        (group) => group.id === takeGroup
+      )!,
+    },
   }
 }
 
@@ -157,6 +241,238 @@ type Ids = ReturnType<typeof fullProject>["ids"]
  * for a new entry when the Rust `Command` gains a variant.
  */
 const EVERY_COMMAND: { [Type in Command["type"]]: (ids: Ids) => Command } = {
+  addArrangement: (ids) => ({
+    type: "addArrangement",
+    name: "New",
+    clips: [ids.audioClip],
+    tracks: [ids.lowerTrack],
+  }),
+  renameArrangement: (ids) => ({
+    type: "renameArrangement",
+    id: ids.arrangement,
+    name: "Verse",
+  }),
+  setArrangementReferences: (ids) => ({
+    type: "setArrangementReferences",
+    id: ids.arrangement,
+    clips: [ids.audioClip],
+    tracks: [ids.lowerTrack],
+  }),
+  switchArrangement: (ids) => ({
+    type: "switchArrangement",
+    id: ids.arrangement,
+  }),
+  removeArrangement: (ids) => ({
+    type: "removeArrangement",
+    id: ids.arrangement,
+  }),
+  addTrackGroup: () => ({ type: "addTrackGroup", name: "New", parent: null }),
+  renameTrackGroup: (ids) => ({
+    type: "renameTrackGroup",
+    id: ids.group,
+    name: "Percussion",
+  }),
+  moveTrackGroup: (ids) => ({
+    type: "moveTrackGroup",
+    id: ids.group,
+    parent: ids.parentGroup,
+  }),
+  moveTrackToGroup: (ids) => ({
+    type: "moveTrackToGroup",
+    track: ids.playlistTrack,
+    parent: ids.group,
+  }),
+  removeTrackGroup: (ids) => ({ type: "removeTrackGroup", id: ids.group }),
+  addClipGroup: (ids) => ({
+    type: "addClipGroup",
+    clips: [
+      ids.project.playlist.clips.find(
+        (clip) => clip.content.type === "automation"
+      )!.id,
+      ids.spareAudioClip,
+    ],
+  }),
+  removeClipGroup: (ids) => ({ type: "removeClipGroup", id: ids.clipGroup }),
+  linkTrack: (ids) => ({
+    type: "linkTrack",
+    track: ids.playlistTrack,
+    kind: { type: "instrument", channel: ids.channel },
+  }),
+  makeUnique: (ids) => ({ type: "makeUnique", clip: ids.clip }),
+  addNotesWithCurves: (ids) => ({
+    type: "addNotesWithCurves",
+    pattern: ids.pattern,
+    channel: ids.channel,
+    notes: [{ start: 100, length: 50, key: 65, velocity: 0.5 }],
+    curves: [],
+  }),
+  setNoteExpressionCurves: (ids) => ({
+    type: "setNoteExpressionCurves",
+    pattern: ids.pattern,
+    channel: ids.channel,
+    expected: [ids.selectedNote],
+    expectedCurves: [],
+    curves: [
+      {
+        note: ids.note,
+        parameter: "finePitchCents",
+        points: [{ position: 0, value: 0.5, curve: 0, hold: false }],
+      },
+    ],
+  }),
+  setPluginSidechainInput: (ids) => ({
+    type: "setPluginSidechainInput",
+    target: { type: "effect", track: ids.track, effect: ids.pluginEffect },
+    input: 1,
+  }),
+  setSidechain: (ids) => ({
+    type: "setSidechain",
+    from: ids.track,
+    to: 0,
+    gain: 0.5,
+  }),
+  applyMixerTrackPreset: (ids) => ({
+    type: "applyMixerTrackPreset",
+    id: ids.track,
+    expected: ids.mixerTrack,
+    nameColor: true,
+    preset: {
+      version: 1,
+      name: "Preset",
+      color: 0x112233,
+      volume: 0.5,
+      pan: 0,
+      muted: false,
+      processing: ids.mixerTrack.processing ?? DEFAULT_TRACK_PROCESSING,
+      latencyOffsetMs: 0,
+      effects: [],
+      plugins: [],
+    },
+  }),
+  moveMixerTracks: (ids) => ({
+    type: "moveMixerTracks",
+    expected: ids.project.mixer.tracks.map((track) => track.id),
+    ids: [ids.track],
+    before: ids.project.mixer.tracks[1].id,
+  }),
+  setTrackParam: (ids) => ({
+    type: "setTrackParam",
+    id: ids.track,
+    param: 0,
+    value: 0,
+  }),
+  ensureCurrentMixerTrack: () => ({ type: "ensureCurrentMixerTrack" }),
+  setTrackExternalOutput: (ids) => ({
+    type: "setTrackExternalOutput",
+    id: ids.track,
+    route: { left: 0, right: 1, exclusive: true },
+  }),
+  createAudioTakeGroup: (ids) => ({
+    type: "createAudioTakeGroup",
+    name: "New Takes",
+    lanes: [{ name: "Mic", takes: [{ pass: 1, clip: ids.spareAudioClip }] }],
+  }),
+  renameAudioTakeGroup: (ids) => ({
+    type: "renameAudioTakeGroup",
+    id: ids.takeGroup,
+    name: "Comp Takes",
+  }),
+  removeAudioTakeGroup: (ids) => ({
+    type: "removeAudioTakeGroup",
+    id: ids.takeGroup,
+  }),
+  auditionAudioTakeGroup: (ids) => ({
+    type: "auditionAudioTakeGroup",
+    id: ids.takeGroup,
+    pass: 1,
+  }),
+  compAudioTakeGroup: (ids) => ({
+    type: "compAudioTakeGroup",
+    expected: ids.audioTakeGroup,
+    sources: [ids.sourceClip],
+    ranges: [{ pass: 1, start: 0, end: 960 }],
+    name: "Comp",
+    fadeTicks: 0,
+    muteSources: true,
+    replaceComp: false,
+  }),
+  compAudioClips: (ids) => ({
+    type: "compAudioClips",
+    sources: [ids.sourceClip],
+    segments: [{ clip: ids.audioClip, start: 0, end: 960 }],
+    destination: null,
+    name: "Comp",
+    fadeTicks: 0,
+    muteSources: true,
+  }),
+  editPatternTimeline: (ids) => ({
+    type: "editPatternTimeline",
+    pattern: ids.pattern,
+    expected: ids.project.patterns[0].timeline ?? { meters: [], markers: [] },
+    expectedSignature: ids.project.patterns[0].timeSignature ?? null,
+    edit: { type: "setSignature", signature: { numerator: 3, denominator: 4 } },
+  }),
+  replaceNotebook: () => ({
+    type: "replaceNotebook",
+    notebook: { pages: [{ title: "Notes", body: "QA" }] },
+  }),
+  setChannelVoiceSettings: (ids) => ({
+    type: "setChannelVoiceSettings",
+    id: ids.channel,
+    settings: {
+      ...createDefaultChannelVoiceSettings(),
+      echo: { ...createDefaultChannelVoiceSettings().echo, enabled: true },
+    },
+  }),
+  setChannelGroup: (ids) => ({
+    type: "setChannelGroup",
+    channels: [ids.channel],
+    group: "New",
+  }),
+  renameChannelGroup: () => ({
+    type: "renameChannelGroup",
+    name: "Drums",
+    newName: "Percussion",
+  }),
+  removeChannelGroup: () => ({ type: "removeChannelGroup", name: "Drums" }),
+  fillStepRange: (ids) => ({
+    type: "fillStepRange",
+    pattern: ids.pattern,
+    channel: ids.channel,
+    lengthSteps: ids.project.patterns[0].lengthSteps,
+    expected: ids.project.patterns[0].lanes.find(
+      (lane) => lane.channel === ids.channel
+    )!.notes,
+    startStep: 0,
+    endStep: 4,
+    replace: true,
+    notes: [{ start: 0, length: 120, key: 64, velocity: 0.5 }],
+  }),
+  updateCapturedNotes: (ids) => ({
+    type: "updateCapturedNotes",
+    pattern: ids.pattern,
+    channel: ids.channel,
+    expected: [ids.selectedNote],
+    updates: [{ id: ids.note, patch: { velocity: 0.25 } }],
+  }),
+  generateAutomationLfo: (ids) => ({
+    type: "generateAutomationLfo",
+    expected: ids.project.automations.find(
+      (automation) => automation.id === ids.automation
+    )!,
+    start: 0,
+    end: 960,
+    resolution: 120,
+    lfo: {
+      wave: "sine",
+      period: 960,
+      phase: 0,
+      center: 0.5,
+      depth: 0.25,
+      width: 0.5,
+      seed: 1,
+    },
+  }),
   addMeterChange: () => ({
     type: "addMeterChange",
     tick: 7400,

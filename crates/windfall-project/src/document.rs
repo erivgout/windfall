@@ -334,6 +334,7 @@ impl Document {
             revision: self.revision,
             settings: touched.settings.then(|| project.settings.clone()),
             plugins: touched.plugins.then(|| project.plugins.clone()),
+            notebook: touched.notebook.then(|| project.notebook.clone()),
             samples: touched.samples.then(|| project.samples.clone()),
             channels: touched.channels.then(|| project.channels.clone()),
             mixer: touched.mixer.then(|| project.mixer.clone()),

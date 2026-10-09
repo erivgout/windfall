@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { usePlaylistStore } from "@/features/playlist/store"
 
+// This application-wide action/palette/menu contract is not a latency budget.
+// Parallel jsdom suites can exceed Vitest's default 5 s while all assertions pass.
 it("registers Analysis at startup without an inspector and removes its actions and subscriptions", async () => {
   const unregister = registerAllActions()
   const uninstall = installKeymap()
@@ -65,4 +67,4 @@ it("registers Analysis at startup without an inspector and removes its actions a
   const version = registry.stateVersion()
   usePlaylistStore.getState().select([71])
   expect(registry.stateVersion()).toBe(version)
-})
+}, 10_000)

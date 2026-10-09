@@ -52,6 +52,10 @@ import { KeyLights } from "./key-lights"
 import { LaneHeader, LaneResizer } from "./lane-header"
 import { NOTE_MENU, PANEL_MENU } from "./menu"
 import { NoteToolsDialog } from "./note-tools-dialog"
+import { RiffGeneratorDialog } from "./riff-generator-dialog"
+import { closeRiffGenerator } from "./riff-generator"
+import { ProgressionGeneratorDialog } from "./progression-dialog"
+import { closeProgressionGenerator } from "./progression"
 import { closeNoteLfo } from "@/features/automation/lfo-dialog"
 import { closeNoteProperties, NotePropertiesDialog } from "./note-properties"
 import { closeNoteCurves, NoteCurvesDialog } from "./note-curves"
@@ -68,6 +72,8 @@ import { gridSpecFor, snapTicks } from "./snap"
 import { scaleRows } from "./scales"
 import { usePianoRollStore } from "./store"
 import { PianoRollToolbar } from "./toolbar"
+import { attachTypingKeyboard } from "./typing-keyboard"
+import { attachStepEntry } from "./step-entry"
 import { ValueLane } from "./value-lane"
 import {
   contentTicks,
@@ -141,6 +147,7 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   const laneKey = `${patternId}:${channelId}`
 
   const scope = useShortcutScope("pianoRoll")
+  const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const readoutRef = useRef<HTMLOutputElement>(null)
   const wasPlaying = useRef(false)
@@ -154,6 +161,17 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   )
   const [view, setView] = useState<TimeGridView | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
+
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const stopStepEntry = attachStepEntry(root, channelId)
+    const stopTyping = attachTypingKeyboard(root, channelId)
+    return () => {
+      stopStepEntry()
+      stopTyping()
+    }
+  }, [channelId])
 
   const lastEnd = useMemo(
     () =>
@@ -198,6 +216,8 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
     return () => {
       setCurrentSession(null)
       closeNoteTools()
+      closeRiffGenerator()
+      closeProgressionGenerator()
       closeNoteProperties()
       closeNoteCurves()
       closeNoteLfo()
@@ -328,7 +348,7 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
         )
       }
     }
-    session.setPlayhead(local)
+    if (!session.editor.scrubbing) session.setPlayhead(local)
 
     const sounding = playing && local !== null
     if (sounding) {
@@ -366,10 +386,13 @@ export function Workspace({ patternId, channelId }: WorkspaceProps) {
   return (
     <SessionContext value={session}>
       <NoteToolsDialog />
+      <RiffGeneratorDialog />
+      <ProgressionGeneratorDialog />
       <NotePropertiesDialog />
       <NoteCurvesDialog />
       <ContextActions items={PANEL_MENU}>
         <div
+          ref={rootRef}
           className="flex h-full min-h-0 min-w-0 flex-col bg-background"
           {...scope}
         >

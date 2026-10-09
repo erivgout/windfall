@@ -20,7 +20,7 @@ import {
 import type { SamplerChannel } from "@/lib/channel-source"
 import { hasSampleDrag, readSampleDrag } from "@/lib/dnd"
 import { useHint } from "@/lib/store/hint"
-import { useProjectStore } from "@/lib/store/project"
+import { dispatch, useProjectStore } from "@/lib/store/project"
 import { useSample } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 import { formatSampleRate } from "@/lib/time"
@@ -29,12 +29,17 @@ import { cn } from "@/lib/utils"
 
 import {
   assignProjectSample,
+  findChannel,
   replaceSampleFromFile,
   replaceSampleFromPickedFile,
 } from "../channel-ops"
 import { useGestureValue } from "../use-gesture-value"
 import { Section } from "./parts"
 import { useSampleInfo } from "./sample-info"
+import { nextSampleTrimPreset } from "./sample-trim-preset-step"
+import { nextSampleTrim, SAMPLE_TRIM_PRESETS } from "./sample-trim-presets"
+import { nextSampleTrimScale } from "./sample-trim-scale"
+import { nextTrimStartScale } from "./trim-start-scale"
 
 /** Lists the samples already in the project, to point the channel at one. */
 function ProjectSamples({ channel }: { channel: SamplerChannel }) {
@@ -161,6 +166,7 @@ function Trim({
 
 /** The sample a channel plays: its waveform, trim handles and a way to change it. */
 export function SampleSection({ channel }: { channel: SamplerChannel }) {
+  const { id, source } = channel
   const sample = useSample(channel.source.sample)
   const state = useSampleInfo(sample)
   const browserVisible = useUiStore((state) => state.panels.browser)
@@ -246,6 +252,141 @@ export function SampleSection({ channel }: { channel: SamplerChannel }) {
             Drop to use this sample
           </div>
         )}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {SAMPLE_TRIM_PRESETS.map((preset) => (
+          <Button
+            key={preset.label}
+            variant="outline"
+            size="xs"
+            disabled={
+              nextSampleTrim(source.start ?? 0, source.end ?? 1, preset) ===
+              null
+            }
+            onClick={() => {
+              const latest = findChannel(id)?.source
+              if (latest?.type !== "sampler") return
+              if (
+                nextSampleTrim(latest.start ?? 0, latest.end ?? 1, preset) ===
+                null
+              )
+                return
+              void dispatch({
+                type: "updateSampler",
+                id,
+                patch: { start: preset.start, end: preset.end },
+              })
+            }}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {(["previous", "next"] as const).map((direction) => (
+          <Button
+            key={direction}
+            variant="outline"
+            size="xs"
+            aria-label={
+              direction === "previous"
+                ? "Choose the previous sample trim preset"
+                : "Choose the next sample trim preset"
+            }
+            disabled={
+              nextSampleTrimPreset(
+                source.start ?? 0,
+                source.end ?? 1,
+                direction
+              ) === null
+            }
+            onClick={() => {
+              const latest = findChannel(id)?.source
+              if (latest?.type !== "sampler") return
+              const next = nextSampleTrimPreset(
+                latest.start ?? 0,
+                latest.end ?? 1,
+                direction
+              )
+              if (next === null) return
+              void dispatch({
+                type: "updateSampler",
+                id,
+                patch: { start: next.start, end: next.end },
+              })
+            }}
+          >
+            {direction === "previous" ? "Previous" : "Next"}
+          </Button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {(["half", "double"] as const).map((factor) => (
+          <Button
+            key={factor}
+            variant="outline"
+            size="xs"
+            aria-label={
+              factor === "half" ? "Halve sample trim" : "Double sample trim"
+            }
+            disabled={
+              nextSampleTrimScale(source.start ?? 0, source.end ?? 1, factor) ===
+              null
+            }
+            onClick={() => {
+              const latest = findChannel(id)?.source
+              if (latest?.type !== "sampler") return
+              const next = nextSampleTrimScale(
+                latest.start ?? 0,
+                latest.end ?? 1,
+                factor
+              )
+              if (next === null) return
+              void dispatch({
+                type: "updateSampler",
+                id,
+                patch: { end: next },
+              })
+            }}
+          >
+            {factor === "half" ? "Halve trim" : "Double trim"}
+          </Button>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {(["half", "double"] as const).map((factor) => (
+          <Button
+            key={factor}
+            variant="outline"
+            size="xs"
+            aria-label={
+              factor === "half"
+                ? "Halve sample trim from the end"
+                : "Double sample trim from the end"
+            }
+            disabled={
+              nextTrimStartScale(source.start ?? 0, source.end ?? 1, factor) ===
+              null
+            }
+            onClick={() => {
+              const latest = findChannel(id)?.source
+              if (latest?.type !== "sampler") return
+              const next = nextTrimStartScale(
+                latest.start ?? 0,
+                latest.end ?? 1,
+                factor
+              )
+              if (next === null) return
+              void dispatch({
+                type: "updateSampler",
+                id,
+                patch: { start: next },
+              })
+            }}
+          >
+            {factor === "half" ? "Halve from end" : "Double from end"}
+          </Button>
+        ))}
       </div>
       {sample && (
         <div className="flex items-baseline gap-3">

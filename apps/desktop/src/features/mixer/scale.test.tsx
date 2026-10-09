@@ -9,6 +9,7 @@ import { startTestApp } from "@/test/harness"
 
 import MixerPanel from "."
 import { STRIP_WIDTH } from "./layout"
+import { useMixerUi } from "./mixer-ui"
 import {
   channelNamed,
   flush,
@@ -27,6 +28,7 @@ let stop: () => void
 
 beforeEach(async () => {
   stubCanvas()
+  useMixerUi.setState(useMixerUi.getInitialState(), true)
   ;({ stop } = await startTestApp())
 })
 afterEach(() => {
@@ -34,16 +36,16 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** Fills the mixer up to its limit of 128 tracks. */
+/** Fills the mixer to the current ordinary-track limit. */
 async function fillMixer() {
-  while (tracks().length < MAX_MIXER_TRACKS) {
-    await dispatch({ type: "addMixerTrack" })
-  }
+  await dispatch({ type: "batch", label: "Fill mixer for virtualization QA",
+    commands: Array.from({ length: MAX_MIXER_TRACKS - tracks().filter((track) => !track.current).length },
+      () => ({ type: "addMixerTrack" as const })) })
 }
 
 function scroller(): HTMLElement {
   const element = document.querySelector<HTMLElement>(
-    "[data-slot=mixer-inserts]"
+    "[data-slot=mixer-dock-middle]"
   )
   if (!element) throw new Error("The mixer is not mounted")
   return element
@@ -80,9 +82,12 @@ describe("a full mixer", () => {
     sizeMixer(10 * STRIP_WIDTH, 400)
   })
 
-  it("mounts the strips in view, not all 127", () => {
+  it("mounts the strips in view instead of every track at the 500-track limit", () => {
     render(<MixerPanel />)
-    expect(tracks()).toHaveLength(128)
+    // The limit includes Master in addition to 500 insert tracks.
+    expect(MAX_MIXER_TRACKS).toBe(501)
+    expect(tracks()).toHaveLength(MAX_MIXER_TRACKS)
+    expect(insertIds()).toHaveLength(500)
     // The ten in view and a few more on the right.
     expect(mountedInserts()).toEqual(insertIds().slice(0, 13))
     expect(strip("Master")).toBeVisible()
@@ -93,8 +98,9 @@ describe("a full mixer", () => {
     scrollTo(50 * STRIP_WIDTH)
     expect(mountedInserts()).toEqual(insertIds().slice(48, 63))
 
-    scrollTo(117 * STRIP_WIDTH)
-    expect(mountedInserts()).toEqual(insertIds().slice(115, 127))
+    const endStart = insertIds().length - 10
+    scrollTo(endStart * STRIP_WIDTH)
+    expect(mountedInserts()).toEqual(insertIds().slice(endStart - 2))
   })
 
   it("mounts nothing new for a scroll that reveals no new strip", () => {
@@ -110,7 +116,7 @@ describe("a full mixer", () => {
     const third = insertIds()[2]
     selectTrack(third)
     scrollTo(60 * STRIP_WIDTH)
-    expect(mountedInserts()).toEqual([third, ...insertIds().slice(58, 73)])
+    expect(mountedInserts()).toEqual([...insertIds().slice(58, 73), third])
   })
 
   it("scrolls a selected strip into view", () => {
@@ -159,7 +165,7 @@ describe("a full mixer", () => {
 
   it("turns the add button off when the mixer is full", () => {
     render(<MixerPanel />)
-    scrollTo(120 * STRIP_WIDTH)
+    scrollTo((insertIds().length - 10) * STRIP_WIDTH)
     expect(
       screen.getByRole("button", { name: "Add mixer track" })
     ).toBeDisabled()

@@ -29,8 +29,6 @@ fn source(rig: &Rig, sample: Option<&str>) -> String {
         });
     }
     project.patterns.push(Pattern {
-        time_signature: None,
-        timeline: Default::default(),
         iid: 1,
         notes: vec![Note {
             channel: 0,

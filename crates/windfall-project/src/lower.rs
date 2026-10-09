@@ -26,10 +26,10 @@ use crate::model::{
     Channel, ChannelId, ChannelSource, Clip, ClipContent, ClipId, DEFAULT_CHANNEL_VOLUME,
     DEFAULT_KEY, DEFAULT_PATTERN_STEPS, DEFAULT_VELOCITY, EffectId, EffectKind, EffectParams,
     EffectSlot, Envelope, InstrumentKind, InstrumentParams, Lane, MAX_EFFECT_SLOTS,
-    MAX_ENVELOPE_MS, MAX_GAIN, MAX_KEY, MAX_PATTERN_STEPS, MAX_PATTERN_TICKS,
-    MAX_SONG_TICKS, MAX_TEMPO_BPM, MAX_TUNE_SEMITONES, MIN_TEMPO_BPM, MixerTrack, Note, NoteId,
-    PPQ, Pattern, PatternId, PlaylistTrack, PlaylistTrackId, Project, SampleAsset, SampleId,
-    SamplePath, SamplerSettings, Send, TICKS_PER_STEP, TrackId, palette_color,
+    MAX_ENVELOPE_MS, MAX_GAIN, MAX_KEY, MAX_PATTERN_STEPS, MAX_PATTERN_TICKS, MAX_SONG_TICKS,
+    MAX_TEMPO_BPM, MAX_TUNE_SEMITONES, MIN_TEMPO_BPM, MixerTrack, Note, NoteId, PPQ, Pattern,
+    PatternId, PlaylistTrack, PlaylistTrackId, Project, SampleAsset, SampleId, SamplePath,
+    SamplerSettings, Send, TICKS_PER_STEP, TimeSignature, TrackId, palette_color,
 };
 
 type Label = &'static str;
@@ -51,24 +51,64 @@ pub(crate) fn execute(project: &mut Project, command: Command) -> Result<Outcome
         edits: Vec::new(),
         created: Vec::new(),
     };
-    match transaction.run(command) {
+    let result = transaction.run(command).and_then(|label| {
+        if transaction.edits.iter().any(|edit| match edit {
+            Edit::Clips { remove, insert } => remove
+                .iter()
+                .any(|old| !insert.iter().any(|new| new.id == old.id)),
+            Edit::PlaylistTrack(ListEdit::Remove { .. })
+            | Edit::Sample(ListEdit::Remove { .. }) => true,
+            Edit::Channel(edit) => matches!(edit.as_ref(), ListEdit::Remove { .. }),
+            _ => false,
+        }) {
+            transaction.prune_arrangement_references();
+        }
+        crate::check::check_arrangement_references(
+            transaction.project,
+            &transaction.project.playlist.arrangement_book,
+        )
+        .map_err(CommandError::invalid)?;
+        Ok(label)
+    });
+    match result {
         Ok(label) => {
-            let curve_edits: Vec<_> = transaction.project.patterns.iter().filter_map(|pattern| {
-                if pattern.note_curves.is_empty() { return None; }
-                let ids: std::collections::HashSet<_> = pattern.lanes.iter().flat_map(|lane| &lane.notes).map(|note| note.id).collect();
-                let old = PatternInfo::of(pattern);
-                let mut new = old.clone();
-                new.note_curves.retain(|curve| ids.contains(&curve.note));
-                (old != new).then_some(Edit::PatternInfo { id: pattern.id, change: Change { old, new } })
-            }).collect();
-            for edit in curve_edits { transaction.push(edit); }
+            let curve_edits: Vec<_> = transaction
+                .project
+                .patterns
+                .iter()
+                .filter_map(|pattern| {
+                    if pattern.note_curves.is_empty() {
+                        return None;
+                    }
+                    let ids: std::collections::HashSet<_> = pattern
+                        .lanes
+                        .iter()
+                        .flat_map(|lane| &lane.notes)
+                        .map(|note| note.id)
+                        .collect();
+                    let old = PatternInfo::of(pattern);
+                    let mut new = old.clone();
+                    new.note_curves.retain(|curve| ids.contains(&curve.note));
+                    (old != new).then_some(Edit::PatternInfo {
+                        id: pattern.id,
+                        change: Change { old, new },
+                    })
+                })
+                .collect();
+            for edit in curve_edits {
+                transaction.push(edit);
+            }
             if transaction.edits.iter().any(|edit| matches!(edit, Edit::Clips { remove, insert } if remove.iter().any(|old| !insert.iter().any(|new| new.id == old.id)))) {
                 let old = transaction.project.playlist.take_groups.clone();
                 let new = crate::take_groups::prune(transaction.project);
                 transaction.push(Edit::TakeGroups(Change { old, new }));
             }
-            Ok(Outcome { edits: transaction.edits, created: transaction.created, label })
-        },
+            Ok(Outcome {
+                edits: transaction.edits,
+                created: transaction.created,
+                label,
+            })
+        }
         Err(error) => {
             for edit in transaction.edits.iter().rev() {
                 edit.apply(transaction.project, Direction::Backward);
@@ -86,12 +126,196 @@ struct Transaction<'a> {
 }
 
 impl Transaction<'_> {
+    /// Removing entities retires their associations, while undo restores both.
+    fn prune_arrangement_references(&mut self) {
+        let old = self.project.playlist.arrangement_book.clone();
+        let mut new = old.clone();
+        let clips: HashSet<_> = self
+            .project
+            .playlist
+            .clips
+            .iter()
+            .map(|clip| clip.id)
+            .collect();
+        let tracks: HashSet<_> = self
+            .project
+            .playlist
+            .tracks
+            .iter()
+            .map(|track| track.id)
+            .collect();
+        for arrangement in &mut new.arrangements {
+            arrangement.clips.retain(|id| clips.contains(id));
+            arrangement.tracks.retain(|id| tracks.contains(id));
+        }
+        for group in &mut new.clip_groups {
+            group.clips.retain(|id| clips.contains(id));
+        }
+        new.clip_groups.retain(|group| group.clips.len() >= 2);
+        new.track_parents.retain(|track, _| tracks.contains(track));
+        new.linked_tracks.retain(|track, kind| {
+            tracks.contains(track)
+                && match kind {
+                    crate::arrangement::TrackKind::Instrument { channel } => {
+                        self.project.channel(*channel).is_some()
+                    }
+                    crate::arrangement::TrackKind::Audio { source } => {
+                        self.project.sample(*source).is_some()
+                    }
+                }
+        });
+        self.push(Edit::ArrangementBook(Change { old, new }));
+    }
+
+    /// Newly placed material belongs to the layout the user is editing.
+    /// Store membership in the same transaction as the material itself.
+    fn enroll_active_arrangement(&mut self, clips: &[ClipId], tracks: &[PlaylistTrackId]) {
+        let old = self.project.playlist.arrangement_book.clone();
+        let mut new = old.clone();
+        if let Some(active) = new.active
+            && let Some(arrangement) = new.arrangements.iter_mut().find(|item| item.id == active)
+        {
+            for id in clips {
+                if !arrangement.clips.contains(id) {
+                    arrangement.clips.push(*id);
+                }
+            }
+            for id in tracks {
+                if !arrangement.tracks.contains(id) {
+                    arrangement.tracks.push(*id);
+                }
+            }
+        }
+        self.push(Edit::ArrangementBook(Change { old, new }));
+    }
+
     fn push(&mut self, edit: Edit) {
         if edit.is_identity() {
             return;
         }
         edit.apply(self.project, Direction::Forward);
         edit::push(&mut self.edits, edit);
+    }
+
+    fn staged_metadata_id(&self) -> Result<(u32, u32), CommandError> {
+        let id = self.project.next_id;
+        let cursor = id
+            .checked_add(1)
+            .filter(|_| id != 0)
+            .ok_or_else(|| CommandError::invalid("the project has run out of ids"))?;
+        Ok((id, cursor))
+    }
+
+    fn replace_arrangement_book(
+        &mut self,
+        next: Result<crate::ArrangementBook, crate::arrangement::ArrangementError>,
+        cursor: u32,
+    ) -> Result<(), CommandError> {
+        let next = next.map_err(|error| CommandError::invalid(error.to_string()))?;
+        let mut proposed = self.project.clone();
+        proposed.playlist.arrangement_book = next.clone();
+        proposed.next_id = cursor;
+        proposed.check().map_err(CommandError::invalid)?;
+        let old = self.project.playlist.arrangement_book.clone();
+        self.push(Edit::ArrangementBook(Change { old, new: next }));
+        self.project.next_id = cursor;
+        Ok(())
+    }
+
+    fn make_clip_unique(&mut self, id: ClipId) -> Result<(), CommandError> {
+        use crate::arrangement::{UniqueCopy, UniqueSource, make_unique};
+        let old = self
+            .project
+            .playlist
+            .clips
+            .iter()
+            .find(|clip| clip.id == id)
+            .cloned()
+            .ok_or_else(|| CommandError::not_found("clip", id))?;
+        let source = match old.content {
+            ClipContent::Pattern { pattern } => UniqueSource::Pattern(
+                self.project
+                    .pattern(pattern)
+                    .ok_or_else(|| CommandError::not_found("pattern", pattern))?,
+            ),
+            ClipContent::Audio { sample, .. } => UniqueSource::Audio(
+                self.project
+                    .sample(sample)
+                    .ok_or_else(|| CommandError::not_found("sample", sample))?,
+            ),
+            _ => {
+                return Err(CommandError::invalid(
+                    "Only pattern and audio clips can be made unique",
+                ));
+            }
+        };
+        let mut cursor = self.project.next_id;
+        let mut exhausted = false;
+        let (_, copy) = make_unique(source, || {
+            let id = cursor;
+            if id == 0 {
+                exhausted = true;
+                return 0;
+            }
+            match cursor.checked_add(1) {
+                Some(next) => {
+                    cursor = next;
+                    id
+                }
+                None => {
+                    exhausted = true;
+                    0
+                }
+            }
+        })
+        .map_err(|error| CommandError::invalid(error.to_string()))?;
+        if exhausted {
+            return Err(CommandError::invalid("the project has run out of ids"));
+        }
+        let mut new = old.clone();
+        let mut proposed = self.project.clone();
+        let (edit, created) = match copy {
+            UniqueCopy::Pattern(item) => {
+                new.content = ClipContent::Pattern { pattern: item.id };
+                proposed.patterns.push(item.clone());
+                (
+                    Edit::Pattern(ListEdit::Insert {
+                        index: self.project.patterns.len(),
+                        item: item.clone(),
+                    }),
+                    item.id.0,
+                )
+            }
+            UniqueCopy::Audio(item) => {
+                if let ClipContent::Audio { sample, .. } = &mut new.content {
+                    *sample = item.id;
+                }
+                proposed.samples.push(item.clone());
+                (
+                    Edit::Sample(ListEdit::Insert {
+                        index: self.project.samples.len(),
+                        item: item.clone(),
+                    }),
+                    item.id.0,
+                )
+            }
+        };
+        *proposed
+            .playlist
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == id)
+            .unwrap() = new.clone();
+        proposed.next_id = cursor;
+        proposed.check().map_err(CommandError::invalid)?;
+        self.push(edit);
+        self.push(Edit::Clips {
+            remove: vec![old],
+            insert: vec![new],
+        });
+        self.project.next_id = cursor;
+        self.created.push(created);
+        Ok(())
     }
 
     fn allocate(&mut self) -> Result<u32, CommandError> {
@@ -104,11 +328,172 @@ impl Transaction<'_> {
 
     fn run(&mut self, command: Command) -> Result<String, CommandError> {
         let label = match command {
-            Command::AddNotesWithCurves { pattern, channel, notes, curves } => {
-                if notes.len() > crate::piano_tools::MAX_TOOL_NOTES || curves.len() > notes.len().saturating_mul(5)
-                    || curves.iter().map(|curve| curve.points.len()).sum::<usize>() > crate::note_curves::MAX_PATTERN_CURVE_POINTS
-                    || curves.iter().any(|curve| curve.note_index as usize >= notes.len()) {
-                    return Err(CommandError::invalid("the curve input note index or insertion count is invalid"));
+            Command::AddArrangement {
+                name,
+                clips,
+                tracks,
+            } => {
+                let (id, cursor) = self.staged_metadata_id()?;
+                let next = self.project.playlist.arrangement_book.add_arrangement(
+                    crate::arrangement::Arrangement {
+                        id,
+                        name,
+                        clips,
+                        tracks,
+                    },
+                );
+                self.replace_arrangement_book(next, cursor)?;
+                self.created.push(id);
+                "Add arrangement"
+            }
+            Command::RenameArrangement { id, name } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .rename_arrangement(id, name),
+                    self.project.next_id,
+                )?;
+                "Rename arrangement"
+            }
+            Command::SetArrangementReferences { id, clips, tracks } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .set_arrangement_references(id, clips, tracks),
+                    self.project.next_id,
+                )?;
+                "Set arrangement references"
+            }
+            Command::SwitchArrangement { id } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .switch_arrangement(id),
+                    self.project.next_id,
+                )?;
+                "Switch arrangement"
+            }
+            Command::RemoveArrangement { id } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .remove_arrangement(id),
+                    self.project.next_id,
+                )?;
+                "Remove arrangement"
+            }
+            Command::AddTrackGroup { name, parent } => {
+                let (id, cursor) = self.staged_metadata_id()?;
+                let next = self
+                    .project
+                    .playlist
+                    .arrangement_book
+                    .add_track_group(crate::arrangement::TrackGroup { id, name }, parent);
+                self.replace_arrangement_book(next, cursor)?;
+                self.created.push(id);
+                "Add track group"
+            }
+            Command::RenameTrackGroup { id, name } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .rename_track_group(id, name),
+                    self.project.next_id,
+                )?;
+                "Rename track group"
+            }
+            Command::MoveTrackGroup { id, parent } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .move_track_group(id, parent),
+                    self.project.next_id,
+                )?;
+                "Move track group"
+            }
+            Command::MoveTrackToGroup { track, parent } => {
+                self.playlist_track_index(track)?;
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .move_track_to_group(track, parent),
+                    self.project.next_id,
+                )?;
+                "Set track group membership"
+            }
+            Command::RemoveTrackGroup { id } => {
+                self.replace_arrangement_book(
+                    self.project
+                        .playlist
+                        .arrangement_book
+                        .remove_track_group(id),
+                    self.project.next_id,
+                )?;
+                "Remove track group"
+            }
+            Command::AddClipGroup { clips } => {
+                let (id, cursor) = self.staged_metadata_id()?;
+                let next = self
+                    .project
+                    .playlist
+                    .arrangement_book
+                    .add_clip_group(crate::arrangement::ClipGroup { id, clips });
+                self.replace_arrangement_book(next, cursor)?;
+                self.created.push(id);
+                "Group clips"
+            }
+            Command::RemoveClipGroup { id } => {
+                self.replace_arrangement_book(
+                    self.project.playlist.arrangement_book.remove_clip_group(id),
+                    self.project.next_id,
+                )?;
+                "Ungroup clips"
+            }
+            Command::LinkTrack { track, kind } => {
+                self.playlist_track_index(track)?;
+                let next = self
+                    .project
+                    .playlist
+                    .arrangement_book
+                    .link_track(track, kind, |kind| match kind {
+                        crate::arrangement::TrackKind::Instrument { channel } => {
+                            self.project.channel(channel).is_some()
+                        }
+                        crate::arrangement::TrackKind::Audio { source } => {
+                            self.project.sample(source).is_some()
+                        }
+                    });
+                self.replace_arrangement_book(next, self.project.next_id)?;
+                "Link playlist track"
+            }
+            Command::MakeUnique { clip } => {
+                self.make_clip_unique(clip)?;
+                "Make clip unique"
+            }
+            Command::AddNotesWithCurves {
+                pattern,
+                channel,
+                notes,
+                curves,
+            } => {
+                if notes.len() > crate::piano_tools::MAX_TOOL_NOTES
+                    || curves.len() > notes.len().saturating_mul(5)
+                    || curves.iter().map(|curve| curve.points.len()).sum::<usize>()
+                        > crate::note_curves::MAX_PATTERN_CURVE_POINTS
+                    || curves
+                        .iter()
+                        .any(|curve| curve.note_index as usize >= notes.len())
+                {
+                    return Err(CommandError::invalid(
+                        "the curve input note index or insertion count is invalid",
+                    ));
                 }
                 let start = self.created.len();
                 self.add_notes(pattern, channel, &notes)?;
@@ -116,93 +501,210 @@ impl Transaction<'_> {
                 let index = self.pattern_index(pattern)?;
                 let old = PatternInfo::of(&self.project.patterns[index]);
                 let mut new = old.clone();
-                new.note_curves.extend(curves.into_iter().map(|curve| crate::NoteExpressionCurve { note: ids[curve.note_index as usize], parameter: curve.parameter, points: curve.points }));
-                new.note_curves.sort_by_key(|curve| (curve.note, curve.parameter));
-                let mut proposed = self.project.patterns[index].clone(); proposed.note_curves = new.note_curves.clone();
+                new.note_curves.extend(curves.into_iter().map(|curve| {
+                    crate::NoteExpressionCurve {
+                        note: ids[curve.note_index as usize],
+                        parameter: curve.parameter,
+                        points: curve.points,
+                    }
+                }));
+                new.note_curves
+                    .sort_by_key(|curve| (curve.note, curve.parameter));
+                let mut proposed = self.project.patterns[index].clone();
+                proposed.note_curves = new.note_curves.clone();
                 crate::note_curves::check(&proposed).map_err(CommandError::invalid)?;
-                self.push(Edit::PatternInfo { id: pattern, change: Change { old, new } });
+                self.push(Edit::PatternInfo {
+                    id: pattern,
+                    change: Change { old, new },
+                });
                 "Add notes with expression curves"
             }
-            Command::SetNoteExpressionCurves { pattern, channel, expected, expected_curves, curves } => {
+            Command::SetNoteExpressionCurves {
+                pattern,
+                channel,
+                expected,
+                expected_curves,
+                curves,
+            } => {
                 self.captured_note_sources(pattern, channel, &expected)?;
-                let ids: std::collections::HashSet<_> = expected.iter().map(|note| note.id).collect();
-                if expected.is_empty() || curves.iter().chain(&expected_curves).any(|curve| !ids.contains(&curve.note)) {
-                    return Err(CommandError::invalid("choose source notes for the expression curves"));
+                let ids: std::collections::HashSet<_> =
+                    expected.iter().map(|note| note.id).collect();
+                if expected.is_empty()
+                    || curves
+                        .iter()
+                        .chain(&expected_curves)
+                        .any(|curve| !ids.contains(&curve.note))
+                {
+                    return Err(CommandError::invalid(
+                        "choose source notes for the expression curves",
+                    ));
                 }
                 let index = self.pattern_index(pattern)?;
                 let before = &self.project.patterns[index];
-                let captured: Vec<_> = before.note_curves.iter().filter(|curve| ids.contains(&curve.note)).cloned().collect();
-                if captured != expected_curves { return Err(CommandError::invalid("the captured note curves changed")); }
+                let captured: Vec<_> = before
+                    .note_curves
+                    .iter()
+                    .filter(|curve| ids.contains(&curve.note))
+                    .cloned()
+                    .collect();
+                if captured != expected_curves {
+                    return Err(CommandError::invalid("the captured note curves changed"));
+                }
                 let old = PatternInfo::of(before);
                 let mut new = old.clone();
                 new.note_curves.retain(|curve| !ids.contains(&curve.note));
                 new.note_curves.extend(curves);
-                new.note_curves.sort_by_key(|curve| (curve.note, curve.parameter));
+                new.note_curves
+                    .sort_by_key(|curve| (curve.note, curve.parameter));
                 let mut proposed = before.clone();
                 proposed.note_curves = new.note_curves.clone();
                 crate::note_curves::check(&proposed).map_err(CommandError::invalid)?;
-                self.push(Edit::PatternInfo { id: pattern, change: Change { old, new } });
+                self.push(Edit::PatternInfo {
+                    id: pattern,
+                    change: Change { old, new },
+                });
                 "Edit note expression curves"
             }
             Command::SetSidechain { from, to, gain } => {
-                let index = self.signal_track_index(from)?; self.signal_track_index(to)?;
-                if from == TrackId::MASTER || from == to { return Err(CommandError::invalid("Choose an ordinary source and a different sidechain destination")); }
-                let old = self.project.mixer.tracks[index].clone(); let mut new = old.clone();
+                let index = self.signal_track_index(from)?;
+                self.signal_track_index(to)?;
+                if from == TrackId::MASTER || from == to {
+                    return Err(CommandError::invalid(
+                        "Choose an ordinary source and a different sidechain destination",
+                    ));
+                }
+                let old = self.project.mixer.tracks[index].clone();
+                let mut new = old.clone();
                 let existing = new.sidechains.iter().position(|send| send.target == to);
                 match (gain, existing) {
-                    (None, Some(index)) => { new.sidechains.remove(index); self.remove_automations_of(|target| *target == AutomationTarget::SidechainGain { track: from, target: to }); }
+                    (None, Some(index)) => {
+                        new.sidechains.remove(index);
+                        self.remove_automations_of(|target| {
+                            *target
+                                == AutomationTarget::SidechainGain {
+                                    track: from,
+                                    target: to,
+                                }
+                        });
+                    }
                     (None, None) => {}
                     (Some(gain), index) => {
                         let gain = clamped("Sidechain gain", gain, 0.0, MAX_GAIN)?;
-                        if index.is_none() && reaches(&self.project.mixer, to, from) { return Err(CommandError::invalid("The sidechain would make routing loop back on itself")); }
-                        if let Some(index) = index { new.sidechains[index].gain = gain; }
-                        else { new.sidechains.push(Send { target: to, gain }); }
+                        if index.is_none() && reaches(&self.project.mixer, to, from) {
+                            return Err(CommandError::invalid(
+                                "The sidechain would make routing loop back on itself",
+                            ));
+                        }
+                        if let Some(index) = index {
+                            new.sidechains[index].gain = gain;
+                        } else {
+                            new.sidechains.push(Send { target: to, gain });
+                        }
                     }
                 }
                 self.push(Edit::SetMixerTrack(Box::new(Change { old, new })));
                 "Route sidechain input"
             }
-            Command::ApplyMixerTrackPreset { id, expected, preset, name_color } => {
+            Command::ApplyMixerTrackPreset {
+                id,
+                expected,
+                preset,
+                name_color,
+            } => {
                 preset.validate().map_err(CommandError::invalid)?;
                 let index = self.mixer_track_index(id)?;
-                if self.project.mixer.tracks[index] != expected { return Err(CommandError::invalid("The destination track changed; reload the preset")); }
+                if self.project.mixer.tracks[index] != expected {
+                    return Err(CommandError::invalid(
+                        "The destination track changed; reload the preset",
+                    ));
+                }
                 let removed: HashSet<_> = expected.effects.iter().map(|slot| slot.id).collect();
-                self.remove_automations_of(|target| removed.iter().any(|effect| targets_effect(target, *effect)));
+                self.remove_automations_of(|target| {
+                    removed.iter().any(|effect| targets_effect(target, *effect))
+                });
                 let mut effects = preset.effects.clone();
                 let mut remap = std::collections::HashMap::new();
                 for effect in &mut effects {
                     let fresh = EffectId(self.allocate()?);
-                    remap.insert(effect.id, fresh); effect.id = fresh; self.created.push(fresh.0);
+                    remap.insert(effect.id, fresh);
+                    effect.id = fresh;
+                    self.created.push(fresh.0);
                 }
-                let mut new = expected.clone(); preset.settings_into(&mut new, name_color);
+                let mut new = expected.clone();
+                preset.settings_into(&mut new, name_color);
                 new.effects = effects;
                 self.push(Edit::SetMixerTrack(Box::new(Change { old: expected, new })));
                 for mut plugin in preset.plugins {
-                    if let crate::PluginTarget::Effect { effect } = plugin.target { plugin.target = crate::PluginTarget::Effect { effect: remap[&effect] }; }
+                    if let crate::PluginTarget::Effect { effect } = plugin.target {
+                        plugin.target = crate::PluginTarget::Effect {
+                            effect: remap[&effect],
+                        };
+                    }
                     self.bind_plugin(plugin);
                 }
                 "Load mixer track preset"
             }
-            Command::MoveMixerTracks { expected, ids, before } => {
-                let order: Vec<_> = self.project.mixer.tracks.iter().map(|track| track.id).collect();
-                if order != expected { return Err(CommandError::invalid("The mixer order changed before the tracks could move")); }
-                if ids.is_empty() || ids.len() > crate::MAX_MIXER_SIGNAL_TRACKS { return Err(CommandError::invalid("Choose tracks to move")); }
+            Command::MoveMixerTracks {
+                expected,
+                ids,
+                before,
+            } => {
+                let order: Vec<_> = self
+                    .project
+                    .mixer
+                    .tracks
+                    .iter()
+                    .map(|track| track.id)
+                    .collect();
+                if order != expected {
+                    return Err(CommandError::invalid(
+                        "The mixer order changed before the tracks could move",
+                    ));
+                }
+                if ids.is_empty() || ids.len() > crate::MAX_MIXER_SIGNAL_TRACKS {
+                    return Err(CommandError::invalid("Choose tracks to move"));
+                }
                 let picked: HashSet<_> = ids.iter().copied().collect();
-                if picked.len() != ids.len() { return Err(CommandError::invalid("Move selection contains duplicate tracks")); }
+                if picked.len() != ids.len() {
+                    return Err(CommandError::invalid(
+                        "Move selection contains duplicate tracks",
+                    ));
+                }
                 for id in &ids {
                     let track = &self.project.mixer.tracks[self.signal_track_index(*id)?];
-                    if track.id == TrackId::MASTER { return Err(CommandError::invalid("Master is pinned and cannot move")); }
+                    if track.id == TrackId::MASTER {
+                        return Err(CommandError::invalid("Master is pinned and cannot move"));
+                    }
                 }
-                if let Some(id) = before { self.signal_track_index(id)?; if id == TrackId::MASTER || picked.contains(&id) { return Err(CommandError::invalid("Choose an unselected insert as the move destination")); } }
-                let moving: Vec<_> = order.iter().copied().filter(|id| picked.contains(id)).collect();
-                let mut wanted: Vec<_> = order.into_iter().filter(|id| !picked.contains(id)).collect();
-                let at = before.map_or(wanted.len(), |id| wanted.iter().position(|other| *other == id).unwrap());
+                if let Some(id) = before {
+                    self.signal_track_index(id)?;
+                    if id == TrackId::MASTER || picked.contains(&id) {
+                        return Err(CommandError::invalid(
+                            "Choose an unselected insert as the move destination",
+                        ));
+                    }
+                }
+                let moving: Vec<_> = order
+                    .iter()
+                    .copied()
+                    .filter(|id| picked.contains(id))
+                    .collect();
+                let mut wanted: Vec<_> = order
+                    .into_iter()
+                    .filter(|id| !picked.contains(id))
+                    .collect();
+                let at = before.map_or(wanted.len(), |id| {
+                    wanted.iter().position(|other| *other == id).unwrap()
+                });
                 wanted.splice(at..at, moving);
                 for (to, id) in wanted.iter().enumerate().skip(1) {
                     let from = self.mixer_track_index(*id)?;
                     if from != to {
                         let item = self.project.mixer.tracks[from].clone();
-                        self.push(Edit::MixerTrack(ListEdit::Remove { index: from, item: item.clone() }));
+                        self.push(Edit::MixerTrack(ListEdit::Remove {
+                            index: from,
+                            item: item.clone(),
+                        }));
                         self.push(Edit::MixerTrack(ListEdit::Insert { index: to, item }));
                     }
                 }
@@ -211,9 +713,17 @@ impl Transaction<'_> {
             Command::SetTrackParam { id, param, value } => {
                 use windfall_dsp::ParamSet;
                 let index = self.mixer_track_index(id)?;
-                let info = windfall_dsp::TrackParams::descriptors().get(param as usize).ok_or_else(|| no_setting("Track EQ and stereo", param))?;
-                if !value.is_finite() { return Err(CommandError::invalid("Track parameter must be a finite number")); }
-                self.change_track(index, |track| { track.processing.set(param as usize, value); });
+                let info = windfall_dsp::TrackParams::descriptors()
+                    .get(param as usize)
+                    .ok_or_else(|| no_setting("Track EQ and stereo", param))?;
+                if !value.is_finite() {
+                    return Err(CommandError::invalid(
+                        "Track parameter must be a finite number",
+                    ));
+                }
+                self.change_track(index, |track| {
+                    track.processing.set(param as usize, value);
+                });
                 return Ok(format!("Change {}", info.name));
             }
             Command::EnsureCurrentMixerTrack => {
@@ -222,7 +732,8 @@ impl Transaction<'_> {
                 } else {
                     let id = TrackId(self.allocate()?);
                     let mut item = new_mixer_track(id, "Current".into(), 0x8b8b9c);
-                    item.current = true; item.output = None;
+                    item.current = true;
+                    item.output = None;
                     let index = self.project.mixer.tracks.len();
                     self.push(Edit::MixerTrack(ListEdit::Insert { index, item }));
                     self.created.push(id.0);
@@ -230,83 +741,231 @@ impl Transaction<'_> {
                 "Show Current mixer utility"
             }
             Command::SetTrackExternalOutput { id, route } => {
-                if let Some(route) = &route { route.check().map_err(CommandError::invalid)?; }
+                if let Some(route) = &route {
+                    route.check().map_err(CommandError::invalid)?;
+                }
                 let index = self.mixer_track_index(id)?;
-                if self.project.mixer.tracks[index].current && route.is_some() { return Err(CommandError::invalid("Current is a utility strip and has no hardware output")); }
+                if self.project.mixer.tracks[index].current && route.is_some() {
+                    return Err(CommandError::invalid(
+                        "Current is a utility strip and has no hardware output",
+                    ));
+                }
                 self.change_track(index, |track| track.external_output = route);
                 "Route hardware output"
             }
             Command::CreateAudioTakeGroup { name, lanes } => {
-                if self.project.playlist.take_groups.len() >= crate::take_groups::MAX_TAKE_GROUPS { return Err(CommandError::invalid("Saved take groups exceed the project capacity")); }
-                let group = crate::AudioTakeGroup { id: self.allocate()?, name, lanes, comp: Vec::new() };
-                crate::take_groups::check_group(self.project, &group).map_err(CommandError::invalid)?;
-                let used: HashSet<_> = self.project.playlist.take_groups.iter().flat_map(|group| group.lanes.iter().flat_map(|lane| &lane.takes).map(|take| take.clip).chain(group.comp.iter().copied())).collect();
-                if group.lanes.iter().flat_map(|lane| &lane.takes).any(|take| used.contains(&take.clip)) {
-                    return Err(CommandError::invalid("An audio clip already belongs to a take group"));
+                if self.project.playlist.take_groups.len() >= crate::take_groups::MAX_TAKE_GROUPS {
+                    return Err(CommandError::invalid(
+                        "Saved take groups exceed the project capacity",
+                    ));
+                }
+                let group = crate::AudioTakeGroup {
+                    id: self.allocate()?,
+                    name,
+                    lanes,
+                    comp: Vec::new(),
+                };
+                crate::take_groups::check_group(self.project, &group)
+                    .map_err(CommandError::invalid)?;
+                let used: HashSet<_> = self
+                    .project
+                    .playlist
+                    .take_groups
+                    .iter()
+                    .flat_map(|group| {
+                        group
+                            .lanes
+                            .iter()
+                            .flat_map(|lane| &lane.takes)
+                            .map(|take| take.clip)
+                            .chain(group.comp.iter().copied())
+                    })
+                    .collect();
+                if group
+                    .lanes
+                    .iter()
+                    .flat_map(|lane| &lane.takes)
+                    .any(|take| used.contains(&take.clip))
+                {
+                    return Err(CommandError::invalid(
+                        "An audio clip already belongs to a take group",
+                    ));
                 }
                 let old = self.project.playlist.take_groups.clone();
-                let mut new = old.clone(); self.created.push(group.id); new.push(group);
+                let mut new = old.clone();
+                self.created.push(group.id);
+                new.push(group);
                 self.push(Edit::TakeGroups(Change { old, new }));
                 "Group audio takes"
             }
             Command::RenameAudioTakeGroup { id, name } => {
-                let old = self.project.playlist.take_groups.clone(); let mut new = old.clone();
-                let group = new.iter_mut().find(|group| group.id == id).ok_or_else(|| CommandError::invalid("Take group no longer exists"))?;
+                let old = self.project.playlist.take_groups.clone();
+                let mut new = old.clone();
+                let group = new
+                    .iter_mut()
+                    .find(|group| group.id == id)
+                    .ok_or_else(|| CommandError::invalid("Take group no longer exists"))?;
                 group.name = name;
-                crate::take_groups::check_group(self.project, group).map_err(CommandError::invalid)?;
+                crate::take_groups::check_group(self.project, group)
+                    .map_err(CommandError::invalid)?;
                 self.push(Edit::TakeGroups(Change { old, new }));
                 "Rename take group"
             }
             Command::RemoveAudioTakeGroup { id } => {
-                let old = self.project.playlist.take_groups.clone(); let mut new = old.clone();
-                if !new.iter().any(|group| group.id == id) { return Err(CommandError::invalid("Take group no longer exists")); }
+                let old = self.project.playlist.take_groups.clone();
+                let mut new = old.clone();
+                if !new.iter().any(|group| group.id == id) {
+                    return Err(CommandError::invalid("Take group no longer exists"));
+                }
                 new.retain(|group| group.id != id);
                 self.push(Edit::TakeGroups(Change { old, new }));
                 "Ungroup audio takes"
             }
             Command::AuditionAudioTakeGroup { id, pass } => {
-                let group = self.project.playlist.take_groups.iter().find(|group| group.id == id).ok_or_else(|| CommandError::invalid("Take group no longer exists"))?;
-                if pass.is_some_and(|pass| !group.lanes.iter().all(|lane| lane.takes.iter().any(|take| take.pass == pass)))
-                    || pass.is_some() && group.lanes.is_empty() || pass.is_none() && group.comp.is_empty()
-                { return Err(CommandError::invalid("Choose a pass present on every lane, or an existing composite")); }
-                let updates = group.lanes.iter().flat_map(|lane| &lane.takes).map(|take| ClipUpdate {
-                    id: take.clip, patch: ClipPatch { muted: Some(pass != Some(take.pass)), ..Default::default() },
-                }).chain(group.comp.iter().map(|id| ClipUpdate { id: *id, patch: ClipPatch { muted: Some(pass.is_some()), ..Default::default() } })).collect::<Vec<_>>();
+                let group = self
+                    .project
+                    .playlist
+                    .take_groups
+                    .iter()
+                    .find(|group| group.id == id)
+                    .ok_or_else(|| CommandError::invalid("Take group no longer exists"))?;
+                if pass.is_some_and(|pass| {
+                    !group
+                        .lanes
+                        .iter()
+                        .all(|lane| lane.takes.iter().any(|take| take.pass == pass))
+                }) || pass.is_some() && group.lanes.is_empty()
+                    || pass.is_none() && group.comp.is_empty()
+                {
+                    return Err(CommandError::invalid(
+                        "Choose a pass present on every lane, or an existing composite",
+                    ));
+                }
+                let updates = group
+                    .lanes
+                    .iter()
+                    .flat_map(|lane| &lane.takes)
+                    .map(|take| ClipUpdate {
+                        id: take.clip,
+                        patch: ClipPatch {
+                            muted: Some(pass != Some(take.pass)),
+                            ..Default::default()
+                        },
+                    })
+                    .chain(group.comp.iter().map(|id| ClipUpdate {
+                        id: *id,
+                        patch: ClipPatch {
+                            muted: Some(pass.is_some()),
+                            ..Default::default()
+                        },
+                    }))
+                    .collect::<Vec<_>>();
                 self.update_clips(&updates)?;
                 "Audition recording takes"
             }
-            Command::CompAudioTakeGroup { expected, sources, ranges, name, fade_ticks, mute_sources, replace_comp } => {
-                let prepared = crate::audio_comp::prepare_group(self.project, &expected, &sources, &ranges, fade_ticks)?;
+            Command::CompAudioTakeGroup {
+                expected,
+                sources,
+                ranges,
+                name,
+                fade_ticks,
+                mute_sources,
+                replace_comp,
+            } => {
+                let prepared = crate::audio_comp::prepare_group(
+                    self.project,
+                    &expected,
+                    &sources,
+                    &ranges,
+                    fade_ticks,
+                )?;
                 if replace_comp {
-                    let tracks: HashSet<_> = self.project.playlist.clips.iter().filter(|clip| expected.comp.contains(&clip.id)).map(|clip| clip.track).collect();
+                    let tracks: HashSet<_> = self
+                        .project
+                        .playlist
+                        .clips
+                        .iter()
+                        .filter(|clip| expected.comp.contains(&clip.id))
+                        .map(|clip| clip.track)
+                        .collect();
                     self.remove_clips(&expected.comp)?;
                     for track in tracks {
-                        if !self.project.playlist.clips.iter().any(|clip| clip.track == track) { self.remove_playlist_track(track)?; }
+                        if !self
+                            .project
+                            .playlist
+                            .clips
+                            .iter()
+                            .any(|clip| clip.track == track)
+                        {
+                            self.remove_playlist_track(track)?;
+                        }
                     }
                 } else {
-                    let updates = expected.comp.iter().map(|id| ClipUpdate { id: *id, patch: ClipPatch { muted: Some(true), ..Default::default() } }).collect::<Vec<_>>();
+                    let updates = expected
+                        .comp
+                        .iter()
+                        .map(|id| ClipUpdate {
+                            id: *id,
+                            patch: ClipPatch {
+                                muted: Some(true),
+                                ..Default::default()
+                            },
+                        })
+                        .collect::<Vec<_>>();
                     self.update_clips(&updates)?;
                 }
                 let mut output = Vec::new();
                 for (lane, clips) in prepared {
                     self.add_playlist_track(Some(format!("{name} · {lane}")), None)?;
                     let track = PlaylistTrackId(*self.created.last().expect("created comp lane"));
-                    let clips = clips.into_iter().map(|clip| ClipInit { track, start: clip.start, length: Some(clip.length), offset: Some(clip.offset), muted: Some(false), content: clip.content }).collect::<Vec<_>>();
-                    let before = self.created.len(); self.add_clips(&clips)?;
+                    let clips = clips
+                        .into_iter()
+                        .map(|clip| ClipInit {
+                            track,
+                            start: clip.start,
+                            length: Some(clip.length),
+                            offset: Some(clip.offset),
+                            muted: Some(false),
+                            content: clip.content,
+                        })
+                        .collect::<Vec<_>>();
+                    let before = self.created.len();
+                    self.add_clips(&clips)?;
                     output.extend(self.created[before..].iter().copied().map(ClipId));
                 }
                 if mute_sources {
-                    let updates = sources.iter().map(|clip| ClipUpdate { id: clip.id, patch: ClipPatch { muted: Some(true), ..Default::default() } }).collect::<Vec<_>>();
+                    let updates = sources
+                        .iter()
+                        .map(|clip| ClipUpdate {
+                            id: clip.id,
+                            patch: ClipPatch {
+                                muted: Some(true),
+                                ..Default::default()
+                            },
+                        })
+                        .collect::<Vec<_>>();
                     self.update_clips(&updates)?;
                 }
-                let old = self.project.playlist.take_groups.clone(); let mut new = old.clone();
-                let group = new.iter_mut().find(|group| group.id == expected.id).expect("captured take group");
+                let old = self.project.playlist.take_groups.clone();
+                let mut new = old.clone();
+                let group = new
+                    .iter_mut()
+                    .find(|group| group.id == expected.id)
+                    .expect("captured take group");
                 group.comp = output;
                 self.push(Edit::TakeGroups(Change { old, new }));
                 "Comp multitrack takes"
             }
-            Command::CompAudioClips { sources, segments, destination, name, fade_ticks, mute_sources } => {
-                let prepared = crate::audio_comp::prepare(self.project, &sources, &segments, fade_ticks)?;
+            Command::CompAudioClips {
+                sources,
+                segments,
+                destination,
+                name,
+                fade_ticks,
+                mute_sources,
+            } => {
+                let prepared =
+                    crate::audio_comp::prepare(self.project, &sources, &segments, fade_ticks)?;
                 let track = if let Some(track) = destination {
                     self.playlist_track_index(track)?;
                     track
@@ -314,22 +973,39 @@ impl Transaction<'_> {
                     self.add_playlist_track(Some(name), None)?;
                     PlaylistTrackId(*self.created.last().expect("created comp track"))
                 };
-                let clips = prepared.into_iter().map(|clip| ClipInit {
-                    track, start: clip.start, length: Some(clip.length), offset: Some(clip.offset),
-                    muted: Some(false), content: clip.content,
-                }).collect::<Vec<_>>();
+                let clips = prepared
+                    .into_iter()
+                    .map(|clip| ClipInit {
+                        track,
+                        start: clip.start,
+                        length: Some(clip.length),
+                        offset: Some(clip.offset),
+                        muted: Some(false),
+                        content: clip.content,
+                    })
+                    .collect::<Vec<_>>();
                 self.add_clips(&clips)?;
                 if mute_sources {
-                    let updates = sources.iter().map(|source| ClipUpdate {
-                        id: source.id, patch: ClipPatch { muted: Some(true), ..Default::default() },
-                    }).collect::<Vec<_>>();
+                    let updates = sources
+                        .iter()
+                        .map(|source| ClipUpdate {
+                            id: source.id,
+                            patch: ClipPatch {
+                                muted: Some(true),
+                                ..Default::default()
+                            },
+                        })
+                        .collect::<Vec<_>>();
                     self.update_clips(&updates)?;
                 }
                 "Comp audio takes"
             }
-            Command::EditPatternTimeline { pattern, expected, expected_signature, edit } => {
-                self.edit_pattern_timeline(pattern, expected, expected_signature, edit)?
-            }
+            Command::EditPatternTimeline {
+                pattern,
+                expected,
+                expected_signature,
+                edit,
+            } => self.edit_pattern_timeline(pattern, expected, expected_signature, edit)?,
             Command::AddMeterChange { tick, signature } => {
                 let id = self.allocate()?;
                 let mut timeline = self.project.playlist.timeline.clone();
@@ -442,14 +1118,28 @@ impl Transaction<'_> {
                     return Err(CommandError::invalid("sidechain inputs belong to effects"));
                 }
                 let mut plugins = self.project.plugins.clone();
-                let plugin = plugins.iter_mut().find(|plugin| plugin.target == target)
+                let plugin = plugins
+                    .iter_mut()
+                    .find(|plugin| plugin.target == target)
                     .ok_or_else(|| CommandError::invalid("the plugin is not in this project"))?;
-                if input.is_some_and(|index| index >= 64 || (!plugin.auxiliary_inputs.is_empty() && !plugin.auxiliary_inputs.iter().any(|port| port.index == index))) {
-                    return Err(CommandError::invalid("the plugin has no such auxiliary input"));
+                if input.is_some_and(|index| {
+                    index >= 64
+                        || (!plugin.auxiliary_inputs.is_empty()
+                            && !plugin
+                                .auxiliary_inputs
+                                .iter()
+                                .any(|port| port.index == index))
+                }) {
+                    return Err(CommandError::invalid(
+                        "the plugin has no such auxiliary input",
+                    ));
                 }
                 plugin.sidechain_input = input;
                 plugin.validate().map_err(CommandError::invalid)?;
-                self.push(Edit::Plugins(Change { old: self.project.plugins.clone(), new: plugins }));
+                self.push(Edit::Plugins(Change {
+                    old: self.project.plugins.clone(),
+                    new: plugins,
+                }));
                 "Choose plugin sidechain input"
             }
             Command::SetPluginState { target, state } => {
@@ -467,6 +1157,14 @@ impl Transaction<'_> {
                 "Save plugin state"
             }
             Command::UpdateSettings { patch } => self.update_settings(patch)?,
+            Command::ReplaceNotebook { notebook } => {
+                let new = notebook.normalized()?;
+                self.push(Edit::Notebook(Change {
+                    old: self.project.notebook.clone(),
+                    new,
+                }));
+                "Save notebook"
+            }
             Command::AddSample { name, path } => self.add_sample(name, path)?,
             Command::RemoveSample { id } => self.remove_sample(id)?,
             Command::AddChannel {
@@ -479,6 +1177,19 @@ impl Transaction<'_> {
             Command::RemoveChannel { id } => self.remove_channel(id)?,
             Command::DuplicateChannel { id } => self.duplicate_channel(id)?,
             Command::MoveChannel { id, index } => self.move_channel(id, index)?,
+            Command::SetChannelVoiceSettings { id, settings } => {
+                let old = self
+                    .project
+                    .channel(id)
+                    .ok_or_else(|| CommandError::not_found("channel", id))?
+                    .clone();
+                let new = Channel {
+                    voice: settings.sanitized(),
+                    ..old.clone()
+                };
+                self.push(Edit::SetChannel(Box::new(Change { old, new })));
+                "Set channel voice settings"
+            }
             Command::UpdateChannel { id, patch } => self.update_channel(id, patch)?,
             Command::SetChannelGroup { channels, group } => {
                 self.set_channel_group(&channels, &group)?;
@@ -488,7 +1199,9 @@ impl Transaction<'_> {
                 let name = checked_group_name(&name)?;
                 let new_name = checked_group_name(&new_name)?;
                 if name.is_empty() || new_name.is_empty() {
-                    return Err(CommandError::invalid("a named group cannot have an empty name"));
+                    return Err(CommandError::invalid(
+                        "a named group cannot have an empty name",
+                    ));
                 }
                 let channels = self.channels_in_group(&name)?;
                 self.set_channel_group(&channels, &new_name)?;
@@ -497,7 +1210,9 @@ impl Transaction<'_> {
             Command::RemoveChannelGroup { name } => {
                 let name = checked_group_name(&name)?;
                 if name.is_empty() {
-                    return Err(CommandError::invalid("the ungrouped category cannot be removed"));
+                    return Err(CommandError::invalid(
+                        "the ungrouped category cannot be removed",
+                    ));
                 }
                 let channels = self.channels_in_group(&name)?;
                 self.set_channel_group(&channels, "")?;
@@ -559,7 +1274,12 @@ impl Transaction<'_> {
                 channel,
                 updates,
             } => self.update_notes(pattern, channel, &updates)?,
-            Command::UpdateCapturedNotes { pattern, channel, expected, updates } => {
+            Command::UpdateCapturedNotes {
+                pattern,
+                channel,
+                expected,
+                updates,
+            } => {
                 self.captured_notes(pattern, channel, &expected, &updates)?;
                 self.update_notes(pattern, channel, &updates)?
             }
@@ -623,11 +1343,20 @@ impl Transaction<'_> {
             Command::SetAutomationPoints { id, points } => {
                 self.set_automation_points(id, points)?
             }
-            Command::GenerateAutomationLfo { expected, start, end, resolution, lfo } => {
+            Command::GenerateAutomationLfo {
+                expected,
+                start,
+                end,
+                resolution,
+                lfo,
+            } => {
                 if self.project.automation(expected.id) != Some(&expected) {
-                    return Err(CommandError::invalid("the captured automation changed; reopen the LFO tool"));
+                    return Err(CommandError::invalid(
+                        "the captured automation changed; reopen the LFO tool",
+                    ));
                 }
-                let points = crate::curve_lfo::write_lfo(&expected.points, start, end, resolution, lfo)?;
+                let points =
+                    crate::curve_lfo::write_lfo(&expected.points, start, end, resolution, lfo)?;
                 self.set_automation_points(expected.id, points)?;
                 "Write automation LFO"
             }
@@ -732,6 +1461,9 @@ impl Transaction<'_> {
         let label = single_label(
             &[
                 (patch.name.is_some(), "Rename project"),
+                (patch.author.is_some(), "Change project author"),
+                (patch.genre.is_some(), "Change project genre"),
+                (patch.comments.is_some(), "Change project comments"),
                 (patch.tempo_bpm.is_some(), "Change tempo"),
                 (patch.time_signature.is_some(), "Change time signature"),
                 (patch.swing.is_some(), "Change swing"),
@@ -742,6 +1474,21 @@ impl Transaction<'_> {
         let mut new = old.clone();
         if let Some(name) = patch.name {
             new.name = name;
+        }
+        for (value, target, field, cap) in [
+            (patch.author, &mut new.author, "author", 256),
+            (patch.genre, &mut new.genre, "genre", 128),
+            (patch.comments, &mut new.comments, "comments", 16_384),
+        ] {
+            if let Some(value) = value {
+                let value = value.trim();
+                if value.len() > cap {
+                    return Err(CommandError::invalid(format!(
+                        "the project {field} is longer than {cap} bytes"
+                    )));
+                }
+                *target = value.to_owned();
+            }
         }
         if let Some(tempo) = patch.tempo_bpm {
             if tempo.is_nan() {
@@ -850,7 +1597,17 @@ impl Transaction<'_> {
         let track_count = self.project.mixer.tracks.len();
         let (track, made_track) = match mixer_track {
             Some(track) => (track, false),
-            None if self.project.mixer.tracks.iter().filter(|track| !track.current).count() < crate::MAX_MIXER_SIGNAL_TRACKS => (TrackId(self.allocate()?), true),
+            None if self
+                .project
+                .mixer
+                .tracks
+                .iter()
+                .filter(|track| !track.current)
+                .count()
+                < crate::MAX_MIXER_SIGNAL_TRACKS =>
+            {
+                (TrackId(self.allocate()?), true)
+            }
             // A full mixer must not stop the user adding channels.
             None => (TrackId::MASTER, false),
         };
@@ -866,6 +1623,7 @@ impl Transaction<'_> {
                 id,
                 name,
                 group: String::new(),
+                voice: Default::default(),
                 timing: crate::ChannelTiming::default(),
                 color,
                 volume: DEFAULT_CHANNEL_VOLUME,
@@ -924,8 +1682,13 @@ impl Transaction<'_> {
                 let source = note.id;
                 note.id = NoteId(self.allocate()?);
                 if let Some(before) = self.project.pattern(*pattern) {
-                    for curve in before.note_curves.iter().filter(|curve| curve.note == source) {
-                        let mut curve = curve.clone(); curve.note = note.id;
+                    for curve in before
+                        .note_curves
+                        .iter()
+                        .filter(|curve| curve.note == source)
+                    {
+                        let mut curve = curve.clone();
+                        curve.note = note.id;
                         copied_curves.push((*pattern, curve));
                     }
                 }
@@ -945,16 +1708,27 @@ impl Transaction<'_> {
             });
         }
         self.created.push(copy_id.0);
-        let patterns: std::collections::HashSet<_> = copied_curves.iter().map(|(pattern, _)| *pattern).collect();
+        let patterns: std::collections::HashSet<_> =
+            copied_curves.iter().map(|(pattern, _)| *pattern).collect();
         for id in patterns {
             let index = self.pattern_index(id)?;
             let old = PatternInfo::of(&self.project.patterns[index]);
             let mut new = old.clone();
-            new.note_curves.extend(copied_curves.iter().filter(|(pattern, _)| *pattern == id).map(|(_, curve)| curve.clone()));
-            new.note_curves.sort_by_key(|curve| (curve.note, curve.parameter));
-            let mut proposed = self.project.patterns[index].clone(); proposed.note_curves = new.note_curves.clone();
+            new.note_curves.extend(
+                copied_curves
+                    .iter()
+                    .filter(|(pattern, _)| *pattern == id)
+                    .map(|(_, curve)| curve.clone()),
+            );
+            new.note_curves
+                .sort_by_key(|curve| (curve.note, curve.parameter));
+            let mut proposed = self.project.patterns[index].clone();
+            proposed.note_curves = new.note_curves.clone();
             crate::note_curves::check(&proposed).map_err(CommandError::invalid)?;
-            self.push(Edit::PatternInfo { id, change: Change { old, new } });
+            self.push(Edit::PatternInfo {
+                id,
+                change: Change { old, new },
+            });
         }
         if let Some(mut plugin) = self
             .project
@@ -1038,24 +1812,38 @@ impl Transaction<'_> {
     }
 
     fn channels_in_group(&self, name: &str) -> Result<Vec<ChannelId>, CommandError> {
-        let channels: Vec<_> = self.project.channels.iter()
-            .filter(|channel| channel.group == name).map(|channel| channel.id).collect();
+        let channels: Vec<_> = self
+            .project
+            .channels
+            .iter()
+            .filter(|channel| channel.group == name)
+            .map(|channel| channel.id)
+            .collect();
         if channels.is_empty() {
             return Err(CommandError::invalid("the channel group no longer exists"));
         }
         Ok(channels)
     }
 
-    fn set_channel_group(&mut self, channels: &[ChannelId], group: &str) -> Result<(), CommandError> {
+    fn set_channel_group(
+        &mut self,
+        channels: &[ChannelId],
+        group: &str,
+    ) -> Result<(), CommandError> {
         let group = checked_group_name(group)?;
         let mut seen = HashSet::new();
         let mut indices = Vec::with_capacity(channels.len());
         for id in channels {
-            if seen.insert(*id) { indices.push(self.channel_index(*id)?); }
+            if seen.insert(*id) {
+                indices.push(self.channel_index(*id)?);
+            }
         }
         for index in indices {
             let old = self.project.channels[index].clone();
-            let new = Channel { group: group.clone(), ..old.clone() };
+            let new = Channel {
+                group: group.clone(),
+                ..old.clone()
+            };
             self.push(Edit::SetChannel(Box::new(Change { old, new })));
         }
         Ok(())
@@ -1093,6 +1881,7 @@ impl Transaction<'_> {
                 ),
                 (patch.reverse.is_some(), "Reverse sample"),
                 (patch.loop_mode.is_some(), "Change sample loop mode"),
+                (patch.loop_crossfade.is_some(), "Change loop crossfade"),
                 (
                     patch.loop_start.is_some() || patch.loop_end.is_some(),
                     "Change sample loop range",
@@ -1134,6 +1923,13 @@ impl Transaction<'_> {
         }
         if let Some(mode) = patch.loop_mode {
             sampler.loop_mode = mode;
+        }
+        if let Some(amount) = patch.loop_crossfade {
+            sampler.loop_crossfade = if amount.is_finite() {
+                amount.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
         }
         if let Some(start) = patch.loop_start {
             if !start.is_finite() {
@@ -1243,7 +2039,7 @@ impl Transaction<'_> {
         self.push(Edit::Pattern(ListEdit::Insert {
             index: count,
             item: Pattern {
-            note_curves: Vec::new(),
+                note_curves: Vec::new(),
                 time_signature: None,
                 timeline: Default::default(),
                 id,
@@ -1257,53 +2053,104 @@ impl Transaction<'_> {
         Ok("Add pattern")
     }
 
-    fn edit_pattern_timeline(&mut self, id: PatternId, expected: crate::Timeline, expected_signature: Option<TimeSignature>, edit: crate::PatternTimelineEdit) -> Result<Label, CommandError> {
+    fn edit_pattern_timeline(
+        &mut self,
+        id: PatternId,
+        expected: crate::Timeline,
+        expected_signature: Option<TimeSignature>,
+        edit: crate::PatternTimelineEdit,
+    ) -> Result<Label, CommandError> {
         let index = self.pattern_index(id)?;
         let pattern = &self.project.patterns[index];
         if pattern.timeline != expected || pattern.time_signature != expected_signature {
-            return Err(CommandError::invalid("the captured pattern timeline changed; reopen the editor"));
+            return Err(CommandError::invalid(
+                "the captured pattern timeline changed; reopen the editor",
+            ));
         }
         let old = PatternInfo::of(pattern);
         let mut new = old.clone();
         let mut created = None;
         let label = match edit {
-            crate::PatternTimelineEdit::SetSignature { signature } => { new.time_signature = signature; "Change pattern signature" }
+            crate::PatternTimelineEdit::SetSignature { signature } => {
+                new.time_signature = signature;
+                "Change pattern signature"
+            }
             crate::PatternTimelineEdit::AddMeter { tick, signature } => {
                 let allocated = self.allocate()?;
-                new.timeline.meters.push(crate::MeterChange { id: crate::MeterChangeId(allocated), tick, signature });
-                created = Some(allocated); "Add pattern meter"
+                new.timeline.meters.push(crate::MeterChange {
+                    id: crate::MeterChangeId(allocated),
+                    tick,
+                    signature,
+                });
+                created = Some(allocated);
+                "Add pattern meter"
             }
             crate::PatternTimelineEdit::UpdateMeter { change } => {
-                let current = new.timeline.meters.iter_mut().find(|meter| meter.id == change.id)
+                let current = new
+                    .timeline
+                    .meters
+                    .iter_mut()
+                    .find(|meter| meter.id == change.id)
                     .ok_or_else(|| CommandError::invalid("the pattern meter does not exist"))?;
-                *current = change; "Change pattern meter"
+                *current = change;
+                "Change pattern meter"
             }
             crate::PatternTimelineEdit::RemoveMeter { id } => {
-                if !new.timeline.meters.iter().any(|meter| meter.id == id) { return Err(CommandError::invalid("the pattern meter does not exist")); }
-                new.timeline.meters.retain(|meter| meter.id != id); "Remove pattern meter"
+                if !new.timeline.meters.iter().any(|meter| meter.id == id) {
+                    return Err(CommandError::invalid("the pattern meter does not exist"));
+                }
+                new.timeline.meters.retain(|meter| meter.id != id);
+                "Remove pattern meter"
             }
             crate::PatternTimelineEdit::AddMarker { tick, name } => {
                 let allocated = self.allocate()?;
-                new.timeline.markers.push(crate::TimelineMarker { id: crate::TimelineMarkerId(allocated), tick, name: name.trim().to_owned(), kind: crate::MarkerKind::Named });
-                created = Some(allocated); "Add pattern marker"
+                new.timeline.markers.push(crate::TimelineMarker {
+                    id: crate::TimelineMarkerId(allocated),
+                    tick,
+                    name: name.trim().to_owned(),
+                    kind: crate::MarkerKind::Named,
+                });
+                created = Some(allocated);
+                "Add pattern marker"
             }
             crate::PatternTimelineEdit::UpdateMarker { mut marker } => {
                 marker.name = marker.name.trim().to_owned();
-                let current = new.timeline.markers.iter_mut().find(|current| current.id == marker.id)
+                let current = new
+                    .timeline
+                    .markers
+                    .iter_mut()
+                    .find(|current| current.id == marker.id)
                     .ok_or_else(|| CommandError::invalid("the pattern marker does not exist"))?;
-                *current = marker; "Change pattern marker"
+                *current = marker;
+                "Change pattern marker"
             }
             crate::PatternTimelineEdit::RemoveMarker { id } => {
-                if !new.timeline.markers.iter().any(|marker| marker.id == id) { return Err(CommandError::invalid("the pattern marker does not exist")); }
-                new.timeline.markers.retain(|marker| marker.id != id); "Remove pattern marker"
+                if !new.timeline.markers.iter().any(|marker| marker.id == id) {
+                    return Err(CommandError::invalid("the pattern marker does not exist"));
+                }
+                new.timeline.markers.retain(|marker| marker.id != id);
+                "Remove pattern marker"
             }
         };
         new.timeline.meters.sort_by_key(|meter| meter.tick);
-        new.timeline.markers.sort_by_key(|marker| (marker.tick, marker.id));
-        let candidate = Pattern { time_signature: new.time_signature, timeline: new.timeline.clone(), ..self.project.patterns[index].clone() };
-        candidate.check_musical(self.project.settings.time_signature, self.project.next_id).map_err(CommandError::invalid)?;
-        self.push(Edit::PatternInfo { id, change: Change { old, new } });
-        if let Some(id) = created { self.created.push(id); }
+        new.timeline
+            .markers
+            .sort_by_key(|marker| (marker.tick, marker.id));
+        let candidate = Pattern {
+            time_signature: new.time_signature,
+            timeline: new.timeline.clone(),
+            ..self.project.patterns[index].clone()
+        };
+        candidate
+            .check_musical(self.project.settings.time_signature, self.project.next_id)
+            .map_err(CommandError::invalid)?;
+        self.push(Edit::PatternInfo {
+            id,
+            change: Change { old, new },
+        });
+        if let Some(id) = created {
+            self.created.push(id);
+        }
         Ok(label)
     }
 
@@ -1338,18 +2185,29 @@ impl Transaction<'_> {
             ..original.clone()
         };
         copy.id = PatternId(self.allocate()?);
-        for meter in &mut copy.timeline.meters { meter.id = crate::MeterChangeId(self.allocate()?); }
-        for marker in &mut copy.timeline.markers { marker.id = crate::TimelineMarkerId(self.allocate()?); }
+        for meter in &mut copy.timeline.meters {
+            meter.id = crate::MeterChangeId(self.allocate()?);
+        }
+        for marker in &mut copy.timeline.markers {
+            marker.id = crate::TimelineMarkerId(self.allocate()?);
+        }
         for lane in &mut copy.lanes {
             // Ids go out in lane order, so the copies sort the same way.
             for note in &mut lane.notes {
                 let source = note.id;
                 note.id = NoteId(self.allocate()?);
-                for curve in copy.note_curves.iter_mut().filter(|curve| curve.note == source) { curve.note = note.id; }
+                for curve in copy
+                    .note_curves
+                    .iter_mut()
+                    .filter(|curve| curve.note == source)
+                {
+                    curve.note = note.id;
+                }
             }
         }
         self.created.push(copy.id.0);
-        copy.note_curves.sort_by_key(|curve| (curve.note, curve.parameter));
+        copy.note_curves
+            .sort_by_key(|curve| (curve.note, curve.parameter));
         self.push(Edit::Pattern(ListEdit::Insert {
             index: index + 1,
             item: copy,
@@ -1584,28 +2442,64 @@ impl Transaction<'_> {
         Ok(plural(notes.len(), "Delete note", "Delete notes"))
     }
 
-    fn captured_notes(&self, pattern: PatternId, channel: ChannelId, expected: &[Note], updates: &[NoteUpdate]) -> Result<(), CommandError> {
+    fn captured_notes(
+        &self,
+        pattern: PatternId,
+        channel: ChannelId,
+        expected: &[Note],
+        updates: &[NoteUpdate],
+    ) -> Result<(), CommandError> {
         if expected.is_empty() || updates.is_empty() {
-            return Err(CommandError::invalid("a captured property edit needs notes and updates"));
+            return Err(CommandError::invalid(
+                "a captured property edit needs notes and updates",
+            ));
         }
-        let lane = self.project.pattern(pattern).and_then(|pattern| pattern.lane(channel))
+        let lane = self
+            .project
+            .pattern(pattern)
+            .and_then(|pattern| pattern.lane(channel))
             .ok_or_else(|| CommandError::invalid("the captured note lane no longer exists"))?;
-        let current: HashMap<NoteId, &Note> = lane.notes.iter().map(|note| (note.id, note)).collect();
-        let captured: HashMap<NoteId, &Note> = expected.iter().map(|note| (note.id, note)).collect();
-        if captured.len() != expected.len() || expected.iter().any(|note| current.get(&note.id).copied() != Some(note))
-            || updates.iter().any(|update| !captured.contains_key(&update.id)) {
-            return Err(CommandError::invalid("the captured notes changed; reopen the property editor"));
+        let current: HashMap<NoteId, &Note> =
+            lane.notes.iter().map(|note| (note.id, note)).collect();
+        let captured: HashMap<NoteId, &Note> =
+            expected.iter().map(|note| (note.id, note)).collect();
+        if captured.len() != expected.len()
+            || expected
+                .iter()
+                .any(|note| current.get(&note.id).copied() != Some(note))
+            || updates
+                .iter()
+                .any(|update| !captured.contains_key(&update.id))
+        {
+            return Err(CommandError::invalid(
+                "the captured notes changed; reopen the property editor",
+            ));
         }
         Ok(())
     }
 
-    fn captured_note_sources(&self, pattern: PatternId, channel: ChannelId, expected: &[Note]) -> Result<(), CommandError> {
-        if expected.is_empty() { return Err(CommandError::invalid("choose source notes")); }
-        let lane = self.project.pattern(pattern).and_then(|pattern| pattern.lane(channel))
+    fn captured_note_sources(
+        &self,
+        pattern: PatternId,
+        channel: ChannelId,
+        expected: &[Note],
+    ) -> Result<(), CommandError> {
+        if expected.is_empty() {
+            return Err(CommandError::invalid("choose source notes"));
+        }
+        let lane = self
+            .project
+            .pattern(pattern)
+            .and_then(|pattern| pattern.lane(channel))
             .ok_or_else(|| CommandError::invalid("the captured note lane no longer exists"))?;
-        let current: HashMap<NoteId, &Note> = lane.notes.iter().map(|note| (note.id, note)).collect();
+        let current: HashMap<NoteId, &Note> =
+            lane.notes.iter().map(|note| (note.id, note)).collect();
         let ids: std::collections::HashSet<_> = expected.iter().map(|note| note.id).collect();
-        if ids.len() != expected.len() || expected.iter().any(|note| current.get(&note.id).copied() != Some(note)) {
+        if ids.len() != expected.len()
+            || expected
+                .iter()
+                .any(|note| current.get(&note.id).copied() != Some(note))
+        {
             return Err(CommandError::invalid("the captured source notes changed"));
         }
         Ok(())
@@ -1713,26 +2607,53 @@ impl Transaction<'_> {
                 ));
             }
         }
-        if let crate::NoteTransform::Quantize { musical: Some(grid), .. } = &transform {
+        if let crate::NoteTransform::Quantize {
+            musical: Some(grid),
+            ..
+        } = &transform
+        {
             let source = &self.project.patterns[self.pattern_index(pattern)?];
-            if grid.signature != source.effective_signature(self.project.settings.time_signature) || grid.meters != source.timeline.meters {
-                return Err(CommandError::invalid("the pattern meter changed; reopen the quantize tool"));
+            if grid.signature != source.effective_signature(self.project.settings.time_signature)
+                || grid.meters != source.timeline.meters
+            {
+                return Err(CommandError::invalid(
+                    "the pattern meter changed; reopen the quantize tool",
+                ));
             }
         }
         let label = transform.label();
         let index = self.pattern_index(pattern)?;
-        let source_curves: Vec<_> = self.project.patterns[index].note_curves.iter().filter(|curve| wanted.contains(&curve.note)).cloned().collect();
-        let crop = matches!(&transform, crate::NoteTransform::Chop { .. } | crate::NoteTransform::ChopPattern { .. });
-        let (mut insert, sources) = crate::piano_tools::transform_mapped(&selected, transform, &source_curves)?;
+        let source_curves: Vec<_> = self.project.patterns[index]
+            .note_curves
+            .iter()
+            .filter(|curve| wanted.contains(&curve.note))
+            .cloned()
+            .collect();
+        let crop = matches!(
+            &transform,
+            crate::NoteTransform::Chop { .. } | crate::NoteTransform::ChopPattern { .. }
+        );
+        let (mut insert, sources) =
+            crate::piano_tools::transform_mapped(&selected, transform, &source_curves)?;
         // Identity transformations preserve history, dirty state and redo.
         if selected == insert {
             return Ok(label);
         }
         let original: HashMap<_, _> = selected.iter().map(|note| (note.id, *note)).collect();
         let mut by_source: HashMap<_, Vec<_>> = HashMap::new();
-        for curve in &source_curves { by_source.entry(curve.note).or_default().push(curve); }
-        let mut new_curves: Vec<_> = self.project.patterns[index].note_curves.iter().filter(|curve| !wanted.contains(&curve.note)).cloned().collect();
-        let mut point_count = new_curves.iter().map(|curve| curve.points.len()).sum::<usize>();
+        for curve in &source_curves {
+            by_source.entry(curve.note).or_default().push(curve);
+        }
+        let mut new_curves: Vec<_> = self.project.patterns[index]
+            .note_curves
+            .iter()
+            .filter(|curve| !wanted.contains(&curve.note))
+            .cloned()
+            .collect();
+        let mut point_count = new_curves
+            .iter()
+            .map(|curve| curve.points.len())
+            .sum::<usize>();
         for note in &mut insert {
             let source = sources.get(&note.id).copied().unwrap_or(note.id);
             if sources.contains_key(&note.id) {
@@ -1743,12 +2664,22 @@ impl Transaction<'_> {
                 for curve in curves {
                     let remapped = if crop {
                         let before = original[&source];
-                        let from = f64::from(note.start.saturating_sub(before.start)) / f64::from(before.length);
-                        let to = f64::from((note.start + note.length).saturating_sub(before.start)) / f64::from(before.length);
+                        let from = f64::from(note.start.saturating_sub(before.start))
+                            / f64::from(before.length);
+                        let to = f64::from((note.start + note.length).saturating_sub(before.start))
+                            / f64::from(before.length);
                         curve.cropped(from, to, note.id)
-                    } else { let mut copy = (**curve).clone(); copy.note = note.id; copy };
+                    } else {
+                        let mut copy = (**curve).clone();
+                        copy.note = note.id;
+                        copy
+                    };
                     point_count = point_count.saturating_add(remapped.points.len());
-                    if point_count > crate::note_curves::MAX_PATTERN_CURVE_POINTS { return Err(CommandError::invalid("the transform exceeds the pattern expression-curve budget")); }
+                    if point_count > crate::note_curves::MAX_PATTERN_CURVE_POINTS {
+                        return Err(CommandError::invalid(
+                            "the transform exceeds the pattern expression-curve budget",
+                        ));
+                    }
                     new_curves.push(remapped);
                 }
             }
@@ -1767,9 +2698,13 @@ impl Transaction<'_> {
         new.length_steps = new.length_steps.max(steps);
         new_curves.sort_by_key(|curve| (curve.note, curve.parameter));
         new.note_curves = new_curves;
-        let mut proposed = self.project.patterns[index].clone(); proposed.note_curves = new.note_curves.clone();
+        let mut proposed = self.project.patterns[index].clone();
+        proposed.note_curves = new.note_curves.clone();
         crate::note_curves::check(&proposed).map_err(CommandError::invalid)?;
-        self.push(Edit::PatternInfo { id: pattern, change: Change { old, new } });
+        self.push(Edit::PatternInfo {
+            id: pattern,
+            change: Change { old, new },
+        });
         Ok(label)
     }
 
@@ -1795,9 +2730,9 @@ impl Transaction<'_> {
         let tracks = &self.project.mixer.tracks;
         let count = tracks.len();
         if tracks.iter().filter(|track| !track.current).count() >= crate::MAX_MIXER_SIGNAL_TRACKS {
-            return Err(CommandError::invalid(format!(
-                "the mixer is full: it holds 500 inserts plus Master"
-            )));
+            return Err(CommandError::invalid(
+                "the mixer is full: it holds 500 inserts plus Master",
+            ));
         }
         let name = name.unwrap_or_else(|| {
             numbered_name("Insert", count, tracks.iter().map(|t| t.name.as_str()))
@@ -1824,7 +2759,8 @@ impl Transaction<'_> {
             | AutomationTarget::TrackParam { track, .. }
             | AutomationTarget::EffectParam { track, .. }
             | AutomationTarget::EffectMix { track, .. } => track == id,
-            AutomationTarget::SendGain { track, target } | AutomationTarget::SidechainGain { track, target } => track == id || target == id,
+            AutomationTarget::SendGain { track, target }
+            | AutomationTarget::SidechainGain { track, target } => track == id || target == id,
             _ => false,
         });
         let channels: Vec<Channel> = self
@@ -1906,19 +2842,29 @@ impl Transaction<'_> {
         );
         let old = self.project.mixer.tracks[self.mixer_track_index(id)?].clone();
         if old.current && (patch.solo == Some(true) || patch.recording.is_some()) {
-            return Err(CommandError::invalid("Current has no solo or recording input"));
+            return Err(CommandError::invalid(
+                "Current has no solo or recording input",
+            ));
         }
         let mut new = old.clone();
         if let Some(offset) = patch.latency_offset_ms {
             if !offset.is_finite() || offset.abs() > 1000.0 {
-                return Err(CommandError::invalid("Mixer latency correction must be -1000 to 1000 ms"));
+                return Err(CommandError::invalid(
+                    "Mixer latency correction must be -1000 to 1000 ms",
+                ));
             }
             new.latency_offset_ms = offset;
         }
-        if let Some(dock) = patch.dock { new.dock = dock; }
+        if let Some(dock) = patch.dock {
+            new.dock = dock;
+        }
         if let Some(processing) = patch.processing {
             use windfall_dsp::ParamSet;
-            if processing.sanitized() != processing { return Err(CommandError::invalid("Track processing settings are outside their ranges")); }
+            if processing.sanitized() != processing {
+                return Err(CommandError::invalid(
+                    "Track processing settings are outside their ranges",
+                ));
+            }
             new.processing = processing;
         }
         if let Some(name) = patch.name {
@@ -2245,8 +3191,12 @@ impl Transaction<'_> {
                 id,
                 name,
                 muted: false,
+                solo: false,
+                color: 0,
+                height: 0,
             },
         }));
+        self.enroll_active_arrangement(&[], &[id]);
         self.created.push(id.0);
         Ok("Add playlist track")
     }
@@ -2273,6 +3223,10 @@ impl Transaction<'_> {
                 (patch.name.is_some(), "Rename playlist track"),
                 (patch.muted == Some(true), "Mute playlist track"),
                 (patch.muted == Some(false), "Unmute playlist track"),
+                (patch.solo == Some(true), "Solo playlist track"),
+                (patch.solo == Some(false), "Unsolo playlist track"),
+                (patch.color.is_some(), "Color playlist track"),
+                (patch.height.is_some(), "Resize playlist track"),
             ],
             "Change playlist track",
         );
@@ -2283,6 +3237,19 @@ impl Transaction<'_> {
         }
         if let Some(muted) = patch.muted {
             new.muted = muted;
+        }
+        if let Some(solo) = patch.solo {
+            new.solo = solo;
+        }
+        if let Some(color) = patch.color {
+            new.color = color;
+        }
+        if let Some(height) = patch.height {
+            new.height = if height == 0 {
+                0
+            } else {
+                height.clamp(18, 160)
+            };
         }
         self.push(Edit::SetPlaylistTrack(Change { old, new }));
         Ok(label)
@@ -2324,10 +3291,13 @@ impl Transaction<'_> {
             clip.id = ClipId(self.allocate()?);
             self.created.push(clip.id.0);
         }
+        let ids: Vec<_> = insert.iter().map(|clip| clip.id).collect();
+        let tracks: Vec<_> = insert.iter().map(|clip| clip.track).collect();
         self.push(Edit::Clips {
             remove: Vec::new(),
             insert,
         });
+        self.enroll_active_arrangement(&ids, &tracks);
         Ok(plural(clips.len(), "Add clip", "Add clips"))
     }
 
@@ -2400,8 +3370,16 @@ impl Transaction<'_> {
         let has = |field: fn(&AudioClipPatch) -> bool| updates.iter().any(|u| field(&u.patch));
         let label = single_label(
             &[
-                (has(|p| p.mixer_track.is_some() || p.output.is_some()), "Route clip"),
+                (
+                    has(|p| p.mixer_track.is_some() || p.output.is_some()),
+                    "Route clip",
+                ),
                 (has(|p| p.gain.is_some()), "Change clip gain"),
+                (has(|p| p.normalize == Some(true)), "Normalize audio clip"),
+                (
+                    has(|p| p.normalize == Some(false)),
+                    "Clear audio clip normalize",
+                ),
                 (has(|p| p.pan.is_some()), "Change clip pan"),
                 (
                     has(|p| p.fade_in.is_some() || p.fade_out.is_some()),
@@ -2433,6 +3411,7 @@ impl Transaction<'_> {
                 sample,
                 mixer_track,
                 output,
+                normalize,
                 gain,
                 pan,
                 fade_in,
@@ -2452,6 +3431,7 @@ impl Transaction<'_> {
                 sample,
                 mixer_track: patch.mixer_track.unwrap_or(mixer_track),
                 output: patch.output.unwrap_or(output),
+                normalize: patch.normalize.unwrap_or(normalize),
                 gain: patch.gain.unwrap_or(gain),
                 pan: patch.pan.unwrap_or(pan),
                 fade_in: patch.fade_in.unwrap_or(fade_in),
@@ -2489,6 +3469,7 @@ impl Transaction<'_> {
                 sample,
                 mixer_track,
                 output,
+                normalize,
                 gain,
                 pan,
                 fade_in,
@@ -2515,6 +3496,7 @@ impl Transaction<'_> {
                     sample,
                     mixer_track,
                     output,
+                    normalize,
                     gain: clamped("the clip gain", gain, 0.0, MAX_GAIN)?,
                     pan: clamped("the pan", pan, -1.0, 1.0)?,
                     fade_in: fade_in.min(MAX_SONG_TICKS),
@@ -2683,7 +3665,12 @@ impl Transaction<'_> {
             AutomationTarget::TrackParam { track, param } => {
                 use windfall_dsp::ParamSet;
                 self.mixer_track_index(track)?;
-                if windfall_dsp::TrackParams::descriptors().get(param as usize).is_none() { return Err(no_setting("Track EQ and stereo", param)); }
+                if windfall_dsp::TrackParams::descriptors()
+                    .get(param as usize)
+                    .is_none()
+                {
+                    return Err(no_setting("Track EQ and stereo", param));
+                }
             }
             AutomationTarget::SidechainGain { track, target } => {
                 let from = &self.project.mixer.tracks[self.mixer_track_index(track)?];
@@ -2794,7 +3781,11 @@ impl Transaction<'_> {
             AutomationTarget::TrackPan { track: id } => format!("{} track pan", track(id)),
             AutomationTarget::TrackParam { track: id, param } => {
                 use windfall_dsp::ParamSet;
-                format!("{} {}", track(id), setting(windfall_dsp::TrackParams::descriptors(), param))
+                format!(
+                    "{} {}",
+                    track(id),
+                    setting(windfall_dsp::TrackParams::descriptors(), param)
+                )
             }
             AutomationTarget::SidechainGain {
                 track: from,
@@ -2890,7 +3881,11 @@ impl Transaction<'_> {
 
     fn signal_track_index(&self, id: TrackId) -> Result<usize, CommandError> {
         let index = self.mixer_track_index(id)?;
-        if self.project.mixer.tracks[index].current { return Err(CommandError::invalid("Current follows selection and cannot be an audio routing destination")); }
+        if self.project.mixer.tracks[index].current {
+            return Err(CommandError::invalid(
+                "Current follows selection and cannot be an audio routing destination",
+            ));
+        }
         Ok(index)
     }
 
@@ -3182,7 +4177,9 @@ fn clamped(what: &str, value: f32, min: f32, max: f32) -> Result<f32, CommandErr
 fn checked_group_name(name: &str) -> Result<String, CommandError> {
     let name = name.trim();
     if name.len() > crate::MAX_CHANNEL_GROUP_NAME_BYTES || name.chars().any(char::is_control) {
-        return Err(CommandError::invalid("a channel group name needs at most 128 UTF-8 bytes and no control characters"));
+        return Err(CommandError::invalid(
+            "a channel group name needs at most 128 UTF-8 bytes and no control characters",
+        ));
     }
     Ok(name.to_owned())
 }
@@ -3206,7 +4203,15 @@ fn checked_key(key: u8) -> Result<u8, CommandError> {
 }
 
 fn checked_note(note: Note) -> Result<Note, CommandError> {
-    if ![note.expression.release, note.expression.fine_pitch_cents, note.expression.modulation_x, note.expression.modulation_y].iter().all(|value| value.is_finite()) {
+    if ![
+        note.expression.release,
+        note.expression.fine_pitch_cents,
+        note.expression.modulation_x,
+        note.expression.modulation_y,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+    {
         return Err(CommandError::invalid("note expression must be finite"));
     }
     if note.length == 0 {
@@ -3324,4 +4329,143 @@ fn copy_name<'a>(original: &str, existing: impl Iterator<Item = &'a str>) -> Str
         .map(|number| format!("{base} #{number}"))
         .find(|name| !taken.contains(name.as_str()))
         .unwrap_or_else(|| original.to_owned())
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use crate::{Command, CommandError, Document, Project, ProjectSettings, SettingsPatch};
+
+    fn apply(doc: &mut Document, patch: SettingsPatch) {
+        doc.dispatch(Command::UpdateSettings { patch }, None)
+            .unwrap();
+    }
+
+    #[test]
+    fn settings_metadata_defaults_when_omitted_and_omits_empty_fields() {
+        let project = Project::new("Old project");
+        let json = serde_json::to_value(&project).unwrap();
+        for field in ["author", "genre", "comments"] {
+            assert!(json["settings"].get(field).is_none());
+        }
+        let loaded: Project = serde_json::from_value(json).unwrap();
+        assert_eq!(loaded.settings, project.settings);
+        assert!(loaded.settings.author.is_empty());
+        assert!(loaded.settings.genre.is_empty());
+        assert!(loaded.settings.comments.is_empty());
+        assert_eq!(
+            serde_json::from_str::<SettingsPatch>("{}").unwrap(),
+            SettingsPatch::default()
+        );
+    }
+
+    #[test]
+    fn settings_metadata_caps_count_trimmed_utf8_bytes_and_reject_atomically() {
+        for (field, cap) in [("author", 256), ("genre", 128), ("comments", 16_384)] {
+            let mut doc = Document::new(Project::new("Caps"));
+            let text = "é".repeat(cap / 2);
+            let patch = serde_json::from_value(serde_json::json!({ field: format!("  {text}\n") }))
+                .unwrap();
+            apply(&mut doc, patch);
+            let saved = serde_json::to_value(&doc.project().settings).unwrap();
+            assert_eq!(saved[field], text);
+            let before = doc.project().clone();
+            let history = doc.history();
+            let patch = serde_json::from_value(serde_json::json!({
+                field: format!("{text}x"), "name": "Must not change"
+            }))
+            .unwrap();
+            let error = doc
+                .dispatch(Command::UpdateSettings { patch }, None)
+                .unwrap_err();
+            assert_eq!(
+                error,
+                CommandError::Invalid(format!("the project {field} is longer than {cap} bytes"))
+            );
+            assert_eq!(doc.project(), &before);
+            assert_eq!(doc.history(), history);
+        }
+    }
+
+    #[test]
+    fn settings_metadata_patch_is_one_undo_step_and_round_trips() {
+        let mut doc = Document::new(Project::new("Metadata"));
+        let before = doc.project().settings.clone();
+        apply(
+            &mut doc,
+            SettingsPatch {
+                author: Some("  Windfall artist  ".into()),
+                genre: Some("  Ambient  ".into()),
+                comments: Some("  First line\nSecond line  ".into()),
+                ..SettingsPatch::default()
+            },
+        );
+        let edited = doc.project().settings.clone();
+        assert_eq!(edited.author, "Windfall artist");
+        assert_eq!(edited.genre, "Ambient");
+        assert_eq!(edited.comments, "First line\nSecond line");
+        assert_eq!(doc.history().entries.len(), 1);
+        let loaded: ProjectSettings =
+            serde_json::from_str(&serde_json::to_string(&edited).unwrap()).unwrap();
+        assert_eq!(loaded, edited);
+        doc.undo().unwrap();
+        assert_eq!(doc.project().settings, before);
+        assert!(doc.undo().is_none());
+        doc.redo().unwrap();
+        assert_eq!(doc.project().settings, edited);
+    }
+
+    #[test]
+    fn settings_comments_edit_undo_and_clear() {
+        let mut doc = Document::new(Project::new("Comments"));
+        apply(
+            &mut doc,
+            SettingsPatch {
+                comments: Some("Notes".into()),
+                ..SettingsPatch::default()
+            },
+        );
+        assert_eq!(doc.history().entries[0].label, "Change project comments");
+        doc.undo().unwrap();
+        assert!(doc.project().settings.comments.is_empty());
+        doc.redo().unwrap();
+        apply(
+            &mut doc,
+            SettingsPatch {
+                comments: Some(" \n\t ".into()),
+                ..SettingsPatch::default()
+            },
+        );
+        assert!(doc.project().settings.comments.is_empty());
+        doc.undo().unwrap();
+        assert_eq!(doc.project().settings.comments, "Notes");
+    }
+
+    #[test]
+    fn settings_empty_patch_preserves_history_dirty_state_and_redo() {
+        let mut doc = Document::new(Project::new("Empty"));
+        apply(
+            &mut doc,
+            SettingsPatch {
+                comments: Some("Notes".into()),
+                ..SettingsPatch::default()
+            },
+        );
+        doc.undo().unwrap();
+        let before = doc.project().clone();
+        let history = doc.history();
+        let applied = doc
+            .dispatch(
+                Command::UpdateSettings {
+                    patch: SettingsPatch::default(),
+                },
+                None,
+            )
+            .unwrap();
+        assert!(applied.touched.is_empty());
+        assert_eq!(doc.project(), &before);
+        assert_eq!(doc.history(), history);
+        assert!(!doc.is_dirty());
+        doc.redo().unwrap();
+        assert_eq!(doc.project().settings.comments, "Notes");
+    }
 }

@@ -97,6 +97,7 @@ struct State {
 struct Link {
     messages: Producer<Message>,
     garbage: Consumer<Garbage>,
+    spectrum: Option<crate::spectrum::SpectrumReader>,
 }
 
 /// Measurements the device callback takes while a stream runs.
@@ -122,18 +123,31 @@ impl Controller {
         let ids = &ids[..ids.len().min(crate::waveform_meter::MAX_VISIBLE)];
         let state = self.lock();
         for (index, slot) in self.inner.shared.waveforms.iter().enumerate() {
-            let id = state.plan.tracks.get(index).filter(|track| ids.contains(&track.id)).map_or(u32::MAX, |track| track.id.0);
+            let id = state
+                .plan
+                .tracks
+                .get(index)
+                .filter(|track| ids.contains(&track.id))
+                .map_or(u32::MAX, |track| track.id.0);
             slot.requested.store(id, Ordering::Release);
         }
     }
 
     pub fn clear_waveform_history(&self) {
-        self.inner.shared.waveform_epoch.fetch_add(1, Ordering::AcqRel);
-        for slot in self.inner.shared.waveforms.iter() { slot.requested.store(u32::MAX, Ordering::Release); }
+        self.inner
+            .shared
+            .waveform_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        for slot in self.inner.shared.waveforms.iter() {
+            slot.requested.store(u32::MAX, Ordering::Release);
+        }
     }
 
     pub fn set_current_track(&self, track: Option<windfall_project::TrackId>) {
-        self.inner.shared.current_track.store(track.map_or(u32::MAX, |track| track.0), Ordering::Release);
+        self.inner
+            .shared
+            .current_track
+            .store(track.map_or(u32::MAX, |track| track.0), Ordering::Release);
     }
     pub(crate) fn new() -> Self {
         Self {
@@ -354,24 +368,6 @@ impl Controller {
         true
     }
 
-    /// A failed immutable snapshot never replaces the installed project.
-    /// Called only by the control-side publication paths, before State.
-    fn refuse_invalid_meters(&self, plan: &Plan) -> bool {
-        if plan.meters.is_ok() {
-            return false;
-        }
-        *self
-            .inner
-            .sampler_error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(
-            crate::sampler_processing::SamplerPreparationError::Unsupported(
-                "Invalid song meter map; project preparation refused.",
-            ),
-        );
-        true
-    }
-
     /// Frames by which the project's instruments and effects delay the
     /// output of the stream that is open, at its sample rate. Zero with no
     /// stream. Every path through the mixer is delayed to match the slowest
@@ -389,49 +385,105 @@ impl Controller {
     /// A recording pre-roll on the output clock, then playback at the playhead.
     pub fn play_count_in(&self, bars: u8) {
         let mut state = self.lock();
-        if state.link.is_none() { return; }
+        if state.link.is_none() {
+            return;
+        }
         state.transport.playing = true;
         state.sequence = state.sequence.wrapping_add(1);
         let sequence = state.sequence;
-        self.inner.shared.count_in_remaining.store(1, Ordering::Release);
-        state.send(Message::CountIn { sequence, bars: bars.min(8), capture: self.inner.shared.recording_clock.active_ticket() });
+        self.inner
+            .shared
+            .count_in_remaining
+            .store(1, Ordering::Release);
+        state.send(Message::CountIn {
+            sequence,
+            bars: bars.min(8),
+            capture: self.inner.shared.recording_clock.active_ticket(),
+        });
     }
 
-    pub fn recording_clock(&self) -> crate::recording_clock::RecordingClock { self.inner.shared.recording_clock.clone() }
-    pub fn start_input_monitor(&self, settings: windfall_ipc::RecordingMonitorSettings, rate: u32) -> Result<crate::recording_monitor::MonitorWriter, String> {
-        self.start_input_monitors(vec![settings], rate).map(|mut writers| writers.remove(0))
+    pub fn recording_clock(&self) -> crate::recording_clock::RecordingClock {
+        self.inner.shared.recording_clock.clone()
     }
-    pub fn start_input_monitors(&self, settings: Vec<windfall_ipc::RecordingMonitorSettings>, rate: u32) -> Result<Vec<crate::recording_monitor::MonitorWriter>, String> {
-        if settings.len() > windfall_project::MAX_MIXER_TRACKS || rate == 0 { return Err("Monitor routes exceed the mixer capacity.".into()); }
+    pub fn start_input_monitor(
+        &self,
+        settings: windfall_ipc::RecordingMonitorSettings,
+        rate: u32,
+    ) -> Result<crate::recording_monitor::MonitorWriter, String> {
+        self.start_input_monitors(vec![settings], rate)
+            .map(|mut writers| writers.remove(0))
+    }
+    pub fn start_input_monitors(
+        &self,
+        settings: Vec<windfall_ipc::RecordingMonitorSettings>,
+        rate: u32,
+    ) -> Result<Vec<crate::recording_monitor::MonitorWriter>, String> {
+        if settings.len() > windfall_project::MAX_MIXER_TRACKS || rate == 0 {
+            return Err("Monitor routes exceed the mixer capacity.".into());
+        }
         let mut state = self.lock();
         if state.link.is_none() {
             return Err("Open an output and choose an existing monitor mixer track.".into());
         }
         for setting in &settings {
-            if !setting.gain.is_finite() || !(0.0..=1.0).contains(&setting.gain) || !(5..=100).contains(&setting.buffer_ms) || state.plan.track_ids.get(setting.track.0).is_none() {
-                return Err("Choose an existing monitor track, gain 0–1 and buffering 5–100 ms.".into());
+            if !setting.gain.is_finite()
+                || !(0.0..=1.0).contains(&setting.gain)
+                || !(5..=100).contains(&setting.buffer_ms)
+                || state.plan.track_ids.get(setting.track.0).is_none()
+            {
+                return Err(
+                    "Choose an existing monitor track, gain 0–1 and buffering 5–100 ms.".into(),
+                );
             }
         }
-        let (writers, readers): (Vec<_>, Vec<_>) = settings.into_iter().map(|setting| crate::recording_monitor::channel(setting, rate)).unzip();
+        let (writers, readers): (Vec<_>, Vec<_>) = settings
+            .into_iter()
+            .map(|setting| crate::recording_monitor::channel(setting, rate))
+            .unzip();
         state.send(Message::SetInputMonitors(readers.into_boxed_slice()));
         Ok(writers)
     }
-    pub fn stop_input_monitor(&self) { self.lock().send(Message::SetInputMonitors(Vec::new().into_boxed_slice())); }
-    pub fn start_disk_taps(&self, taps: Vec<(windfall_ipc::RecordingMixerTap, f64)>, gate: crate::recording_clock::CaptureGate, rate: u32) -> Result<Vec<crate::recording_disk::DiskReader>, String> {
+    pub fn stop_input_monitor(&self) {
+        self.lock()
+            .send(Message::SetInputMonitors(Vec::new().into_boxed_slice()));
+    }
+    pub fn start_disk_taps(
+        &self,
+        taps: Vec<(windfall_ipc::RecordingMixerTap, f64)>,
+        gate: crate::recording_clock::CaptureGate,
+        rate: u32,
+    ) -> Result<Vec<crate::recording_disk::DiskReader>, String> {
         let mut state = self.lock();
-        if state.link.is_none() || rate == 0 || taps.len() > windfall_project::MAX_MIXER_TRACKS { return Err("Open an output before mixer disk recording.".into()); }
+        if state.link.is_none() || rate == 0 || taps.len() > windfall_project::MAX_MIXER_TRACKS {
+            return Err("Open an output before mixer disk recording.".into());
+        }
         for (tap, offset) in &taps {
-            if tap.mode == windfall_project::MixerRecordMode::Input || state.plan.track_ids.get(tap.track.0).is_none() || !offset.is_finite() || offset.abs() > 1000.0 {
+            if tap.mode == windfall_project::MixerRecordMode::Input
+                || state.plan.track_ids.get(tap.track.0).is_none()
+                || !offset.is_finite()
+                || offset.abs() > 1000.0
+            {
                 return Err("Choose a mixer track, processed recording source and an offset within 1000 ms.".into());
             }
         }
-        let (readers, writers): (Vec<_>, Vec<_>) = taps.into_iter().map(|(tap, offset)| crate::recording_disk::channel(tap, gate.clone(), rate, offset)).unzip();
-        state.send(Message::SetDiskTaps(writers.into_boxed_slice())); Ok(readers)
+        let (readers, writers): (Vec<_>, Vec<_>) = taps
+            .into_iter()
+            .map(|(tap, offset)| crate::recording_disk::channel(tap, gate.clone(), rate, offset))
+            .unzip();
+        state.send(Message::SetDiskTaps(writers.into_boxed_slice()));
+        Ok(readers)
     }
-    pub fn stop_disk_taps(&self) { self.lock().send(Message::SetDiskTaps(Vec::new().into_boxed_slice())); }
+    pub fn stop_disk_taps(&self) {
+        self.lock()
+            .send(Message::SetDiskTaps(Vec::new().into_boxed_slice()));
+    }
 
     /// Exact nominal sample span through the compiled song tempo map.
-    pub fn song_range_frames(&self, range: windfall_project::TickRange, rate: u32) -> Result<f64, String> {
+    pub fn song_range_frames(
+        &self,
+        range: windfall_project::TickRange,
+        rate: u32,
+    ) -> Result<f64, String> {
         range.check()?;
         let state = self.lock();
         let ticks = state.plan.warp(f64::from(range.end)) - state.plan.warp(f64::from(range.start));
@@ -526,10 +578,16 @@ impl Controller {
             state.transport.loop_song = loop_song;
         }
         if let Some(mut metronome) = patch.metronome {
-            metronome.gain = if metronome.gain.is_finite() { metronome.gain.clamp(0.0, 1.0) } else { 0.25 };
+            metronome.gain = if metronome.gain.is_finite() {
+                metronome.gain.clamp(0.0, 1.0)
+            } else {
+                0.25
+            };
             state.transport.metronome = Some(metronome);
         }
-        if let Some(bars) = patch.count_in_bars { state.transport.count_in_bars = Some(bars.min(8)); }
+        if let Some(bars) = patch.count_in_bars {
+            state.transport.count_in_bars = Some(bars.min(8));
+        }
         state.send_transport();
     }
 
@@ -668,6 +726,22 @@ impl Controller {
         let mut state = self.lock();
         state.maintain();
         let shared = &self.inner.shared;
+        let plan = Arc::as_ptr(&state.plan) as usize;
+        let (spectrum, spectrogram, correlation) = state
+            .link
+            .as_mut()
+            .and_then(|link| link.spectrum.as_mut())
+            .and_then(|reader| reader.snapshot(plan))
+            .map_or_else(
+                || (Vec::new(), Vec::new(), None),
+                |snapshot| {
+                    (
+                        crate::spectrum::summarize(snapshot),
+                        crate::spectrum::summarize_history(snapshot),
+                        frame_correlation(snapshot.stereo.correlation),
+                    )
+                },
+            );
         let meters = state
             .hosted
             .as_ref()
@@ -677,10 +751,22 @@ impl Controller {
             shared.automated(&mut automated);
         }
         RealtimeFrame {
+            correlation,
+            spectrum,
+            spectrogram,
             waveforms: if state.link.is_some() {
                 let epoch = shared.waveform_epoch.load(Ordering::Acquire);
-                state.plan.tracks.iter().enumerate().filter_map(|(index, track)| shared.waveforms[index].snapshot(track.id, epoch)).take(crate::waveform_meter::MAX_VISIBLE).collect()
-            } else { Vec::new() },
+                state
+                    .plan
+                    .tracks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, track)| shared.waveforms[index].snapshot(track.id, epoch))
+                    .take(crate::waveform_meter::MAX_VISIBLE)
+                    .collect()
+            } else {
+                Vec::new()
+            },
             playing: self.playing(&state),
             tick: shared.tick(),
             meters: (0..state.plan.tracks.len() * 2)
@@ -734,54 +820,13 @@ impl Controller {
     /// last is the one that counts.
     pub(crate) fn attach(&self, sample_rate: u32) -> Processor {
         self.inner.shared.recording_clock.reset_output();
-        let (message_tx, message_rx) = RingBuffer::new(MESSAGE_CAPACITY);
-        let (garbage_tx, garbage_rx) = RingBuffer::new(GARBAGE_CAPACITY);
-        let shared = self.inner.shared.clone();
-
-        let mut state = self.lock();
-        self.panic_hardware();
-        // Every effect and instrument is built anew, prepared for this
-        // stream's sample rate. What the last stream ran went with it.
-        // The returned ledger freezes the identities actually prepared,
-        // including revisions changed since this plan was installed.
-        let (plan_state, hosted) = PlanState::build(&state.plan, sample_rate, None);
-        let processor = Processor::with_queues(
-            sample_rate,
-            state.plan.clone(),
-            Box::new(plan_state),
-            state.output_gain,
-            message_rx,
-            garbage_tx,
-            shared,
-        );
-        state.hosted = Some(hosted);
-        state.link = Some(Link {
-            messages: message_tx,
-            garbage: garbage_rx,
-        });
-        state.backlog.clear();
-        // What the last stream's processor published about its automation
-        // is not true of this one, which has yet to play anything.
-        self.inner.shared.publish_automated(std::iter::empty());
-        state.send_transport();
-
-        let shared = &self.inner.shared;
-        // Where stop returns to is not where the playhead was when the last
-        // stream went away, so the two travel separately.
-        state.send(Message::Seek(shared.start()));
-        if state.resume {
-            state.transport.playing = true;
-            state.sequence = state.sequence.wrapping_add(1);
-            let sequence = state.sequence;
-            state.send(Message::Play {
-                sequence,
-                passes: None,
-                from: Some(shared.tick()),
-            });
-        } else {
-            state.transport.playing = false;
-            shared.publish_transport(state.sequence, false);
-        }
+        let (processor, _, retirement) = self
+            .try_attach(
+                sample_rate,
+                crate::project_preparation::AttachmentMode::Independent,
+            )
+            .expect("independent processor preparation failed");
+        drop(retirement);
         processor
     }
 
@@ -791,8 +836,13 @@ impl Controller {
         let mut state = self.lock();
         self.panic_hardware();
         state.resume = self.playing(&state) && self.count_in_remaining() == 0;
-        if self.count_in_remaining() > 0 { state.transport.playing = false; }
-        self.inner.shared.count_in_remaining.store(0, Ordering::Release);
+        if self.count_in_remaining() > 0 {
+            state.transport.playing = false;
+        }
+        self.inner
+            .shared
+            .count_in_remaining
+            .store(0, Ordering::Release);
         state.link = None;
         state.hosted = None;
         state.backlog.clear();
@@ -803,18 +853,16 @@ impl Controller {
 
     pub(crate) fn detach(&self) {
         self.inner.shared.recording_clock.reset_output();
-        let mut state = self.lock();
-        self.panic_hardware();
-        state.link = None;
-        state.hosted = None;
-        state.backlog.clear();
-        state.resume = false;
-        state.transport.playing = false;
-        let shared = &self.inner.shared;
-        shared.count_in_remaining.store(0, Ordering::Release);
-        shared.publish_transport(state.sequence, false);
-        shared.publish_position(shared.start(), shared.start(), 0);
-        shared.publish_clips(0, 0);
+        self.inner
+            .shared
+            .count_in_remaining
+            .store(0, Ordering::Release);
+        // A failed stream build can leave an admitted attachment in Starting.
+        // Close through the same generation fence as a running stream so a
+        // later reopen can prepare, and retire owners outside the state guard.
+        if let Ok(closing) = self.begin_close(false) {
+            self.finish_close(closing);
+        }
     }
 
     /// Whether the transport is playing: the audio thread's word once it
@@ -881,6 +929,13 @@ impl State {
     }
 }
 
+/// Copies existing analyzer evidence on the control-side frame path only.
+fn frame_correlation(correlation: Option<f64>) -> Option<f32> {
+    correlation
+        .filter(|value| value.is_finite() && (-1.0..=1.0).contains(value))
+        .map(|value| value as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use windfall_core::TICKS_PER_STEP;
@@ -889,6 +944,28 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn phase_meter_publication_preserves_absence_zero_and_endpoints() {
+        assert_eq!(frame_correlation(None), None);
+        for value in [-1.0, 0.0, 0.25, 1.0] {
+            assert_eq!(frame_correlation(Some(value)), Some(value as f32));
+        }
+    }
+
+    #[test]
+    fn phase_meter_publication_rejects_nonfinite_and_out_of_range_values() {
+        for value in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0 - f64::EPSILON,
+            1.0 + f64::EPSILON,
+            f64::MAX,
+        ] {
+            assert_eq!(frame_correlation(Some(value)), None);
+        }
+    }
 
     /// A project and pool with one channel that plays a single full-scale
     /// frame on each of `steps`.
@@ -908,6 +985,7 @@ mod tests {
             muted: false,
             solo: false,
             group: String::new(),
+            voice: Default::default(),
             timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId::MASTER,
             source: ChannelSource::Sampler(SamplerSettings {
@@ -1414,6 +1492,9 @@ mod tests {
             id: PlaylistTrackId(950),
             name: String::new(),
             muted: false,
+            solo: false,
+            color: 0,
+            height: 0,
         });
         project.automations.push(Automation {
             id: AutomationId(960),

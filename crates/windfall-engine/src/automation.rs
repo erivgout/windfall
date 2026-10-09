@@ -61,10 +61,10 @@ use std::collections::HashMap;
 
 use windfall_project::{
     AutomationId, AutomationPoint, AutomationRange, AutomationTarget, ClipContent, ClipId,
-    EffectId, Project, curve_value,
+    EffectId, Playlist, Project, curve_value,
 };
 
-use crate::plan::{IdIndex, Plan};
+use crate::plan::{IdIndex, Plan, silent_playlist_tracks};
 use crate::ramp::Ramp;
 use crate::state::PlanState;
 
@@ -303,8 +303,8 @@ fn curve_before(points: &[AutomationPoint], tick: f64) -> f32 {
 /// Builds the lanes of a project for a plan made of it. Clips that are
 /// muted, or on a muted playlist track, count for nothing, and an
 /// automation whose target the plan does not have is left out.
-pub(crate) fn compile(project: &Project, plan: &Plan) -> Vec<Lane> {
-    let playlist = &project.playlist;
+pub(crate) fn compile(project: &Project, playlist: &Playlist, plan: &Plan) -> Vec<Lane> {
+    let silent_tracks = silent_playlist_tracks(playlist);
     let row_of = |clip_track| {
         let rows = playlist.tracks.iter();
         rows.clone().position(|track| track.id == clip_track)
@@ -323,7 +323,7 @@ pub(crate) fn compile(project: &Project, plan: &Plan) -> Vec<Lane> {
         let Some(row) = row_of(clip.track) else {
             continue;
         };
-        if clip.muted || playlist.tracks[row].muted || end == clip.start {
+        if clip.muted || silent_tracks.contains(&clip.track) || end == clip.start {
             continue;
         }
         let Some(automation) = automations.get(id.0).map(|at| &project.automations[at]) else {

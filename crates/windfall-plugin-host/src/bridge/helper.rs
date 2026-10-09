@@ -2,7 +2,7 @@
 
 use super::{
     adapter::ParameterSpec,
-    control::{ControlParameter, Decoder, Message, Packet, ReadStep},
+    control::{ControlParameter, Decoder, DescribedParameter, Message, Packet, ReadStep},
     mapping::Mapping,
     protocol::*,
     slots::{InputBlock, OutputBlock, Region},
@@ -61,6 +61,43 @@ impl Drop for Native {
     }
 }
 impl Native {
+    fn describe(&mut self) -> io::Result<(Vec<u8>, Vec<DescribedParameter>, crate::PluginLayout)> {
+        // Discovery must not stop notes or disturb a playback instance. The
+        // desktop creates a separate fresh helper specifically for discovery.
+        if self.sequence.is_some() || self.processed_epoch != 0 {
+            return Err(error(
+                "native discovery requires a fresh unprocessed helper",
+            ));
+        }
+        self.deactivate()?;
+        let result = (|| {
+            self.instance.idle(&mut |_| {});
+            let state = captured_state(self.instance.save_state().map_err(error)?)?;
+            let parameters = self
+                .instance
+                .params()
+                .to_vec()
+                .into_iter()
+                .filter(|param| !param.hidden)
+                .map(|param| DescribedParameter {
+                    spec: ControlParameter {
+                        id: param.id,
+                        min: param.min,
+                        max: param.max,
+                        value: self.instance.param_value(param.id).unwrap_or(param.default),
+                        stepped: param.stepped,
+                        read_only: param.read_only,
+                    },
+                    name: param.name.clone(),
+                    automatable: param.automatable,
+                })
+                .collect();
+            Ok((state, parameters, self.instance.layout().clone()))
+        })();
+        // A refused metadata/state request must retain a usable helper owner.
+        self.activate()?;
+        result
+    }
     fn adopt_timeline(&mut self) -> io::Result<u64> {
         let epoch = self.region.timeline_epoch().map_err(error)?;
         if epoch < self.epoch {
@@ -215,8 +252,16 @@ impl Native {
                 let mut event = input.events[event_at];
                 event.set_time(0);
                 match event {
-                    HostEvent::NoteOff { key, channel, .. } => processor.release_note_on_channel(key, channel),
-                    HostEvent::NoteOffInstance { id, key, channel, velocity, .. } => {
+                    HostEvent::NoteOff { key, channel, .. } => {
+                        processor.release_note_on_channel(key, channel)
+                    }
+                    HostEvent::NoteOffInstance {
+                        id,
+                        key,
+                        channel,
+                        velocity,
+                        ..
+                    } => {
                         admitted &= processor.release_note_instance(id, key, channel, velocity);
                     }
                     HostEvent::AllNotesOff { .. } => processor.release_all_notes(),
@@ -246,7 +291,11 @@ impl Native {
             // erase them. A nonempty successful native call is mandatory.
             let before = processor.health();
             dropped_evidence(before.dropped_events, before.dropped_events)?;
-            let status = processor.process_sidechain(&mut output.left[at..end], &mut output.right[at..end], Some(&input.key[at..end]));
+            let status = processor.process_sidechain(
+                &mut output.left[at..end],
+                &mut output.right[at..end],
+                Some(&input.key[at..end]),
+            );
             let after = processor.health();
             output.native_drops = output
                 .native_drops
@@ -643,6 +692,23 @@ fn run(address: SocketAddr) -> io::Result<()> {
             }
             let mut response = Packet::new(packet.request, packet.owner, Message::Stopped);
             match packet.body {
+                Message::Describe => match native.describe() {
+                    Ok((state, parameters, layout)) => {
+                        response.state = state;
+                        response.body = Message::Described { parameters, layout };
+                        if let Err(error_value) = response.check_encoding() {
+                            response.state.clear();
+                            response.body = Message::Error {
+                                message: error_value.to_string(),
+                            };
+                        }
+                    }
+                    Err(error_value) => {
+                        response.body = Message::Error {
+                            message: error_value.to_string(),
+                        };
+                    }
+                },
                 Message::Shutdown => {
                     native.deactivate()?;
                     reply(&mut socket, &response)?;

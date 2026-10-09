@@ -1,0 +1,1 @@
+The waveform helper halves or doubles its start tick. Half moves it toward zero, and zero stays at zero. A start of one tick halves to zero. Double stops at the pattern tick limit either way. Length, height, opacity, and center key stay as they are. This is not an undo step.

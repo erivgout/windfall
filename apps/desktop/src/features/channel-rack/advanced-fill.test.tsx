@@ -14,7 +14,6 @@ import type { Backend } from "@/lib/ipc"
 import { SimDocument } from "@/lib/ipc/sim/document"
 import { dispatch, redo, undo, useProjectStore } from "@/lib/store/project"
 import { useUiStore } from "@/lib/store/ui"
-import { settle } from "@/test/harness"
 
 import {
   applyAdvancedFill,

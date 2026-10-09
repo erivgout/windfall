@@ -79,7 +79,7 @@ describe("strips", () => {
       "Snare, track 4",
     ])
     expect(strip("Master").closest("[data-slot=mixer-master]")).not.toBeNull()
-    expect(strip("Kick").closest("[data-slot=mixer-inserts]")).not.toBeNull()
+    expect(strip("Kick").closest("[data-slot=mixer-dock-middle]")).not.toBeNull()
   })
 
   it("reads 0 dB at unity gain and centered pan", () => {
@@ -839,13 +839,21 @@ describe("track operations", () => {
         (item) => item.textContent
       )
     ).toEqual([
+      "Render selected mixer tracks…",
+      "Render armed mixer tracks…Arm a mixer insert or Master",
+      "Arm or disarm mixer track for recording",
+      "Record armed mixer tracks…",
       "Rename mixer trackF2",
       "Change track color…",
       "Add effect",
       "Show effectsE",
+      "Bypass effects",
+      "Enable effects",
       "Mute or unmute trackM",
       "Solo or unsolo trackS",
       "Unmute all tracks",
+      "Reset levels",
+      "Select tracks routed here",
       "Unsolo all tracks",
       "Reset fader to 0 dB",
       "Center pan",
@@ -861,6 +869,12 @@ describe("track operations", () => {
     ).toHaveAttribute("aria-checked", "false")
     expect(
       within(menu).getByRole("menuitem", { name: "Route to master" })
+    ).toHaveAttribute("aria-disabled", "true")
+    expect(
+      within(menu).getByRole("menuitem", { name: "Render selected mixer tracks…" })
+    ).not.toHaveAttribute("aria-disabled", "true")
+    expect(
+      within(menu).getByRole("menuitem", { name: /^Render armed mixer tracks/ })
     ).toHaveAttribute("aria-disabled", "true")
   })
 
@@ -982,7 +996,7 @@ describe("keys and wheel", () => {
 
   it("moves along the strips with the mouse wheel", () => {
     render(<MixerPanel />)
-    const scroller = document.querySelector("[data-slot=mixer-inserts]")
+    const scroller = screen.getByRole("group", { name: "middle mixer dock" })
     if (!scroller) throw new Error("The mixer is not mounted")
     fireEvent.wheel(strip("Kick"), { deltaY: 240 })
     expect(scroller.scrollLeft).toBe(240)

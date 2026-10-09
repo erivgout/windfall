@@ -47,7 +47,17 @@
 //! from -1 to 1. Each field's doc comment gives its unit, range and
 //! default.
 
+pub mod additive;
 mod balance;
+pub mod drums;
+pub mod drive;
+pub mod fm;
+pub mod multiband;
+pub mod physical;
+pub mod spatial;
+pub mod performance;
+pub mod granular;
+pub mod spectral;
 pub mod blocks;
 mod channel_mute;
 mod compressor;
@@ -101,3 +111,34 @@ pub use synth::{
     EnvelopeParams, FilterMode, FilterParams, FilterSlope, LfoParams, MAX_POLYPHONY, MAX_UNISON,
     OscillatorParams, SubtractiveSynth, SynthParams, VoiceMode,
 };
+
+pub use fm::{FourOp, FourOpParams, MatrixFm, MatrixFmParams, RingHybrid, RingHybridParams};
+pub use additive::{HarmonicStack, HarmonicStackParams, PartialMorph, PartialMorphParams, Inharmonic, InharmonicParams, Resynth, ResynthParams, SeedPatch, SeedPatchParams, ScanSynth, ScanSynthParams};
+pub use physical::{Pluck, PluckParams, FingerBass, FingerBassParams, AcousticString, AcousticStringParams};
+pub use drums::{Membrane, MembraneParams, DrumRack, DrumRackParams, Kick, KickParams, DrumVoice, DrumVoiceParams};
+pub use multiband::{BandSplit, BandSplitParams, MultibandCompressor, MultibandCompressorParams, MultibandMaximizer, MultibandMaximizerParams, TransientShaper, TransientShaperParams, TransientSplit, TransientSplitParams, OneKnob, OneKnobParams, BassHarmonics, BassHarmonicsParams, Exciter, ExciterParams};
+pub use drive::{Waveshaper, WaveshaperParams, Overdrive, OverdriveParams, GuitarRack, GuitarRackParams, DriveChain, DriveChainParams};
+pub use spatial::{VintageChorus, VintageChorusParams, HyperChorus, HyperChorusParams, VintagePhaser, VintagePhaserParams, StackedFlanger, StackedFlangerParams, BandDelay, BandDelayParams, Room, RoomParams, Spreader, SpreaderParams, StereoEnhancer, StereoEnhancerParams};
+
+
+pub mod control;
+
+pub mod eqbank;
+
+pub mod analog;
+
+pub mod lush;
+
+pub mod speech;
+
+pub mod tuner;
+
+pub mod mastering;
+
+pub mod surface;
+
+pub mod sendtap;
+
+pub mod notemap;
+
+pub mod zones;

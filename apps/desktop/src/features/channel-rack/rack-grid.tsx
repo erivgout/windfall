@@ -27,6 +27,7 @@ import {
   replaceSampleFromFile,
 } from "./channel-ops"
 import { ChannelRow } from "./channel-row"
+import { matchingChannelIds } from "./channel-filter"
 import { RACK_MENU } from "./menus"
 import {
   fitPitch,
@@ -68,10 +69,12 @@ function sameDrop(a: Drop | null, b: Drop | null): boolean {
  */
 export function RackGrid() {
   const allIds = useChannelIds()
-  const filter = useRackStore((state) => state.groupFilter)
-  const ids = useProjectStore(useShallow((state) => state.project.channels
-    .filter((channel) => filter === null || (channel.group ?? "") === filter)
-    .map((channel) => channel.id)))
+  const groupFilter = useRackStore((state) => state.groupFilter)
+  const [query, setQuery] = useState("")
+  const ids = useProjectStore(useShallow((state) => matchingChannelIds(
+    state.project.channels.filter((channel) => groupFilter === null || (channel.group ?? "") === groupFilter),
+    query
+  )))
   const pattern = useSelectedPatternId()
   const lengthSteps = useProjectStore(
     (state) =>
@@ -261,6 +264,21 @@ export function RackGrid() {
             width: pitches(lengthSteps, LEFT_WIDTH + STEPS_INSET + STEPS_TRAIL),
           }}
         >
+          <label
+            className="sticky left-0 flex shrink-0 flex-col gap-1 px-2 py-1 text-[0.6875rem] text-muted-foreground"
+            style={{ width: LEFT_WIDTH }}
+          >
+            Filter channels
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key.startsWith("Arrow")) event.stopPropagation()
+              }}
+              className="h-7 w-full min-w-0 rounded-md border border-input bg-input/20 px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+            />
+          </label>
           <div
             className="sticky top-0 z-20 flex shrink-0 border-b bg-background"
             style={{ height: RULER_HEIGHT }}
@@ -344,9 +362,13 @@ export function RackGrid() {
             >
               <ActionButton action="channel.add" variant="ghost" size="sm" />
               <span className="text-muted-foreground">
-                {ids.length === 0 && filter !== null ? "No channels in this group" : "or drag a sample here from the browser"}
+                {ids.length === 0 && query.trim() !== ""
+                  ? "No channels match."
+                  : ids.length === 0 && groupFilter !== null
+                    ? "No channels in this group"
+                    : "or drag a sample here from the browser"}
               </span>
-              {filter !== null && <ActionButton action="channelRack.showAllGroups" variant="ghost" size="sm">Show all</ActionButton>}
+              {groupFilter !== null && <ActionButton action="channelRack.showAllGroups" variant="ghost" size="sm">Show all</ActionButton>}
             </div>
           </div>
         </div>

@@ -1,0 +1,1 @@
+The waveform helper halves or doubles how far its center key sits from C5. C5 stays at C5. Half of one step above or below C5 lands on C5. Double stops at MIDI key 0 and MIDI key 127. Start, length, height, and opacity stay as they are. This is not an undo step.

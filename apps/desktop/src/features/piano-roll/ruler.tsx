@@ -30,6 +30,7 @@ import { handleWheel } from "./grid-input"
 import { showHint } from "./hint"
 import { VIEW_MENU } from "./menu"
 import { fadePastEnd, shownLengthTicks } from "./overlays"
+import { patternEdgeTick } from "./pattern-jumps"
 import type { PianoRollSession } from "./session"
 import { snapRound, snapTicks } from "./snap"
 import { usePianoRollStore } from "./store"
@@ -306,8 +307,22 @@ export function Ruler() {
     endPreview()
   }
 
+  function jumpToEdge(edge: "start" | "end") {
+    const context = session.editor.context
+    if (!context || useTransportStore.getState().mode !== "pattern") return
+    void seek(patternEdgeTick(context.pattern.lengthSteps, edge))
+  }
+
   return (
-    <ContextActions items={[{ title: "Edit markers / meter here…", run: () => openPatternTimeline(menuTick.current), afterClose: true }, contextSeparator, ...RULER_MENU]}>
+    <ContextActions
+      items={[
+        { title: "Edit markers / meter here…", run: () => openPatternTimeline(menuTick.current), afterClose: true },
+        { title: "Jump to the start", run: () => jumpToEdge("start") },
+        { title: "Jump to the end", run: () => jumpToEdge("end") },
+        contextSeparator,
+        ...RULER_MENU,
+      ]}
+    >
       <canvas
         ref={canvasRef}
         aria-label="Time ruler. Drag the marker at the end of the pattern to change its length"

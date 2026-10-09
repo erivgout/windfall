@@ -1,8 +1,31 @@
 //! The interface every built-in instrument implements, and one type that
 //! can hold any of them.
 
+use crate::analog::{AcidLine, AcidLineParams};
+use crate::analog::{TripleOsc, TripleOscParams};
+use crate::analog::{WaveLane, WaveLaneParams};
+use crate::analog::{MacroVoice, MacroVoiceParams};
+use crate::speech::{SpeechVoice, SpeechVoiceParams};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+use crate::additive::{
+    HarmonicStack, HarmonicStackParams, Inharmonic, InharmonicParams, PartialMorph,
+    PartialMorphParams, Resynth, ResynthParams, ScanSynth, ScanSynthParams, SeedPatch,
+    SeedPatchParams,
+};
+use crate::drums::{
+    DrumRack, DrumRackParams, DrumVoice, DrumVoiceParams, Kick, KickParams, Membrane,
+    MembraneParams,
+};
+use crate::fm::{FourOp, FourOpParams, MatrixFm, MatrixFmParams, RingHybrid, RingHybridParams};
+use crate::granular::{
+    GrainCloud, GrainCloudParams, SliceDeck, SliceDeckParams, SliceMap, SliceMapParams,
+    WaveRide, WaveRideParams,
+};
+use crate::physical::{
+    AcousticString, AcousticStringParams, FingerBass, FingerBassParams, Pluck, PluckParams,
+};
 
 use crate::param::{ParamInfo, ParamSet};
 use crate::synth::{SubtractiveSynth, SynthParams};
@@ -56,9 +79,18 @@ pub trait Instrument: Send {
     fn note_off(&mut self, key: u8);
 
     /// Whether instance-specific release and expression are supported.
-    fn supports_note_instances(&self) -> bool { false }
+    fn supports_note_instances(&self) -> bool {
+        false
+    }
 
-    fn note_on_instance(&mut self, id: NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+    fn note_on_instance(
+        &mut self,
+        id: NoteInstanceId,
+        key: u8,
+        velocity: f32,
+        pan: f32,
+        expression: NoteExpression,
+    ) {
         let _ = id;
         self.note_on_expression(key, velocity, pan, expression);
     }
@@ -74,7 +106,9 @@ pub trait Instrument: Send {
     }
 
     /// Effective pitch in fractional MIDI keys, including per-note tuning.
-    fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) { let _ = (id, pitch); }
+    fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) {
+        let _ = (id, pitch);
+    }
 
     /// Stops every note with a fade of a few milliseconds, skipping their
     /// releases. For stopping the transport without a click.
@@ -108,15 +142,92 @@ pub trait Instrument: Send {
 #[ts(export)]
 pub enum InstrumentKind {
     SubtractiveSynth,
+    FourOp,
+    MatrixFm,
+    RingHybrid,
+    HarmonicStack,
+    PartialMorph,
+    Inharmonic,
+    Resynth,
+    SeedPatch,
+    ScanSynth,
+    Pluck,
+    FingerBass,
+    AcousticString,
+    Membrane,
+    DrumRack,
+    Kick,
+    DrumVoice,
+    SliceMap,
+    SliceDeck,
+    GrainCloud,
+    WaveRide,
+    AcidLine,
+    TripleOsc,
+    WaveLane,
+    MacroVoice,
+    SpeechVoice,
 }
 
 impl InstrumentKind {
-    pub const ALL: [InstrumentKind; 1] = [InstrumentKind::SubtractiveSynth];
+    pub const ALL: [InstrumentKind; 26] = [
+        InstrumentKind::SubtractiveSynth,
+        InstrumentKind::FourOp,
+        InstrumentKind::MatrixFm,
+        InstrumentKind::RingHybrid,
+        InstrumentKind::HarmonicStack,
+        InstrumentKind::PartialMorph,
+        InstrumentKind::Inharmonic,
+        InstrumentKind::Resynth,
+        InstrumentKind::SeedPatch,
+        InstrumentKind::ScanSynth,
+        InstrumentKind::Pluck,
+        InstrumentKind::FingerBass,
+        InstrumentKind::AcousticString,
+        InstrumentKind::Membrane,
+        InstrumentKind::DrumRack,
+        InstrumentKind::Kick,
+        InstrumentKind::DrumVoice,
+        InstrumentKind::SliceMap,
+        InstrumentKind::SliceDeck,
+        InstrumentKind::GrainCloud,
+        InstrumentKind::WaveRide,
+        InstrumentKind::AcidLine,
+        InstrumentKind::TripleOsc,
+        InstrumentKind::WaveLane,
+        InstrumentKind::MacroVoice,
+        InstrumentKind::SpeechVoice,
+    ];
 
     /// The instrument's name as shown to the user.
     pub fn name(self) -> &'static str {
         match self {
             InstrumentKind::SubtractiveSynth => SynthParams::NAME,
+            InstrumentKind::FourOp => FourOpParams::NAME,
+            InstrumentKind::MatrixFm => MatrixFmParams::NAME,
+            InstrumentKind::RingHybrid => RingHybridParams::NAME,
+            InstrumentKind::HarmonicStack => HarmonicStackParams::NAME,
+            InstrumentKind::PartialMorph => PartialMorphParams::NAME,
+            InstrumentKind::Inharmonic => InharmonicParams::NAME,
+            InstrumentKind::Resynth => ResynthParams::NAME,
+            InstrumentKind::SeedPatch => SeedPatchParams::NAME,
+            InstrumentKind::ScanSynth => ScanSynthParams::NAME,
+            InstrumentKind::Pluck => PluckParams::NAME,
+            InstrumentKind::FingerBass => FingerBassParams::NAME,
+            InstrumentKind::AcousticString => AcousticStringParams::NAME,
+            InstrumentKind::Membrane => MembraneParams::NAME,
+            InstrumentKind::DrumRack => DrumRackParams::NAME,
+            InstrumentKind::Kick => KickParams::NAME,
+            InstrumentKind::DrumVoice => DrumVoiceParams::NAME,
+            InstrumentKind::SliceMap => SliceMapParams::NAME,
+            InstrumentKind::SliceDeck => SliceDeckParams::NAME,
+            InstrumentKind::GrainCloud => GrainCloudParams::NAME,
+            InstrumentKind::WaveRide => WaveRideParams::NAME,
+            InstrumentKind::AcidLine => AcidLineParams::NAME,
+            InstrumentKind::TripleOsc => TripleOscParams::NAME,
+            InstrumentKind::WaveLane => WaveLaneParams::NAME,
+            InstrumentKind::MacroVoice => MacroVoiceParams::NAME,
+            InstrumentKind::SpeechVoice => SpeechVoiceParams::NAME,
         }
     }
 
@@ -124,6 +235,31 @@ impl InstrumentKind {
     pub fn descriptors(self) -> &'static [ParamInfo] {
         match self {
             InstrumentKind::SubtractiveSynth => SynthParams::descriptors(),
+            InstrumentKind::FourOp => FourOpParams::descriptors(),
+            InstrumentKind::MatrixFm => MatrixFmParams::descriptors(),
+            InstrumentKind::RingHybrid => RingHybridParams::descriptors(),
+            InstrumentKind::HarmonicStack => HarmonicStackParams::descriptors(),
+            InstrumentKind::PartialMorph => PartialMorphParams::descriptors(),
+            InstrumentKind::Inharmonic => InharmonicParams::descriptors(),
+            InstrumentKind::Resynth => ResynthParams::descriptors(),
+            InstrumentKind::SeedPatch => SeedPatchParams::descriptors(),
+            InstrumentKind::ScanSynth => ScanSynthParams::descriptors(),
+            InstrumentKind::Pluck => PluckParams::descriptors(),
+            InstrumentKind::FingerBass => FingerBassParams::descriptors(),
+            InstrumentKind::AcousticString => AcousticStringParams::descriptors(),
+            InstrumentKind::Membrane => MembraneParams::descriptors(),
+            InstrumentKind::DrumRack => DrumRackParams::descriptors(),
+            InstrumentKind::Kick => KickParams::descriptors(),
+            InstrumentKind::DrumVoice => DrumVoiceParams::descriptors(),
+            InstrumentKind::SliceMap => SliceMapParams::descriptors(),
+            InstrumentKind::SliceDeck => SliceDeckParams::descriptors(),
+            InstrumentKind::GrainCloud => GrainCloudParams::descriptors(),
+            InstrumentKind::WaveRide => WaveRideParams::descriptors(),
+            InstrumentKind::AcidLine => AcidLineParams::descriptors(),
+            InstrumentKind::TripleOsc => TripleOscParams::descriptors(),
+            InstrumentKind::WaveLane => WaveLaneParams::descriptors(),
+            InstrumentKind::MacroVoice => MacroVoiceParams::descriptors(),
+            InstrumentKind::SpeechVoice => SpeechVoiceParams::descriptors(),
         }
     }
 
@@ -133,6 +269,37 @@ impl InstrumentKind {
             InstrumentKind::SubtractiveSynth => {
                 InstrumentParams::SubtractiveSynth(SynthParams::default())
             }
+            InstrumentKind::FourOp => InstrumentParams::FourOp(FourOpParams::default()),
+            InstrumentKind::MatrixFm => InstrumentParams::MatrixFm(MatrixFmParams::default()),
+            InstrumentKind::RingHybrid => InstrumentParams::RingHybrid(RingHybridParams::default()),
+            InstrumentKind::HarmonicStack => {
+                InstrumentParams::HarmonicStack(HarmonicStackParams::default())
+            }
+            InstrumentKind::PartialMorph => {
+                InstrumentParams::PartialMorph(PartialMorphParams::default())
+            }
+            InstrumentKind::Inharmonic => InstrumentParams::Inharmonic(InharmonicParams::default()),
+            InstrumentKind::Resynth => InstrumentParams::Resynth(ResynthParams::default()),
+            InstrumentKind::SeedPatch => InstrumentParams::SeedPatch(SeedPatchParams::default()),
+            InstrumentKind::ScanSynth => InstrumentParams::ScanSynth(ScanSynthParams::default()),
+            InstrumentKind::Pluck => InstrumentParams::Pluck(PluckParams::default()),
+            InstrumentKind::FingerBass => InstrumentParams::FingerBass(FingerBassParams::default()),
+            InstrumentKind::AcousticString => {
+                InstrumentParams::AcousticString(AcousticStringParams::default())
+            }
+            InstrumentKind::Membrane => InstrumentParams::Membrane(MembraneParams::default()),
+            InstrumentKind::DrumRack => InstrumentParams::DrumRack(DrumRackParams::default()),
+            InstrumentKind::Kick => InstrumentParams::Kick(KickParams::default()),
+            InstrumentKind::DrumVoice => InstrumentParams::DrumVoice(DrumVoiceParams::default()),
+            InstrumentKind::SliceMap => InstrumentParams::SliceMap(SliceMapParams::default()),
+            InstrumentKind::SliceDeck => InstrumentParams::SliceDeck(SliceDeckParams::default()),
+            InstrumentKind::GrainCloud => InstrumentParams::GrainCloud(GrainCloudParams::default()),
+            InstrumentKind::WaveRide => InstrumentParams::WaveRide(WaveRideParams::default()),
+            InstrumentKind::AcidLine => InstrumentParams::AcidLine(AcidLineParams::default()),
+            InstrumentKind::TripleOsc => InstrumentParams::TripleOsc(TripleOscParams::default()),
+            InstrumentKind::WaveLane => InstrumentParams::WaveLane(WaveLaneParams::default()),
+            InstrumentKind::MacroVoice => InstrumentParams::MacroVoice(MacroVoiceParams::default()),
+            InstrumentKind::SpeechVoice => InstrumentParams::SpeechVoice(SpeechVoiceParams::default()),
         }
     }
 }
@@ -144,12 +311,62 @@ impl InstrumentKind {
 #[ts(export)]
 pub enum InstrumentParams {
     SubtractiveSynth(SynthParams),
+    FourOp(FourOpParams),
+    MatrixFm(MatrixFmParams),
+    RingHybrid(RingHybridParams),
+    HarmonicStack(HarmonicStackParams),
+    PartialMorph(PartialMorphParams),
+    Inharmonic(InharmonicParams),
+    Resynth(ResynthParams),
+    SeedPatch(SeedPatchParams),
+    ScanSynth(ScanSynthParams),
+    Pluck(PluckParams),
+    FingerBass(FingerBassParams),
+    AcousticString(AcousticStringParams),
+    Membrane(MembraneParams),
+    DrumRack(DrumRackParams),
+    Kick(KickParams),
+    DrumVoice(DrumVoiceParams),
+    SliceMap(SliceMapParams),
+    SliceDeck(SliceDeckParams),
+    GrainCloud(GrainCloudParams),
+    WaveRide(WaveRideParams),
+    AcidLine(AcidLineParams),
+    TripleOsc(TripleOscParams),
+    WaveLane(WaveLaneParams),
+    MacroVoice(MacroVoiceParams),
+    SpeechVoice(SpeechVoiceParams),
 }
 
 impl InstrumentParams {
     pub fn kind(&self) -> InstrumentKind {
         match self {
             InstrumentParams::SubtractiveSynth(_) => InstrumentKind::SubtractiveSynth,
+            InstrumentParams::FourOp(_) => InstrumentKind::FourOp,
+            InstrumentParams::MatrixFm(_) => InstrumentKind::MatrixFm,
+            InstrumentParams::RingHybrid(_) => InstrumentKind::RingHybrid,
+            InstrumentParams::HarmonicStack(_) => InstrumentKind::HarmonicStack,
+            InstrumentParams::PartialMorph(_) => InstrumentKind::PartialMorph,
+            InstrumentParams::Inharmonic(_) => InstrumentKind::Inharmonic,
+            InstrumentParams::Resynth(_) => InstrumentKind::Resynth,
+            InstrumentParams::SeedPatch(_) => InstrumentKind::SeedPatch,
+            InstrumentParams::ScanSynth(_) => InstrumentKind::ScanSynth,
+            InstrumentParams::Pluck(_) => InstrumentKind::Pluck,
+            InstrumentParams::FingerBass(_) => InstrumentKind::FingerBass,
+            InstrumentParams::AcousticString(_) => InstrumentKind::AcousticString,
+            InstrumentParams::Membrane(_) => InstrumentKind::Membrane,
+            InstrumentParams::DrumRack(_) => InstrumentKind::DrumRack,
+            InstrumentParams::Kick(_) => InstrumentKind::Kick,
+            InstrumentParams::DrumVoice(_) => InstrumentKind::DrumVoice,
+            InstrumentParams::SliceMap(_) => InstrumentKind::SliceMap,
+            InstrumentParams::SliceDeck(_) => InstrumentKind::SliceDeck,
+            InstrumentParams::GrainCloud(_) => InstrumentKind::GrainCloud,
+            InstrumentParams::WaveRide(_) => InstrumentKind::WaveRide,
+            InstrumentParams::AcidLine(_) => InstrumentKind::AcidLine,
+            InstrumentParams::TripleOsc(_) => InstrumentKind::TripleOsc,
+            InstrumentParams::WaveLane(_) => InstrumentKind::WaveLane,
+            InstrumentParams::MacroVoice(_) => InstrumentKind::MacroVoice,
+            InstrumentParams::SpeechVoice(_) => InstrumentKind::SpeechVoice,
         }
     }
 
@@ -159,6 +376,43 @@ impl InstrumentParams {
             InstrumentParams::SubtractiveSynth(params) => {
                 InstrumentParams::SubtractiveSynth(params.sanitized())
             }
+            InstrumentParams::FourOp(params) => InstrumentParams::FourOp(params.sanitized()),
+            InstrumentParams::MatrixFm(params) => InstrumentParams::MatrixFm(params.sanitized()),
+            InstrumentParams::RingHybrid(params) => {
+                InstrumentParams::RingHybrid(params.sanitized())
+            }
+            InstrumentParams::HarmonicStack(params) => {
+                InstrumentParams::HarmonicStack(params.sanitized())
+            }
+            InstrumentParams::PartialMorph(params) => {
+                InstrumentParams::PartialMorph(params.sanitized())
+            }
+            InstrumentParams::Inharmonic(params) => {
+                InstrumentParams::Inharmonic(params.sanitized())
+            }
+            InstrumentParams::Resynth(params) => InstrumentParams::Resynth(params.sanitized()),
+            InstrumentParams::SeedPatch(params) => InstrumentParams::SeedPatch(params.sanitized()),
+            InstrumentParams::ScanSynth(params) => InstrumentParams::ScanSynth(params.sanitized()),
+            InstrumentParams::Pluck(params) => InstrumentParams::Pluck(params.sanitized()),
+            InstrumentParams::FingerBass(params) => {
+                InstrumentParams::FingerBass(params.sanitized())
+            }
+            InstrumentParams::AcousticString(params) => {
+                InstrumentParams::AcousticString(params.sanitized())
+            }
+            InstrumentParams::Membrane(params) => InstrumentParams::Membrane(params.sanitized()),
+            InstrumentParams::DrumRack(params) => InstrumentParams::DrumRack(params.sanitized()),
+            InstrumentParams::Kick(params) => InstrumentParams::Kick(params.sanitized()),
+            InstrumentParams::DrumVoice(params) => InstrumentParams::DrumVoice(params.sanitized()),
+            InstrumentParams::SliceMap(params) => InstrumentParams::SliceMap(params.sanitized()),
+            InstrumentParams::SliceDeck(params) => InstrumentParams::SliceDeck(params.sanitized()),
+            InstrumentParams::GrainCloud(params) => InstrumentParams::GrainCloud(params.sanitized()),
+            InstrumentParams::WaveRide(params) => InstrumentParams::WaveRide(params.sanitized()),
+            InstrumentParams::AcidLine(params) => InstrumentParams::AcidLine(params.sanitized()),
+            InstrumentParams::TripleOsc(params) => InstrumentParams::TripleOsc(params.sanitized()),
+            InstrumentParams::WaveLane(params) => InstrumentParams::WaveLane(params.sanitized()),
+            InstrumentParams::MacroVoice(params) => InstrumentParams::MacroVoice(params.sanitized()),
+            InstrumentParams::SpeechVoice(params) => InstrumentParams::SpeechVoice(params.sanitized()),
         }
     }
 
@@ -170,6 +424,31 @@ impl InstrumentParams {
         let _ = sample_rate;
         match self {
             InstrumentParams::SubtractiveSynth(_) => SubtractiveSynth::LATENCY_SAMPLES,
+            InstrumentParams::FourOp(_) => 0,
+            InstrumentParams::MatrixFm(_) => 0,
+            InstrumentParams::RingHybrid(_) => 0,
+            InstrumentParams::HarmonicStack(_) => 0,
+            InstrumentParams::PartialMorph(_) => 0,
+            InstrumentParams::Inharmonic(_) => 0,
+            InstrumentParams::Resynth(_) => 0,
+            InstrumentParams::SeedPatch(_) => 0,
+            InstrumentParams::ScanSynth(_) => 0,
+            InstrumentParams::Pluck(_) => 0,
+            InstrumentParams::FingerBass(_) => 0,
+            InstrumentParams::AcousticString(_) => 0,
+            InstrumentParams::Membrane(_) => 0,
+            InstrumentParams::DrumRack(_) => 0,
+            InstrumentParams::Kick(_) => 0,
+            InstrumentParams::DrumVoice(_) => 0,
+            InstrumentParams::SliceMap(_) => 0,
+            InstrumentParams::SliceDeck(_) => 0,
+            InstrumentParams::GrainCloud(_) => 0,
+            InstrumentParams::WaveRide(_) => 0,
+            InstrumentParams::AcidLine(_) => 0,
+            InstrumentParams::TripleOsc(_) => 0,
+            InstrumentParams::WaveLane(_) => 0,
+            InstrumentParams::MacroVoice(_) => 0,
+            InstrumentParams::SpeechVoice(_) => 0,
         }
     }
 
@@ -178,6 +457,31 @@ impl InstrumentParams {
     pub fn get(&self, index: usize) -> Option<f32> {
         match self {
             InstrumentParams::SubtractiveSynth(params) => params.get(index),
+            InstrumentParams::FourOp(params) => params.get(index),
+            InstrumentParams::MatrixFm(params) => params.get(index),
+            InstrumentParams::RingHybrid(params) => params.get(index),
+            InstrumentParams::HarmonicStack(params) => params.get(index),
+            InstrumentParams::PartialMorph(params) => params.get(index),
+            InstrumentParams::Inharmonic(params) => params.get(index),
+            InstrumentParams::Resynth(params) => params.get(index),
+            InstrumentParams::SeedPatch(params) => params.get(index),
+            InstrumentParams::ScanSynth(params) => params.get(index),
+            InstrumentParams::Pluck(params) => params.get(index),
+            InstrumentParams::FingerBass(params) => params.get(index),
+            InstrumentParams::AcousticString(params) => params.get(index),
+            InstrumentParams::Membrane(params) => params.get(index),
+            InstrumentParams::DrumRack(params) => params.get(index),
+            InstrumentParams::Kick(params) => params.get(index),
+            InstrumentParams::DrumVoice(params) => params.get(index),
+            InstrumentParams::SliceMap(params) => params.get(index),
+            InstrumentParams::SliceDeck(params) => params.get(index),
+            InstrumentParams::GrainCloud(params) => params.get(index),
+            InstrumentParams::WaveRide(params) => params.get(index),
+            InstrumentParams::AcidLine(params) => params.get(index),
+            InstrumentParams::TripleOsc(params) => params.get(index),
+            InstrumentParams::WaveLane(params) => params.get(index),
+            InstrumentParams::MacroVoice(params) => params.get(index),
+            InstrumentParams::SpeechVoice(params) => params.get(index),
         }
     }
 
@@ -186,6 +490,31 @@ impl InstrumentParams {
     pub fn set(&mut self, index: usize, value: f32) -> bool {
         match self {
             InstrumentParams::SubtractiveSynth(params) => params.set(index, value),
+            InstrumentParams::FourOp(params) => params.set(index, value),
+            InstrumentParams::MatrixFm(params) => params.set(index, value),
+            InstrumentParams::RingHybrid(params) => params.set(index, value),
+            InstrumentParams::HarmonicStack(params) => params.set(index, value),
+            InstrumentParams::PartialMorph(params) => params.set(index, value),
+            InstrumentParams::Inharmonic(params) => params.set(index, value),
+            InstrumentParams::Resynth(params) => params.set(index, value),
+            InstrumentParams::SeedPatch(params) => params.set(index, value),
+            InstrumentParams::ScanSynth(params) => params.set(index, value),
+            InstrumentParams::Pluck(params) => params.set(index, value),
+            InstrumentParams::FingerBass(params) => params.set(index, value),
+            InstrumentParams::AcousticString(params) => params.set(index, value),
+            InstrumentParams::Membrane(params) => params.set(index, value),
+            InstrumentParams::DrumRack(params) => params.set(index, value),
+            InstrumentParams::Kick(params) => params.set(index, value),
+            InstrumentParams::DrumVoice(params) => params.set(index, value),
+            InstrumentParams::SliceMap(params) => params.set(index, value),
+            InstrumentParams::SliceDeck(params) => params.set(index, value),
+            InstrumentParams::GrainCloud(params) => params.set(index, value),
+            InstrumentParams::WaveRide(params) => params.set(index, value),
+            InstrumentParams::AcidLine(params) => params.set(index, value),
+            InstrumentParams::TripleOsc(params) => params.set(index, value),
+            InstrumentParams::WaveLane(params) => params.set(index, value),
+            InstrumentParams::MacroVoice(params) => params.set(index, value),
+            InstrumentParams::SpeechVoice(params) => params.set(index, value),
         }
     }
 }
@@ -198,6 +527,31 @@ impl InstrumentParams {
 /// to be dropped.
 pub enum AnyInstrument {
     SubtractiveSynth(Box<SubtractiveSynth>),
+    FourOp(Box<FourOp>),
+    MatrixFm(Box<MatrixFm>),
+    RingHybrid(Box<RingHybrid>),
+    HarmonicStack(Box<HarmonicStack>),
+    PartialMorph(Box<PartialMorph>),
+    Inharmonic(Box<Inharmonic>),
+    Resynth(Box<Resynth>),
+    SeedPatch(Box<SeedPatch>),
+    ScanSynth(Box<ScanSynth>),
+    Pluck(Box<Pluck>),
+    FingerBass(Box<FingerBass>),
+    AcousticString(Box<AcousticString>),
+    Membrane(Box<Membrane>),
+    DrumRack(Box<DrumRack>),
+    Kick(Box<Kick>),
+    DrumVoice(Box<DrumVoice>),
+    SliceMap(Box<SliceMap>),
+    SliceDeck(Box<SliceDeck>),
+    GrainCloud(Box<GrainCloud>),
+    WaveRide(Box<WaveRide>),
+    AcidLine(Box<AcidLine>),
+    TripleOsc(Box<TripleOsc>),
+    WaveLane(Box<WaveLane>),
+    MacroVoice(Box<MacroVoice>),
+    SpeechVoice(Box<SpeechVoice>),
 }
 
 impl AnyInstrument {
@@ -210,12 +564,162 @@ impl AnyInstrument {
                 synth.set_params(params);
                 AnyInstrument::SubtractiveSynth(synth)
             }
+            InstrumentParams::FourOp(params) => {
+                let mut synth = Box::<FourOp>::default();
+                synth.set_params(params);
+                AnyInstrument::FourOp(synth)
+            }
+            InstrumentParams::MatrixFm(params) => {
+                let mut synth = Box::<MatrixFm>::default();
+                synth.set_params(params);
+                AnyInstrument::MatrixFm(synth)
+            }
+            InstrumentParams::RingHybrid(params) => {
+                let mut synth = Box::<RingHybrid>::default();
+                synth.set_params(params);
+                AnyInstrument::RingHybrid(synth)
+            }
+            InstrumentParams::HarmonicStack(params) => {
+                let mut synth = Box::<HarmonicStack>::default();
+                synth.set_params(params);
+                AnyInstrument::HarmonicStack(synth)
+            }
+            InstrumentParams::PartialMorph(params) => {
+                let mut synth = Box::<PartialMorph>::default();
+                synth.set_params(params);
+                AnyInstrument::PartialMorph(synth)
+            }
+            InstrumentParams::Inharmonic(params) => {
+                let mut synth = Box::<Inharmonic>::default();
+                synth.set_params(params);
+                AnyInstrument::Inharmonic(synth)
+            }
+            InstrumentParams::Resynth(params) => {
+                let mut synth = Box::<Resynth>::default();
+                synth.set_params(params);
+                AnyInstrument::Resynth(synth)
+            }
+            InstrumentParams::SeedPatch(params) => {
+                let mut synth = Box::<SeedPatch>::default();
+                synth.set_params(params);
+                AnyInstrument::SeedPatch(synth)
+            }
+            InstrumentParams::ScanSynth(params) => {
+                let mut synth = Box::<ScanSynth>::default();
+                synth.set_params(params);
+                AnyInstrument::ScanSynth(synth)
+            }
+            InstrumentParams::Pluck(params) => {
+                let mut synth = Box::<Pluck>::default();
+                synth.set_params(params);
+                AnyInstrument::Pluck(synth)
+            }
+            InstrumentParams::FingerBass(params) => {
+                let mut synth = Box::<FingerBass>::default();
+                synth.set_params(params);
+                AnyInstrument::FingerBass(synth)
+            }
+            InstrumentParams::AcousticString(params) => {
+                let mut synth = Box::<AcousticString>::default();
+                synth.set_params(params);
+                AnyInstrument::AcousticString(synth)
+            }
+            InstrumentParams::Membrane(params) => {
+                let mut synth = Box::<Membrane>::default();
+                synth.set_params(params);
+                AnyInstrument::Membrane(synth)
+            }
+            InstrumentParams::DrumRack(params) => {
+                let mut synth = Box::<DrumRack>::default();
+                synth.set_params(params);
+                AnyInstrument::DrumRack(synth)
+            }
+            InstrumentParams::Kick(params) => {
+                let mut synth = Box::<Kick>::default();
+                synth.set_params(params);
+                AnyInstrument::Kick(synth)
+            }
+            InstrumentParams::DrumVoice(params) => {
+                let mut synth = Box::<DrumVoice>::default();
+                synth.set_params(params);
+                AnyInstrument::DrumVoice(synth)
+            }
+            InstrumentParams::SliceMap(params) => {
+                let mut synth = Box::<SliceMap>::default();
+                synth.set_params(params);
+                AnyInstrument::SliceMap(synth)
+            }
+            InstrumentParams::SliceDeck(params) => {
+                let mut synth = Box::<SliceDeck>::default();
+                synth.set_params(params);
+                AnyInstrument::SliceDeck(synth)
+            }
+            InstrumentParams::GrainCloud(params) => {
+                let mut synth = Box::<GrainCloud>::default();
+                synth.set_params(params);
+                AnyInstrument::GrainCloud(synth)
+            }
+            InstrumentParams::WaveRide(params) => {
+                let mut synth = Box::<WaveRide>::default();
+                synth.set_params(params);
+                AnyInstrument::WaveRide(synth)
+            }
+            InstrumentParams::AcidLine(params) => {
+                let mut synth = Box::<AcidLine>::default();
+                synth.set_params(params);
+                AnyInstrument::AcidLine(synth)
+            }
+            InstrumentParams::TripleOsc(params) => {
+                let mut synth = Box::<TripleOsc>::default();
+                synth.set_params(params);
+                AnyInstrument::TripleOsc(synth)
+            }
+            InstrumentParams::WaveLane(params) => {
+                let mut synth = Box::<WaveLane>::default();
+                synth.set_params(params);
+                AnyInstrument::WaveLane(synth)
+            }
+            InstrumentParams::MacroVoice(params) => {
+                let mut synth = Box::<MacroVoice>::default();
+                synth.set_params(params);
+                AnyInstrument::MacroVoice(synth)
+            }
+            InstrumentParams::SpeechVoice(params) => {
+                let mut synth = Box::<SpeechVoice>::default();
+                synth.set_params(params);
+                AnyInstrument::SpeechVoice(synth)
+            }
         }
     }
 
     pub fn kind(&self) -> InstrumentKind {
         match self {
             AnyInstrument::SubtractiveSynth(_) => InstrumentKind::SubtractiveSynth,
+            AnyInstrument::FourOp(_) => InstrumentKind::FourOp,
+            AnyInstrument::MatrixFm(_) => InstrumentKind::MatrixFm,
+            AnyInstrument::RingHybrid(_) => InstrumentKind::RingHybrid,
+            AnyInstrument::HarmonicStack(_) => InstrumentKind::HarmonicStack,
+            AnyInstrument::PartialMorph(_) => InstrumentKind::PartialMorph,
+            AnyInstrument::Inharmonic(_) => InstrumentKind::Inharmonic,
+            AnyInstrument::Resynth(_) => InstrumentKind::Resynth,
+            AnyInstrument::SeedPatch(_) => InstrumentKind::SeedPatch,
+            AnyInstrument::ScanSynth(_) => InstrumentKind::ScanSynth,
+            AnyInstrument::Pluck(_) => InstrumentKind::Pluck,
+            AnyInstrument::FingerBass(_) => InstrumentKind::FingerBass,
+            AnyInstrument::AcousticString(_) => InstrumentKind::AcousticString,
+            AnyInstrument::Membrane(_) => InstrumentKind::Membrane,
+            AnyInstrument::DrumRack(_) => InstrumentKind::DrumRack,
+            AnyInstrument::Kick(_) => InstrumentKind::Kick,
+            AnyInstrument::DrumVoice(_) => InstrumentKind::DrumVoice,
+            AnyInstrument::SliceMap(_) => InstrumentKind::SliceMap,
+            AnyInstrument::SliceDeck(_) => InstrumentKind::SliceDeck,
+            AnyInstrument::GrainCloud(_) => InstrumentKind::GrainCloud,
+            AnyInstrument::WaveRide(_) => InstrumentKind::WaveRide,
+            AnyInstrument::AcidLine(_) => InstrumentKind::AcidLine,
+            AnyInstrument::TripleOsc(_) => InstrumentKind::TripleOsc,
+            AnyInstrument::WaveLane(_) => InstrumentKind::WaveLane,
+            AnyInstrument::MacroVoice(_) => InstrumentKind::MacroVoice,
+            AnyInstrument::SpeechVoice(_) => InstrumentKind::SpeechVoice,
         }
     }
 
@@ -223,6 +727,31 @@ impl AnyInstrument {
     pub fn prepare(&mut self, sample_rate: f32, max_block: usize) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::FourOp(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::MatrixFm(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::RingHybrid(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::HarmonicStack(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::PartialMorph(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::Inharmonic(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::Resynth(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::SeedPatch(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::ScanSynth(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::Pluck(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::FingerBass(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::AcousticString(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::Membrane(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::DrumRack(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::Kick(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::DrumVoice(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::SliceMap(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::SliceDeck(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::GrainCloud(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::WaveRide(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::AcidLine(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::TripleOsc(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::WaveLane(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::MacroVoice(synth) => synth.prepare(sample_rate, max_block),
+            AnyInstrument::SpeechVoice(synth) => synth.prepare(sample_rate, max_block),
         }
     }
 
@@ -230,6 +759,31 @@ impl AnyInstrument {
     pub fn reset(&mut self) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.reset(),
+            AnyInstrument::FourOp(synth) => synth.reset(),
+            AnyInstrument::MatrixFm(synth) => synth.reset(),
+            AnyInstrument::RingHybrid(synth) => synth.reset(),
+            AnyInstrument::HarmonicStack(synth) => synth.reset(),
+            AnyInstrument::PartialMorph(synth) => synth.reset(),
+            AnyInstrument::Inharmonic(synth) => synth.reset(),
+            AnyInstrument::Resynth(synth) => synth.reset(),
+            AnyInstrument::SeedPatch(synth) => synth.reset(),
+            AnyInstrument::ScanSynth(synth) => synth.reset(),
+            AnyInstrument::Pluck(synth) => synth.reset(),
+            AnyInstrument::FingerBass(synth) => synth.reset(),
+            AnyInstrument::AcousticString(synth) => synth.reset(),
+            AnyInstrument::Membrane(synth) => synth.reset(),
+            AnyInstrument::DrumRack(synth) => synth.reset(),
+            AnyInstrument::Kick(synth) => synth.reset(),
+            AnyInstrument::DrumVoice(synth) => synth.reset(),
+            AnyInstrument::SliceMap(synth) => synth.reset(),
+            AnyInstrument::SliceDeck(synth) => synth.reset(),
+            AnyInstrument::GrainCloud(synth) => synth.reset(),
+            AnyInstrument::WaveRide(synth) => synth.reset(),
+            AnyInstrument::AcidLine(synth) => synth.reset(),
+            AnyInstrument::TripleOsc(synth) => synth.reset(),
+            AnyInstrument::WaveLane(synth) => synth.reset(),
+            AnyInstrument::MacroVoice(synth) => synth.reset(),
+            AnyInstrument::SpeechVoice(synth) => synth.reset(),
         }
     }
 
@@ -243,6 +797,82 @@ impl AnyInstrument {
             ) => {
                 synth.set_params(params);
             }
+            (AnyInstrument::FourOp(synth), InstrumentParams::FourOp(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::MatrixFm(synth), InstrumentParams::MatrixFm(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::RingHybrid(synth), InstrumentParams::RingHybrid(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::HarmonicStack(synth), InstrumentParams::HarmonicStack(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::PartialMorph(synth), InstrumentParams::PartialMorph(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::Inharmonic(synth), InstrumentParams::Inharmonic(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::Resynth(synth), InstrumentParams::Resynth(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::SeedPatch(synth), InstrumentParams::SeedPatch(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::ScanSynth(synth), InstrumentParams::ScanSynth(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::Pluck(synth), InstrumentParams::Pluck(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::FingerBass(synth), InstrumentParams::FingerBass(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::AcousticString(synth), InstrumentParams::AcousticString(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::Membrane(synth), InstrumentParams::Membrane(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::DrumRack(synth), InstrumentParams::DrumRack(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::Kick(synth), InstrumentParams::Kick(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::DrumVoice(synth), InstrumentParams::DrumVoice(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::SliceMap(synth), InstrumentParams::SliceMap(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::SliceDeck(synth), InstrumentParams::SliceDeck(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::GrainCloud(synth), InstrumentParams::GrainCloud(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::WaveRide(synth), InstrumentParams::WaveRide(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::AcidLine(synth), InstrumentParams::AcidLine(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::TripleOsc(synth), InstrumentParams::TripleOsc(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::WaveLane(synth), InstrumentParams::WaveLane(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::MacroVoice(synth), InstrumentParams::MacroVoice(params)) => {
+                synth.set_params(params);
+            }
+            (AnyInstrument::SpeechVoice(synth), InstrumentParams::SpeechVoice(params)) => {
+                synth.set_params(params);
+            }
+            _ => return false,
         }
         true
     }
@@ -251,6 +881,31 @@ impl AnyInstrument {
     pub fn set_tempo(&mut self, bpm: f32) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.set_tempo(bpm),
+            AnyInstrument::FourOp(synth) => synth.set_tempo(bpm),
+            AnyInstrument::MatrixFm(synth) => synth.set_tempo(bpm),
+            AnyInstrument::RingHybrid(synth) => synth.set_tempo(bpm),
+            AnyInstrument::HarmonicStack(synth) => synth.set_tempo(bpm),
+            AnyInstrument::PartialMorph(synth) => synth.set_tempo(bpm),
+            AnyInstrument::Inharmonic(synth) => synth.set_tempo(bpm),
+            AnyInstrument::Resynth(synth) => synth.set_tempo(bpm),
+            AnyInstrument::SeedPatch(synth) => synth.set_tempo(bpm),
+            AnyInstrument::ScanSynth(synth) => synth.set_tempo(bpm),
+            AnyInstrument::Pluck(synth) => synth.set_tempo(bpm),
+            AnyInstrument::FingerBass(synth) => synth.set_tempo(bpm),
+            AnyInstrument::AcousticString(synth) => synth.set_tempo(bpm),
+            AnyInstrument::Membrane(synth) => synth.set_tempo(bpm),
+            AnyInstrument::DrumRack(synth) => synth.set_tempo(bpm),
+            AnyInstrument::Kick(synth) => synth.set_tempo(bpm),
+            AnyInstrument::DrumVoice(synth) => synth.set_tempo(bpm),
+            AnyInstrument::SliceMap(synth) => synth.set_tempo(bpm),
+            AnyInstrument::SliceDeck(synth) => synth.set_tempo(bpm),
+            AnyInstrument::GrainCloud(synth) => synth.set_tempo(bpm),
+            AnyInstrument::WaveRide(synth) => synth.set_tempo(bpm),
+            AnyInstrument::AcidLine(synth) => synth.set_tempo(bpm),
+            AnyInstrument::TripleOsc(synth) => synth.set_tempo(bpm),
+            AnyInstrument::WaveLane(synth) => synth.set_tempo(bpm),
+            AnyInstrument::MacroVoice(synth) => synth.set_tempo(bpm),
+            AnyInstrument::SpeechVoice(synth) => synth.set_tempo(bpm),
         }
     }
 
@@ -258,12 +913,116 @@ impl AnyInstrument {
     pub fn note_on(&mut self, key: u8, velocity: f32) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.note_on(key, velocity),
+            AnyInstrument::FourOp(synth) => synth.note_on(key, velocity),
+            AnyInstrument::MatrixFm(synth) => synth.note_on(key, velocity),
+            AnyInstrument::RingHybrid(synth) => synth.note_on(key, velocity),
+            AnyInstrument::HarmonicStack(synth) => synth.note_on(key, velocity),
+            AnyInstrument::PartialMorph(synth) => synth.note_on(key, velocity),
+            AnyInstrument::Inharmonic(synth) => synth.note_on(key, velocity),
+            AnyInstrument::Resynth(synth) => synth.note_on(key, velocity),
+            AnyInstrument::SeedPatch(synth) => synth.note_on(key, velocity),
+            AnyInstrument::ScanSynth(synth) => synth.note_on(key, velocity),
+            AnyInstrument::Pluck(synth) => synth.note_on(key, velocity),
+            AnyInstrument::FingerBass(synth) => synth.note_on(key, velocity),
+            AnyInstrument::AcousticString(synth) => synth.note_on(key, velocity),
+            AnyInstrument::Membrane(synth) => synth.note_on(key, velocity),
+            AnyInstrument::DrumRack(synth) => synth.note_on(key, velocity),
+            AnyInstrument::Kick(synth) => synth.note_on(key, velocity),
+            AnyInstrument::DrumVoice(synth) => synth.note_on(key, velocity),
+            AnyInstrument::SliceMap(synth) => synth.note_on(key, velocity),
+            AnyInstrument::SliceDeck(synth) => synth.note_on(key, velocity),
+            AnyInstrument::GrainCloud(synth) => synth.note_on(key, velocity),
+            AnyInstrument::WaveRide(synth) => synth.note_on(key, velocity),
+            AnyInstrument::AcidLine(synth) => synth.note_on(key, velocity),
+            AnyInstrument::TripleOsc(synth) => synth.note_on(key, velocity),
+            AnyInstrument::WaveLane(synth) => synth.note_on(key, velocity),
+            AnyInstrument::MacroVoice(synth) => synth.note_on(key, velocity),
+            AnyInstrument::SpeechVoice(synth) => synth.note_on(key, velocity),
         }
     }
 
-    pub fn note_on_expression(&mut self, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
+    pub fn note_on_expression(
+        &mut self,
+        key: u8,
+        velocity: f32,
+        pan: f32,
+        expression: NoteExpression,
+    ) {
         match self {
-            AnyInstrument::SubtractiveSynth(synth) => synth.note_on_expression(key, velocity, pan, expression),
+            AnyInstrument::SubtractiveSynth(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::FourOp(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::MatrixFm(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::RingHybrid(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::HarmonicStack(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::PartialMorph(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::Inharmonic(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::Resynth(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::SeedPatch(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::ScanSynth(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::Pluck(synth) => synth.note_on_expression(key, velocity, pan, expression),
+            AnyInstrument::FingerBass(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::AcousticString(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::Membrane(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::DrumRack(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::Kick(synth) => synth.note_on_expression(key, velocity, pan, expression),
+            AnyInstrument::DrumVoice(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::SliceMap(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::SliceDeck(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::GrainCloud(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::WaveRide(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::AcidLine(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::TripleOsc(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::WaveLane(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::MacroVoice(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
+            AnyInstrument::SpeechVoice(synth) => {
+                synth.note_on_expression(key, velocity, pan, expression)
+            }
         }
     }
 
@@ -271,33 +1030,284 @@ impl AnyInstrument {
     pub fn note_off(&mut self, key: u8) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.note_off(key),
+            AnyInstrument::FourOp(synth) => synth.note_off(key),
+            AnyInstrument::MatrixFm(synth) => synth.note_off(key),
+            AnyInstrument::RingHybrid(synth) => synth.note_off(key),
+            AnyInstrument::HarmonicStack(synth) => synth.note_off(key),
+            AnyInstrument::PartialMorph(synth) => synth.note_off(key),
+            AnyInstrument::Inharmonic(synth) => synth.note_off(key),
+            AnyInstrument::Resynth(synth) => synth.note_off(key),
+            AnyInstrument::SeedPatch(synth) => synth.note_off(key),
+            AnyInstrument::ScanSynth(synth) => synth.note_off(key),
+            AnyInstrument::Pluck(synth) => synth.note_off(key),
+            AnyInstrument::FingerBass(synth) => synth.note_off(key),
+            AnyInstrument::AcousticString(synth) => synth.note_off(key),
+            AnyInstrument::Membrane(synth) => synth.note_off(key),
+            AnyInstrument::DrumRack(synth) => synth.note_off(key),
+            AnyInstrument::Kick(synth) => synth.note_off(key),
+            AnyInstrument::DrumVoice(synth) => synth.note_off(key),
+            AnyInstrument::SliceMap(synth) => synth.note_off(key),
+            AnyInstrument::SliceDeck(synth) => synth.note_off(key),
+            AnyInstrument::GrainCloud(synth) => synth.note_off(key),
+            AnyInstrument::WaveRide(synth) => synth.note_off(key),
+            AnyInstrument::AcidLine(synth) => synth.note_off(key),
+            AnyInstrument::TripleOsc(synth) => synth.note_off(key),
+            AnyInstrument::WaveLane(synth) => synth.note_off(key),
+            AnyInstrument::MacroVoice(synth) => synth.note_off(key),
+            AnyInstrument::SpeechVoice(synth) => synth.note_off(key),
         }
     }
 
     pub fn supports_note_instances(&self) -> bool {
-        match self { AnyInstrument::SubtractiveSynth(synth) => synth.supports_note_instances() }
+        match self {
+            AnyInstrument::SubtractiveSynth(synth) => synth.supports_note_instances(),
+            AnyInstrument::FourOp(synth) => synth.supports_note_instances(),
+            AnyInstrument::MatrixFm(synth) => synth.supports_note_instances(),
+            AnyInstrument::RingHybrid(synth) => synth.supports_note_instances(),
+            AnyInstrument::HarmonicStack(synth) => synth.supports_note_instances(),
+            AnyInstrument::PartialMorph(synth) => synth.supports_note_instances(),
+            AnyInstrument::Inharmonic(synth) => synth.supports_note_instances(),
+            AnyInstrument::Resynth(synth) => synth.supports_note_instances(),
+            AnyInstrument::SeedPatch(synth) => synth.supports_note_instances(),
+            AnyInstrument::ScanSynth(synth) => synth.supports_note_instances(),
+            AnyInstrument::Pluck(synth) => synth.supports_note_instances(),
+            AnyInstrument::FingerBass(synth) => synth.supports_note_instances(),
+            AnyInstrument::AcousticString(synth) => synth.supports_note_instances(),
+            AnyInstrument::Membrane(synth) => synth.supports_note_instances(),
+            AnyInstrument::DrumRack(synth) => synth.supports_note_instances(),
+            AnyInstrument::Kick(synth) => synth.supports_note_instances(),
+            AnyInstrument::DrumVoice(synth) => synth.supports_note_instances(),
+            AnyInstrument::SliceMap(synth) => synth.supports_note_instances(),
+            AnyInstrument::SliceDeck(synth) => synth.supports_note_instances(),
+            AnyInstrument::GrainCloud(synth) => synth.supports_note_instances(),
+            AnyInstrument::WaveRide(synth) => synth.supports_note_instances(),
+            AnyInstrument::AcidLine(synth) => synth.supports_note_instances(),
+            AnyInstrument::TripleOsc(synth) => synth.supports_note_instances(),
+            AnyInstrument::WaveLane(synth) => synth.supports_note_instances(),
+            AnyInstrument::MacroVoice(synth) => synth.supports_note_instances(),
+            AnyInstrument::SpeechVoice(synth) => synth.supports_note_instances(),
+        }
     }
 
-    pub fn note_on_instance(&mut self, id: NoteInstanceId, key: u8, velocity: f32, pan: f32, expression: NoteExpression) {
-        match self { AnyInstrument::SubtractiveSynth(synth) => synth.note_on_instance(id, key, velocity, pan, expression) }
+    pub fn note_on_instance(
+        &mut self,
+        id: NoteInstanceId,
+        key: u8,
+        velocity: f32,
+        pan: f32,
+        expression: NoteExpression,
+    ) {
+        match self {
+            AnyInstrument::SubtractiveSynth(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::FourOp(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::MatrixFm(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::RingHybrid(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::HarmonicStack(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::PartialMorph(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::Inharmonic(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::Resynth(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::SeedPatch(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::ScanSynth(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::Pluck(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::FingerBass(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::AcousticString(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::Membrane(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::DrumRack(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::Kick(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::DrumVoice(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::SliceMap(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::SliceDeck(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::GrainCloud(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::WaveRide(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::AcidLine(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::TripleOsc(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::WaveLane(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::MacroVoice(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+            AnyInstrument::SpeechVoice(synth) => {
+                synth.note_on_instance(id, key, velocity, pan, expression)
+            }
+        }
     }
 
     pub fn note_off_instance(&mut self, id: NoteInstanceId, key: u8) {
-        match self { AnyInstrument::SubtractiveSynth(synth) => synth.note_off_instance(id, key) }
+        match self {
+            AnyInstrument::SubtractiveSynth(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::FourOp(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::MatrixFm(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::RingHybrid(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::HarmonicStack(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::PartialMorph(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::Inharmonic(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::Resynth(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::SeedPatch(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::ScanSynth(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::Pluck(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::FingerBass(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::AcousticString(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::Membrane(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::DrumRack(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::Kick(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::DrumVoice(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::SliceMap(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::SliceDeck(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::GrainCloud(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::WaveRide(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::AcidLine(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::TripleOsc(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::WaveLane(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::MacroVoice(synth) => synth.note_off_instance(id, key),
+            AnyInstrument::SpeechVoice(synth) => synth.note_off_instance(id, key),
+        }
     }
 
-    pub fn set_note_expression(&mut self, id: NoteInstanceId, pan: f32, expression: NoteExpression) {
-        match self { AnyInstrument::SubtractiveSynth(synth) => synth.set_note_expression(id, pan, expression) }
+    pub fn set_note_expression(
+        &mut self,
+        id: NoteInstanceId,
+        pan: f32,
+        expression: NoteExpression,
+    ) {
+        match self {
+            AnyInstrument::SubtractiveSynth(synth) => {
+                synth.set_note_expression(id, pan, expression)
+            }
+            AnyInstrument::FourOp(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::MatrixFm(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::RingHybrid(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::HarmonicStack(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::PartialMorph(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::Inharmonic(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::Resynth(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::SeedPatch(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::ScanSynth(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::Pluck(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::FingerBass(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::AcousticString(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::Membrane(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::DrumRack(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::Kick(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::DrumVoice(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::SliceMap(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::SliceDeck(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::GrainCloud(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::WaveRide(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::AcidLine(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::TripleOsc(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::WaveLane(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::MacroVoice(synth) => synth.set_note_expression(id, pan, expression),
+            AnyInstrument::SpeechVoice(synth) => synth.set_note_expression(id, pan, expression),
+        }
     }
 
     pub fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) {
-        match self { AnyInstrument::SubtractiveSynth(synth) => synth.set_note_pitch(id, pitch) }
+        match self {
+            AnyInstrument::SubtractiveSynth(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::FourOp(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::MatrixFm(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::RingHybrid(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::HarmonicStack(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::PartialMorph(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::Inharmonic(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::Resynth(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::SeedPatch(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::ScanSynth(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::Pluck(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::FingerBass(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::AcousticString(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::Membrane(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::DrumRack(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::Kick(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::DrumVoice(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::SliceMap(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::SliceDeck(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::GrainCloud(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::WaveRide(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::AcidLine(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::TripleOsc(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::WaveLane(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::MacroVoice(synth) => synth.set_note_pitch(id, pitch),
+            AnyInstrument::SpeechVoice(synth) => synth.set_note_pitch(id, pitch),
+        }
     }
 
     /// See [`Instrument::all_notes_off`].
     pub fn all_notes_off(&mut self) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.all_notes_off(),
+            AnyInstrument::FourOp(synth) => synth.all_notes_off(),
+            AnyInstrument::MatrixFm(synth) => synth.all_notes_off(),
+            AnyInstrument::RingHybrid(synth) => synth.all_notes_off(),
+            AnyInstrument::HarmonicStack(synth) => synth.all_notes_off(),
+            AnyInstrument::PartialMorph(synth) => synth.all_notes_off(),
+            AnyInstrument::Inharmonic(synth) => synth.all_notes_off(),
+            AnyInstrument::Resynth(synth) => synth.all_notes_off(),
+            AnyInstrument::SeedPatch(synth) => synth.all_notes_off(),
+            AnyInstrument::ScanSynth(synth) => synth.all_notes_off(),
+            AnyInstrument::Pluck(synth) => synth.all_notes_off(),
+            AnyInstrument::FingerBass(synth) => synth.all_notes_off(),
+            AnyInstrument::AcousticString(synth) => synth.all_notes_off(),
+            AnyInstrument::Membrane(synth) => synth.all_notes_off(),
+            AnyInstrument::DrumRack(synth) => synth.all_notes_off(),
+            AnyInstrument::Kick(synth) => synth.all_notes_off(),
+            AnyInstrument::DrumVoice(synth) => synth.all_notes_off(),
+            AnyInstrument::SliceMap(synth) => synth.all_notes_off(),
+            AnyInstrument::SliceDeck(synth) => synth.all_notes_off(),
+            AnyInstrument::GrainCloud(synth) => synth.all_notes_off(),
+            AnyInstrument::WaveRide(synth) => synth.all_notes_off(),
+            AnyInstrument::AcidLine(synth) => synth.all_notes_off(),
+            AnyInstrument::TripleOsc(synth) => synth.all_notes_off(),
+            AnyInstrument::WaveLane(synth) => synth.all_notes_off(),
+            AnyInstrument::MacroVoice(synth) => synth.all_notes_off(),
+            AnyInstrument::SpeechVoice(synth) => synth.all_notes_off(),
         }
     }
 
@@ -305,6 +1315,31 @@ impl AnyInstrument {
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.process(left, right),
+            AnyInstrument::FourOp(synth) => synth.process(left, right),
+            AnyInstrument::MatrixFm(synth) => synth.process(left, right),
+            AnyInstrument::RingHybrid(synth) => synth.process(left, right),
+            AnyInstrument::HarmonicStack(synth) => synth.process(left, right),
+            AnyInstrument::PartialMorph(synth) => synth.process(left, right),
+            AnyInstrument::Inharmonic(synth) => synth.process(left, right),
+            AnyInstrument::Resynth(synth) => synth.process(left, right),
+            AnyInstrument::SeedPatch(synth) => synth.process(left, right),
+            AnyInstrument::ScanSynth(synth) => synth.process(left, right),
+            AnyInstrument::Pluck(synth) => synth.process(left, right),
+            AnyInstrument::FingerBass(synth) => synth.process(left, right),
+            AnyInstrument::AcousticString(synth) => synth.process(left, right),
+            AnyInstrument::Membrane(synth) => synth.process(left, right),
+            AnyInstrument::DrumRack(synth) => synth.process(left, right),
+            AnyInstrument::Kick(synth) => synth.process(left, right),
+            AnyInstrument::DrumVoice(synth) => synth.process(left, right),
+            AnyInstrument::SliceMap(synth) => synth.process(left, right),
+            AnyInstrument::SliceDeck(synth) => synth.process(left, right),
+            AnyInstrument::GrainCloud(synth) => synth.process(left, right),
+            AnyInstrument::WaveRide(synth) => synth.process(left, right),
+            AnyInstrument::AcidLine(synth) => synth.process(left, right),
+            AnyInstrument::TripleOsc(synth) => synth.process(left, right),
+            AnyInstrument::WaveLane(synth) => synth.process(left, right),
+            AnyInstrument::MacroVoice(synth) => synth.process(left, right),
+            AnyInstrument::SpeechVoice(synth) => synth.process(left, right),
         }
     }
 
@@ -312,6 +1347,31 @@ impl AnyInstrument {
     pub fn active_voices(&self) -> usize {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.active_voices(),
+            AnyInstrument::FourOp(synth) => synth.active_voices(),
+            AnyInstrument::MatrixFm(synth) => synth.active_voices(),
+            AnyInstrument::RingHybrid(synth) => synth.active_voices(),
+            AnyInstrument::HarmonicStack(synth) => synth.active_voices(),
+            AnyInstrument::PartialMorph(synth) => synth.active_voices(),
+            AnyInstrument::Inharmonic(synth) => synth.active_voices(),
+            AnyInstrument::Resynth(synth) => synth.active_voices(),
+            AnyInstrument::SeedPatch(synth) => synth.active_voices(),
+            AnyInstrument::ScanSynth(synth) => synth.active_voices(),
+            AnyInstrument::Pluck(synth) => synth.active_voices(),
+            AnyInstrument::FingerBass(synth) => synth.active_voices(),
+            AnyInstrument::AcousticString(synth) => synth.active_voices(),
+            AnyInstrument::Membrane(synth) => synth.active_voices(),
+            AnyInstrument::DrumRack(synth) => synth.active_voices(),
+            AnyInstrument::Kick(synth) => synth.active_voices(),
+            AnyInstrument::DrumVoice(synth) => synth.active_voices(),
+            AnyInstrument::SliceMap(synth) => synth.active_voices(),
+            AnyInstrument::SliceDeck(synth) => synth.active_voices(),
+            AnyInstrument::GrainCloud(synth) => synth.active_voices(),
+            AnyInstrument::WaveRide(synth) => synth.active_voices(),
+            AnyInstrument::AcidLine(synth) => synth.active_voices(),
+            AnyInstrument::TripleOsc(synth) => synth.active_voices(),
+            AnyInstrument::WaveLane(synth) => synth.active_voices(),
+            AnyInstrument::MacroVoice(synth) => synth.active_voices(),
+            AnyInstrument::SpeechVoice(synth) => synth.active_voices(),
         }
     }
 
@@ -319,6 +1379,31 @@ impl AnyInstrument {
     pub fn latency_samples(&self) -> usize {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.latency_samples(),
+            AnyInstrument::FourOp(synth) => synth.latency_samples(),
+            AnyInstrument::MatrixFm(synth) => synth.latency_samples(),
+            AnyInstrument::RingHybrid(synth) => synth.latency_samples(),
+            AnyInstrument::HarmonicStack(synth) => synth.latency_samples(),
+            AnyInstrument::PartialMorph(synth) => synth.latency_samples(),
+            AnyInstrument::Inharmonic(synth) => synth.latency_samples(),
+            AnyInstrument::Resynth(synth) => synth.latency_samples(),
+            AnyInstrument::SeedPatch(synth) => synth.latency_samples(),
+            AnyInstrument::ScanSynth(synth) => synth.latency_samples(),
+            AnyInstrument::Pluck(synth) => synth.latency_samples(),
+            AnyInstrument::FingerBass(synth) => synth.latency_samples(),
+            AnyInstrument::AcousticString(synth) => synth.latency_samples(),
+            AnyInstrument::Membrane(synth) => synth.latency_samples(),
+            AnyInstrument::DrumRack(synth) => synth.latency_samples(),
+            AnyInstrument::Kick(synth) => synth.latency_samples(),
+            AnyInstrument::DrumVoice(synth) => synth.latency_samples(),
+            AnyInstrument::SliceMap(synth) => synth.latency_samples(),
+            AnyInstrument::SliceDeck(synth) => synth.latency_samples(),
+            AnyInstrument::GrainCloud(synth) => synth.latency_samples(),
+            AnyInstrument::WaveRide(synth) => synth.latency_samples(),
+            AnyInstrument::AcidLine(synth) => synth.latency_samples(),
+            AnyInstrument::TripleOsc(synth) => synth.latency_samples(),
+            AnyInstrument::WaveLane(synth) => synth.latency_samples(),
+            AnyInstrument::MacroVoice(synth) => synth.latency_samples(),
+            AnyInstrument::SpeechVoice(synth) => synth.latency_samples(),
         }
     }
 
@@ -326,6 +1411,86 @@ impl AnyInstrument {
     pub fn tail_samples(&self) -> usize {
         match self {
             AnyInstrument::SubtractiveSynth(synth) => synth.tail_samples(),
+            AnyInstrument::FourOp(synth) => synth.tail_samples(),
+            AnyInstrument::MatrixFm(synth) => synth.tail_samples(),
+            AnyInstrument::RingHybrid(synth) => synth.tail_samples(),
+            AnyInstrument::HarmonicStack(synth) => synth.tail_samples(),
+            AnyInstrument::PartialMorph(synth) => synth.tail_samples(),
+            AnyInstrument::Inharmonic(synth) => synth.tail_samples(),
+            AnyInstrument::Resynth(synth) => synth.tail_samples(),
+            AnyInstrument::SeedPatch(synth) => synth.tail_samples(),
+            AnyInstrument::ScanSynth(synth) => synth.tail_samples(),
+            AnyInstrument::Pluck(synth) => synth.tail_samples(),
+            AnyInstrument::FingerBass(synth) => synth.tail_samples(),
+            AnyInstrument::AcousticString(synth) => synth.tail_samples(),
+            AnyInstrument::Membrane(synth) => synth.tail_samples(),
+            AnyInstrument::DrumRack(synth) => synth.tail_samples(),
+            AnyInstrument::Kick(synth) => synth.tail_samples(),
+            AnyInstrument::DrumVoice(synth) => synth.tail_samples(),
+            AnyInstrument::SliceMap(synth) => synth.tail_samples(),
+            AnyInstrument::SliceDeck(synth) => synth.tail_samples(),
+            AnyInstrument::GrainCloud(synth) => synth.tail_samples(),
+            AnyInstrument::WaveRide(synth) => synth.tail_samples(),
+            AnyInstrument::AcidLine(synth) => synth.tail_samples(),
+            AnyInstrument::TripleOsc(synth) => synth.tail_samples(),
+            AnyInstrument::WaveLane(synth) => synth.tail_samples(),
+            AnyInstrument::MacroVoice(synth) => synth.tail_samples(),
+            AnyInstrument::SpeechVoice(synth) => synth.tail_samples(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[test]
+    fn every_instrument_kind_round_trips_and_dispatches() {
+        assert_eq!(InstrumentKind::ALL[0], InstrumentKind::SubtractiveSynth);
+        for kind in InstrumentKind::ALL {
+            let params = kind.default_params();
+            let tag = serde_json::to_value(kind).unwrap();
+            let json = serde_json::to_value(params).unwrap();
+            assert_eq!(json["type"], tag);
+            let loaded: InstrumentParams = serde_json::from_value(json).unwrap();
+            assert_eq!(loaded, params);
+            let bare: InstrumentParams =
+                serde_json::from_value(serde_json::json!({ "type": tag })).unwrap();
+            assert_eq!(bare, params);
+            assert_eq!(params.sanitized(), params);
+            for (index, info) in kind.descriptors().iter().enumerate() {
+                assert_eq!(params.get(index), Some(info.default));
+                let mut changed = params;
+                assert!(changed.set(index, info.default));
+                assert_eq!(changed, params);
+            }
+            let mut instrument = AnyInstrument::new(&params);
+            assert_eq!(instrument.kind(), kind);
+            instrument.prepare(48_000.0, 64);
+            assert!(instrument.set_params(&params));
+            let wrong = InstrumentKind::ALL[(kind as usize + 1) % InstrumentKind::ALL.len()]
+                .default_params();
+            assert!(!instrument.set_params(&wrong));
+            assert_eq!(
+                instrument.latency_samples(),
+                params.latency_samples(48_000.0)
+            );
+            instrument.set_tempo(120.0);
+            let id = NoteInstanceId(1);
+            let expression = NoteExpression::default();
+            instrument.note_on_instance(id, 36, 0.8, 0.0, expression);
+            instrument.set_note_expression(id, 0.0, expression);
+            instrument.set_note_pitch(id, 36.0);
+            let _ = instrument.supports_note_instances();
+            instrument.process(&mut [0.0; 64], &mut [0.0; 64]);
+            instrument.note_off_instance(id, 36);
+            instrument.note_on_expression(36, 0.8, 0.0, expression);
+            instrument.note_off(36);
+            instrument.note_on(36, 0.8);
+            instrument.all_notes_off();
+            let _ = (instrument.active_voices(), instrument.tail_samples());
+            instrument.reset();
+            assert_eq!(instrument.active_voices(), 0);
         }
     }
 }

@@ -34,8 +34,8 @@ use ts_rs::TS;
 use windfall_dsp::{ParamInfo, ParamKind, ParamScale};
 
 use crate::model::{
-    AutomationPoint, AutomationTarget, ChannelSource, MAX_GAIN, MAX_TEMPO_BPM, MIN_TEMPO_BPM,
-    Project,
+    AutomationPoint, AutomationTarget, ChannelSource, Project, MAX_GAIN, MAX_TEMPO_BPM,
+    MIN_TEMPO_BPM,
 };
 
 /// How strongly a `curve` of 1 bends a segment. See [`curve_shape`].
@@ -254,7 +254,10 @@ impl Project {
             AutomationTarget::TrackParam { track, param } => {
                 use windfall_dsp::ParamSet;
                 let info = windfall_dsp::TrackParams::descriptors().get(param as usize)?;
-                (AutomationRange::of_param(info), self.mixer.track(track)?.processing.get(param as usize)?)
+                (
+                    AutomationRange::of_param(info),
+                    self.mixer.track(track)?.processing.get(param as usize)?,
+                )
             }
             AutomationTarget::SidechainGain { track, target } => {
                 let sends = &self.mixer.track(track)?.sidechains;
@@ -440,6 +443,14 @@ mod tests {
                 let value = range.value(n);
                 assert!(value >= info.min && value <= info.max + info.max.abs() * 1e-6);
                 match info.kind {
+                    ParamKind::Float if info.min == info.max => {
+                        // Reserved descriptors (such as the final echo-bank
+                        // next-send) have one legal value, so normalization
+                        // cannot retain the original automation position.
+                        assert_eq!(value, info.min, "{} at {n}", info.id);
+                        assert_eq!(range.normalized(value), 0.0, "{}", info.id);
+                        assert_eq!(range.value(range.normalized(value)), value);
+                    }
                     ParamKind::Float => {
                         let back = range.normalized(value);
                         assert!((back - n).abs() < 1e-4, "{} at {n}: {back}", info.id);

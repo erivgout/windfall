@@ -11,7 +11,13 @@ import {
   selectedSound,
 } from "./commands"
 import { requestPreview, stopPreview } from "./preview"
-import { requestFilterFocus, setAutoPreview, useBrowserStore } from "./store"
+import {
+  collapseAllFolders,
+  expandLoadedFolders,
+  requestFilterFocus,
+  setAutoPreview,
+  useBrowserStore,
+} from "./store"
 
 const SECTION = "Browser"
 
@@ -115,6 +121,20 @@ export const BROWSER_ACTIONS: Action[] = [
     section: SECTION,
     keywords: "reload rescan read again",
     run: refreshSelection,
+  },
+  {
+    id: "browser.collapseFolders",
+    title: "Collapse folders",
+    section: SECTION,
+    keywords: "close tree directories",
+    run: collapseAllFolders,
+  },
+  {
+    id: "browser.expandLoadedFolders",
+    title: "Expand loaded folders",
+    section: SECTION,
+    keywords: "open tree directories",
+    run: expandLoadedFolders,
   },
 ]
 

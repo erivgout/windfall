@@ -1,0 +1,1 @@
+The desktop piano-roll toolbar halves or doubles the portamento duration for notes drawn from now on. Halve uses the whole number of ticks at or below half, and 1 tick stays 1 tick. Double stops at the maximum pattern length. Notes already in the pattern stay as they are. This is not an undo step. The selected-note portamento commands stay as they are.

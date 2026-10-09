@@ -526,7 +526,53 @@ fn effect_at(kind: EffectKind, step: u32) -> EffectParams {
         | EffectKind::Lofi
         | EffectKind::Chorus
         | EffectKind::Flanger
-        | EffectKind::Phaser => {
+        | EffectKind::Phaser
+        | EffectKind::BandSplit
+        | EffectKind::MultibandCompressor
+        | EffectKind::MultibandMaximizer
+        | EffectKind::TransientShaper
+        | EffectKind::TransientSplit
+        | EffectKind::OneKnob
+        | EffectKind::BassHarmonics
+        | EffectKind::Exciter
+        | EffectKind::Waveshaper
+        | EffectKind::Overdrive
+        | EffectKind::GuitarRack
+        | EffectKind::DriveChain
+        | EffectKind::VintageChorus
+        | EffectKind::HyperChorus
+        | EffectKind::VintagePhaser
+        | EffectKind::StackedFlanger
+        | EffectKind::BandDelay
+        | EffectKind::Room
+        | EffectKind::Spreader
+        | EffectKind::StereoEnhancer
+        | EffectKind::VolumeGate
+        | EffectKind::TimeTransport
+        | EffectKind::Scratch
+        | EffectKind::PerformanceRack
+        | EffectKind::Convolver
+        | EffectKind::FrequencyShifter
+        | EffectKind::PitchShift
+        | EffectKind::PitchCorrect
+        | EffectKind::Vocoder
+        | EffectKind::EchoBank
+        | EffectKind::FrequencyDelay
+        | EffectKind::SevenBand
+        | EffectKind::MorphEq
+        | EffectKind::FilterBank
+        | EffectKind::XyPad
+        | EffectKind::XyzPad
+        | EffectKind::PanLfo
+        | EffectKind::EnvelopeFollower
+        | EffectKind::NoteEnvelope
+        | EffectKind::LushSpace
+        | EffectKind::Tuner
+        | EffectKind::StageStack
+        | EffectKind::ControlSurface
+        | EffectKind::SendTap => {
+            // Sweep each declared scalar across its range, including new
+            // processors, while keeping this exhaustive for future variants.
             let mut params = kind.default_params();
             for (index, info) in kind.descriptors().iter().enumerate() {
                 params.set(index, info.min + turn * (info.max - info.min));
@@ -559,15 +605,32 @@ fn effects_and_instruments_never_allocate_or_free_on_the_audio_path() {
     // Every kind of effect, spread over tracks to respect the slot limit; a limiter that looks
     // ahead on another and on the master, so latency is compensated on
     // several paths at once.
+    // Keep one free slot on keys for the cross-track move below. Every extra
+    // rack gets its own sounding sampler so new effects process real input.
+    let slots = windfall_project::MAX_EFFECT_SLOTS;
+    let extra_count = EffectKind::ALL
+        .len()
+        .saturating_sub(slots * 2 - 1)
+        .div_ceil(slots);
+    let extra_racks: Vec<TrackId> = (0..extra_count)
+        .map(|_| {
+            let track = rig.track();
+            let channel = rig.channel_on(level(48_000, 0.1, 2.0), track);
+            rig.steps(channel, &[0]);
+            track
+        })
+        .collect();
     let mut chain: Vec<EffectId> = EffectKind::ALL
         .into_iter()
         .enumerate()
         .map(|(index, kind)| {
             rig.effect(
-                if index < windfall_project::MAX_EFFECT_SLOTS {
+                if index < slots {
                     space
-                } else {
+                } else if index < slots * 2 - 1 {
                     keys
+                } else {
+                    extra_racks[(index - (slots * 2 - 1)) / slots]
                 },
                 effect_at(kind, 0),
             )

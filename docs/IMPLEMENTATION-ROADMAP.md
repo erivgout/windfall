@@ -1,6 +1,20 @@
 # Windfall implementation roadmap
 
-## Current execution priority — user instruction, 2026-10-08
+## Current execution priority — user instruction, 2026-10-09
+
+The user now requests parallel QA of implementation already present, repairs
+for failed acceptance checks, and promotion of fully verified features to done.
+This supersedes the implementation-first QA deferral below. Record current
+evidence in `docs/qa/`; keep incomplete feature scope and hardware/platform
+acceptance explicit. Do not infer completion from source presence or a build.
+Local verification is authorized; the restriction on GitHub CI and Actions
+remains.
+
+The QA reconciliation is complete: 46 additional features are accepted and
+136 rows are now done. See [final QA acceptance](qa/2026-10-09-completion.md)
+for evidence and remaining implementation/device/platform gates.
+
+### Previous implementation priority — 2026-10-08
 
 New implementation coverage and deferred artifact/QA work are tracked in
 [FEATURE-PASS.md](FEATURE-PASS.md).

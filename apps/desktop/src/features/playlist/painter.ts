@@ -12,7 +12,6 @@ import type { ViewRange } from "@/lib/automation/view-range"
 import {
   BORDER_SHADE,
   deviceX,
-  deviceY,
   mix,
   resizedSpan,
   rgbaToCss,
@@ -49,6 +48,7 @@ import {
   ORPHAN_COLOR,
   type ClipLookups,
 } from "./look"
+import { playlistDeviceY, playlistYToRow } from "./row-geometry"
 import { loopPoints, previewOf, previewSpans, type ClipSpan } from "./preview"
 import type { ClipSprite, ClipStyle } from "./sprite"
 
@@ -91,10 +91,20 @@ export type CurveDraft = {
   points: readonly AutomationPoint[]
 }
 
+/** Session-only point indices, belonging to one clip even for shared curves. */
+export type PointSelection = {
+  clip: ClipId
+  automation: AutomationId
+  indices: ReadonlySet<number>
+}
+
 export type AudioContent = Extract<ClipContent, { type: "audio" }>
 
 /** An audio clip's settings as a drag has them, before it is released. */
 export type AudioDraft = { clip: ClipId; content: AudioContent }
+
+/** A clip's content offset while it is being slipped, before release. */
+export type SlipDraft = { clip: ClipId; offset: number }
 
 /** What the painter draws from. Whoever owns it calls `invalidate` after a change. */
 export interface PaintSource {
@@ -117,7 +127,9 @@ export interface PaintSource {
   readonly songEnd: number
   /** The curve being edited, shown in every clip of its automation. */
   readonly draft: CurveDraft | null
+  readonly pointSelection?: PointSelection | null
   readonly audioDraft: AudioDraft | null
+  readonly slipDraft: SlipDraft | null
   /** Where targets stay on the value an automation clip left. */
   readonly holds: readonly HoldSegment[]
   /** Automations more than one clip shows. */
@@ -307,10 +319,8 @@ export class ClipPainter {
     const lw = transform.lineWidth
     const minWidth = MIN_CLIP_WIDTH * viewport.dpr
     const ticks = visibleTicks(viewport)
-    const firstRow = Math.floor(viewport.scrollRow)
-    const lastRow = Math.ceil(
-      viewport.scrollRow + viewport.height / viewport.rowHeight
-    )
+    const firstRow = Math.floor(playlistYToRow(viewport, 0))
+    const lastRow = Math.ceil(playlistYToRow(viewport, viewport.height))
     const sprites: ClipSprite[] = []
 
     const add = (
@@ -346,8 +356,8 @@ export class ClipPainter {
         span,
         x0,
         x1,
-        y0: deviceY(transform, row) + lw,
-        y1: deviceY(transform, row + 1),
+        y0: playlistDeviceY(viewport, transform, row) + lw,
+        y1: playlistDeviceY(viewport, transform, row + 1),
         ghost,
         selected,
         muted,
@@ -382,7 +392,8 @@ export class ClipPainter {
         let start = batch.start(index)
         let length = batch.length(index)
         let row = batch.row(index)
-        let offset = clip.offset
+        const slip = this.source.slipDraft
+        let offset = slip?.clip === id ? slip.offset : clip.offset
         if (selected && moving) {
           const resized = resizedSpan(
             start,
@@ -582,6 +593,11 @@ export class ClipPainter {
         if (!points) continue
         paintAutomation(ctx, frame, sprite, style, {
           points,
+          selected:
+            this.source.pointSelection?.clip === sprite.id &&
+            this.source.pointSelection.automation === content.automation
+              ? this.source.pointSelection.indices
+              : undefined,
           area: { ...area, top: area.top + inset, bottom: area.bottom - inset },
           range: this.source.viewOf(content.automation),
           labels: this.source.viewLabelsOf(content.automation),
@@ -708,8 +724,13 @@ export class ClipPainter {
       if (!items.batch.isSelected(index)) continue
       const x0 = deviceX(transform, items.batch.start(index))
       const x1 = Math.max(x0 + lw, deviceX(transform, items.batch.end(index)))
-      const y0 = deviceY(transform, items.batch.row(index)) + lw
-      const y1 = deviceY(transform, items.batch.row(index) + 1)
+      const y0 =
+        playlistDeviceY(viewport, transform, items.batch.row(index)) + lw
+      const y1 = playlistDeviceY(
+        viewport,
+        transform,
+        items.batch.row(index) + 1
+      )
       ctx.fillStyle = wash
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
       ctx.fillStyle = outline
@@ -752,8 +773,8 @@ export class ClipPainter {
       x0 + Math.round(24 * dpr),
       deviceX(transform, preview.start + preview.length)
     )
-    const y0 = deviceY(transform, preview.row) + lw
-    const y1 = deviceY(transform, preview.row + 1)
+    const y0 = playlistDeviceY(viewport, transform, preview.row) + lw
+    const y1 = playlistDeviceY(viewport, transform, preview.row + 1)
     ctx.fillStyle = rgbaToCss(withAlpha(theme.playhead, 0.2))
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0)
     ctx.fillStyle = rgbaToCss(theme.playhead)

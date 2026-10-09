@@ -1,4 +1,4 @@
-/** Authored CC0 fixture: format 0, 960 PPQ, one note and one unsupported marker. */
+/** Authored CC0 fixture: format 0, 960 PPQ, one note and one named marker. */
 export function midiFixture(channel = 0): Uint8Array {
   const events = [
     0,

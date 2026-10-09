@@ -1,0 +1,1 @@
+The channel timing section steps the swing mix from straight toward full. Straight stays straight when moved previous. Full stays full when moved next. A mix between two presets moves to the neighboring preset. Gate and shift stay as they are.

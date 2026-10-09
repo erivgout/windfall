@@ -115,6 +115,8 @@ impl PatternInfo {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Edit {
+    Notebook(Change<crate::Notebook>),
+    ArrangementBook(Change<crate::ArrangementBook>),
     Timeline(Change<crate::Timeline>),
     TakeGroups(Change<Vec<crate::AudioTakeGroup>>),
     Settings(Change<ProjectSettings>),
@@ -162,9 +164,15 @@ pub(crate) enum Edit {
 impl Edit {
     pub(crate) fn apply(&self, project: &mut Project, direction: Direction) {
         match self {
+            Edit::ArrangementBook(change) => {
+                project.playlist.arrangement_book = change.result(direction).clone()
+            }
             Edit::Settings(change) => project.settings = change.result(direction).clone(),
+            Edit::Notebook(change) => project.notebook = change.result(direction).clone(),
             Edit::Timeline(change) => project.playlist.timeline = change.result(direction).clone(),
-            Edit::TakeGroups(change) => project.playlist.take_groups = change.result(direction).clone(),
+            Edit::TakeGroups(change) => {
+                project.playlist.take_groups = change.result(direction).clone()
+            }
             Edit::Plugins(change) => project.plugins = change.result(direction).clone(),
             Edit::Sample(edit) => edit.apply(&mut project.samples, direction),
             Edit::Channel(edit) => edit.apply(&mut project.channels, direction),
@@ -243,6 +251,7 @@ impl Edit {
         };
         match self {
             Edit::Settings(_) => touched.settings = true,
+            Edit::Notebook(_) => touched.notebook = true,
             Edit::Timeline(_) => touched.playlist = true,
             Edit::TakeGroups(_) => touched.playlist = true,
             Edit::Plugins(_) => touched.plugins = true,
@@ -260,7 +269,8 @@ impl Edit {
             Edit::PatternInfo { id, .. } => touch_pattern(*id),
             Edit::Notes { pattern, .. } => touch_pattern(*pattern),
             Edit::MixerTrack(_) | Edit::SetMixerTrack(_) => touched.mixer = true,
-            Edit::PlaylistTrack(_)
+            Edit::ArrangementBook(_)
+            | Edit::PlaylistTrack(_)
             | Edit::MovePlaylistTrack(_)
             | Edit::SetPlaylistTrack(_)
             | Edit::Clips { .. } => {
@@ -293,7 +303,9 @@ impl Edit {
     pub(crate) fn is_identity(&self) -> bool {
         match self {
             Edit::Settings(change) => change.old == change.new,
+            Edit::Notebook(change) => change.old == change.new,
             Edit::Timeline(change) => change.old == change.new,
+            Edit::ArrangementBook(change) => change.old == change.new,
             Edit::TakeGroups(change) => change.old == change.new,
             Edit::Plugins(change) => change.old == change.new,
             Edit::SetChannel(change) => change.old == change.new,
@@ -317,9 +329,14 @@ impl Edit {
 
     /// Folds `next`, which ran right after this edit, into this edit when the
     /// two act on the same thing. Hands `next` back when they do not.
+    // An unmatched edit is moved back into history; boxing the common refusal
+    // would allocate just to transfer its existing rollback ownership.
+    #[allow(clippy::result_large_err)]
     fn absorb(&mut self, next: Edit) -> Result<(), Edit> {
         match (self, next) {
             (Edit::Settings(first), Edit::Settings(second)) => first.new = second.new,
+            (Edit::Notebook(first), Edit::Notebook(second)) => first.new = second.new,
+            (Edit::ArrangementBook(first), Edit::ArrangementBook(second)) => first.new = second.new,
             (Edit::Timeline(first), Edit::Timeline(second)) => first.new = second.new,
             (Edit::TakeGroups(first), Edit::TakeGroups(second)) => first.new = second.new,
             (Edit::Plugins(first), Edit::Plugins(second)) => first.new = second.new,

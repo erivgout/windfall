@@ -2,6 +2,7 @@
 import type { Automation } from "./Automation";
 import type { Channel } from "./Channel";
 import type { Mixer } from "./Mixer";
+import type { Notebook } from "./Notebook";
 import type { Pattern } from "./Pattern";
 import type { Playlist } from "./Playlist";
 import type { PluginBinding } from "./PluginBinding";
@@ -17,7 +18,11 @@ export type Project = { formatVersion: number,
 /**
  * The next id to hand out. Id 0 is reserved for the master mixer track.
  */
-nextId: number, settings: ProjectSettings, samples: Array<SampleAsset>, 
+nextId: number, settings: ProjectSettings, 
+/**
+ * Up to eight saved plain-text song notebook pages.
+ */
+notebook?: Notebook, samples: Array<SampleAsset>, 
 /**
  * Channel rack, in display order.
  */

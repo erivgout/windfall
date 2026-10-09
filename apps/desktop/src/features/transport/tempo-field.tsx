@@ -21,6 +21,9 @@ import { useTempo } from "@/lib/store/selectors"
 import { formatTempo, normalizeTempo, parseTempo } from "@/lib/time"
 import { DEFAULT_TEMPO_BPM, MAX_TEMPO_BPM, MIN_TEMPO_BPM } from "@/lib/units"
 
+import { nextTempoPreset } from "./tempo-preset-step"
+import { nextTempo, TEMPO_PRESETS } from "./tempo-presets"
+
 /** How far the pointer must move before a press counts as a drag. */
 const DRAG_THRESHOLD_PX = 3
 const PIXELS_PER_BPM = 3
@@ -212,6 +215,30 @@ export function TempoField() {
       [
         ...TEMPO_AUTOMATION,
         contextSeparator,
+        {
+          submenu: "Tempo presets",
+          items: TEMPO_PRESETS.map((preset) => ({
+            title: `${preset} BPM`,
+            disabled: nextTempo(tempo, preset) === null,
+            run: () => setTempo(preset),
+          })),
+        },
+        {
+          title: "Previous tempo preset",
+          disabled: nextTempoPreset(tempo, "previous") === null,
+          run: () => {
+            const next = nextTempoPreset(tempo, "previous")
+            if (next !== null) setTempo(next)
+          },
+        },
+        {
+          title: "Next tempo preset",
+          disabled: nextTempoPreset(tempo, "next") === null,
+          run: () => {
+            const next = nextTempoPreset(tempo, "next")
+            if (next !== null) setTempo(next)
+          },
+        },
         "tempo.tap",
         "tempo.half",
         "tempo.double",

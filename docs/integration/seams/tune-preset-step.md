@@ -1,0 +1,1 @@
+The sampler sound section steps the tune from an octave down toward an octave up. An octave down stays an octave down when moved previous. An octave up stays an octave up when moved next. The shown cents stay as they are. A semitone between two presets moves to the neighboring preset. Root key and gain stay as they are.

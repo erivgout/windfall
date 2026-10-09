@@ -1,7 +1,9 @@
 //! Synthetic MIDI files through the real shell, sample loader and history.
 
 use windfall_ipc::{MidiExportOptions, MidiImportOptions};
-use windfall_midi::{Marker, MidiNote, MidiSong, MidiTrack, TempoChange, WriteOptions};
+use windfall_midi::{
+    KeySignatureChange, Marker, MidiNote, MidiSong, MidiTrack, TempoChange, WriteOptions,
+};
 use windfall_project::{Command, PlayMode};
 
 use super::Rig;
@@ -104,7 +106,10 @@ fn reviewed_import_appends_one_undo_step_and_keeps_project_file() {
         .expect("reviews");
     assert_eq!(preview.notes, 1);
     assert_eq!(preview.channels, ["Imported lead"]);
-    assert!(!preview.adjustments.is_empty());
+    assert!(
+        preview.adjustments.is_empty(),
+        "tempo and markers are supported"
+    );
     assert_eq!(rig.session.document_snapshot(), before);
     let result = rig.session.import_midi(preview.token).expect("imports");
     let after = rig.session.document_snapshot();
@@ -115,6 +120,17 @@ fn reviewed_import_appends_one_undo_step_and_keeps_project_file() {
         before.project.channels.len() + 1
     );
     assert_eq!(after.history.cursor, before.history.cursor + 1);
+    assert_eq!(
+        after
+            .project
+            .playlist
+            .timeline
+            .markers
+            .iter()
+            .map(|marker| (marker.tick, marker.name.as_str(), marker.kind))
+            .collect::<Vec<_>>(),
+        [(0, "Verse", windfall_project::MarkerKind::Named)]
+    );
     assert!(result.patch.dirty);
     rig.session.undo().expect("undo");
     let mut restored = rig.project();
@@ -252,6 +268,20 @@ fn song_and_pattern_exports_write_real_midi_without_editing_the_document() {
     let song = windfall_midi::read_file(path).expect("reads export");
     assert_eq!(song.note_count(), 1);
     assert_eq!(song.tempos.len(), 2);
+    assert_eq!(
+        song.tempos,
+        [
+            TempoChange::from_bpm(0, 120.0),
+            TempoChange::from_bpm(960, 100.0)
+        ]
+    );
+    assert_eq!(
+        song.markers,
+        [Marker {
+            tick: 0,
+            text: "Verse".into()
+        }]
+    );
     let mut options = export_options(&rig, PlayMode::Pattern);
     options.pattern = rig.project().patterns.last().expect("imported pattern").id;
     options.single_track = true;
@@ -263,8 +293,55 @@ fn song_and_pattern_exports_write_real_midi_without_editing_the_document() {
     let bytes = std::fs::read(pattern_path).expect("written");
     assert_eq!(&bytes[8..10], &[0, 0]);
     assert_eq!(&bytes[12..14], &480_u16.to_be_bytes());
-    assert_eq!(windfall_midi::read(&bytes).expect("reads").note_count(), 1);
+    let pattern = windfall_midi::read(&bytes).expect("reads");
+    assert_eq!(pattern.note_count(), 1);
+    assert_eq!(
+        pattern.markers,
+        [Marker {
+            tick: 0,
+            text: "Verse".into()
+        }]
+    );
     assert_eq!(rig.session.document_snapshot(), before);
+}
+
+#[test]
+fn reviewed_import_still_reports_unsupported_key_signature_without_false_marker_loss() {
+    let rig = Rig::new();
+    let path = fixture(&rig, 0);
+    let mut song = windfall_midi::read_file(&path).expect("reads fixture");
+    song.key_signatures.push(KeySignatureChange {
+        tick: 0,
+        sharps: 2,
+        minor: false,
+    });
+    windfall_midi::write_file(&path, &song, &WriteOptions::default())
+        .expect("writes unsupported metadata");
+    let before = rig.session.document_snapshot();
+    let preview = rig
+        .session
+        .midi_preview(&path, MidiImportOptions::default())
+        .expect("reviews");
+    assert!(
+        preview
+            .adjustments
+            .iter()
+            .any(|message| message.contains("key signature"))
+    );
+    assert!(
+        !preview
+            .adjustments
+            .iter()
+            .any(|message| message.contains("marker"))
+    );
+    assert_eq!(rig.session.document_snapshot(), before);
+    rig.session
+        .import_midi(preview.token)
+        .expect("imports supported data");
+    let after = rig.session.document_snapshot();
+    assert_eq!(after.history.cursor, before.history.cursor + 1);
+    assert_eq!(after.project.playlist.timeline.markers[0].name, "Verse");
+    assert_eq!(after.project.playlist.timeline.markers[0].tick, 0);
 }
 
 #[test]

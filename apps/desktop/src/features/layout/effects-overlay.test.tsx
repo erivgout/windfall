@@ -54,7 +54,8 @@ afterEach(() => {
 const flush = () => act(settle)
 const ui = () => useUiStore.getState()
 const tab = (name: string | RegExp) => screen.getByRole("tab", { name })
-const centre = () => screen.getByRole("tabpanel")
+const centre = () =>
+  screen.getByRole("tabpanel", { name: /Effects|Channel rack|Playlist/ })
 
 /** The workspace with a compressor on the master, which is selected. */
 async function open() {

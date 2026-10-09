@@ -69,7 +69,39 @@ describe("intentFor", () => {
     })
   })
 
-  it.each(TOOLS)(
+  it("slips a clip on its body or edges, leaving empty grid alone", () => {
+    for (const hit of [body, startEdge, endEdge]) {
+      expect(intentFor(press({ tool: "slip", hit }))).toEqual({
+        kind: "slip",
+        id: 7,
+      })
+    }
+    expect(intentFor(press({ tool: "slip" }))).toEqual({ kind: "none" })
+  })
+
+  it("slips over audio and automation handles without editing their content", () => {
+    for (const inner of [
+      { kind: "fade", edge: "in" },
+      { kind: "gain" },
+      { kind: "point", index: 0 },
+      { kind: "bend", index: 0 },
+      { kind: "curve" },
+    ] as const) {
+      expect(intentFor(press({ tool: "slip", hit: body, inner }))).toEqual({
+        kind: "slip",
+        id: 7,
+      })
+      expect(cursorFor("slip", "body", inner)).toBe("ew-resize")
+    }
+  })
+
+  it("keeps Ctrl and Shift on a clip a slip rather than a move or copy", () => {
+    expect(
+      intentFor(press({ tool: "slip", hit: body, mod: true, shift: true }))
+    ).toEqual({ kind: "slip", id: 7 })
+  })
+
+  it.each(TOOLS.filter((tool) => tool !== "playback"))(
     "selects with a box on Ctrl+drag over empty grid in the %s tool",
     (tool) => {
       expect(intentFor(press({ tool, mod: true }))).toEqual({
@@ -109,7 +141,7 @@ describe("intentFor", () => {
     }
   )
 
-  it.each<Tool>(["draw", "paint", "erase", "mute"])(
+  it.each<Tool>(["draw", "paint", "erase", "mute", "slip"])(
     "deletes with the right button in the %s tool",
     (tool) => {
       expect(intentFor(press({ tool, button: 2, hit: body }))).toEqual({
@@ -139,6 +171,26 @@ describe("intentFor", () => {
   it("ignores other buttons", () => {
     expect(intentFor(press({ button: 3 }))).toEqual({ kind: "none" })
   })
+
+  it("scrubs empty grid, clips and handles even with modifiers", () => {
+    for (const hit of [null, body, startEdge, endEdge]) {
+      expect(
+        intentFor(
+          press({
+            tool: "playback",
+            hit,
+            mod: true,
+            shift: true,
+            inner: { kind: "gain" },
+          })
+        )
+      ).toEqual({ kind: "playback" })
+    }
+    expect(
+      intentFor(press({ tool: "playback", button: 2, hit: body }))
+    ).toEqual({ kind: "none" })
+    expect(cursorFor("playback", "body", { kind: "gain" })).toBe("crosshair")
+  })
 })
 
 describe("cursorFor", () => {
@@ -151,5 +203,9 @@ describe("cursorFor", () => {
     expect(cursorFor("erase", "body")).toBe("not-allowed")
     expect(cursorFor("mute", "body")).toBe("pointer")
     expect(cursorFor("mute", null)).toBe("default")
+    expect(cursorFor("slip", null)).toBe("default")
+    expect(cursorFor("slip", "body")).toBe("ew-resize")
+    expect(cursorFor("slip", "start-edge")).toBe("ew-resize")
+    expect(cursorFor("slip", "end-edge")).toBe("ew-resize")
   })
 })

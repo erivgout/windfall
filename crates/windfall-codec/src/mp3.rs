@@ -8,7 +8,7 @@ use mp3lame_encoder::{
     Bitrate, Builder, FlushGap, InterleavedPcm, Mode, MonoPcm, Quality, VbrMode,
 };
 
-use crate::{CodecError, atomic::AtomicFile};
+use crate::{CodecError, atomic::AtomicFile, encoder::AudioTags};
 
 /// MPEG sample rates accepted without resampling.
 pub const MP3_SAMPLE_RATES: &[u32] = &[
@@ -97,6 +97,7 @@ pub(crate) fn check_layout(
 pub struct Mp3Writer {
     encoder: mp3lame_encoder::Encoder,
     file: AtomicFile,
+    audio_start: u64,
     channels: usize,
     samples: Vec<f32>,
     bytes: Vec<u8>,
@@ -116,6 +117,60 @@ fn encoding(error: impl std::fmt::Display) -> CodecError {
     CodecError::Encoding(error.to_string())
 }
 
+/// ID3v2.4 uses four seven-bit bytes for both tag and frame sizes.
+fn synchsafe_size(size: usize) -> Result<[u8; 4], CodecError> {
+    if size > 0x0FFF_FFFF {
+        return Err(CodecError::InvalidInput(
+            "MP3 project tags are too large".to_owned(),
+        ));
+    }
+    Ok([
+        ((size >> 21) & 0x7F) as u8,
+        ((size >> 14) & 0x7F) as u8,
+        ((size >> 7) & 0x7F) as u8,
+        (size & 0x7F) as u8,
+    ])
+}
+
+fn id3_tag(tags: &AudioTags<'_>) -> Result<Vec<u8>, CodecError> {
+    let fields = [
+        (b"TIT2", tags.title, b"\x03".as_slice()),
+        (b"TPE1", tags.author, b"\x03".as_slice()),
+        (b"TCON", tags.genre, b"\x03".as_slice()),
+        // UTF-8, English, and an empty NUL-terminated content description.
+        (b"COMM", tags.comments, b"\x03eng\0".as_slice()),
+    ];
+    let mut size = 0_usize;
+    for (_, value, prefix) in fields {
+        if !value.is_empty() {
+            size = size
+                .checked_add(10 + prefix.len())
+                .and_then(|size| size.checked_add(value.len()))
+                .ok_or_else(|| {
+                    CodecError::InvalidInput("MP3 project tags are too large".to_owned())
+                })?;
+        }
+    }
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    let tag_size = synchsafe_size(size)?;
+    let mut tag = Vec::with_capacity(10 + size);
+    tag.extend_from_slice(b"ID3\x04\0\0");
+    tag.extend_from_slice(&tag_size);
+    for (id, value, prefix) in fields {
+        if value.is_empty() {
+            continue;
+        }
+        tag.extend_from_slice(id);
+        tag.extend_from_slice(&synchsafe_size(prefix.len() + value.len())?);
+        tag.extend_from_slice(&[0, 0]); // No frame flags.
+        tag.extend_from_slice(prefix);
+        tag.extend_from_slice(value.as_bytes());
+    }
+    Ok(tag)
+}
+
 impl Mp3Writer {
     /// Creates a stream without modifying its destination until finalization.
     pub fn create(
@@ -124,7 +179,19 @@ impl Mp3Writer {
         channels: u16,
         settings: Mp3Settings,
     ) -> Result<Self, CodecError> {
+        Self::create_with_tags(path, sample_rate, channels, settings, &AudioTags::default())
+    }
+
+    /// Creates a stream with an ID3v2.4 tag for nonempty project fields.
+    pub fn create_with_tags(
+        path: impl AsRef<Path>,
+        sample_rate: u32,
+        channels: u16,
+        settings: Mp3Settings,
+        tags: &AudioTags<'_>,
+    ) -> Result<Self, CodecError> {
         check_layout(sample_rate, channels, settings)?;
+        let tag = id3_tag(tags)?;
         let mut builder =
             Builder::new().ok_or_else(|| encoding("could not create the LAME encoder"))?;
         builder
@@ -172,9 +239,13 @@ impl Mp3Writer {
                 builder.set_vbr_quality(quality).map_err(encoding)?;
             }
         }
+        let encoder = builder.build().map_err(encoding)?;
+        let mut file = AtomicFile::create(path.as_ref())?;
+        file.write_all(&tag)?;
         Ok(Self {
-            encoder: builder.build().map_err(encoding)?,
-            file: AtomicFile::create(path.as_ref())?,
+            encoder,
+            file,
+            audio_start: tag.len() as u64,
             channels: usize::from(channels),
             samples: Vec::with_capacity(8192),
             bytes: Vec::with_capacity(16384),
@@ -231,7 +302,7 @@ impl Mp3Writer {
             .lame_tag_encode_to_vec(&mut tag)
             .ok_or_else(|| encoding("LAME did not supply its gapless header"))?;
         self.file.place(|file| {
-            file.seek(SeekFrom::Start(0))?;
+            file.seek(SeekFrom::Start(self.audio_start))?;
             file.write_all(&tag)
         })?;
         Ok(())

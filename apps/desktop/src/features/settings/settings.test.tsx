@@ -185,7 +185,7 @@ describe("audio settings in the dialog", () => {
       expect(box(name)).toHaveTextContent("Default")
     }
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Running on Speakers (simulated) at 48 kHz with a buffer of 256 samples: 5.3 ms of output latency."
+      "Running on Speakers (simulated) at 48 kHz with 2 output channels and a buffer of 256 samples: 5.3 ms of output latency."
     )
   })
 
@@ -203,6 +203,7 @@ describe("audio settings in the dialog", () => {
       device: null,
       sampleRate: 44_100,
       bufferFrames: null,
+      outputChannels: null,
     })
     expect(box("Buffer size")).toHaveTextContent("Default")
 

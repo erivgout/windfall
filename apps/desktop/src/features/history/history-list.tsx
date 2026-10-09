@@ -3,9 +3,12 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { useEffect, useRef, useState } from "react"
 
 import type { HistoryEntry } from "@/bindings"
+import { Empty, EmptyDescription } from "@/components/ui/empty"
 import { historyJump } from "@/lib/store/project"
 import { useHistory } from "@/lib/store/selectors"
 import { cn } from "@/lib/utils"
+
+import { matchingRuns } from "./history-filter"
 
 type StepState = "done" | "current" | "undone"
 
@@ -150,8 +153,18 @@ function RunRows({ run, cursor }: { run: HistoryRun; cursor: number }) {
  * Steps in a row with the same label are folded into one. Self-contained,
  * so it can sit in a popover or a panel of its own.
  */
-export function HistoryList({ className }: { className?: string }) {
+export function HistoryList({
+  className,
+  query = "",
+}: {
+  className?: string
+  query?: string
+}) {
   const { entries, cursor } = useHistory()
+  const runs = matchingRuns(
+    [{ label: "Project opened", first: 0, last: 0 }, ...groupRuns(entries)],
+    query
+  )
   const list = useRef<HTMLOListElement>(null)
   const shown = useRef(false)
 
@@ -162,7 +175,15 @@ export function HistoryList({ className }: { className?: string }) {
       ?.querySelector("[aria-current='step']")
       ?.scrollIntoView({ block: shown.current ? "nearest" : "center" })
     shown.current = true
-  }, [cursor])
+  }, [cursor, query])
+
+  if (runs.length === 0) {
+    return (
+      <Empty className="p-2" role="status">
+        <EmptyDescription>No steps match.</EmptyDescription>
+      </Empty>
+    )
+  }
 
   return (
     <ol
@@ -170,14 +191,7 @@ export function HistoryList({ className }: { className?: string }) {
       aria-label="Undo history"
       className={cn("flex flex-col gap-px overflow-y-auto", className)}
     >
-      <li className="flex">
-        <HistoryRow
-          label="Project opened"
-          cursor={0}
-          state={stateAt(0, cursor)}
-        />
-      </li>
-      {groupRuns(entries).map((run) =>
+      {runs.map((run) =>
         run.first === run.last ? (
           <li key={run.first} className="flex">
             <HistoryRow

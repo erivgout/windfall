@@ -103,6 +103,16 @@ export function DelayEditor({ bind }: EditorProps<DelayParams>) {
             {...bind("mix")}
             description="Balance between the dry sound and the echoes. Use 100% on a send track"
           />
+          <ParamControl
+            {...bind("modRateHz")}
+            label="Mod rate"
+            description="Speed of the modulation of echo timing"
+          />
+          <ParamControl
+            {...bind("modDepthMs")}
+            label="Mod depth"
+            description="How far the echo timing moves around its selected time"
+          />
         </ParamRow>
       </ParamGroup>
       <ParamGroup

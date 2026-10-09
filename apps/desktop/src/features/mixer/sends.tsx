@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { ValueContextItems } from "@/components/value-context-menu"
 import { automationFeed, useAutomationMarker } from "@/features/automation/live"
-import { useHint, useProjectStore } from "@/lib/store"
+import { dispatch, useHint, useProjectStore } from "@/lib/store"
 import { MAX_GAIN } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
@@ -25,6 +25,9 @@ import { trackValueItems } from "./menus"
 import { addSend, clampGain, removeSend } from "./operations"
 import { LoopNote, TrackLabel } from "./output-select"
 import { sendChoices } from "./routing"
+import { nextSendPreset } from "./send-preset-step"
+import { nextSendGain, SEND_PRESETS } from "./send-presets"
+import { nextSendGainScale } from "./send-scale"
 import { useGestureValue } from "./use-gesture-value"
 
 function SendRow({ from, send }: { from: TrackId; send: Send }) {
@@ -45,6 +48,58 @@ function SendRow({ from, send }: { from: TrackId; send: Send }) {
   const items = useMemo(
     (): ContextItem[] => [
       ...trackValueItems(from, { send: send.target }),
+      {
+        submenu: "Send level",
+        items: [
+          ...SEND_PRESETS.map((preset) => ({
+            title: preset.label,
+            disabled: nextSendGain(send.gain, preset.value) === null,
+            run: () => {
+              const gain = nextSendGain(send.gain, preset.value)
+              if (gain === null) return
+              return dispatch({ type: "setSend", from, to: send.target, gain })
+            },
+          })),
+          ...(["previous", "next"] as const).map((direction) => ({
+            title: direction === "previous" ? "Previous preset" : "Next preset",
+            disabled: nextSendPreset(send.gain, direction) === null,
+            run: () => {
+              const latest = useProjectStore
+                .getState()
+                .project.mixer.tracks.find((track) => track.id === from)
+                ?.sends.find((item) => item.target === send.target)
+              if (!latest) return
+              const next = nextSendPreset(latest.gain, direction)
+              if (next === null) return
+              return dispatch({
+                type: "setSend",
+                from,
+                to: send.target,
+                gain: next,
+              })
+            },
+          })),
+          ...(["half", "double"] as const).map((factor) => ({
+            title: factor === "half" ? "Half" : "Double",
+            disabled: nextSendGainScale(send.gain, factor) === null,
+            run: () => {
+              const latest = useProjectStore
+                .getState()
+                .project.mixer.tracks.find((track) => track.id === from)
+                ?.sends.find((item) => item.target === send.target)
+              if (!latest) return
+              const next = nextSendGainScale(latest.gain, factor)
+              if (next === null) return
+              return dispatch({
+                type: "setSend",
+                from,
+                to: send.target,
+                gain: next,
+              })
+            },
+          })),
+        ],
+      },
       contextSeparator,
       {
         title: "Remove send",
@@ -52,7 +107,7 @@ function SendRow({ from, send }: { from: TrackId; send: Send }) {
         run: () => removeSend(from, send.target),
       },
     ],
-    [from, send.target]
+    [from, send.target, send.gain]
   )
   const live = useMemo(
     () =>

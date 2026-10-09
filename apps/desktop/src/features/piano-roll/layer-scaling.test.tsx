@@ -22,6 +22,7 @@ const frames = new Map<number, FrameRequestCallback>()
 let frameId = 0
 let width = 4000
 let height = 2000
+let stopFixture: (() => void) | null = null
 const origin = { x: 110, y: 70 }
 
 class Observer {
@@ -84,6 +85,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  stopFixture?.()
+  stopFixture = null
   applyUiScale(100)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -129,6 +132,7 @@ async function start(
   dpr: number
 ) {
   const roll = await startRoll()
+  stopFixture = () => roll.stop()
   await dispatch({ type: "addChannel", name: "Lead" })
   await dispatch({
     type: "addNotes",
@@ -161,6 +165,11 @@ async function start(
     autoRender: false,
     initial: { pxPerTick: 0.08, rowHeight: 16, scrollRow: 0 },
   })
+  stopFixture = () => {
+    roll.session.attachView(null)
+    view.destroy()
+    roll.stop()
+  }
   const color = channel("Lead").color
   roll.editor.setPalette([rgbFromInt(color)])
   roll.session.attachView(view)
@@ -171,7 +180,7 @@ async function start(
     </SessionContext.Provider>
   )
   const ruler = screen.getByLabelText(/^Time ruler/) as HTMLCanvasElement
-  const lane = screen.getByLabelText("Note velocities") as HTMLCanvasElement
+  const lane = screen.getByLabelText("Note velocity values") as HTMLCanvasElement
   for (const canvas of [ruler, lane]) {
     canvas.getBoundingClientRect = () =>
       new DOMRect(
@@ -191,9 +200,8 @@ async function start(
     color,
     stop() {
       mounted.unmount()
-      roll.session.attachView(null)
-      view.destroy()
-      roll.stop()
+      stopFixture?.()
+      stopFixture = null
     },
   }
 }

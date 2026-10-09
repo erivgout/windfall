@@ -1,0 +1,1 @@
+The waveform helper halves or doubles its opacity. Half of the faintest opacity stays the faintest. Double stops at 60%. Height, start, length, and center key stay as they are. Notes stay as they are. This is session state for the reference drawing, not an undo step.

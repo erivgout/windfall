@@ -1,4 +1,6 @@
-import { rowToY, tickToX, type Viewport } from "@/lib/canvas"
+import { tickToX, type Viewport } from "@/lib/canvas"
+
+import { playlistRowToY } from "./row-geometry"
 
 /*
  * Where a clip and its parts are on screen, in CSS pixels from the grid's
@@ -26,12 +28,12 @@ export function clipBox(
   span: { start: number; length: number },
   row: number
 ): Box {
-  const top = rowToY(viewport, row)
+  const top = playlistRowToY(viewport, row)
   return {
     left: tickToX(viewport, span.start),
     right: tickToX(viewport, span.start + span.length),
     top: top + 1,
-    bottom: top + viewport.rowHeight,
+    bottom: playlistRowToY(viewport, row + 1),
   }
 }
 

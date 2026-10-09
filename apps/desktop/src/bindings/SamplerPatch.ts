@@ -2,4 +2,4 @@
 import type { SamplerLoopMode } from "./SamplerLoopMode";
 import type { SamplerStretch } from "./SamplerStretch";
 
-export type SamplerPatch = { stretch?: SamplerStretch, rootKey?: number, tune?: number, gain?: number, start?: number, end?: number, reverse?: boolean, loopMode?: SamplerLoopMode, loopStart?: number, loopEnd?: number, cutSelf?: boolean, cutGroup?: number, };
+export type SamplerPatch = { stretch?: SamplerStretch, rootKey?: number, tune?: number, gain?: number, start?: number, end?: number, reverse?: boolean, loopMode?: SamplerLoopMode, loopStart?: number, loopEnd?: number, loopCrossfade?: number, cutSelf?: boolean, cutGroup?: number, };

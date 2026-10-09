@@ -37,6 +37,7 @@ import {
   useProjectGeneration,
 } from "@/lib/store/replaced"
 import { songTick } from "./ops"
+import { nextRulerTool } from "./ruler-tool-step"
 import {
   editTimeline,
   refreshTimelineState,
@@ -337,6 +338,32 @@ export function TimelineControls() {
           <ToggleGroupItem value="select">Select time</ToggleGroupItem>
           <ToggleGroupItem value="zoom">Zoom region</ToggleGroupItem>
         </ToggleGroup>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Choose the previous ruler tool"
+          disabled={nextRulerTool(tool, "previous") === null}
+          onClick={() => {
+            const latest = useTimelineStore.getState().tool
+            const next = nextRulerTool(latest, "previous")
+            if (next !== null) useTimelineStore.setState({ tool: next })
+          }}
+        >
+          Previous
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Choose the next ruler tool"
+          disabled={nextRulerTool(tool, "next") === null}
+          onClick={() => {
+            const latest = useTimelineStore.getState().tool
+            const next = nextRulerTool(latest, "next")
+            if (next !== null) useTimelineStore.setState({ tool: next })
+          }}
+        >
+          Next
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
             Timeline

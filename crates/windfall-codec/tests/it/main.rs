@@ -3,6 +3,7 @@
 
 mod common;
 mod encoder;
+mod export_tags;
 mod fixtures;
 mod flac;
 mod heap;

@@ -516,6 +516,10 @@ impl Session {
         }
         let guard = crate::sync::lock(&self.inner.recording);
         if guard.is_some()
+            || self
+                .inner
+                .recording_finish_cancelled
+                .load(std::sync::atomic::Ordering::Acquire)
             || !self
                 .inner
                 .recording_finishing
@@ -572,7 +576,7 @@ impl Session {
 /// track where it names none and no clip of the sample has one to share,
 /// then the clip. `next_id` is the id the project hands out to the first of
 /// them.
-fn audio_clip_commands(
+pub(super) fn audio_clip_commands(
     project: &Project,
     sample: SampleId,
     buffer: &AudioBuffer,
@@ -637,6 +641,7 @@ fn audio_clip_commands(
                 sample,
                 mixer_track,
                 output: Default::default(),
+                normalize: false,
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,

@@ -254,6 +254,16 @@ describe("selected-note tools through the real Rust WASM backend", () => {
       target: { value: "50" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Swing" }))
+    fireEvent.change(screen.getByLabelText("Divisions per unit"), {
+      target: { value: "0" },
+    })
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
+    expect(screen.getByLabelText("Divisions per unit")).toHaveAttribute("aria-invalid", "true")
+    fireEvent.change(screen.getByLabelText("Divisions per unit"), {
+      target: { value: "1" },
+    })
+    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled()
+    fireEvent.click(screen.getByRole("button", { name: "Custom ticks" }))
     fireEvent.change(screen.getByLabelText("Grid (ticks)"), {
       target: { value: "0" },
     })

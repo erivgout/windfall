@@ -1,0 +1,1 @@
+The channel timing section steps the gate from the written length toward a quarter note. The written length stays the written length when moved previous. A quarter note stays a quarter note when moved next. A gate between two presets moves to the neighboring preset. Swing mix and shift stay as they are.

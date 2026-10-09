@@ -125,6 +125,7 @@ export function attachGridInput(
   const autoScroll = () => {
     scrollFrame = 0
     if (!editor.hasPointerGesture || !last) return
+    if (usePianoRollStore.getState().tool === "zoom") return
     const { width, height } = view.viewport
     const dx = edgeSpeed(last.x, width)
     const dy = edgeSpeed(last.y, height)
@@ -175,7 +176,7 @@ export function attachGridInput(
     travelled = false
     const preferences = usePianoRollStore.getState()
     const editing = session.editing
-    if (event.button === 0 && editing && preferences.ghosts && preferences.editGhosts &&
+    if (editing && preferences.ghosts && preferences.editGhosts &&
       !editor.busy && !editor.hasStampChoice && !hitTestPoint(view.viewport, editor.items, last.x, last.y)) {
       const project = useProjectStore.getState().project
       const pattern = project.patterns.find((pattern) => pattern.id === editing.patternId)
@@ -238,6 +239,9 @@ export function attachGridInput(
 
   const onPointerUp = (event: PointerEvent) => endGesture(event, true)
   const onPointerCancel = (event: PointerEvent) => endGesture(event, false)
+  const onLostCapture = (event: PointerEvent) => {
+    if (frame.held && editor.hasPointerGesture) endGesture(event, false)
+  }
 
   const onPointerLeave = () => {
     pointerInside = false
@@ -272,6 +276,13 @@ export function attachGridInput(
 
   // Ctrl and Shift change what a drag does, also while the mouse is still.
   const onModifier = (event: KeyboardEvent) => {
+    if (event.type === "keydown" && event.key === "Escape" && (editor.busy || editor.canRestoreZoom)) {
+      event.preventDefault()
+      stopAutoScroll()
+      frame.release()
+      editor.cancel()
+      return
+    }
     if (!last || !editor.busy || !canRefresh()) return
     if (!["Control", "Shift", "Alt", "Meta"].includes(event.key)) return
     last = {
@@ -296,6 +307,7 @@ export function attachGridInput(
   element.addEventListener("pointerenter", onPointerMove)
   element.addEventListener("pointerup", onPointerUp)
   element.addEventListener("pointercancel", onPointerCancel)
+  element.addEventListener("lostpointercapture", onLostCapture)
   element.addEventListener("pointerleave", onPointerLeave)
   element.addEventListener("contextmenu", onContextMenu)
   element.addEventListener("mousedown", onMouseDown)
@@ -306,6 +318,7 @@ export function attachGridInput(
   window.addEventListener("blur", onBlur)
 
   return () => {
+    editor.cancel()
     stopAutoScroll()
     stopCursor()
     element.removeEventListener("pointerdown", onPointerDown)
@@ -313,6 +326,7 @@ export function attachGridInput(
     element.removeEventListener("pointerenter", onPointerMove)
     element.removeEventListener("pointerup", onPointerUp)
     element.removeEventListener("pointercancel", onPointerCancel)
+    element.removeEventListener("lostpointercapture", onLostCapture)
     element.removeEventListener("pointerleave", onPointerLeave)
     element.removeEventListener("contextmenu", onContextMenu)
     element.removeEventListener("mousedown", onMouseDown)

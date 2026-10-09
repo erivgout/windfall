@@ -17,12 +17,6 @@ pub(super) const PENDING_PARAMETER_CAPACITY: usize = 256;
 const INPUT_PARAMETER_CAPACITY: usize =
     PENDING_PARAMETER_CAPACITY + crate::instance::QUEUE_CAPACITY + EVENT_CAPACITY;
 
-pub(super) const PENDING_PARAMETER_CAPACITY: usize = 256;
-// All three input sources may be disjoint. Reserved instrument events cannot
-// contain parameters. Neither points nor COM queues grow during a callback.
-const INPUT_PARAMETER_CAPACITY: usize =
-    PENDING_PARAMETER_CAPACITY + crate::instance::QUEUE_CAPACITY + EVENT_CAPACITY;
-
 #[derive(Clone, Copy)]
 struct Point {
     offset: i32,

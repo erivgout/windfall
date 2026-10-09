@@ -7,7 +7,7 @@ use super::{
 use crate::{
     descriptor::{AudioPort, PluginLayout},
     error::PluginError,
-    events::{HostEvent, PluginEvent, Transport, NoteExpressionKind, MAX_NOTE_INSTANCES},
+    events::{HostEvent, MAX_NOTE_INSTANCES, NoteExpressionKind, PluginEvent, Transport},
     processor::{AudioIo, BlockResult, ProcessFailed, ProcessStatus, ProcessorBackend},
 };
 use std::{any::Any, sync::Arc};
@@ -17,8 +17,18 @@ use vst3::{
 };
 
 #[derive(Clone, Copy)]
-struct NativeHeld { id: u32, key: u8, channel: u8 }
-impl NativeHeld { const EMPTY: Self = Self { id: 0, key: 0, channel: 0 }; }
+struct NativeHeld {
+    id: u32,
+    key: u8,
+    channel: u8,
+}
+impl NativeHeld {
+    const EMPTY: Self = Self {
+        id: 0,
+        key: 0,
+        channel: 0,
+    };
+}
 
 struct Ports {
     buffers: Vec<Vec<Vec<f32>>>,
@@ -49,45 +59,6 @@ fn process_context(
     Ok(context)
 }
 
-fn process_context(
-    transport: &Transport,
-    sample_rate: f64,
-    steady_time: u64,
-) -> Result<ProcessContext, ProcessFailed> {
-    let (bar_start, _) = transport.bar_position().ok_or(ProcessFailed)?;
-    // SAFETY: ProcessContext is POD, only flagged fields are consumed.
-    let mut context: ProcessContext = unsafe { std::mem::zeroed() };
-    context.state = 512 | 1024 | 2048 | 8192 | 131072 | if transport.playing { 2 } else { 0 };
-    context.sampleRate = sample_rate;
-    context.projectTimeSamples = (transport.position_seconds * sample_rate) as i64;
-    context.continousTimeSamples = steady_time.min(i64::MAX as u64) as i64;
-    context.projectTimeMusic = transport.position_beats;
-    context.tempo = transport.tempo_bpm;
-    context.timeSigNumerator = transport.numerator.into();
-    context.timeSigDenominator = transport.denominator.into();
-    context.barPositionMusic = bar_start;
-    Ok(context)
-}
-
-fn process_context(
-    transport: &Transport,
-    sample_rate: f64,
-    steady_time: u64,
-) -> Result<ProcessContext, ProcessFailed> {
-    let (bar_start, _) = transport.bar_position().ok_or(ProcessFailed)?;
-    // SAFETY: ProcessContext is POD, only flagged fields are consumed.
-    let mut context: ProcessContext = unsafe { std::mem::zeroed() };
-    context.state = 512 | 1024 | 2048 | 8192 | 131072 | if transport.playing { 2 } else { 0 };
-    context.sampleRate = sample_rate;
-    context.projectTimeSamples = (transport.position_seconds * sample_rate) as i64;
-    context.continousTimeSamples = steady_time.min(i64::MAX as u64) as i64;
-    context.projectTimeMusic = transport.position_beats;
-    context.tempo = transport.tempo_bpm;
-    context.timeSigNumerator = transport.numerator.into();
-    context.timeSigDenominator = transport.denominator.into();
-    context.barPositionMusic = bar_start;
-    Ok(context)
-}
 impl Ports {
     fn new(ports: &[AudioPort], max_block: usize) -> Self {
         let mut buffers: Vec<Vec<Vec<f32>>> = ports
@@ -114,7 +85,11 @@ impl Ports {
             buses,
             main: ports.iter().position(|p| p.main && p.channels > 0),
             key: ports.iter().position(|p| !p.main && p.channels > 0),
-            auxiliary: ports.iter().enumerate().filter_map(|(index, p)| (!p.main && p.channels > 0).then_some(index)).collect(),
+            auxiliary: ports
+                .iter()
+                .enumerate()
+                .filter_map(|(index, p)| (!p.main && p.channels > 0).then_some(index))
+                .collect(),
         }
     }
     fn clear(&mut self, frames: usize) {
@@ -147,9 +122,20 @@ impl Ports {
             let mono = channels.len() == 1;
             for (side, channel) in channels.iter_mut().take(2).enumerate() {
                 for (index, output) in channel[..frames].iter_mut().enumerate() {
-                    let pair = key.and_then(|key| key.get(index)).copied().unwrap_or([0.0; 2]);
-                    let value = if mono { (pair[0] + pair[1]) * 0.5 } else { pair[side] };
-                    *output = if value.is_finite() { value.clamp(-1.0e6, 1.0e6) } else { 0.0 };
+                    let pair = key
+                        .and_then(|key| key.get(index))
+                        .copied()
+                        .unwrap_or([0.0; 2]);
+                    let value = if mono {
+                        (pair[0] + pair[1]) * 0.5
+                    } else {
+                        pair[side]
+                    };
+                    *output = if value.is_finite() {
+                        value.clamp(-1.0e6, 1.0e6)
+                    } else {
+                        0.0
+                    };
                 }
             }
             self.buses[bus].silenceFlags = if key.is_none() { u64::MAX } else { 0 };
@@ -336,14 +322,22 @@ impl VstProcessor {
         let output_events = Events::new();
         let output_event_ptr = output_events.to_com_ptr::<IEventList>().expect("events");
         let mut expression_masks = [0; 16];
-        if let Some(controller) = objects.controller.as_ref().and_then(|controller| controller.cast::<INoteExpressionController>()) {
-            for channel in 0..16 {
-                let count = unsafe { controller.getNoteExpressionCount(0, channel as i16) }.clamp(0, 256);
+        if let Some(controller) = objects
+            .controller
+            .as_ref()
+            .and_then(|controller| controller.cast::<INoteExpressionController>())
+        {
+            for (channel, expression_mask) in expression_masks.iter_mut().enumerate() {
+                let count =
+                    unsafe { controller.getNoteExpressionCount(0, channel as i16) }.clamp(0, 256);
                 for index in 0..count {
                     let mut info: NoteExpressionTypeInfo = unsafe { std::mem::zeroed() };
-                    if unsafe { controller.getNoteExpressionInfo(0, channel as i16, index, &mut info) } == kResultOk
-                        && info.typeId <= 5 {
-                        expression_masks[channel] |= 1 << info.typeId;
+                    if unsafe {
+                        controller.getNoteExpressionInfo(0, channel as i16, index, &mut info)
+                    } == kResultOk
+                        && info.typeId <= 5
+                    {
+                        *expression_mask |= 1 << info.typeId;
                     }
                 }
             }
@@ -408,7 +402,14 @@ impl VstProcessor {
             .saturating_add(self.native_drops)
     }
     fn note(&self, time: u32, key: u8, channel: u8, velocity: f32, on: bool) {
-        self.note_with_id(time, key, channel, velocity, on, i32::from(channel) * 128 + i32::from(key));
+        self.note_with_id(
+            time,
+            key,
+            channel,
+            velocity,
+            on,
+            i32::from(channel) * 128 + i32::from(key),
+        );
     }
     fn note_with_id(&self, time: u32, key: u8, channel: u8, velocity: f32, on: bool, id: i32) {
         if !self.event_input {
@@ -443,42 +444,77 @@ impl VstProcessor {
     }
     fn instance(&mut self, time: u32, id: u32, key: u8, channel: u8, velocity: f32, on: bool) {
         if on {
-            let slot = self.instances.iter().position(|note| note.id == id)
+            let slot = self
+                .instances
+                .iter()
+                .position(|note| note.id == id)
                 .or_else(|| self.instances.iter().position(|note| note.id == 0));
-            let Some(slot) = slot else { self.native_drops = self.native_drops.saturating_add(1); return; };
+            let Some(slot) = slot else {
+                self.native_drops = self.native_drops.saturating_add(1);
+                return;
+            };
             self.instances[slot] = NativeHeld { id, key, channel };
-        } else if let Some(note) = self.instances.iter_mut().find(|note| note.id == id) { *note = NativeHeld::EMPTY; }
+        } else if let Some(note) = self.instances.iter_mut().find(|note| note.id == id) {
+            *note = NativeHeld::EMPTY;
+        }
         self.note_with_id(time, key, channel, velocity, on, id as i32);
     }
     fn expression(&self, time: u32, id: u32, channel: u8, kind: NoteExpressionKind, value: f64) {
-        if !self.event_input || self.expression_masks[channel as usize] & kind.mask() == 0 { return; }
-        let value = match kind { NoteExpressionKind::Tuning => value / 240.0 + 0.5,
-            NoteExpressionKind::Volume => value / 4.0, _ => value };
+        if !self.event_input || self.expression_masks[channel as usize] & kind.mask() == 0 {
+            return;
+        }
+        let value = match kind {
+            NoteExpressionKind::Tuning => value / 240.0 + 0.5,
+            NoteExpressionKind::Volume => value / 4.0,
+            _ => value,
+        };
         let mut event: Event = unsafe { std::mem::zeroed() };
         event.sampleOffset = time as i32;
         event.flags = 1;
         event.r#type = 4;
-        event.__field0.noteExpressionValue = NoteExpressionValueEvent { typeId: kind as u32, noteId: id as i32, value };
+        event.__field0.noteExpressionValue = NoteExpressionValueEvent {
+            typeId: kind as u32,
+            noteId: id as i32,
+            value,
+        };
         self.events.push(event);
     }
     fn release_instances(&mut self, time: u32) {
         for index in 0..self.instances.len() {
             let note = self.instances[index];
-            if note.id != 0 { self.note_with_id(time, note.key, note.channel, 0.0, false, note.id as i32); }
+            if note.id != 0 {
+                self.note_with_id(time, note.key, note.channel, 0.0, false, note.id as i32);
+            }
         }
         self.instances.fill(NativeHeld::EMPTY);
     }
 }
 impl ProcessorBackend for VstProcessor {
-    fn supports_note_instances(&self) -> bool { self.event_input }
-    fn note_expression_mask(&self, channel: u8) -> u32 { self.expression_masks[channel.min(15) as usize] }
+    fn supports_note_instances(&self) -> bool {
+        self.event_input
+    }
+    fn note_expression_mask(&self, channel: u8) -> u32 {
+        self.expression_masks[channel.min(15) as usize]
+    }
     fn set_sidechain_input(&mut self, input: Option<u32>) {
         self.inputs.key = match input {
-            Some(index) => self.inputs.auxiliary.iter().copied().find(|port| *port == index as usize),
+            Some(index) => self
+                .inputs
+                .auxiliary
+                .iter()
+                .copied()
+                .find(|port| *port == index as usize),
             None => self.inputs.auxiliary.first().copied(),
         };
     }
-    fn process(&mut self, audio: AudioIo<'_>, events: &[HostEvent], transport: &Transport, steady_time: u64, out: &mut dyn FnMut(PluginEvent)) -> Result<BlockResult, ProcessFailed> {
+    fn process(
+        &mut self,
+        audio: AudioIo<'_>,
+        events: &[HostEvent],
+        transport: &Transport,
+        steady_time: u64,
+        out: &mut dyn FnMut(PluginEvent),
+    ) -> Result<BlockResult, ProcessFailed> {
         self.process_sidechain(audio, None, events, transport, steady_time, out)
     }
     fn process_sidechain(
@@ -555,9 +591,28 @@ impl ProcessorBackend for VstProcessor {
         }
         for event in events {
             match *event {
-                HostEvent::NoteOnInstance { time, id, key, channel, velocity } => self.instance(time, id, key, channel, velocity, true),
-                HostEvent::NoteOffInstance { time, id, key, channel, velocity } => self.instance(time, id, key, channel, velocity, false),
-                HostEvent::NoteExpression { time, id, channel, kind, value, .. } => self.expression(time, id, channel, kind, value),
+                HostEvent::NoteOnInstance {
+                    time,
+                    id,
+                    key,
+                    channel,
+                    velocity,
+                } => self.instance(time, id, key, channel, velocity, true),
+                HostEvent::NoteOffInstance {
+                    time,
+                    id,
+                    key,
+                    channel,
+                    velocity,
+                } => self.instance(time, id, key, channel, velocity, false),
+                HostEvent::NoteExpression {
+                    time,
+                    id,
+                    channel,
+                    kind,
+                    value,
+                    ..
+                } => self.expression(time, id, channel, kind, value),
                 HostEvent::Param { time, id, value } => {
                     if let Some(v) = self.value(id) {
                         if !v.writable {

@@ -29,10 +29,10 @@ fn source() -> RecordingSource {
         right: None,
         armed_tracks: None,
         mixer_tap: None,
+        alignment: None,
+        loop_recording: None,
+        monitor: None,
     }
-    alignment: None,
-    loop_recording: None,
-    monitor: None,
 }
 fn synthetic(
     _source: RecordingSource,

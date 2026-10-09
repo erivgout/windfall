@@ -9,7 +9,6 @@ import {
 } from "@/lib/automation/view-range"
 import {
   deviceX,
-  deviceY,
   rgbaToCss,
   rgbFromInt,
   withAlpha,
@@ -22,6 +21,7 @@ import {
   MIN_HEIGHT_FOR_BAND,
   type Box,
 } from "../clip-box"
+import { playlistDeviceY, rowGeometry } from "../row-geometry"
 import { tickAtDeviceX, type ClipSprite, type ClipStyle } from "../sprite"
 import { MIN_BEND_WIDTH } from "./hit"
 import {
@@ -44,6 +44,8 @@ const MIN_CURVE_HEIGHT = 5
 
 export type AutomationPaint = {
   points: readonly AutomationPoint[]
+  /** Selected points in this clip, filled with the curve's ink. */
+  selected?: ReadonlySet<number>
   /** The clip under its title bar, less a little air, in device pixels. */
   area: Box
   /** The part of the curve's range the area shows. Left out, all of it. */
@@ -197,9 +199,11 @@ function paintCurve(
   let last = first
   while (last < points.length && points[last].tick <= toTick) last += 1
   const count = last - first
-  if (count === 0 || paint.budget.marks <= 0) return
-  if ((right - left) / count < MIN_POINT_SPACING * dpr) return
-  paint.budget.marks -= count
+  if (count === 0) return
+  const showAll =
+    paint.budget.marks > 0 && (right - left) / count >= MIN_POINT_SPACING * dpr
+  if (!showAll && !paint.selected?.size) return
+  if (showAll) paint.budget.marks -= count
 
   const radius = POINT_SIZE * dpr
   const fill = rgbaToCss(theme.background)
@@ -212,10 +216,12 @@ function paintCurve(
   const atStart = tickAtDeviceX(transform, 0) <= 0
   const minX = atStart ? radius + ctx.lineWidth / 2 : -Infinity
   for (let index = first; index < last; index += 1) {
+    if (!showAll && !paint.selected?.has(index)) continue
     const point = points[index]
     if (!inView(range, point.value)) continue
     const x = Math.max(minX, xOf(point.tick))
     const y = yOf(point.value)
+    ctx.fillStyle = paint.selected?.has(index) ? style.note : fill
     ctx.beginPath()
     // A point that holds its value is a square, one that slopes a circle.
     if (point.hold) ctx.rect(x - radius, y - radius, 2 * radius, 2 * radius)
@@ -224,7 +230,7 @@ function paintCurve(
     ctx.stroke()
   }
 
-  if (!paint.active) return
+  if (!paint.active || !showAll) return
   const small = radius * 0.8
   for (let index = Math.max(0, first - 1); index < last; index += 1) {
     const handle = bendHandle(points, index)
@@ -281,14 +287,14 @@ export function paintHolds(
   const { transform, viewport } = frame
   const dpr = viewport.dpr
   const lw = transform.lineWidth
-  const banded = viewport.rowHeight >= MIN_HEIGHT_FOR_BAND
   const dash = Math.round(5 * dpr)
   const gap = Math.round(4 * dpr)
   for (const hold of holds) {
     const row = rowOf(hold.track)
     if (row === undefined) continue
-    const y0 = deviceY(transform, row) + lw
-    const y1 = deviceY(transform, row + 1)
+    const banded = rowGeometry(viewport).height(row) >= MIN_HEIGHT_FOR_BAND
+    const y0 = playlistDeviceY(viewport, transform, row) + lw
+    const y1 = playlistDeviceY(viewport, transform, row + 1)
     if (y1 <= 0 || y0 >= transform.heightDev) continue
     const from = Math.max(0, deviceX(transform, hold.start))
     const to = Math.min(transform.widthDev, deviceX(transform, hold.end))

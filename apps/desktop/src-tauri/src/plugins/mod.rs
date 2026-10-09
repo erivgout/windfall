@@ -1,4 +1,6 @@
 //! Cached, isolated discovery and a native owner thread for audio instances.
+#[cfg(windows)]
+mod bridge;
 mod capture_ack;
 mod runtime;
 pub(crate) use capture_ack::{CaptureAcknowledgement, CaptureOutcome};

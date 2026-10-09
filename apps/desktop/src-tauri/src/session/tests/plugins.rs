@@ -12,6 +12,24 @@ fn library() -> &'static Path {
     static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
     LIBRARY.get_or_init(|| {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        if let Some(source) = std::env::var_os("WINDFALL_BRIDGE_FIXTURE") {
+            let source = PathBuf::from(source);
+            assert!(source.is_file(), "explicit native fixture must be a file");
+            let source = source.canonicalize().expect("canonical native fixture");
+            let helper = PathBuf::from(
+                std::env::var_os("WINDFALL_DESKTOP_BRIDGE_HELPER")
+                    .expect("explicit fixture requires the current desktop helper"),
+            );
+            assert!(helper.is_file(), "explicit desktop helper must be a file");
+            assert_eq!(
+                helper.canonicalize().expect("canonical desktop helper"),
+                root.join("target/debug/windfall-desktop.exe")
+                    .canonicalize()
+                    .expect("build the current desktop helper explicitly"),
+                "the fixture runner must use the actual desktop scanner/audio entry"
+            );
+            return source;
+        }
         let target = root.join("target/plugin-session-fixtures");
         let output = std::process::Command::new(env!("CARGO"))
             .args(["build", "--manifest-path"])
@@ -1823,7 +1841,7 @@ fn n4_native_final_block_export_failure(vst3: bool) {
         &mut |_| true,
     );
     assert!(
-        matches!(result, Err(windfall_engine::StemError::Plugin(_))),
+        matches!(result, Err(windfall_engine::RenderError::Plugin(_))),
         "{result:?}"
     );
     assert!(
@@ -2589,7 +2607,7 @@ fn n4_settled_gain_with_unprocessed_note(vst3: bool) {
         cancelled: None,
     })
     .unwrap();
-    let (_, parameters) = control.describe(Duration::from_secs(2)).unwrap();
+    let (_, parameters, _) = control.describe(Duration::from_secs(2)).unwrap();
     assert_eq!(
         parameters
             .iter()

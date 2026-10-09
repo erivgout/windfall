@@ -410,6 +410,7 @@ describe("mock backend: browser and engine", () => {
       device: null,
       sampleRate: null,
       bufferFrames: null,
+      outputChannels: null,
     })
     await backend.engineConfigure({ sampleRate: 44_100 })
     // The buffer was left to the device, and stays "default" in the request.
@@ -418,6 +419,7 @@ describe("mock backend: browser and engine", () => {
       device: null,
       sampleRate: 44_100,
       bufferFrames: null,
+      outputChannels: null,
     })
     expect(await backend.engineStatus()).toMatchObject({
       sampleRate: 44_100,

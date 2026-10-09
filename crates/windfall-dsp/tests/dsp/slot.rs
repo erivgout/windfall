@@ -28,6 +28,15 @@ fn loud_eq() -> EffectParams {
     EffectParams::Eq(params)
 }
 
+fn audible_params(kind: EffectKind) -> EffectParams {
+    let mut params = kind.default_params();
+    // A note-controlled gate is intentionally silent until a note triggers it.
+    if let EffectParams::NoteEnvelope(envelope) = &mut params {
+        envelope.trigger = true;
+    }
+    params
+}
+
 #[test]
 fn hosting_types_can_be_sent_to_the_audio_thread_and_are_small() {
     fn sendable<T: Send>() {}
@@ -57,16 +66,58 @@ fn any_effect_reports_what_it_holds_and_refuses_other_settings() {
         }
         let has_meter = matches!(kind, EffectKind::Compressor | EffectKind::Limiter);
         assert_eq!(effect.gain_reduction().is_some(), has_meter);
-        let has_latency = matches!(kind, EffectKind::Limiter | EffectKind::Distortion);
+        let has_latency = matches!(
+            kind,
+            EffectKind::Limiter
+                | EffectKind::Distortion
+                | EffectKind::MultibandMaximizer
+                | EffectKind::OneKnob
+                | EffectKind::BassHarmonics
+                | EffectKind::Exciter
+                | EffectKind::PerformanceRack
+                | EffectKind::Convolver
+                | EffectKind::FrequencyShifter
+                | EffectKind::PitchShift
+                | EffectKind::PitchCorrect
+        );
         let can_delay = has_latency || kind == EffectKind::StereoMatrix;
-        assert_eq!(effect.latency_samples() > 0, has_latency);
-        assert_eq!(effect.max_latency_samples(RATE) > 0, can_delay);
+        assert_eq!(effect.latency_samples() > 0, has_latency, "{}", kind.name());
+        assert_eq!(
+            effect.latency_samples(),
+            kind.default_params().latency_samples(RATE),
+            "{}",
+            kind.name()
+        );
+        assert_eq!(
+            effect.max_latency_samples(RATE) > 0,
+            can_delay,
+            "{}",
+            kind.name()
+        );
         assert!(effect.max_latency_samples(RATE) >= effect.latency_samples());
 
-        let (mut left, mut right) = (noise(1, 0.3, 2_000), noise(2, 0.3, 2_000));
+        if kind == EffectKind::NoteEnvelope {
+            let mut closed_left = noise(1, 0.3, 256);
+            let mut closed_right = closed_left.clone();
+            effect.process(&mut closed_left, &mut closed_right);
+            assert!(
+                closed_left
+                    .iter()
+                    .chain(&closed_right)
+                    .all(|sample| *sample == 0.0)
+            );
+        }
+        assert!(effect.set_params(&audible_params(kind)));
+        let (mut left, mut right) = (noise(1, 0.3, 96_000), noise(2, 0.3, 96_000));
         effect.set_tempo(140.0);
-        effect.process(&mut left, &mut right);
-        assert!(peak(&left) > 0.0 && left.iter().all(|sample| sample.is_finite()));
+        for (l, r) in left.chunks_mut(256).zip(right.chunks_mut(256)) {
+            effect.process(l, r);
+        }
+        assert!(
+            peak(&left) > 0.0 && left.iter().chain(&right).all(|sample| sample.is_finite()),
+            "{}",
+            kind.name()
+        );
         effect.reset();
         assert!(effect.tail_samples() >= effect.latency_samples());
     }
@@ -218,7 +269,7 @@ fn a_slot_keeps_the_same_delay_on_off_and_in_between() {
 #[test]
 fn a_slot_shields_its_effect_from_bad_input() {
     for kind in EffectKind::ALL {
-        let mut slot = slot(kind.default_params());
+        let mut slot = slot(audible_params(kind));
         let mut left = noise(7, 0.5, 2_048);
         let mut right = noise(8, 0.5, 2_048);
         left[10] = f32::NAN;

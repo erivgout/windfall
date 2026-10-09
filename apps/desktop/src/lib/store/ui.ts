@@ -12,6 +12,17 @@ export type SidePanel = "browser" | "mixer"
 export type CenterTab = "channelRack" | "playlist" | "pianoRoll"
 /** Any panel. A panel is also the scope its keyboard shortcuts are live in. */
 export type PanelId = SidePanel | CenterTab
+export const PANEL_IDS: readonly PanelId[] = [
+  "browser",
+  "mixer",
+  "channelRack",
+  "playlist",
+  "pianoRoll",
+]
+
+export function isPanelId(value: string | null): value is PanelId {
+  return PANEL_IDS.some((id) => id === value)
+}
 /**
  * A part of a panel with keys of its own, inside the panel's scope: the
  * channel settings beside the rack, the effects beside the mixer, one
@@ -48,6 +59,8 @@ type UiState = {
   theme: Theme
   keymap: KeymapPreset
   panels: Record<SidePanel, boolean>
+  /** Panels in their own windows for this session; never persisted. */
+  detachedPanels: PanelId[]
   centerTab: CenterTab
   /** What is showing over the center tab, if anything. */
   centerOverlay: CenterOverlay | null
@@ -72,6 +85,8 @@ type UiState = {
   setKeymap(keymap: KeymapPreset): void
   togglePanel(panel: SidePanel): void
   setPanelVisible(panel: SidePanel, visible: boolean): void
+  addDetachedPanel(panel: PanelId): void
+  removeDetachedPanel(panel: PanelId): void
   showCenterTab(tab: CenterTab): void
   setCenterOverlay(overlay: CenterOverlay | null): void
   saveLayout(key: string, sizes: PanelSizes): void
@@ -124,6 +139,7 @@ export const useUiStore = create<UiState>()(
       theme: "dark",
       keymap: "windfall",
       panels: DEFAULT_PANELS,
+      detachedPanels: [],
       centerTab: "channelRack",
       centerOverlay: null,
       layouts: {},
@@ -147,6 +163,18 @@ export const useUiStore = create<UiState>()(
         })),
       setPanelVisible: (panel, visible) =>
         set((state) => ({ panels: { ...state.panels, [panel]: visible } })),
+      addDetachedPanel: (panel) =>
+        set((state) =>
+          !isPanelId(panel) || state.detachedPanels.includes(panel)
+            ? state
+            : { detachedPanels: [...state.detachedPanels, panel] }
+        ),
+      removeDetachedPanel: (panel) =>
+        set((state) =>
+          state.detachedPanels.includes(panel)
+            ? { detachedPanels: state.detachedPanels.filter((id) => id !== panel) }
+            : state
+        ),
       // Bringing an editor forward also hands it the keyboard, and puts
       // away whatever was lying over the editors.
       showCenterTab: (centerTab) =>

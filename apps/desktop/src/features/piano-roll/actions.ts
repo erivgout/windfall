@@ -5,6 +5,7 @@ import {
   type AppState,
   type PresetShortcuts,
 } from "@/lib/actions"
+import { dispatch } from "@/lib/store/project"
 
 import { LANE_KINDS } from "./lane-math"
 import { NOTE_TOOLS, openNoteTools } from "./note-tools"
@@ -18,6 +19,25 @@ import { SNAP_OPTIONS } from "./snap"
 import { usePianoRollStore, type Tool } from "./store"
 import { openWaveformHelper } from "./waveform-helper"
 import { openPatternTimeline } from "./pattern-timeline"
+import { openRiffGenerator } from "./riff-generator"
+import { openProgressionGenerator } from "./progression"
+import { exportSheetMusic } from "./sheet-export"
+import { useTypingKeyboardStore } from "./typing-keyboard"
+import { useStepEntryStore } from "./step-entry"
+import { canDumpPlayedNotes, dumpPlayedNotes } from "./dump-played-notes"
+import { useNoteLogStore } from "./note-log"
+import { rememberedVelocity } from "./pointer-tools"
+import { restoredVelocities } from "./restore-muted"
+import { notesAtTick } from "./select-playhead"
+import { GLIDE_PRESETS, setSelectedGlide } from "./glide-presets"
+import { setSelectedGlidePresetStep } from "./glide-preset-step"
+import { setSelectedGlideScale } from "./glide-scale"
+import { LENGTH_PRESETS, setSelectedLength } from "./length-presets"
+import { setSelectedNoteLengthPresetStep } from "./length-preset-step"
+import { setSelectedLengthScale } from "./length-scale"
+import { setSelectedNoteStartScale } from "./note-start-scale"
+import { setSelectedNoteKeyScale } from "./note-key-scale"
+import { setSelectedNoteFromEndScale } from "./note-from-end-scale"
 
 const SECTION = "Piano roll"
 
@@ -35,6 +55,14 @@ const hasSelection = (state: AppState) =>
 const hasNotes = (state: AppState) =>
   inRoll(state) && (editor()?.notes.length ?? 0) > 0
 
+function restorableNotes() {
+  const context = editor()?.context
+  if (!context) return []
+  return restoredVelocities(context.notes, (id) =>
+    rememberedVelocity(context.pattern.id, context.channel, id)
+  )
+}
+
 const TOOL_ACTIONS: {
   tool: Tool
   title: string
@@ -45,6 +73,10 @@ const TOOL_ACTIONS: {
   { tool: "paint", title: "Paint tool", key: "B", words: "brush repeat" },
   { tool: "select", title: "Select tool", key: "S", words: "marquee box" },
   { tool: "erase", title: "Erase tool", key: "E", words: "delete rubber" },
+  { tool: "mute", title: "Mute tool", key: "M", words: "silence unmute note" },
+  { tool: "slice", title: "Slice tool", key: "C", words: "split cut note" },
+  { tool: "zoom", title: "Zoom tool", key: "Z", words: "rectangle viewport" },
+  { tool: "playback", title: "Playback tool", key: "Y", words: "scrub seek audition" },
 ]
 
 function capital(word: string): string {
@@ -52,6 +84,68 @@ function capital(word: string): string {
 }
 
 const ACTIONS: Action[] = [
+  {
+    id: "pianoRoll.dumpPlayedNotes",
+    title: "Dump played notes",
+    section: SECTION,
+    keywords: "audition log recent held notes capture",
+    enabled: (state) => inRoll(state) && canDumpPlayedNotes(),
+    whyDisabled: () => "Open a pattern channel and audition notes on it",
+    run: dumpPlayedNotes,
+  },
+  {
+    id: "pianoRoll.stepEntry",
+    title: "Step entry",
+    section: SECTION,
+    defaultShortcut: "\\",
+    keywords: "computer keyboard insert note snap cursor",
+    enabled: inRoll,
+    checked: () => useStepEntryStore.getState().enabled,
+    run: () => {
+      const stepEntry = useStepEntryStore.getState()
+      stepEntry.setEnabled(!stepEntry.enabled)
+      currentSession()?.focusGrid()
+    },
+  },
+  {
+    id: "pianoRoll.typing",
+    title: "Typing",
+    section: SECTION,
+    defaultShortcut: "`",
+    keywords: "computer keyboard audition octave",
+    enabled: inRoll,
+    checked: () => useTypingKeyboardStore.getState().enabled,
+    run: () => {
+      const typing = useTypingKeyboardStore.getState()
+      typing.setEnabled(!typing.enabled)
+      currentSession()?.focusGrid()
+    },
+  },
+  {
+    id: "pianoRoll.exportSheetMusic",
+    title: "Export sheet music…",
+    section: SECTION,
+    keywords: "MusicXML notation score save channel",
+    enabled: (state) => inRoll(state) && !!editor()?.context,
+    whyDisabled: () => "Open a pattern channel in the piano roll",
+    run: exportSheetMusic,
+  },
+  {
+    id: "pianoRoll.generateRiff",
+    title: "Generate riff…",
+    section: SECTION,
+    keywords: "seed melody scale append generator",
+    enabled: (state) => inRoll(state) && !!editor()?.context && !editor()?.busy,
+    run: openRiffGenerator,
+  },
+  {
+    id: "pianoRoll.generateProgression",
+    title: "Generate progression…",
+    section: SECTION,
+    keywords: "seed chord progression triad diatonic mood append generator",
+    enabled: (state) => inRoll(state) && !!editor()?.context && !editor()?.busy,
+    run: openProgressionGenerator,
+  },
   {
     id: "pianoRoll.patternTimeline",
     title: "Pattern markers and time signatures…",
@@ -107,6 +201,150 @@ const ACTIONS: Action[] = [
     enabled: hasSelection,
     run: () => setSelectedArticulation(item.value),
   })),
+  ...GLIDE_PRESETS.map((item): Action => ({
+    id: `pianoRoll.glide.${item.glideTicks}`,
+    title: `Set selected notes: ${item.label.toLowerCase()} portamento`,
+    section: SECTION,
+    keywords: "portamento duration glide ticks",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedGlide(item.glideTicks),
+  })),
+  {
+    id: "pianoRoll.glide.previous",
+    title: "Previous portamento preset",
+    section: SECTION,
+    keywords: "portamento duration glide preset",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedGlidePresetStep("previous"),
+  },
+  {
+    id: "pianoRoll.glide.next",
+    title: "Next portamento preset",
+    section: SECTION,
+    keywords: "portamento duration glide preset",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedGlidePresetStep("next"),
+  },
+  {
+    id: "pianoRoll.glide.half",
+    title: "Halve selected portamento",
+    section: SECTION,
+    keywords: "portamento duration glide half",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedGlideScale("half"),
+  },
+  {
+    id: "pianoRoll.glide.double",
+    title: "Double selected portamento",
+    section: SECTION,
+    keywords: "portamento duration glide double",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedGlideScale("double"),
+  },
+  ...LENGTH_PRESETS.map((item): Action => ({
+    id: `pianoRoll.length.${item.length}`,
+    title: `Set selected notes: ${item.label.toLowerCase()}`,
+    section: SECTION,
+    keywords: "note length duration ticks",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedLength(item.length),
+  })),
+  {
+    id: "pianoRoll.length.previous",
+    title: "Previous length preset",
+    section: SECTION,
+    keywords: "note length duration preset",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteLengthPresetStep("previous"),
+  },
+  {
+    id: "pianoRoll.length.next",
+    title: "Next length preset",
+    section: SECTION,
+    keywords: "note length duration preset",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteLengthPresetStep("next"),
+  },
+  {
+    id: "pianoRoll.length.half",
+    title: "Halve selected note lengths",
+    section: SECTION,
+    keywords: "note length half double duration",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedLengthScale("half"),
+  },
+  {
+    id: "pianoRoll.length.double",
+    title: "Double selected note lengths",
+    section: SECTION,
+    keywords: "note length half double duration",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedLengthScale("double"),
+  },
+  {
+    id: "pianoRoll.start.half",
+    title: "Halve selected note starts",
+    section: SECTION,
+    keywords: "note start half timing ticks",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteStartScale("half"),
+  },
+  {
+    id: "pianoRoll.start.double",
+    title: "Double selected note starts",
+    section: SECTION,
+    keywords: "note start double timing ticks",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteStartScale("double"),
+  },
+  {
+    id: "pianoRoll.key.half",
+    title: "Halve selected note distance from C5",
+    section: SECTION,
+    keywords: "note key C5 distance half pitch",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteKeyScale("half"),
+  },
+  {
+    id: "pianoRoll.key.double",
+    title: "Double selected note distance from C5",
+    section: SECTION,
+    keywords: "note key C5 distance double pitch",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteKeyScale("double"),
+  },
+  {
+    id: "pianoRoll.fromEnd.half",
+    title: "Halve selected notes from the end",
+    section: SECTION,
+    keywords: "note end half length start duration ticks",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteFromEndScale("half"),
+  },
+  {
+    id: "pianoRoll.fromEnd.double",
+    title: "Double selected notes from the end",
+    section: SECTION,
+    keywords: "note end double length start duration ticks",
+    enabled: hasSelection,
+    whyDisabled: () => "Select notes in the piano roll",
+    run: () => setSelectedNoteFromEndScale("double"),
+  },
   {
     id: "pianoRoll.noteProperties",
     title: "Note properties…",
@@ -134,6 +372,21 @@ const ACTIONS: Action[] = [
   })),
 
   {
+    id: "pianoRoll.drum",
+    title: "Drum",
+    section: SECTION,
+    defaultShortcut: "G",
+    keywords: "paint toggle drum sequencer steps",
+    enabled: inRoll,
+    checked: () => roll().drum,
+    run: () => {
+      editor()?.cancel()
+      roll().setDrum(!roll().drum)
+      currentSession()?.focusGrid()
+    },
+  },
+
+  {
     id: "pianoRoll.selectAll",
     title: "Select all notes",
     section: SECTION,
@@ -143,18 +396,71 @@ const ACTIONS: Action[] = [
     run: () => editor()?.selectAll(),
   },
   {
+    id: "pianoRoll.selectMatchingPitches",
+    title: "Select matching pitches",
+    section: SECTION,
+    enabled: hasSelection,
+    run: () => editor()?.selectMatchingPitches(),
+  },
+  {
+    id: "pianoRoll.selectMutedNotes",
+    title: "Select muted notes",
+    section: SECTION,
+    enabled: (state) =>
+      inRoll(state) &&
+      (editor()?.notes.some((note) => note.velocity === 0) ?? false),
+    run: () => editor()?.selectMutedNotes(),
+  },
+  {
+    id: "pianoRoll.restoreMutedNotes",
+    title: "Restore muted notes",
+    section: SECTION,
+    enabled: (state) => inRoll(state) && restorableNotes().length > 0,
+    run: async () => {
+      const context = editor()?.context
+      if (!context) return
+      const updates = restorableNotes()
+      if (!updates.length) return
+      await dispatch({
+        type: "updateNotes",
+        pattern: context.pattern.id,
+        channel: context.channel,
+        updates: updates.map(({ id, velocity }) => ({ id, patch: { velocity } })),
+      })
+    },
+  },
+  {
+    id: "pianoRoll.selectNotesAtPlayhead",
+    title: "Select notes at the playhead",
+    section: SECTION,
+    enabled: (state) => {
+      const session = currentSession()
+      return (
+        inRoll(state) &&
+        typeof session?.playhead === "number" &&
+        notesAtTick(session.editor.notes, Math.floor(session.playhead)).length > 0
+      )
+    },
+    run: () => {
+      const session = currentSession()
+      if (!session || typeof session.playhead !== "number") return
+      const ids = notesAtTick(session.editor.notes, Math.floor(session.playhead))
+      if (ids.length > 0) session.editor.setSelection(ids)
+    },
+  },
+  {
     id: "pianoRoll.deselect",
     title: "Deselect all notes",
     section: SECTION,
     defaultShortcut: "Escape",
     keywords: "clear selection cancel",
     enabled: (state) =>
-      inRoll(state) && (roll().selectionCount > 0 || (editor()?.busy ?? false)),
+      inRoll(state) && (roll().selectionCount > 0 || (editor()?.busy ?? false) || (editor()?.canRestoreZoom ?? false)),
     run: () => {
       const current = editor()
       if (!current) return
       // Escape in the middle of a drag gives the drag up instead.
-      if (current.busy) current.cancel()
+      if (current.busy || current.canRestoreZoom) current.cancel()
       else current.setSelection([])
     },
   },
@@ -414,8 +720,12 @@ export function registerPianoRollActions(): () => void {
     registry.register(PIANO_ROLL_ACTIONS, {
       presets: { fl: PIANO_ROLL_FL_KEYMAP },
     }),
+    invalidateActionsOn(useTypingKeyboardStore, (state) => [state.enabled]),
+    invalidateActionsOn(useStepEntryStore, (state) => [state.enabled]),
+    invalidateActionsOn(useNoteLogStore, (state) => [state.notes, state.dumping]),
     invalidateActionsOn(usePianoRollStore, (state) => [
       state.tool,
+      state.drum,
       state.snap,
       state.ghosts,
       state.follow,

@@ -40,7 +40,7 @@ onHistoryNavigation(closeNoteCurves)
 
 function valueAt(points: NoteCurvePoint[], position: number) {
   if (position <= points[0].position) return points[0].value
-  let index = points.findIndex((point) => point.position > position)
+  const index = points.findIndex((point) => point.position > position)
   if (index < 0) return points.at(-1)!.value
   const from = points[index - 1], to = points[index]
   return from.hold ? from.value : from.value + (to.value - from.value) * curveShape((position - from.position) / (to.position - from.position), from.curve)

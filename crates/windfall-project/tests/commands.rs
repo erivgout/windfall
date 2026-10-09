@@ -335,6 +335,7 @@ fn update_settings_changes_each_field() {
                     denominator: 8,
                 }),
                 swing: Some(0.25),
+                ..SettingsPatch::default()
             },
         },
     );
@@ -708,7 +709,7 @@ fn new_channels_cycle_through_the_palette() {
 #[test]
 fn add_channel_plays_into_the_master_when_the_mixer_is_full() {
     let mut doc = document();
-    for _ in 1..MAX_MIXER_TRACKS {
+    for _ in 1..MAX_MIXER_SIGNAL_TRACKS {
         doc.dispatch(Command::AddMixerTrack { name: None }, None)
             .unwrap();
     }
@@ -724,7 +725,9 @@ fn add_channel_plays_into_the_master_when_the_mixer_is_full() {
     );
     assert_eq!(applied.created.len(), 1);
     assert_eq!(doc.project().channels[0].mixer_track, TrackId::MASTER);
-    assert_eq!(doc.project().mixer.tracks.len(), MAX_MIXER_TRACKS);
+    assert_eq!(doc.project().mixer.tracks.len(), MAX_MIXER_SIGNAL_TRACKS);
+    assert!(doc.project().mixer.tracks.iter().all(|track| !track.current));
+    doc.project().check().unwrap();
 }
 
 #[test]
@@ -910,6 +913,8 @@ fn update_channel_changes_each_field() {
                 muted: Some(true),
                 solo: Some(true),
                 mixer_track: Some(insert),
+                group: None,
+                timing: None,
             },
         ),
     );
@@ -1067,6 +1072,7 @@ fn renaming_a_channel_leaves_a_track_that_is_not_its_own_alone() {
             sample,
             mixer_track: kick_track,
             output: Default::default(),
+            normalize: false,
             gain: 1.0,
             pan: 0.0,
             fade_in: 0,
@@ -2444,12 +2450,12 @@ fn add_mixer_track_adds_a_track_routed_to_the_master() {
 #[test]
 fn the_mixer_holds_a_limited_number_of_tracks() {
     let mut doc = document();
-    for _ in 1..MAX_MIXER_TRACKS {
+    for _ in 1..MAX_MIXER_SIGNAL_TRACKS {
         doc.dispatch(Command::AddMixerTrack { name: None }, None)
             .unwrap();
     }
     doc.project().check().unwrap();
-    assert_eq!(doc.project().mixer.tracks.len(), MAX_MIXER_TRACKS);
+    assert_eq!(doc.project().mixer.tracks.len(), MAX_MIXER_SIGNAL_TRACKS);
     assert_invalid(
         fail(&mut doc, Command::AddMixerTrack { name: None }),
         "the mixer is full",
@@ -2725,6 +2731,9 @@ fn playlist_tracks_are_added_renamed_and_muted() {
             id,
             name: "Track 1".to_owned(),
             muted: false,
+            solo: false,
+            color: 0,
+            height: 0,
         }]
     );
     let second = add_playlist_track(&mut doc);
@@ -2738,6 +2747,9 @@ fn playlist_tracks_are_added_renamed_and_muted() {
             PlaylistTrackPatch {
                 name: Some("Drums".to_owned()),
                 muted: None,
+                solo: None,
+                color: None,
+                height: None,
             },
         ),
     );
@@ -2750,6 +2762,9 @@ fn playlist_tracks_are_added_renamed_and_muted() {
             PlaylistTrackPatch {
                 name: None,
                 muted: Some(true),
+                solo: None,
+                color: None,
+                height: None,
             },
         ),
     );
@@ -2760,6 +2775,9 @@ fn playlist_tracks_are_added_renamed_and_muted() {
             id: second,
             name: "Drums".to_owned(),
             muted: true,
+            solo: false,
+            color: 0,
+            height: 0,
         }
     );
     assert_eq!(
@@ -2936,6 +2954,7 @@ fn audio(sample: SampleId, mixer_track: TrackId) -> ClipContent {
         sample,
         mixer_track,
         output: Default::default(),
+        normalize: false,
         gain: 1.0,
         pan: 0.0,
         fade_in: 0,
@@ -2979,6 +2998,7 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
         sample: vocal,
         mixer_track: bus,
         output: Default::default(),
+        normalize: false,
         gain: 0.5,
         pan: -0.25,
         fade_in: 240,
@@ -3014,6 +3034,7 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
         sample: vocal,
         mixer_track: TrackId::MASTER,
         output: Default::default(),
+        normalize: false,
         gain: 9.0,
         pan: -4.0,
         fade_in: u32::MAX,
@@ -3030,6 +3051,7 @@ fn an_audio_clip_is_added_with_its_values_brought_into_range() {
             sample: vocal,
             mixer_track: TrackId::MASTER,
             output: Default::default(),
+            normalize: false,
             gain: MAX_GAIN,
             pan: -1.0,
             fade_in: MAX_SONG_TICKS,
@@ -3159,6 +3181,7 @@ fn update_audio_clips_changes_what_is_particular_to_audio() {
             sample: vocal,
             mixer_track: bus,
             output: Default::default(),
+            normalize: false,
             gain: 0.5,
             pan: 0.5,
             fade_in: 240,
@@ -3246,6 +3269,9 @@ fn a_sample_an_audio_clip_plays_cannot_be_removed() {
             patch: PlaylistTrackPatch {
                 name: Some("Vocals".to_owned()),
                 muted: None,
+                solo: None,
+                color: None,
+                height: None,
             },
         },
     );
@@ -4193,8 +4219,10 @@ fn check_names_each_broken_rule() {
         let ChannelSource::Instrument { params } = &mut project.channels[2].source else {
             panic!("the third channel is not an instrument");
         };
-        let InstrumentParams::SubtractiveSynth(synth) = params;
-        synth
+        match params {
+            InstrumentParams::SubtractiveSynth(synth) => synth,
+            _ => panic!("expected the subtractive synth"),
+        }
     }
     fn reverb(project: &mut Project) -> &mut ReverbParams {
         let EffectParams::Reverb(reverb) = &mut project.mixer.tracks[1].effects[0].params else {
@@ -4216,11 +4244,6 @@ fn check_names_each_broken_rule() {
             let copy = p.samples[0].clone();
             p.samples.push(copy);
         }),
-        ("repeats the path", |p| {
-            let mut copy = p.samples[0].clone();
-            copy.id = SampleId(p.next_id - 1);
-            p.samples.push(copy);
-        }),
         ("forward slashes", |p| {
             p.samples[0].path = SamplePath::Project("a\\b.wav".to_owned());
         }),
@@ -4235,7 +4258,7 @@ fn check_names_each_broken_rule() {
             let target = p.mixer.tracks[1].id;
             p.mixer.tracks[0].sends.push(Send { target, gain: 1.0 });
         }),
-        ("more than the limit", |p| {
+        ("500 inserts, Master and one Current utility", |p| {
             let extra = p.mixer.tracks[1].clone();
             p.mixer.tracks.resize(MAX_MIXER_TRACKS + 1, extra);
         }),
@@ -4992,9 +5015,17 @@ fn a_setting_is_named_in_the_history() {
             } else {
                 info.max
             };
+            let previous_history = doc.history();
             let applied = run(&mut doc, set_param(track_id, effect, param, other));
             assert_eq!(applied.label, format!("Change {}", info.name));
-            assert_eq!(label(&doc), applied.label);
+            if info.min == info.max {
+                // A fixed descriptor, such as the final echo unit's send
+                // without a destination, must remain a history-free no-op.
+                assert!(applied.touched.is_empty());
+                assert_eq!(doc.history(), previous_history);
+            } else {
+                assert_eq!(label(&doc), applied.label);
+            }
         }
     }
     let synth = InstrumentKind::SubtractiveSynth.descriptors();
@@ -5193,7 +5224,10 @@ fn synth(doc: &Document, channel: ChannelId) -> SynthParams {
     let ChannelSource::Instrument { params } = &channel.source else {
         panic!("the channel is not an instrument");
     };
-    let InstrumentParams::SubtractiveSynth(synth) = params;
+    let synth = match params {
+        InstrumentParams::SubtractiveSynth(synth) => synth,
+        _ => panic!("expected the subtractive synth"),
+    };
     *synth
 }
 
@@ -5555,6 +5589,7 @@ fn a_track_with_effects_has_this_json() {
     assert_eq!(
         json,
         r#"{
+  "current": false,
   "id": 2,
   "name": "Insert 1",
   "color": 15026253,
@@ -5571,6 +5606,7 @@ fn a_track_with_effects_has_this_json() {
       "mix": 1.0,
       "params": {
         "type": "compressor",
+        "sidechain": false,
         "thresholdDb": -18.0,
         "ratio": 4.0,
         "attackMs": 10.0,
@@ -5594,7 +5630,8 @@ fn a_track_with_effects_has_this_json() {
         "lookaheadMs": 5.0
       }
     }
-  ]
+  ],
+  "latencyOffsetMs": 0.0
 }"#
     );
     let back: MixerTrack = serde_json::from_str(&json).unwrap();
@@ -5615,6 +5652,62 @@ fn an_instrument_channel_has_this_json() {
     assert_eq!(
         json,
         r#"{
+  "voice": {
+    "arpeggiator": {
+      "mode": "off",
+      "rate": "sixteenth",
+      "gate": 0.75,
+      "rangeOctaves": 1
+    },
+    "echo": {
+      "enabled": false,
+      "time": {
+        "unit": "milliseconds",
+        "ms": 250.0
+      },
+      "feedback": 0.5,
+      "pitchSemitones": 0,
+      "repeats": 3
+    },
+    "polyphony": {
+      "maxVoices": 32,
+      "monoLegato": false,
+      "portamentoMs": 0.0
+    },
+    "envelopes": {
+      "filter": {
+        "enabled": false,
+        "attackMs": 2.0,
+        "decayMs": 200.0,
+        "sustain": 0.8,
+        "releaseMs": 150.0,
+        "depth": 0.0
+      },
+      "pitch": {
+        "enabled": false,
+        "attackMs": 2.0,
+        "decayMs": 200.0,
+        "sustain": 0.8,
+        "releaseMs": 150.0,
+        "depth": 0.0
+      },
+      "pan": {
+        "enabled": false,
+        "attackMs": 2.0,
+        "decayMs": 200.0,
+        "sustain": 0.8,
+        "releaseMs": 150.0,
+        "depth": 0.0
+      },
+      "lfo": {
+        "enabled": false,
+        "shape": "sine",
+        "target": "filter",
+        "rateHz": 5.0,
+        "depth": 0.0
+      }
+    }
+  },
   "id": 2,
   "name": "Subtractive synth",
   "color": 15026253,

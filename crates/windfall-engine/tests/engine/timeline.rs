@@ -96,8 +96,8 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
         .enumerate()
         {
             rig.project.plugins.push(PluginBinding {
-            sidechain_input: None,
-            auxiliary_inputs: Vec::new(),
+                sidechain_input: None,
+                auxiliary_inputs: Vec::new(),
                 target,
                 format: format.into(),
                 path: "transport-probe".into(),
@@ -156,7 +156,9 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
                 assert_eq!(f64::from_bits(values[7]), origin / 960.);
                 assert_eq!(values[8], index);
             } else {
-                assert_eq!(&values[6..], &[0, 0, 0]);
+                // Pattern-local meters have their own authoritative origin,
+                // including the default signature at tick zero.
+                assert_eq!(&values[6..], &[1, 0, 0]);
             }
         }
     }
@@ -204,7 +206,7 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
                 assert_eq!(f64::from_bits(values[7]), 485. / 960.);
                 assert_eq!(values[8], 1);
             } else {
-                assert_eq!(&values[4..], &[4, 4, 0, 0, 0]);
+                assert_eq!(&values[4..], &[4, 4, 1, 0, 0]);
             }
         }
     }
@@ -297,8 +299,22 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
             (7, 16),
             Some((7400., 4)),
         ),
-        (PlayMode::Pattern, pattern, 2001.25, 2001.25, (4, 4), None),
-        (PlayMode::Pattern, other_pattern, 2001., 2001., (4, 4), None),
+        (
+            PlayMode::Pattern,
+            pattern,
+            2001.25,
+            2001.25,
+            (4, 4),
+            Some((0., 0)),
+        ),
+        (
+            PlayMode::Pattern,
+            other_pattern,
+            2001.,
+            2001.,
+            (4, 4),
+            Some((0., 0)),
+        ),
         (
             PlayMode::Song,
             pattern,
@@ -331,14 +347,23 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
                 &baseline_values[..4],
                 "native clock/tempo must retain the existing authority"
             );
-            assert_eq!((values[4], values[5]), signature);
+            assert_eq!(
+                (values[4], values[5]),
+                signature,
+                "{mode:?} source {source:?}, requested tick {tick}, actual tick {}",
+                f64::from_bits(values[2]) * 960.
+            );
             assert_eq!(values[0], 1);
             assert!(f64::from_bits(values[1]).is_finite());
             let actual_tick = f64::from_bits(values[2]) * 960.;
             // The native clock reports the ceil-aligned first sample, at most
             // one 180-bpm sample after the requested musical position.
             assert!(actual_tick >= tick - 1e-9 && actual_tick <= tick + 0.06 + 1e-9);
-            let seconds = 60. / 960. * 10_000. / 120. * (1.0_f64 + 2. * actual_tick / 10_000.).ln();
+            let seconds = if mode == PlayMode::Song {
+                60. / 960. * 10_000. / 120. * (1.0_f64 + 2. * actual_tick / 10_000.).ln()
+            } else {
+                actual_tick * 60. / (120. * 960.)
+            };
             assert!(
                 (f64::from_bits(values[3]) - seconds).abs() < 1e-8,
                 "{mode:?} expected seconds {seconds}, got {}",
@@ -352,6 +377,81 @@ fn timeline_hosted_transport_uses_song_meters_only_in_song_mode() {
                 }
                 None => assert_eq!(&values[6..], &[0, 0, 0]),
             }
+        }
+    }
+
+    // Saved pattern meter maps have their own signatures and anchors, and
+    // switching back to Song restores the song map for both hosted roles.
+    rig.project
+        .patterns
+        .iter_mut()
+        .find(|item| item.id == pattern)
+        .unwrap()
+        .time_signature = Some(TimeSignature {
+        numerator: 3,
+        denominator: 4,
+    });
+    let local_id = rig.project.next_id;
+    rig.project.next_id += 1;
+    let local = rig
+        .project
+        .patterns
+        .iter_mut()
+        .find(|item| item.id == other_pattern)
+        .unwrap();
+    local.time_signature = Some(TimeSignature {
+        numerator: 5,
+        denominator: 4,
+    });
+    local.timeline.meters.push(MeterChange {
+        id: MeterChangeId(local_id),
+        tick: 1200,
+        signature: TimeSignature {
+            numerator: 7,
+            denominator: 8,
+        },
+    });
+    rig.project.check().unwrap();
+    let (mut processor, controller) = rig.song_processor(RATE);
+    // Retain the selected region's absolute sample-grid alignment used above;
+    // tempo-map inversion alone can round an exact boundary infinitesimally
+    // into the preceding segment when a new processor has no selected region.
+    controller
+        .set_timeline_region(Some(TickRange {
+            start: 4001,
+            end: 10_000,
+        }))
+        .unwrap();
+    for (mode, source, tick, signature, origin, index) in [
+        (PlayMode::Pattern, pattern, 2001., (3, 4), 0., 0),
+        (PlayMode::Pattern, other_pattern, 0., (5, 4), 0., 0),
+        (PlayMode::Pattern, other_pattern, 2001., (7, 8), 1200., 1),
+        (PlayMode::Song, other_pattern, 7400., (7, 16), 7400., 4),
+        (PlayMode::Pattern, pattern, 2001., (3, 4), 0., 0),
+    ] {
+        controller.set_transport(TransportPatch {
+            mode: Some(mode),
+            pattern: Some(source),
+            ..Default::default()
+        });
+        controller.seek(tick);
+        controller.play();
+        let mut out = [0.; 2];
+        assert_eq!(allocator_calls(|| processor.process(&mut out)), 0);
+        for probe in &probes {
+            let values = probe
+                .0
+                .each_ref()
+                .map(|value| value.load(Ordering::Relaxed));
+            assert_eq!(
+                (values[4], values[5]),
+                signature,
+                "{mode:?} source {source:?}, requested tick {tick}, actual tick {}",
+                f64::from_bits(values[2]) * 960.
+            );
+            assert_eq!(values[6], 1);
+            assert_eq!(f64::from_bits(values[7]), origin / 960.);
+            assert_eq!(values[8], index);
         }
     }
 }

@@ -13,6 +13,7 @@ use vorbis_rs::{
 use windfall_core::AudioBuffer;
 
 use crate::atomic::AtomicFile;
+use crate::encoder::AudioTags;
 use crate::error::CodecError;
 
 /// The lowest quality an Ogg Vorbis file can be asked for: about 45 kbit/s
@@ -90,12 +91,33 @@ impl VorbisWriter {
         channels: u16,
         quality: f32,
     ) -> Result<Self, CodecError> {
+        Self::create_with_tags(path, sample_rate, channels, quality, &AudioTags::default())
+    }
+
+    /// Starts an Ogg Vorbis file with comments for nonempty project fields.
+    pub fn create_with_tags(
+        path: impl AsRef<Path>,
+        sample_rate: u32,
+        channels: u16,
+        quality: f32,
+        tags: &AudioTags<'_>,
+    ) -> Result<Self, CodecError> {
         let (rate, count) = check_layout(sample_rate, channels, quality)?;
         let file = AtomicFile::create(path.as_ref())?;
         let mut builder = VorbisEncoderBuilder::new_with_serial(rate, count, file, STREAM_SERIAL);
         builder.bitrate_management_strategy(VorbisBitrateManagementStrategy::QualityVbr {
             target_quality: quality / 10.0,
         });
+        for (tag, value) in [
+            ("TITLE", tags.title),
+            ("ARTIST", tags.author),
+            ("GENRE", tags.genre),
+            ("DESCRIPTION", tags.comments),
+        ] {
+            if !value.is_empty() {
+                builder.comment_tag(tag, value).map_err(from_vorbis)?;
+            }
+        }
         let encoder = builder.build().map_err(from_vorbis)?;
         Ok(Self {
             encoder: Some(encoder),

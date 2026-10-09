@@ -173,7 +173,10 @@ impl Settings {
         for (index, value) in &self.changes {
             params.set(index.index(count), *value);
         }
-        let InstrumentParams::SubtractiveSynth(synth) = params;
+        let synth = match params {
+            InstrumentParams::SubtractiveSynth(synth) => synth,
+            _ => panic!("expected the subtractive synth"),
+        };
         InstrumentParams::SubtractiveSynth(SynthParams {
             gain: self.raw.unwrap_or(synth.gain),
             ..synth
@@ -485,6 +488,7 @@ impl Action {
                                 sample: sample.among(&samples),
                                 mixer_track: mixer_track.among(&tracks),
                                 output: Default::default(),
+                                normalize: false,
                                 gain: *gain,
                                 pan: *pan,
                                 fade_in: *fade_in,
@@ -727,6 +731,7 @@ fn settings_patch() -> impl Strategy<Value = SettingsPatch> {
             tempo_bpm,
             time_signature,
             swing,
+            ..SettingsPatch::default()
         })
 }
 
@@ -784,6 +789,7 @@ fn sampler_patch() -> impl Strategy<Value = SamplerPatch> {
                 loop_start,
                 loop_end,
             )| SamplerPatch {
+                loop_crossfade: None,
                 stretch: None,
                 root_key,
                 tune,
@@ -939,8 +945,10 @@ fn audio_clip_patch() -> impl Strategy<Value = AudioClipPatch> {
     )
         .prop_map(
             |(gain, pan, fade_in, fade_out, reverse, pitch)| AudioClipPatch {
+                output: None,
                 mixer_track: None,
                 stretch: None,
+                normalize: None,
                 gain,
                 pan,
                 fade_in,
@@ -1081,7 +1089,13 @@ fn single_action() -> impl Strategy<Value = Action> {
         2 => (pick(), position()).prop_map(|(id, index)| Action::MovePlaylistTrack(id, index)),
         1 => pick().prop_map(Action::RemovePlaylistTrack),
         1 => (pick(), (maybe(name()), maybe(any::<bool>()))).prop_map(|(id, (name, muted))| {
-            Action::UpdatePlaylistTrack(id, PlaylistTrackPatch { name, muted })
+            Action::UpdatePlaylistTrack(id, PlaylistTrackPatch {
+                name,
+                muted,
+                solo: None,
+                color: None,
+                height: None,
+            })
         }),
         4 => vec(clip_spec(), 0..4).prop_map(Action::AddClips),
         4 => vec((pick(), audio_clip_patch(), maybe(pick())), 0..4)
@@ -1108,6 +1122,9 @@ fn action() -> impl Strategy<Value = Action> {
 }
 
 #[derive(Debug, Clone)]
+// Keep the small, test-only generated action inline so its existing shrink
+// strategy and replay representation do not gain another ownership layer.
+#[allow(clippy::large_enum_variant)]
 enum Step {
     Dispatch(Action, Option<u64>),
     Undo,
@@ -1229,6 +1246,7 @@ fn seed_project() -> Project {
                     sample: project_sample,
                     mixer_track: tracks[1],
                     output: Default::default(),
+                    normalize: false,
                     gain: 0.8,
                     pan: -0.25,
                     fade_in: 240,

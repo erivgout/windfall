@@ -1,10 +1,13 @@
 import { useEffect, useMemo } from "react"
 
 import { ContextActions } from "@/components/context-actions"
+import { ProjectInfoControls } from "@/features/project-info"
+import { NotebookControls } from "@/features/notebook"
 import { useShortcutScope } from "@/lib/actions"
 import { useProjectGeneration } from "@/lib/store/replaced"
 import { useTransportStore } from "@/lib/store/transport"
 
+import { ArrangementControls } from "./arrangement/controls"
 import { setActiveMetrics } from "./active"
 import { ClipInspector } from "./audio/clip-inspector"
 import { AudioCompDialog } from "./audio/comp-dialog"
@@ -72,9 +75,16 @@ function Playlist() {
         className="flex h-full min-h-0 min-w-0 flex-col"
         {...scope}
       >
-        <PlaylistToolbar metrics={metrics} />
+        <div className="flex shrink-0 items-center border-b">
+          <div className="min-w-0 flex-1">
+            <PlaylistToolbar metrics={metrics} />
+          </div>
+          <ProjectInfoControls />
+          <NotebookControls />
+        </div>
         <TimelineControls />
         <TakeGroupControls />
+        <ArrangementControls />
         <ClipInspector />
         <AudioCompDialog />
         <div className="flex min-h-0 flex-1">

@@ -107,6 +107,51 @@ export function movePoint(
   return next
 }
 
+/** Moves a selection by one delta, leaving room between unselected neighbours. */
+export function moveSelectedPoints(
+  points: readonly AutomationPoint[],
+  indices: ReadonlySet<number>,
+  tickDelta: number,
+  valueDelta: number,
+  window: CurveWindow
+): AutomationPoint[] {
+  let minTick = -Infinity
+  let maxTick = Infinity
+  let minValue = -Infinity
+  let maxValue = Infinity
+  for (const index of indices) {
+    const point = points[index]
+    if (!point) continue
+    minTick = Math.max(minTick, Math.max(0, window.offset) - point.tick)
+    maxTick = Math.min(
+      maxTick,
+      Math.min(MAX_SONG_TICKS, window.offset + window.length) - point.tick
+    )
+    const before = points[index - 1]
+    const after = points[index + 1]
+    // A pre-existing jump can stay put; moving it must not reverse its order.
+    if (before && !indices.has(index - 1)) {
+      minTick = Math.max(minTick, Math.min(0, before.tick + 1 - point.tick))
+    }
+    if (after && !indices.has(index + 1)) {
+      maxTick = Math.min(maxTick, Math.max(0, after.tick - 1 - point.tick))
+    }
+    minValue = Math.max(minValue, -point.value)
+    maxValue = Math.min(maxValue, 1 - point.value)
+  }
+  // Existing jumps on a shared tick may leave no room to move in time.
+  const ticks =
+    minTick > maxTick
+      ? 0
+      : Math.min(maxTick, Math.max(minTick, Math.round(tickDelta)))
+  const value = Math.min(maxValue, Math.max(minValue, valueDelta))
+  return points.map((point, index) =>
+    indices.has(index)
+      ? { ...point, tick: point.tick + ticks, value: point.value + value }
+      : point
+  )
+}
+
 /** Sets the bend of the stretch that leaves a point, -1 to 1. */
 export function bendSegment(
   points: readonly AutomationPoint[],

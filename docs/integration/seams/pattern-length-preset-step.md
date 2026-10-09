@@ -1,0 +1,1 @@
+The channel rack steps the pattern length from 16 steps toward 64 steps. 16 steps stays 16 steps when moved previous. 64 steps stays 64 steps when moved next. A length between two presets moves to the neighboring preset. A missing length counts as 16 steps. The time signature stays as it is.

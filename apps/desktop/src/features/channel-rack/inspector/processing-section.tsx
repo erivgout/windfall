@@ -17,6 +17,7 @@ import type { SamplerChannel } from "@/lib/channel-source"
 import { backend } from "@/lib/ipc"
 import { dispatch, receivePatch, useProjectStore } from "@/lib/store/project"
 import { Section } from "./parts"
+import { nextSamplerQuality } from "./sampler-quality-step"
 
 export function SamplerProcessingSection({
   channel,
@@ -202,6 +203,36 @@ function ProcessingForm({ channel }: { channel: SamplerChannel }) {
                 <ToggleGroupItem value="standard">Standard</ToggleGroupItem>
                 <ToggleGroupItem value="high">High</ToggleGroupItem>
               </ToggleGroup>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Choose the previous sampler preparation quality"
+                  disabled={
+                    pending || nextSamplerQuality(quality, "previous") === null
+                  }
+                  onClick={() => {
+                    const next = nextSamplerQuality(quality, "previous")
+                    if (next !== null) setQuality(next)
+                  }}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label="Choose the next sampler preparation quality"
+                  disabled={
+                    pending || nextSamplerQuality(quality, "next") === null
+                  }
+                  onClick={() => {
+                    const next = nextSamplerQuality(quality, "next")
+                    if (next !== null) setQuality(next)
+                  }}
+                >
+                  Next
+                </Button>
+              </div>
             </Field>
             <Field orientation="horizontal">
               <Checkbox

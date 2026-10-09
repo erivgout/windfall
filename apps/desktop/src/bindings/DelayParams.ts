@@ -57,4 +57,14 @@ saturation: number,
  * Balance between the dry input (0) and the echoes (1). Default 0.3.
  * Use 1 on a send track.
  */
-mix: number, };
+mix: number, 
+/**
+ * Speed of the delay-time sine LFO, in Hz. 0 to 8, default 0.
+ * Zero holds the LFO at its current phase.
+ */
+modRateHz: number, 
+/**
+ * Peak excursion around the delay time, in ms. 0 to 20, default 0.
+ * Zero keeps the original, unmodulated delay time.
+ */
+modDepthMs: number, };

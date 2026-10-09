@@ -34,6 +34,7 @@ import { useUiStore, type KeymapPreset, type Theme } from "@/lib/store/ui"
 import { formatSampleRate } from "@/lib/time"
 import { cn } from "@/lib/utils"
 import { MidiHardwareSettingsSection } from "./midi-hardware"
+import { nextKeymapPreset } from "./keymap-preset-step"
 
 import {
   bufferOptions,
@@ -276,6 +277,35 @@ function KeyboardSection() {
           onChange={setKeymap}
         />
       </Row>
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Choose the previous shortcut preset"
+          disabled={nextKeymapPreset(keymap, "previous") === null}
+          onClick={() => {
+            const next = nextKeymapPreset(
+              useUiStore.getState().keymap,
+              "previous"
+            )
+            if (next !== null) setKeymap(next as KeymapPreset)
+          }}
+        >
+          Previous
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Choose the next shortcut preset"
+          disabled={nextKeymapPreset(keymap, "next") === null}
+          onClick={() => {
+            const next = nextKeymapPreset(useUiStore.getState().keymap, "next")
+            if (next !== null) setKeymap(next as KeymapPreset)
+          }}
+        >
+          Next
+        </Button>
+      </div>
       <p className="text-muted-foreground">
         {preset?.about} The command palette lists every shortcut.
       </p>

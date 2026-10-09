@@ -24,13 +24,16 @@ import { automationFeed, useAutomationMarker } from "@/features/automation/live"
 import { instrumentParams, sourceSample } from "@/lib/channel-source"
 import { useGesture } from "@/lib/store/gesture"
 import { useHint } from "@/lib/store/hint"
+import { dispatch } from "@/lib/store/project"
 import { useChannel, useLane, useSample } from "@/lib/store/selectors"
 import { useUiStore } from "@/lib/store/ui"
 import { colorToCss, DEFAULT_CHANNEL_VOLUME, MAX_GAIN } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
 import { ChannelButton } from "./channel-button"
-import { selectChannel } from "./channel-ops"
+import { findChannel, selectChannel } from "./channel-ops"
+import { nextChannelPanPreset } from "./channel-pan-preset-step"
+import { nextChannelVolumePreset } from "./channel-volume-preset-step"
 import { useSampleMissing } from "./inspector/sample-info"
 import {
   LEFT_COLUMNS,
@@ -46,9 +49,13 @@ import { channelTarget, channelValueItems } from "./menus"
 import { MixerBadge } from "./mixer-badge"
 import { MuteLamp } from "./mute-lamp"
 import { RackNoteArea } from "./note-preview"
+import { CHANNEL_PAN_PRESETS, nextChannelPan } from "./pan-presets"
+import { nextChannelPanScale } from "./pan-scale"
 import { detailSteps, litSteps } from "./steps"
 import type { WaveShape } from "./synth/wave-glyph"
 import { useGestureValue } from "./use-gesture-value"
+import { CHANNEL_VOLUME_PRESETS, nextChannelVolume } from "./volume-presets"
+import { nextChannelVolumeScale } from "./volume-scale"
 
 const STEPS_HINT =
   "Click a step to turn it on or off, drag to paint, right-drag to erase. Enter toggles the focused step, Space plays or stops"
@@ -127,7 +134,60 @@ function Mix({
 
   return (
     <>
-      <ValueContextItems items={panItems}>
+      <ValueContextItems
+        items={[
+          ...panItems,
+          {
+            submenu: "Pan",
+            items: [
+              ...CHANNEL_PAN_PRESETS.map((preset) => ({
+                title: preset.label,
+                disabled: nextChannelPan(pan, preset.value) === null,
+                run: () => {
+                  const next = nextChannelPan(pan, preset.value)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateChannel",
+                    id,
+                    patch: { pan: next },
+                  })
+                },
+              })),
+              ...(["previous", "next"] as const).map((direction) => ({
+                title:
+                  direction === "previous" ? "Previous preset" : "Next preset",
+                disabled: nextChannelPanPreset(pan, direction) === null,
+                run: () => {
+                  const channel = findChannel(id)
+                  if (!channel) return
+                  const next = nextChannelPanPreset(channel.pan, direction)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateChannel",
+                    id,
+                    patch: { pan: next },
+                  })
+                },
+              })),
+              ...(["half", "double"] as const).map((factor) => ({
+                title: factor === "half" ? "Half" : "Double",
+                disabled: nextChannelPanScale(pan, factor) === null,
+                run: () => {
+                  const channel = findChannel(id)
+                  if (!channel) return
+                  const next = nextChannelPanScale(channel.pan, factor)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateChannel",
+                    id,
+                    patch: { pan: next },
+                  })
+                },
+              })),
+            ],
+          },
+        ]}
+      >
         <PanControl
           size="sm"
           aria-label={`${name} channel pan`}
@@ -137,7 +197,60 @@ function Mix({
           {...panHint}
         />
       </ValueContextItems>
-      <ValueContextItems items={volumeItems}>
+      <ValueContextItems
+        items={[
+          ...volumeItems,
+          {
+            submenu: "Volume",
+            items: [
+              ...CHANNEL_VOLUME_PRESETS.map((preset) => ({
+                title: preset.label,
+                disabled: nextChannelVolume(volume, preset.value) === null,
+                run: () => {
+                  const next = nextChannelVolume(volume, preset.value)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateChannel",
+                    id,
+                    patch: { volume: next },
+                  })
+                },
+              })),
+              ...(["previous", "next"] as const).map((direction) => ({
+                title:
+                  direction === "previous" ? "Previous preset" : "Next preset",
+                disabled: nextChannelVolumePreset(volume, direction) === null,
+                run: () => {
+                  const channel = findChannel(id)
+                  if (!channel) return
+                  const next = nextChannelVolumePreset(channel.volume, direction)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateChannel",
+                    id,
+                    patch: { volume: next },
+                  })
+                },
+              })),
+              ...(["half", "double"] as const).map((factor) => ({
+                title: factor === "half" ? "Half" : "Double",
+                disabled: nextChannelVolumeScale(volume, factor) === null,
+                run: () => {
+                  const channel = findChannel(id)
+                  if (!channel) return
+                  const next = nextChannelVolumeScale(channel.volume, factor)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateChannel",
+                    id,
+                    patch: { volume: next },
+                  })
+                },
+              })),
+            ],
+          },
+        ]}
+      >
         <Knob
           size="sm"
           aria-label={`${name} channel volume`}
@@ -159,7 +272,7 @@ function Mix({
 /** The wave of the first oscillator that sounds, to stand for a synth. */
 function instrumentGlyph(channel: Channel): WaveShape | null {
   const params = instrumentParams(channel)
-  if (!params) return null
+  if (!params || params.type !== "subtractiveSynth") return null
   const sounding = params.oscillators.find((oscillator) => oscillator.level > 0)
   return (sounding ?? params.oscillators[0]).waveform
 }

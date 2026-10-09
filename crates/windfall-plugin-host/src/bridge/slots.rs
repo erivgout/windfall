@@ -217,7 +217,11 @@ impl Region {
         self.put(slot, PARAM_COUNT, block.parameter_count as u32);
         self.put(slot, FLAGS, u32::from(!block.controls_complete));
         self.put(slot, NOTE_CHANNEL, 0);
-        self.put(slot, SIDECHAIN_PORT, block.sidechain_input.map_or(0, |index| index + 1));
+        self.put(
+            slot,
+            SIDECHAIN_PORT,
+            block.sidechain_input.map_or(0, |index| index + 1),
+        );
         self.write_sequence(slot, EPOCH, block.epoch);
         self.write_sequence(slot, CONTROL_START, block.control_start);
         self.write_sequence(slot, CONTROL_END, block.control_end);
@@ -226,8 +230,16 @@ impl Region {
             self.put(slot, TRANSPORT + index, *word);
         }
         for index in 0..self.config.block {
-            self.put(slot, KEY_INPUT + index, finite_input(block.key[index][0]).to_bits());
-            self.put(slot, KEY_INPUT + MAX_BLOCK + index, finite_input(block.key[index][1]).to_bits());
+            self.put(
+                slot,
+                KEY_INPUT + index,
+                finite_input(block.key[index][0]).to_bits(),
+            );
+            self.put(
+                slot,
+                KEY_INPUT + MAX_BLOCK + index,
+                finite_input(block.key[index][1]).to_bits(),
+            );
             self.put(
                 slot,
                 INPUT + index,
@@ -299,13 +311,21 @@ impl Region {
             self.get(slot, TRANSPORT + index)
         }))?;
         let input = self.get(slot, SIDECHAIN_PORT);
-        if input > 64 { return Err(ProtocolError::Layout); }
+        if input > 64 {
+            return Err(ProtocolError::Layout);
+        }
         block.sidechain_input = input.checked_sub(1);
         for index in 0..frames {
             block.left[index] = f32::from_bits(self.get(slot, INPUT + index));
             block.right[index] = f32::from_bits(self.get(slot, INPUT + MAX_BLOCK + index));
-            block.key[index] = [f32::from_bits(self.get(slot, KEY_INPUT + index)), f32::from_bits(self.get(slot, KEY_INPUT + MAX_BLOCK + index))];
-            if !block.left[index].is_finite() || !block.right[index].is_finite() || block.key[index].iter().any(|sample| !sample.is_finite()) {
+            block.key[index] = [
+                f32::from_bits(self.get(slot, KEY_INPUT + index)),
+                f32::from_bits(self.get(slot, KEY_INPUT + MAX_BLOCK + index)),
+            ];
+            if !block.left[index].is_finite()
+                || !block.right[index].is_finite()
+                || block.key[index].iter().any(|sample| !sample.is_finite())
+            {
                 return Err(ProtocolError::Audio);
             }
         }
@@ -572,7 +592,7 @@ mod tests {
         assert_eq!((TRANSPORT, EPOCH, REPLY_IDENTITY), (16, 30, 32));
         assert_eq!(
             (HEADER_WORDS * 4, SLOT_WORDS * 4, REGION_BYTES),
-            (256, 85_824, 343_552)
+            (256, 226_112, 904_704)
         );
         let before: Vec<_> = region
             .storage

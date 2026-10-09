@@ -22,6 +22,7 @@ use self::bits::{BitWriter, crc8, crc16};
 use self::predict::{Lpc, MAX_FIXED_ORDER, fixed_residual, window};
 use self::rice::{RiceLimits, RicePlan, RiceScratch};
 use crate::atomic::AtomicFile;
+use crate::encoder::AudioTags;
 use crate::error::CodecError;
 use crate::md5::Md5;
 use crate::wav::{DEFAULT_DITHER_SEED, Dither};
@@ -175,21 +176,39 @@ impl FlacWriter {
         depth: FlacBitDepth,
         level: u8,
     ) -> Result<Self, CodecError> {
+        Self::create_with_tags(
+            path,
+            sample_rate,
+            channels,
+            depth,
+            level,
+            &AudioTags::default(),
+        )
+    }
+
+    /// Starts a FLAC file with Vorbis comments for nonempty project fields.
+    pub fn create_with_tags(
+        path: impl AsRef<Path>,
+        sample_rate: u32,
+        channels: u16,
+        depth: FlacBitDepth,
+        level: u8,
+        tags: &AudioTags<'_>,
+    ) -> Result<Self, CodecError> {
         check_layout(sample_rate, channels, level)?;
+        let comments = vorbis_comments(tags)?;
         let mut file = AtomicFile::create(path.as_ref())?;
         let mut head = Vec::with_capacity(64);
         head.extend_from_slice(b"fLaC");
         // The stream's description, 34 bytes that `finalize` fills in.
         head.extend_from_slice(&[0, 0, 0, 34]);
         head.extend_from_slice(&[0; 34]);
-        // A comment block that names the encoder and holds no comments. It
-        // is the last block before the audio.
-        let comment_bytes = 4 + VENDOR.len() as u32 + 4;
+        // The comment block retains the encoder vendor and is the last
+        // metadata block before the audio.
+        let comment_bytes = comments.len() as u32;
         head.push(0x80 | 4);
         head.extend_from_slice(&comment_bytes.to_be_bytes()[1..]);
-        head.extend_from_slice(&(VENDOR.len() as u32).to_le_bytes());
-        head.extend_from_slice(VENDOR);
-        head.extend_from_slice(&0_u32.to_le_bytes());
+        head.extend_from_slice(&comments);
         file.write_all(&head)?;
 
         let channels = usize::from(channels);
@@ -369,6 +388,37 @@ impl FlacWriter {
         }
         Ok(())
     }
+}
+
+fn vorbis_comments(tags: &AudioTags<'_>) -> Result<Vec<u8>, CodecError> {
+    let fields = [
+        ("TITLE", tags.title),
+        ("ARTIST", tags.author),
+        ("GENRE", tags.genre),
+        ("DESCRIPTION", tags.comments),
+    ];
+    let nonempty = || fields.iter().filter(|(_, value)| !value.is_empty());
+    let bytes = nonempty().fold(8 + VENDOR.len() as u64, |total, (key, value)| {
+        total + 4 + key.len() as u64 + 1 + value.len() as u64
+    });
+    // FLAC metadata block lengths have 24 bits.
+    if bytes > 0xFF_FFFF {
+        return Err(CodecError::InvalidInput(
+            "FLAC comments exceed the metadata block limit".to_owned(),
+        ));
+    }
+    let mut comments = Vec::with_capacity(bytes as usize);
+    comments.extend_from_slice(&(VENDOR.len() as u32).to_le_bytes());
+    comments.extend_from_slice(VENDOR);
+    comments.extend_from_slice(&(nonempty().count() as u32).to_le_bytes());
+    for (key, value) in nonempty() {
+        let size = key.len() + 1 + value.len();
+        comments.extend_from_slice(&(size as u32).to_le_bytes());
+        comments.extend_from_slice(key.as_bytes());
+        comments.push(b'=');
+        comments.extend_from_slice(value.as_bytes());
+    }
+    Ok(comments)
 }
 
 fn broken_error() -> CodecError {

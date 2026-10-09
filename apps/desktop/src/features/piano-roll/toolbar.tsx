@@ -7,6 +7,9 @@ import {
   GhostIcon,
   PaintBrush01Icon,
   PencilEdit02Icon,
+  VolumeMute02Icon,
+  ScissorIcon,
+  PlayIcon,
   ZoomInAreaIcon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
@@ -45,14 +48,24 @@ import { useUiStore } from "@/lib/store/ui"
 import { colorToCss } from "@/lib/units"
 import { isNoteArticulation, NOTE_ARTICULATIONS } from "@/lib/note-expression"
 
+import { nextDrawArticulation } from "./articulation-step"
 import { useSession } from "./context"
+import { nextDrawColor } from "./draw-color-step"
+import { nextDrawGlideScale } from "./draw-glide-scale"
 import { VIEW_MENU } from "./menu"
+import { nextPianoTool } from "./piano-tool-step"
 import { isSnapId, SNAP_OPTIONS, type SnapOption } from "./snap"
+import { nextSnapScale } from "./snap-scale"
 import { usePianoRollStore } from "./store"
 import { ScaleControls } from "./scale-controls"
 import { StampMenu } from "./stamp-menu"
 import { NoteColorPicker } from "./note-color-picker"
 import { WaveformHelperControl } from "./waveform-helper"
+import { ChordToolsControl } from "./chords/control"
+import { ChordReadout } from "./chords/readout-control"
+import { ScaleHighlightControl } from "./scale/control"
+import { useTypingKeyboardStore } from "./typing-keyboard"
+import { useStepEntryStore } from "./step-entry"
 
 type RollButtonProps = {
   action: string
@@ -200,6 +213,32 @@ function SnapPicker() {
           ))}
         </SelectContent>
       </Select>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose a finer snap"
+        disabled={nextSnapScale(snap, "finer") === null}
+        onClick={() => {
+          const next = nextSnapScale(usePianoRollStore.getState().snap, "finer")
+          if (next !== null) usePianoRollStore.getState().setSnap(next)
+        }}
+      >
+        Finer
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose a coarser snap"
+        disabled={nextSnapScale(snap, "coarser") === null}
+        onClick={() => {
+          const next = nextSnapScale(usePianoRollStore.getState().snap, "coarser")
+          if (next !== null) usePianoRollStore.getState().setSnap(next)
+        }}
+      >
+        Coarser
+      </Button>
     </label>
   )
 }
@@ -231,11 +270,73 @@ function ArticulationPicker() {
           </SelectGroup>
         </SelectContent>
       </Select>
-      {articulation === "portamento" && <NumberField
-        size="sm" aria-label="Portamento duration" value={glideTicks}
-        onValueChange={setGlideTicks} min={1} max={245760} step={1}
-        coarseStep={60} unit="ticks" className="w-24"
-      />}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose the previous articulation for new notes"
+        disabled={nextDrawArticulation(articulation, "previous") === null}
+        onClick={() => {
+          const latest = usePianoRollStore.getState().drawArticulation
+          const next = nextDrawArticulation(latest, "previous")
+          if (next !== null) setArticulation(next)
+        }}
+      >
+        Previous
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose the next articulation for new notes"
+        disabled={nextDrawArticulation(articulation, "next") === null}
+        onClick={() => {
+          const latest = usePianoRollStore.getState().drawArticulation
+          const next = nextDrawArticulation(latest, "next")
+          if (next !== null) setArticulation(next)
+        }}
+      >
+        Next
+      </Button>
+      {articulation === "portamento" && (
+        <>
+          <NumberField
+            size="sm" aria-label="Portamento duration" value={glideTicks}
+            onValueChange={setGlideTicks} min={1} max={245760} step={1}
+            coarseStep={60} unit="ticks" className="w-24"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Halve the duration for new portamento notes"
+            disabled={nextDrawGlideScale(glideTicks, "half") === null}
+            onClick={() => {
+              const next = nextDrawGlideScale(
+                usePianoRollStore.getState().drawGlideTicks,
+                "half"
+              )
+              if (next !== null) usePianoRollStore.getState().setDrawGlideTicks(next)
+            }}
+          >
+            Halve
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Double the duration for new portamento notes"
+            disabled={nextDrawGlideScale(glideTicks, "double") === null}
+            onClick={() => {
+              const next = nextDrawGlideScale(
+                usePianoRollStore.getState().drawGlideTicks,
+                "double"
+              )
+              if (next !== null) usePianoRollStore.getState().setDrawGlideTicks(next)
+            }}
+          >
+            Double
+          </Button>
+        </>
+      )}
     </Group>
   )
 }
@@ -244,14 +345,51 @@ function DrawColorPicker() {
   const session = useSession()
   const color = usePianoRollStore((state) => state.drawColorGroup)
   const setColor = usePianoRollStore((state) => state.setDrawColorGroup)
-  return <NoteColorPicker compact value={color} onChange={(value) => {
-    if (value !== "keep") setColor(value)
-    session.focusGrid()
-  }} />
+  return (
+    <>
+      <NoteColorPicker compact value={color} onChange={(value) => {
+        if (value !== "keep") setColor(value)
+        session.focusGrid()
+      }} />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose the previous draw color"
+        disabled={nextDrawColor(color, "previous") === null}
+        onClick={() => {
+          const latest = usePianoRollStore.getState().drawColorGroup
+          const next = nextDrawColor(latest, "previous")
+          if (next !== null) setColor(next.color)
+        }}
+      >
+        Previous color
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose the next draw color"
+        disabled={nextDrawColor(color, "next") === null}
+        onClick={() => {
+          const latest = usePianoRollStore.getState().drawColorGroup
+          const next = nextDrawColor(latest, "next")
+          if (next !== null) setColor(next.color)
+        }}
+      >
+        Next color
+      </Button>
+    </>
+  )
 }
 
 /** The strip above the grid: channel, tools, snap, view switches, readout. */
 export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
+  const tool = usePianoRollStore((state) => state.tool)
+  const setTool = usePianoRollStore((state) => state.setTool)
+  const drum = usePianoRollStore((state) => state.drum)
+  const typing = useTypingKeyboardStore((state) => state.enabled)
+  const stepEntry = useStepEntryStore((state) => state.enabled)
   const readoutHint = useHint(
     "Position under the pointer as bar, beat and tick, and the key"
   )
@@ -264,17 +402,76 @@ export function PianoRollToolbar({ channelId, readoutRef }: ToolbarProps) {
         className="flex h-9 shrink-0 items-center gap-3 overflow-x-auto overflow-y-hidden border-b bg-chassis/40 px-1.5 whitespace-nowrap"
       >
         <ChannelPicker channelId={channelId} />
+        <ActionButton
+          action="pianoRoll.typing"
+          variant={typing ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={typing}
+          className={typing ? "text-brand" : undefined}
+        />
+        <ActionButton
+          action="pianoRoll.stepEntry"
+          variant={stepEntry ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={stepEntry}
+          className={stepEntry ? "text-brand" : undefined}
+        />
         <Group label="Tools">
           <RollButton action="pianoRoll.toolDraw" icon={PencilEdit02Icon} />
           <RollButton action="pianoRoll.toolPaint" icon={PaintBrush01Icon} />
           <RollButton action="pianoRoll.toolSelect" icon={Cursor01Icon} />
           <RollButton action="pianoRoll.toolErase" icon={Eraser01Icon} />
+          <RollButton action="pianoRoll.toolMute" icon={VolumeMute02Icon} />
+          <RollButton action="pianoRoll.toolSlice" icon={ScissorIcon} />
+          <RollButton action="pianoRoll.toolZoom" icon={ZoomInAreaIcon} />
+          <RollButton action="pianoRoll.toolPlayback" icon={PlayIcon} />
         </Group>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label="Choose the previous piano tool"
+          disabled={nextPianoTool(tool, "previous") === null}
+          onClick={() => {
+            const latest = usePianoRollStore.getState().tool
+            const next = nextPianoTool(latest, "previous")
+            if (next !== null) setTool(next)
+          }}
+        >
+          Previous
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-label="Choose the next piano tool"
+          disabled={nextPianoTool(tool, "next") === null}
+          onClick={() => {
+            const latest = usePianoRollStore.getState().tool
+            const next = nextPianoTool(latest, "next")
+            if (next !== null) setTool(next)
+          }}
+        >
+          Next
+        </Button>
+        <ActionButton
+          action="pianoRoll.drum"
+          variant={drum ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={drum}
+          className={drum ? "text-brand" : undefined}
+        >
+          Drum
+        </ActionButton>
         <SnapPicker />
         <ArticulationPicker />
         <DrawColorPicker />
         <ScaleControls />
         <StampMenu />
+        <ChordToolsControl />
+        <ChordReadout />
+        <ActionButton action="pianoRoll.generateRiff" variant="outline" size="sm" />
+        <ScaleHighlightControl />
         <WaveformHelperControl />
         <ActionButton action="pianoRoll.quantize" variant="outline" size="sm">
           Note tools

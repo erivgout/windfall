@@ -316,6 +316,7 @@ fn drum_project() -> (Project, SamplePool) {
             muted: false,
             solo: false,
             group: String::new(),
+            voice: Default::default(),
             timing: windfall_project::ChannelTiming::default(),
             mixer_track: track,
             source: ChannelSource::Sampler(SamplerSettings {
@@ -413,6 +414,7 @@ fn add_effects(project: &mut Project) -> (ChannelId, TrackId) {
         muted: false,
         solo: false,
         group: String::new(),
+        voice: Default::default(),
         timing: windfall_project::ChannelTiming::default(),
         mixer_track: track,
         source: ChannelSource::Instrument {
@@ -483,6 +485,7 @@ fn add_song(project: &mut Project, pool: &mut SamplePool, bass: ChannelId, bass_
                 sample,
                 mixer_track: riser_track,
                 output: Default::default(),
+                normalize: false,
                 gain: 0.5,
                 pan: 0.0,
                 fade_in: bar / 2,
@@ -554,6 +557,9 @@ fn add_song(project: &mut Project, pool: &mut SamplePool, bass: ChannelId, bass_
             id: *id,
             name: name.to_owned(),
             muted: false,
+            solo: false,
+            color: 0,
+            height: 0,
         })
         .collect();
     project.playlist.clips = clips;

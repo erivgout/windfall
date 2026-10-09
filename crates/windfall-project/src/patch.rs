@@ -14,6 +14,7 @@ use crate::model::{
 /// The sections of a project an edit changed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Touched {
+    pub notebook: bool,
     pub settings: bool,
     pub plugins: bool,
     pub samples: bool,
@@ -32,6 +33,7 @@ impl Touched {
     pub fn all(project: &Project) -> Self {
         Self {
             settings: true,
+            notebook: true,
             plugins: true,
             samples: true,
             channels: true,
@@ -50,6 +52,7 @@ impl Touched {
     /// Adds everything `other` touched to `self`.
     pub fn merge(&mut self, other: &Touched) {
         self.settings |= other.settings;
+        self.notebook |= other.notebook;
         self.plugins |= other.plugins;
         self.samples |= other.samples;
         self.channels |= other.channels;
@@ -78,6 +81,9 @@ pub struct ProjectPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub settings: Option<ProjectSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notebook: Option<crate::Notebook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub plugins: Option<Vec<crate::PluginBinding>>,

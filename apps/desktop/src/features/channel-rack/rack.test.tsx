@@ -371,7 +371,7 @@ describe("keyboard", () => {
     render(<ChannelRackPanel />)
     const volume = screen.getByRole("slider", { name: "Kick channel volume" })
     fireEvent.keyDown(volume, { key: "Enter" })
-    const input = screen.getByRole("textbox")
+    const input = screen.getByRole("textbox", { name: "Kick channel volume" })
     expect(fireEvent.keyDown(input, { key: " ", code: "Space" })).toBe(true)
     await settle()
     expect(useTransportStore.getState().playing).toBe(false)
@@ -562,10 +562,17 @@ describe("the channel button", () => {
       "Rename channel…F2",
       "Change channel color…",
       "Duplicate channelCtrl+D",
+      "Channel group",
       "Replace sample from an audio file…",
       "Mute",
       "Solo",
+      "Unmute all",
+      "Unsolo all",
+      "Reset levels",
+      "Select next muted channel",
+      "Select next solo channel",
       "Clear steps",
+      "Send steps to piano rollAlt+3",
       "Fill every 2 steps",
       "Fill every 4 steps",
       "Fill every 8 steps",

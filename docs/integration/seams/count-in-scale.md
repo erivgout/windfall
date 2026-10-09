@@ -1,0 +1,1 @@
+The recording dialog halves or doubles the count-in through None, 1, 2, 4, and 8 bars. None stays none. Eight bars stays eight bars when doubled. The buttons stay disabled while recording or while the dialog is busy. The playlist start stays as it is.

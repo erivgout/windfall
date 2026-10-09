@@ -1,6 +1,7 @@
 import { Add01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { memo, type KeyboardEvent } from "react"
+import { memo, useState, type KeyboardEvent } from "react"
+import { useShallow } from "zustand/react/shallow"
 
 import type { PatternId } from "@/bindings"
 import { ActionButton } from "@/components/action-button"
@@ -11,9 +12,9 @@ import {
 } from "@/components/context-actions"
 import { runAction } from "@/lib/actions"
 import { useHint } from "@/lib/store/hint"
+import { useProjectStore } from "@/lib/store/project"
 import {
   usePattern,
-  usePatternIds,
   useSelectedPatternId,
   useSettings,
 } from "@/lib/store/selectors"
@@ -25,7 +26,8 @@ import { cn } from "@/lib/utils"
 import { AudioSection } from "./audio/picker-section"
 import { AutomationSection } from "./automation/picker-section"
 import { PICKER_WIDTH } from "./layout"
-import { PickerSection } from "./picker-section"
+import { matchingPatternIds } from "./pattern-filter"
+import { PickerEmpty, PickerSection } from "./picker-section"
 import { useClipCounts } from "./selectors"
 import { usePlaylistStore } from "./store"
 
@@ -127,7 +129,10 @@ const PatternRow = memo(function PatternRow({
  * channel rack shows it too.
  */
 export function PatternPicker() {
-  const ids = usePatternIds()
+  const [query, setQuery] = useState("")
+  const ids = useProjectStore(
+    useShallow((state) => matchingPatternIds(state.project.patterns, query))
+  )
   const selectedPattern = useSelectedPatternId()
   const patternBrush = usePlaylistStore(
     (state) => state.brush.type === "pattern"
@@ -170,6 +175,19 @@ export function PatternPicker() {
           onKeyDown={onKeyDown}
           className="flex flex-col py-0.5"
         >
+          <label className="flex flex-col gap-1 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+            Filter patterns
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key.startsWith("Arrow")) event.stopPropagation()
+              }}
+              className="h-7 w-full min-w-0 rounded-md border border-input bg-input/20 px-2 text-xs text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+            />
+          </label>
+          {ids.length === 0 && <PickerEmpty>No patterns match.</PickerEmpty>}
           {ids.map((id, index) => (
             <PatternRow
               key={id}

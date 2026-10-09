@@ -4,7 +4,7 @@
     "https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/",
     "https://forum.image-line.com/viewtopic.php?p=2065297"
   ],
-  "as_of": "2026-10-08",
+  "as_of": "2026-10-09",
   "rows": [
     {
       "id": "core-lifetime-free-updates",
@@ -40,7 +40,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "Native mono/stereo WAV capture and playlist attachment. Feature-pass source adds ADC/DAC alignment, count-in, rate/drift correction, offsets, tail drain, routed monitoring, multitrack hardware/mixer disk sources and atomic selected-loop attachment. External outputs, standalone monitoring, printed-master playback routing, comping and logger workflows remain. Artifacts and all new QA deferred. See docs/RECORDING.md."
+      "notes": "Source includes synchronized mono/stereo and multitrack WAV capture, native-rate/drift correction, routed input monitoring, count-in, retained loop passes, take groups and comping. Printed takes use Direct output and external port assignments are implemented. Current QA distinguishes synthetic software checks from remaining physical capture, duplex latency/drift, device failure and platform acceptance. See docs/qa/2026-10-09-recording-mixer.md."
     },
     {
       "id": "core-audio-clips",
@@ -97,10 +97,10 @@
       "summary": "Builds chord progressions for a chosen key and mood and writes them into the piano roll.",
       "windfall_name": "Chord progression generator",
       "phase": 6,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "The manual calls it the Chord Progression Tool. Not named in the plan's phase table, so placed in phase 6."
+      "notes": "Verified by QA 2026-10-09: Stopped keyboard step entry, saved project metadata/export author tags and key/mood chord insertion verified through mounted document controls and complementary native persistence/export checks. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "core-gopher",
@@ -193,10 +193,10 @@
       "summary": "Lets the time signature change at chosen points on the timeline or inside a pattern.",
       "windfall_name": "Time signature changes",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Persisted song meter maps and anchored engine/CLAP/VST3 transport metadata were integrated previously. Pattern base signatures, local meter maps/markers, ruler/grid segments, pointer snapping and MIDI/FL pattern metadata conversion are now implemented in source. Remaining segmented metrical workflows, native plugin/device acceptance and P1 off-lock preparation stay open; current source artifacts and all new QA are deferred. See docs/TIMELINE-REGIONS.md and docs/PATTERN-TIMELINES.md."
+      "notes": "Verified by QA 2026-10-09: Chord-map note/expression randomization and independent song/pattern marker/meter maps verified through mounted controls, atomic history/save and actual native/MIDI timing/export. Evidence: docs/qa/2026-10-09-piano-contracts.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "core-midi-support",
@@ -313,10 +313,10 @@
       "summary": "Per-step bars for editing note, velocity, release, fine pitch, modulation and shift values.",
       "windfall_name": "Step graph editor",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Source includes note/velocity/release/fine-pitch/modulation X/Y/pan/length/shift graphs, chord bars, interpolated paint, reset, keyboard edits and captured native note transactions. Expression reaches built-in sampler/synth voices. Artifact builds, QA and reviews deferred. See docs/STEP-GRAPH.md and docs/NOTE-EXPRESSION.md."
+      "notes": "Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-channel-controls",
@@ -361,10 +361,10 @@
       "summary": "Delays off-beat steps by an adjustable amount for a shuffled feel.",
       "windfall_name": "Swing",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Global swing plus implemented per-channel swing mix in the shared native playback/MIDI timing kernel and channel inspector. Implementation-first QA and artifact regeneration are deferred; see docs/CHANNEL-TIMING.md."
+      "notes": "Verified by QA 2026-10-09: Saved swing mix, signed note offset and truncation verified through mounted controls and exact native/MIDI onset measurements. Evidence: docs/qa/2026-10-09-channel-timing.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-channel-groups",
@@ -373,10 +373,10 @@
       "summary": "Sorts channels into named groups and shows one group at a time.",
       "windfall_name": "Channel groups",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Implemented saved group membership, atomic bulk assign/rename/merge/remove commands, rack filtering, multi-channel manager and row/palette actions. QA and shared-WASM regeneration deferred; see docs/CHANNEL-GROUPS.md."
+      "notes": "Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-channel-menu",
@@ -397,10 +397,10 @@
       "summary": "Fills a channel's steps at a regular spacing or from a chosen rhythm rule.",
       "windfall_name": "Step fill tools",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Regular fills and shift tools plus an implemented Advanced step fill dialog: regular, Euclidean and seeded rhythms, rotated/repeated ranges, velocity/key/gate controls, replacement/overlay preview, and native captured-lane admission with one undo step. QA deferred under the user's feature-first instruction; see docs/ADVANCED-FILL.md."
+      "notes": "Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-cut-groups",
@@ -433,10 +433,10 @@
       "summary": "Offline treatments applied to a loaded sample, such as crossfaded loops, reversing and normalizing.",
       "windfall_name": "Sample pre-processing",
       "phase": 1,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-rack-piano-roll-preview",
@@ -457,10 +457,10 @@
       "summary": "Converts a channel's active steps into piano roll notes.",
       "windfall_name": "Steps to notes",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Explicit Send steps to piano roll row/palette action selects the existing note lane and note preview without duplicating notes or adding history. UI/native navigation QA deferred; see docs/FEATURE-PASS.md."
+      "notes": "Verified by QA 2026-10-09: Shared canonical step/piano lane, saved named group filtering, step-property editing and rhythm-rule fill verified through mounted controls and project transactions. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-channel-envelopes",
@@ -481,10 +481,10 @@
       "summary": "A real-time, non-destructive arpeggio applied to the notes a channel receives.",
       "windfall_name": "Channel arpeggiator",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Saved non-destructive channel arpeggiation, voice caps and glide verified through mounted controls and public audible scheduling/admission tests. Evidence: docs/qa/2026-10-09-recording-mixer.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-echo-delay",
@@ -493,10 +493,10 @@
       "summary": "Repeats a channel's notes as fading, optionally pitch-shifted echoes at the note level instead of as audio.",
       "windfall_name": "Note echo",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-rack-polyphony",
@@ -505,10 +505,10 @@
       "summary": "Caps the number of voices a channel plays and sets its glide time.",
       "windfall_name": "Channel polyphony and glide",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Saved non-destructive channel arpeggiation, voice caps and glide verified through mounted controls and public audible scheduling/admission tests. Evidence: docs/qa/2026-10-09-recording-mixer.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-note-timing",
@@ -517,10 +517,10 @@
       "summary": "Truncates notes to a set length, offsets their start and scales how much swing applies to the channel.",
       "windfall_name": "Channel note timing",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Implemented persisted gate, signed shift and per-channel swing mix with inspector controls/reset and a shared Rust timing path for native playback and MIDI export. QA and artifact regeneration deferred; see docs/CHANNEL-TIMING.md."
+      "notes": "Verified by QA 2026-10-09: Saved swing mix, signed note offset and truncation verified through mounted controls and exact native/MIDI onset measurements. Evidence: docs/qa/2026-10-09-channel-timing.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-rack-sampler-stretch",
@@ -565,10 +565,10 @@
       "summary": "Adds a run of notes while dragging; a drum mode toggles steps on and off.",
       "windfall_name": "Piano roll paint tool",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Paint tool is in. No drum sequencer mode yet."
+      "notes": "Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-delete",
@@ -589,10 +589,10 @@
       "summary": "Silences notes without removing them.",
       "windfall_name": "Piano roll mute tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-slice",
@@ -601,10 +601,10 @@
       "summary": "Cuts notes in two along a drawn line.",
       "windfall_name": "Piano roll slice tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-select",
@@ -625,10 +625,10 @@
       "summary": "Zooms the view to a dragged region.",
       "windfall_name": "Piano roll zoom tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-playback",
@@ -637,10 +637,10 @@
       "summary": "Auditions notes by clicking or dragging across the grid.",
       "windfall_name": "Piano roll scrub tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-stamp",
@@ -709,10 +709,10 @@
       "summary": "Shows notes from the other channels in the pattern as faint references that can be made editable.",
       "windfall_name": "Ghost notes",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Existing ghost display is retained. New source implementation adds persisted Edit ghost notes mode, source-lane hit switching and ordinary edit gestures without copying notes or jumping the viewport. Broader editable-ghost acceptance awaits user-deferred QA; see docs/EDITABLE-GHOSTS.md."
+      "notes": "Verified by QA 2026-10-09: Real-WASM piano gestures, drum paint, retained mute, note slicing, region zoom, audition release and editable ghosts; history, cancellation and expression conservation verified. Evidence: docs/qa/2026-10-09-rack-piano.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-scale-highlighting",
@@ -745,10 +745,10 @@
       "summary": "Labels positions inside a pattern and lets a pattern carry its own time signatures.",
       "windfall_name": "Pattern markers",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Pattern local markers/meters and editing, ruler/grid and snapping, captured musical quantize/grooves, segmented painting/paste/nudge, rack labels/shading, native metronome/transport and MIDI/FL metadata implemented in source. Artifacts and all QA deferred. See docs/PATTERN-TIMELINES.md."
+      "notes": "Verified by QA 2026-10-09: Chord-map note/expression randomization and independent song/pattern marker/meter maps verified through mounted controls, atomic history/save and actual native/MIDI timing/export. Evidence: docs/qa/2026-10-09-piano-contracts.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-waveform-helper",
@@ -889,10 +889,10 @@
       "summary": "Generates random notes from a chord map and randomizes pan, velocity and pitch.",
       "windfall_name": "Randomize",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Source implementation: deterministic seeded property randomizer/humanizer and chord-map note generation with grid/density/gate/key range/velocity controls, source expression/color preservation and captured native undo transaction. All checks/artifact builds deferred by user; see docs/PIANO-RANDOMIZER.md."
+      "notes": "Verified by QA 2026-10-09: Chord-map note/expression randomization and independent song/pattern marker/meter maps verified through mounted controls, atomic history/save and actual native/MIDI timing/export. Evidence: docs/qa/2026-10-09-piano-contracts.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-piano-scale-levels",
@@ -925,10 +925,10 @@
       "summary": "Generates melodies in stages from progression, arpeggio and level settings.",
       "windfall_name": "Riff generator",
       "phase": 6,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Not named in the plan's phase table, so placed in phase 6."
+      "notes": "Not named in the plan's phase table, so placed in phase 6. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-piano-scripting",
@@ -949,10 +949,10 @@
       "summary": "Exports the piano roll as printable staff notation.",
       "windfall_name": "Sheet music export",
       "phase": 6,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Not named in the plan's phase table, so placed in phase 6."
+      "notes": "Not named in the plan's phase table, so placed in phase 6. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-playlist-pattern-clips",
@@ -1021,10 +1021,10 @@
       "summary": "Slides a clip's content left or right inside its fixed start and end.",
       "windfall_name": "Slip edit",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-slice",
@@ -1033,10 +1033,10 @@
       "summary": "Cuts clips along a drawn line.",
       "windfall_name": "Playlist slice tool",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "One selected audio clip can be split at reviewed grid/transient markers into source-linked clips in one undo step, retaining trim/reverse/tape pitch/routing. Drawn-line slicing across clip types remains pending. See docs/SLICER.md."
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-select",
@@ -1060,7 +1060,7 @@
       "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Dragging a ruler region zooms the playlist using logical coordinates, with Escape/focus/selection preservation and replacement guards. Actual shared-WASM tests cover 75–200% scaling, DPR and scroll; composed UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md."
+      "notes": "Dragging a ruler region zooms the playlist using logical coordinates, with Escape/focus/selection preservation and replacement guards. Actual shared-WASM tests cover 75â€“200% scaling, DPR and scroll; composed UI CI passes. See docs/TIMELINE-REGIONS.md and docs/integration/2026-10-08-completion-audit.md."
     },
     {
       "id": "win-playlist-playback",
@@ -1069,10 +1069,10 @@
       "summary": "Starts or scrubs playback from the clicked position.",
       "windfall_name": "Playlist scrub tool",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-tracks",
@@ -1081,10 +1081,10 @@
       "summary": "Horizontal lanes that hold any clip type and can be named, colored, resized, muted and soloed.",
       "windfall_name": "Playlist tracks",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Name, mute and reordering. No color, solo or per-track resize yet."
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-track-groups",
@@ -1093,10 +1093,10 @@
       "summary": "Nests tracks under a parent so they collapse, mute and solo together.",
       "windfall_name": "Track groups",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-instrument-audio-tracks",
@@ -1105,10 +1105,10 @@
       "summary": "Links a timeline track to a channel and a mixer track so it behaves like a track in a conventional DAW.",
       "windfall_name": "Linked tracks",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-playlist-time-markers",
@@ -1129,10 +1129,10 @@
       "summary": "Keeps several alternative timeline layouts inside one project.",
       "windfall_name": "Arrangements",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA 2026-10-09: active arrangement filtering, new-track/clip enrollment, removal pruning and atomic history/save validation verified by six native integration cases and shared-WASM checks. Independent alternative clip positions are still absent. See docs/qa/2026-10-09-arrangement-repair.md."
     },
     {
       "id": "win-playlist-picker",
@@ -1153,10 +1153,10 @@
       "summary": "Groups clips so that selecting, moving or deleting one affects them all.",
       "windfall_name": "Clip groups",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-make-unique",
@@ -1165,10 +1165,10 @@
       "summary": "Turns one clip instance into an independent copy so it can be edited without changing the others.",
       "windfall_name": "Make unique",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-playlist-snap",
@@ -1201,10 +1201,10 @@
       "summary": "On-clip handles for fade-in, fade-out and gain, with crossfades between overlapping clips.",
       "windfall_name": "Clip fades and gain",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Fade in, fade out and gain handles. No automatic crossfades yet."
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-audio-clip-properties",
@@ -1213,10 +1213,10 @@
       "summary": "Per-instance settings for an audio clip's gain, pan, pitch, direction and normalization.",
       "windfall_name": "Audio clip properties",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Per-instance gain, pan, tape/spectral pitch, reverse, fades and independent playlist stretch are implemented. Native audio-editor normalization creates a unique derived WAV with undo; a direct non-destructive normalize property remains pending. See docs/AUDIO-EDITOR.md and docs/ARCHITECTURE.md."
+      "notes": "Verified by QA 2026-10-09: Playlist gestures, named/resized/muted/soloed lanes and groups, fades/crossfades and per-instance audio properties verified with real document/history checks and complementary native PCM. Playback tool verifies seek/scrub. Evidence: docs/qa/2026-10-09-playlist-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-playlist-automation-editing",
@@ -1273,10 +1273,10 @@
       "summary": "Renders the pattern and audio clips on selected tracks to a new audio clip and mutes the sources.",
       "windfall_name": "Bounce in place",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Selected-clip bounce is implemented with captured source guards, active-layout enrollment, source muting and Direct output. QA repairs exclude unselected overlapping clips and avoid applying Master processing twice. Native rendering evidence is being collected; a direct track-consolidate workflow remains open. See docs/qa/2026-10-09-playlist-workflow.md."
     },
     {
       "id": "win-playlist-deverb",
@@ -1357,10 +1357,10 @@
       "summary": "Sends a track's audio to another track's plugins as a control input without it being heard there.",
       "windfall_name": "Sidechain",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA 2026-10-09: detector-only public engine acceptance and mounted selection workflows pass; the desktop bridge now forwards selected keys, and real mono-aux CLAP/VST3 cases pass. Full completion still requires actual multiple/wider auxiliary buses, saved selection reapplication across native-owner exchange, and live detector/PDC/history transitions. See docs/qa/2026-10-09-sidechain-acceptance.md and docs/qa/2026-10-09-completion-audit.md."
     },
     {
       "id": "win-mixer-track-eq",
@@ -1369,10 +1369,10 @@
       "summary": "A small parametric equalizer built into every track after its effect slots.",
       "windfall_name": "Track EQ",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Post-slot track EQ/polarity/swap/width verified with measured native PCM and mounted controls; selected/armed offline rendering verifies captured requests, real files and actual stems. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-mixer-track-utilities",
@@ -1381,10 +1381,10 @@
       "summary": "Per-track switches and a knob for polarity, channel swap and stereo width.",
       "windfall_name": "Track stereo utilities",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Post-slot track EQ/polarity/swap/width verified with measured native PCM and mounted controls; selected/armed offline rendering verifies captured requests, real files and actual stems. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-mixer-pdc",
@@ -1396,7 +1396,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Automatic compensation across the whole routing graph. No manual offset yet."
+      "notes": "Automatic graph compensation and saved signed manual latency corrections are implemented. New QA covers correction validation, atomic history and persistence; measured manual-offset send/print/external alignment remains acceptance work. See docs/qa/2026-10-09-recording-mixer.md."
     },
     {
       "id": "win-mixer-docks-layouts",
@@ -1405,10 +1405,10 @@
       "summary": "Left, middle and right docks for tracks and eight size layouts from compact to extra large.",
       "windfall_name": "Mixer layouts",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: All eight saved layouts, three docks, grouped adjustments/routing/movement, stale refusal, keyboard ranges and independent scrolling verified; actual browser resize/scrollbar geometry accepted. Evidence: docs/qa/2026-10-09-mixer-ui.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-mixer-track-presets",
@@ -1417,10 +1417,10 @@
       "summary": "Saves and reloads a track's effects and settings as a preset.",
       "windfall_name": "Mixer track presets",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Versioned capture/save/load and captured-destination replacement with fresh effect IDs are implemented. New QA covers built-in replacement, validation, routing preservation, history and persistence. Hosted plugin state/assets and native preset publication acceptance remain open. See docs/qa/2026-10-09-recording-mixer.md."
     },
     {
       "id": "win-mixer-waveform-view",
@@ -1429,10 +1429,10 @@
       "summary": "Swaps the level meters for scrolling waveforms.",
       "windfall_name": "Waveform meters",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA 2026-10-09: bounded native waveform publication and mounted extrema drawing/mode/clear/release behavior verified. Actual native/view source-selection, subscription and device-callback smoke remains an explicit ANALYZER-TAPS.md / ANALYZER-INTEGRATION.md gate. See docs/qa/2026-10-09-completion-audit.md."
     },
     {
       "id": "win-mixer-multi-select",
@@ -1441,10 +1441,10 @@
       "summary": "Selects several tracks at once so they can be routed, moved or adjusted together.",
       "windfall_name": "Multi-track selection",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: All eight saved layouts, three docks, grouped adjustments/routing/movement, stale refusal, keyboard ranges and independent scrolling verified; actual browser resize/scrollbar geometry accepted. Evidence: docs/qa/2026-10-09-mixer-ui.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-mixer-audio-io",
@@ -1456,7 +1456,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Feature-pass source adds saved per-track external hardware input and mono/stereo mapping, shared-device multitrack capture, independent-device alignment and per-track recording monitor routes. External output ports and standalone monitoring remain implementation work. Artifacts and all QA deferred. See docs/MULTITRACK-RECORDING.md."
+      "notes": "Saved hardware input routes, standalone monitoring and mono/stereo external outputs are implemented. Physical device port/open-count checks, multitrack monitoring and external replacement/copy alignment remain acceptance gates. See docs/qa/2026-10-09-recording-mixer.md."
     },
     {
       "id": "win-mixer-record-arm",
@@ -1468,7 +1468,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "Feature-pass source adds saved arms and dry/post-effects/post-fader recording choices, hardware and mixer-only capture, native frame/processing-latency gates, common count-in/loop selection and one atomic kept-source transaction. Printed clips feed Master; printed-master bypass playback and comping remain implementation work. Artifacts and all QA deferred. See docs/MIXER-DISK-RECORDING.md and docs/MULTITRACK-RECORDING.md."
+      "notes": "Saved arms and dry/post-effects/post-fader disk recording, shared multitrack keep, Direct printed playback and take associations are implemented. Native rendered-capture alignment/tail and hardware input acceptance remain open. See docs/qa/2026-10-09-recording-mixer.md."
     },
     {
       "id": "win-mixer-render-tracks",
@@ -1477,10 +1477,10 @@
       "summary": "Renders the armed or selected mixer tracks to audio files offline.",
       "windfall_name": "Render mixer tracks",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Post-slot track EQ/polarity/swap/width verified with measured native PCM and mounted controls; selected/armed offline rendering verifies captured requests, real files and actual stems. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-browser-folders",
@@ -1549,10 +1549,10 @@
       "summary": "Lists autosaved, dated backup copies of projects.",
       "windfall_name": "Backups list",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Computer-keyboard audition/release and dated backup listing/open workflows verified through mounted UI and complementary public native audio or actual filesystem acceptance. Evidence: docs/qa/2026-10-09-completion-audit.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "win-browser-tags",
@@ -1585,10 +1585,10 @@
       "summary": "Lists everything in the open project: patterns, instruments, effects, samples, controller links and edit history.",
       "windfall_name": "Project tab",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-browser-project-picker",
@@ -1597,10 +1597,10 @@
       "summary": "A full-screen overview of the project's clips and channels and how they relate.",
       "windfall_name": "Project overview",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "win-browser-plugin-database",
@@ -1645,10 +1645,10 @@
       "summary": "A drum machine with 16 physically modeled drum pads.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-harmor",
@@ -1657,10 +1657,10 @@
       "summary": "An additive synth that can also resynthesize audio and images.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-kepler-exo",
@@ -1681,10 +1681,10 @@
       "summary": "An additive synth that morphs between harmonic snapshots.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-ogun",
@@ -1693,10 +1693,10 @@
       "summary": "An additive synth aimed at metallic and shimmering timbres.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-poizone",
@@ -1717,10 +1717,10 @@
       "summary": "A physical-modeling synth for string instruments.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "inst-sawer",
@@ -1741,10 +1741,10 @@
       "summary": "A hybrid synth combining FM and subtractive synthesis with a built-in sequencer and effects.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": "Candidate basis: Dexed (GPL-3.0)."
+      "notes": "Candidate basis: Dexed (GPL-3.0). QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-transistor-bass",
@@ -1753,10 +1753,10 @@
       "summary": "A bass-line synth in the style of a classic acid bass machine, with its own step sequencer.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": "Candidate basis: Surge XT (GPL-3.0)."
+      "notes": "Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "inst-directwave-full",
@@ -1777,10 +1777,10 @@
       "summary": "An additive engine presented with subtractive-style controls.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-kepler",
@@ -1801,10 +1801,10 @@
       "summary": "Slices drum loops with beat detection and lets each slice be edited, played and rearranged.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-soundfont-player",
@@ -1825,10 +1825,10 @@
       "summary": "A synth combining FM, ring modulation and subtractive methods with a deep modulation matrix.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "Candidate basis: Dexed (GPL-3.0)."
+      "notes": "Candidate basis: Dexed (GPL-3.0). QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-3x-osc",
@@ -1849,10 +1849,10 @@
       "summary": "A preset-only synth that derives a patch from a preset number, giving billions of variations.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-bassdrum",
@@ -1873,10 +1873,10 @@
       "summary": "Turns an image into sound by scanning it and mapping color and brightness to frequency and level.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-boobass",
@@ -1885,10 +1885,10 @@
       "summary": "A simple monophonic bass guitar instrument with tone controls.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-channel-sampler",
@@ -1921,10 +1921,10 @@
       "summary": "A single physically modeled drum per channel, built for use with the step sequencer.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-flex",
@@ -1945,10 +1945,10 @@
       "summary": "A drum synth holding many programmable patches, one per key.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-fruity-dx10",
@@ -1957,10 +1957,10 @@
       "summary": "A light eight-voice FM synth.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Candidate basis: Dexed (GPL-3.0)."
+      "notes": "Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "inst-fruity-granulizer",
@@ -1969,10 +1969,10 @@
       "summary": "A granular sampler that plays a sample as many small overlapping grains.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-fruity-kick",
@@ -1981,10 +1981,10 @@
       "summary": "A simple kick drum synth built from a pitch-swept sine wave.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "The manual calls it Fruit Kick."
+      "notes": "Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "inst-fruity-pad-controller-fpc",
@@ -2005,10 +2005,10 @@
       "summary": "Cuts a loop into slices mapped across the keyboard for rearranging.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "May share one Windfall plugin with the phase-3 slicer."
+      "notes": "May share one Windfall plugin with the phase-3 slicer. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-fruity-slicer-2",
@@ -2053,10 +2053,10 @@
       "summary": "Synthesizes plucked strings by modeling a vibrating string.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "inst-simsynth",
@@ -2065,10 +2065,10 @@
       "summary": "A three-oscillator analog-style subtractive synth.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Candidate basis: Surge XT (GPL-3.0)."
+      "notes": "Verified by QA 2026-10-09: Mapped instrument family verified through meaningful parameter/audio differences, persistence/history and public live/offline PCM comparisons. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "inst-speech-synthesizer",
@@ -2089,10 +2089,10 @@
       "summary": "Plays a sample along drawn curves to simulate turntable scratching.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "inst-fl-keys",
@@ -2137,10 +2137,10 @@
       "summary": "Splits audio into its transient and sustained parts so each can be processed separately.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": "New in FL Studio 2026."
+      "notes": "New in FL Studio 2026. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-luxeverb",
@@ -2161,10 +2161,10 @@
       "summary": "Shifts the pitch and formant of incoming audio in real time, with separate modes for voice and full mixes.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": "Candidate basis: Signalsmith Stretch (MIT)."
+      "notes": "Candidate basis: Signalsmith Stretch (MIT). QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-transient-processor",
@@ -2173,10 +2173,10 @@
       "summary": "Boosts or softens the attack and release portions of a sound.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-emphasis",
@@ -2197,10 +2197,10 @@
       "summary": "Detects transients in incoming audio and uses them to retrigger and reloop it in real time.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "all-plugins",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-gross-beat",
@@ -2209,10 +2209,10 @@
       "summary": "Bends the playback position and volume of live audio along drawn curves for stutter, gating and scratch effects.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-hardcore-11-guitar-fx",
@@ -2221,10 +2221,10 @@
       "summary": "A rack of eleven guitar pedal effects with cabinet simulation.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-low-lifter",
@@ -2233,10 +2233,10 @@
       "summary": "Adds harmonics to bass content so low notes stay audible on small speakers.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-pitcher",
@@ -2245,10 +2245,10 @@
       "summary": "Corrects pitch in real time and can add harmony voices under MIDI control.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": "Needs real-time pitch detection."
+      "notes": "Needs real-time pitch detection. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-vintage-chorus",
@@ -2257,10 +2257,10 @@
       "summary": "A chorus modeled on the one built into a classic analog polysynth.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-vintage-phaser",
@@ -2269,10 +2269,10 @@
       "summary": "A phaser modeled on a classic analog pedal.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "signature",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-frequency-shifter",
@@ -2281,10 +2281,10 @@
       "summary": "Moves every frequency by a fixed amount in hertz, giving metallic and inharmonic tones.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-hyper-chorus",
@@ -2293,10 +2293,10 @@
       "summary": "An extreme multi-voice chorus for supersaw-style thickening.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-maximus",
@@ -2305,10 +2305,10 @@
       "summary": "A mastering dynamics processor that compresses and limits separate frequency bands.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-multiband-delay",
@@ -2320,7 +2320,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet."
+      "notes": "QA 2026-10-09: registered FrequencyDelay has sixteen independent delay/level/pan bands; measured DSP and public native integration verified. Dedicated drawn sixteen-band editor, fallible host admission and saturating aggregate-tail acceptance remain open under DELAY-FAMILY.md. This is distinct from the three-band BandDelay. See docs/qa/2026-10-09-delay-bank.md."
     },
     {
       "id": "fx-spreader",
@@ -2329,10 +2329,10 @@
       "summary": "Widens the stereo image while staying compatible with mono playback.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-vocodex",
@@ -2341,10 +2341,10 @@
       "summary": "A many-band vocoder with a built-in carrier synth.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-control-surface",
@@ -2365,10 +2365,10 @@
       "summary": "A modular distortion unit combining several distortion types, filters, chorus and speaker cabinets.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-effector-12-fx",
@@ -2377,10 +2377,10 @@
       "summary": "Twelve performance effects, used one at a time and steered from an X/Y pad.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-equo",
@@ -2401,10 +2401,10 @@
       "summary": "Divides audio into two or three frequency bands that can be routed to separate outputs.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-balance",
@@ -2425,10 +2425,10 @@
       "summary": "A guitar-style overdrive distortion.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-chorus",
@@ -2461,10 +2461,10 @@
       "summary": "A convolution processor for impulse-response reverb and linear-phase EQ.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Impulse responses shipped with FL are Image-Line content; needs own."
+      "notes": "Impulse responses shipped with FL are Image-Line content; needs own. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-delay-2",
@@ -2473,10 +2473,10 @@
       "summary": "A stereo echo with feedback, filtering and stereo offset.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Stereo/filter/modulated echo contracts verified through measured DSP/public runtime, saved parameters and mounted editor controls including modulation rate/depth. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "fx-fruity-delay-3",
@@ -2485,10 +2485,10 @@
       "summary": "A tempo-synced echo with filtering, modulation and analog-style degradation.",
       "windfall_name": "Delay",
       "phase": 2,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "Tempo sync, filtering, stereo delay and saturation are implemented. Delay modulation remains pending; the core delay alone does not close the broader row."
+      "notes": "Verified by QA 2026-10-09: Stereo/filter/modulated echo contracts verified through measured DSP/public runtime, saved parameters and mounted editor controls including modulation rate/depth. Evidence: docs/qa/2026-10-09-dsp-plugins.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "fx-fruity-delay-bank",
@@ -2500,7 +2500,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": "A T3-bound E3 implementation owns the chainable filtered echo bank and sixteen frequency-band delay DSP foundations. Signal/reference, stability, allocation and throughput checks are in progress; no source checkpoint, registry, persistence, automation, engine/export, UI or parity acceptance is claimed yet."
+      "notes": "QA 2026-10-09: registered eight-unit EchoBank with chaining/filtering, saved controls and public native runtime integration verified. Dedicated linked eight-unit editing, fallible host admission and saturating aggregate-tail acceptance remain open under DELAY-FAMILY.md. See docs/qa/2026-10-09-delay-bank.md."
     },
     {
       "id": "fx-fruity-fast-dist",
@@ -2545,10 +2545,10 @@
       "summary": "Stacked flangers that widen the stereo field and imitate unison voices.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-formula-controller",
@@ -2617,10 +2617,10 @@
       "summary": "A three-band compressor for mastering.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-notebook",
@@ -2641,10 +2641,10 @@
       "summary": "A plainer page-based notepad for keeping lyrics and reminders with the project.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Plain multi-page notebook editing, history, limits, replacement and native disk roundtrip verified. Playback-following Notebook1 remains separate. Evidence: docs/qa/2026-10-09-notebook.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "fx-fruity-panomatic",
@@ -2713,10 +2713,10 @@
       "summary": "A turntable simulator for scratching a loaded sample.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-send",
@@ -2761,10 +2761,10 @@
       "summary": "Adjusts stereo width, phase offset and channel balance.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-stereo-shaper",
@@ -2785,10 +2785,10 @@
       "summary": "A classic vocoder that imposes the character of one sound onto another.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-waveshaper",
@@ -2797,10 +2797,10 @@
       "summary": "Distorts audio through a user-drawn input-to-output curve.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-fruity-x-y-controller",
@@ -2869,10 +2869,10 @@
       "summary": "A one-knob enhancer built on a multiband maximizer.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "fx-tuner",
@@ -3085,10 +3085,10 @@
       "summary": "The earlier algorithmic room reverb.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor."
+      "notes": "manual-only: listed in the online manual's plugin index, not on the compare-editions page, so outside its 39/71/6 totals. The manual calls it a legacy plugin and recommends its successor. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "vis-fruity-video-player",
@@ -3157,10 +3157,10 @@
       "summary": "A configurable oscilloscope, spectrum, vectorscope and peak meter display.",
       "windfall_name": null,
       "phase": 5,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": "fruity",
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "vis-fruity-dance",
@@ -3685,10 +3685,10 @@
       "summary": "Plays a click on each beat.",
       "windfall_name": "Metronome",
       "phase": 1,
-      "status": "in-progress",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "Native sample-clock beat triggers, pattern/song meter maps and tempo warp, short accented clicks, runtime output mixing and toolbar/menu/palette gain/accent controls are implemented in source. Artifacts and all QA deferred. See docs/METRONOME-COUNT-IN.md."
+      "notes": "Verified by QA 2026-10-09: Public native runtime verifies audible beat clicks; physical recording and count-in remain separate open rows. Evidence: docs/qa/2026-10-09-recording-mixer.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "wf-typing-keyboard",
@@ -3697,10 +3697,10 @@
       "summary": "Plays notes from the computer keyboard.",
       "windfall_name": "Typing keyboard",
       "phase": 1,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Computer-keyboard audition/release and dated backup listing/open workflows verified through mounted UI and complementary public native audio or actual filesystem acceptance. Evidence: docs/qa/2026-10-09-completion-audit.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "wf-themes",
@@ -3781,10 +3781,10 @@
       "summary": "One snap setting shared by the editors, also used to quantize live input.",
       "windfall_name": "Global snap",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "wf-detached-windows",
@@ -3793,10 +3793,10 @@
       "summary": "Lets an editor or plugin window leave the main window for a second monitor.",
       "windfall_name": "Detachable panels",
       "phase": 2,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "wf-keyboard-shortcuts",
@@ -3817,10 +3817,10 @@
       "summary": "One-click utility actions such as selecting unused channels, purging unused clips or switching the stretch mode of every clip.",
       "windfall_name": "Utility commands",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": "Maps to named commands in Windfall's command palette."
+      "notes": "Verified by QA 2026-10-09: Verified one-click utilities: reset levels, switch every clip's stretch mode, mute empty tracks and unsolo; property/history/save conservation verified. Unused-channel selection and unused-clip purge are not claimed. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "wf-project-info",
@@ -3829,10 +3829,10 @@
       "summary": "Stores title, author and notes with the project and writes author data into rendered files.",
       "windfall_name": "Project info",
       "phase": 2,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Stopped keyboard step entry, saved project metadata/export author tags and key/mood chord insertion verified through mounted document controls and complementary native persistence/export checks. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "wf-project-settings",
@@ -3877,10 +3877,10 @@
       "summary": "Enters notes one step at a time from a keyboard while playback is stopped.",
       "windfall_name": "Step entry",
       "phase": 3,
-      "status": "todo",
+      "status": "done",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "Verified by QA 2026-10-09: Stopped keyboard step entry, saved project metadata/export author tags and key/mood chord insertion verified through mounted document controls and complementary native persistence/export checks. Evidence: docs/qa/2026-10-09-workflow.md; final local gates and accepted scope: docs/qa/2026-10-09-completion.md."
     },
     {
       "id": "wf-score-logger",
@@ -3889,10 +3889,10 @@
       "summary": "Keeps a rolling log of everything played so a missed idea can be dropped into a pattern afterwards.",
       "windfall_name": "Note logger",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "wf-count-in",
@@ -3916,7 +3916,7 @@
       "status": "in-progress",
       "reason": null,
       "fl_edition": "producer",
-      "notes": "Feature-pass source adds chosen-region loop playback, cumulative tempo-map frame boundaries, complete/final-partial take metadata, all/latest/only/except selection, separate kept WAVs, one atomic source/clip undo step and muted earlier takes. Comping and multitrack arms remain separate work. Artifacts and all QA deferred. See docs/LOOP-RECORDING.md."
+      "notes": "Loop pass selection, atomic kept-source attachment, saved take groups and synchronized comp editing are implemented. Capture-to-keep, pass boundaries and real device acceptance remain open; do not infer complete recording QA from the general suite. See docs/qa/2026-10-09-recording-mixer.md."
     },
     {
       "id": "wf-automation-recording",
@@ -3925,10 +3925,10 @@
       "summary": "Records knob and slider movements, made by mouse or controller, as automation.",
       "windfall_name": "Automation recording",
       "phase": 3,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": null
+      "notes": "QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "wf-controller-linking",
@@ -4069,10 +4069,10 @@
       "summary": "Displays the name of the chord currently played or selected.",
       "windfall_name": "Chord display",
       "phase": 6,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "New in FL Studio 2026. Not named in the plan's phase table, so placed in phase 6."
+      "notes": "New in FL Studio 2026. Not named in the plan's phase table, so placed in phase 6. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     },
     {
       "id": "wf-cloud-mastering",
@@ -4105,10 +4105,10 @@
       "summary": "In-app links to the manual and step-by-step tutorials for first tasks.",
       "windfall_name": "Help and tutorials",
       "phase": 7,
-      "status": "todo",
+      "status": "in-progress",
       "reason": null,
       "fl_edition": null,
-      "notes": "Guided tutorials were added in FL Studio 2026."
+      "notes": "Guided tutorials were added in FL Studio 2026. QA reconciliation 2026-10-09: an implemented subset is documented in docs/qa/2026-10-09-inventory.md; full-row acceptance remains open. See docs/qa/2026-10-09-completion-audit.md and the dated domain reports for tested behavior and remaining gates."
     }
   ]
 }

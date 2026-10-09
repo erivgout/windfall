@@ -40,10 +40,10 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn countClasses(&self) -> i32 {
-        21
+        22
     }
     unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        if info.is_null() || !(0..21).contains(&index) {
+        if info.is_null() || !(0..22).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -75,6 +75,7 @@ impl IPluginFactoryTrait for Factory {
                         "VST3 Bridge Successful Native State Limit",
                         "VST3 Bridge Controlled Process Error",
                         "VST3 Bridge Deactivation Edit",
+                        "VST3 Auxiliary Detector",
                     ][index as usize],
                 ),
             });
@@ -95,12 +96,13 @@ impl IPluginFactoryTrait for Factory {
             obj.write(ptr::null_mut());
             let class = ptr::read_unaligned(class.cast::<TUID>());
             let iid = ptr::read_unaligned(iid.cast::<[u8; 16]>());
-            if iid != IComponent::IID || !(0..21).any(|i| class == cid(i)) {
+            if iid != IComponent::IID || !(0..22).any(|i| class == cid(i)) {
                 return kNoInterface;
             }
             let component = ComWrapper::new(Component {
                 absurd: class == cid(1),
                 instrument: class == cid(2) || class == cid(12),
+                sidechain: class == cid(21),
                 bridge_note_probe: class == cid(12),
                 mono: class == cid(3),
                 refuse: class == cid(6),
@@ -155,7 +157,7 @@ impl IPluginFactoryTrait for Factory {
 }
 impl IPluginFactory2Trait for Factory {
     unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
-        if info.is_null() || !(0..21).contains(&index) {
+        if info.is_null() || !(0..22).contains(&index) {
             return kInvalidArgument;
         }
         // SAFETY: caller supplies a writable SDK output struct.
@@ -187,6 +189,7 @@ impl IPluginFactory2Trait for Factory {
                         "VST3 Bridge Successful Native State Limit",
                         "VST3 Bridge Controlled Process Error",
                         "VST3 Bridge Deactivation Edit",
+                        "VST3 Auxiliary Detector",
                     ][index as usize],
                 ),
                 classFlags: 0,
@@ -204,6 +207,7 @@ impl IPluginFactory2Trait for Factory {
     }
 }
 struct Component {
+    sidechain: bool,
     absurd: bool,
     instrument: bool,
     bridge_note_probe: bool,
@@ -278,7 +282,13 @@ impl IComponentTrait for Component {
         if self.absurd {
             1000
         } else if media == 0 {
-            if self.instrument && dir == 0 { 0 } else { 1 }
+            if self.instrument && dir == 0 {
+                0
+            } else if self.sidechain && dir == 0 {
+                2
+            } else {
+                1
+            }
         } else {
             i32::from(self.instrument && dir == 0)
         }
@@ -290,11 +300,14 @@ impl IComponentTrait for Component {
         index: i32,
         bus: *mut BusInfo,
     ) -> tresult {
-        if index != 0 || bus.is_null() || unsafe { self.getBusCount(media, dir) } == 0 {
+        if index < 0 || index >= unsafe { self.getBusCount(media, dir) } || bus.is_null() {
             return kInvalidArgument;
         }
         let mut name = [0; 128];
-        for (slot, unit) in name.iter_mut().zip("Stereo".encode_utf16()) {
+        for (slot, unit) in name
+            .iter_mut()
+            .zip(if index == 1 { "Detector" } else { "Stereo" }.encode_utf16())
+        {
             *slot = unit;
         }
         // SAFETY: caller supplies a writable SDK bus structure.
@@ -302,10 +315,14 @@ impl IComponentTrait for Component {
             bus.write(BusInfo {
                 mediaType: media,
                 direction: dir,
-                channelCount: if media == 1 || self.mono { 1 } else { 2 },
+                channelCount: if media == 1 || self.mono || index == 1 {
+                    1
+                } else {
+                    2
+                },
                 name,
-                busType: 0,
-                flags: 1,
+                busType: if index == 1 { 1 } else { 0 },
+                flags: u32::from(index == 0),
             });
         }
         kResultOk
@@ -501,7 +518,14 @@ impl IAudioProcessorTrait for Component {
         _outputs: *mut SpeakerArrangement,
         numOuts: i32,
     ) -> tresult {
-        if numIns == i32::from(!self.instrument) && numOuts == 1 {
+        if numIns
+            == if self.sidechain {
+                2
+            } else {
+                i32::from(!self.instrument)
+            }
+            && numOuts == 1
+        {
             kResultOk
         } else {
             kResultFalse
@@ -509,15 +533,15 @@ impl IAudioProcessorTrait for Component {
     }
     unsafe fn getBusArrangement(
         &self,
-        _dir: BusDirection,
+        dir: BusDirection,
         index: i32,
         arr: *mut SpeakerArrangement,
     ) -> tresult {
-        if index != 0 || arr.is_null() {
+        if (index != 0 && !(self.sidechain && dir == 0 && index == 1)) || arr.is_null() {
             return kInvalidArgument;
         }
         unsafe {
-            arr.write(if self.mono { 1 } else { 3 });
+            arr.write(if self.mono || index == 1 { 1 } else { 3 });
         }
         kResultOk
     }
@@ -588,6 +612,7 @@ impl IAudioProcessorTrait for Component {
         let audio = unsafe { &mut *self.audio.get() };
         if !audio.configured
             || data.numOutputs != 1
+            || (self.sidechain && data.numInputs != 2)
             || data.numSamples <= 0
             || data.processContext.is_null()
         {
@@ -733,7 +758,13 @@ impl IAudioProcessorTrait for Component {
                     } else if self.multi_params && channel == 1 {
                         audio.extra.iter().sum::<f64>() as f32
                     } else {
-                        (input + synth) * (gain as f32 * 2.0)
+                        let detector = if self.sidechain {
+                            let auxiliary = &*data.inputs.add(1);
+                            *(*auxiliary.__field0.channelBuffers32).add(frame as usize)
+                        } else {
+                            0.0
+                        };
+                        (input + synth) * (gain as f32 * 2.0) + detector
                     });
                 }
             }
@@ -746,7 +777,9 @@ impl IAudioProcessorTrait for Component {
                 event.__field0.noteOn.pitch = 69;
                 event.__field0.noteOn.velocity = 0.75;
                 event.__field0.noteOn.noteId = -1;
-                for _ in 0..5000 {
+                // Exceed the host's enlarged note/release reserve (9,217),
+                // so this fixture still exercises rejected native output.
+                for _ in 0..10_000 {
                     unsafe {
                         events.addEvent(&mut event);
                     }

@@ -444,6 +444,12 @@ impl Session {
         }
         let (baseline_pool, preparation) = {
             let state = self.state();
+            if state.replacements != ticket.request || state.generation != ticket.generation {
+                return Err(Refusal::Superseded);
+            }
+            if state.edits != ticket.edits {
+                return Err(Refusal::Edited);
+            }
             (state.pool.clone(), self.project_preparation(&state))
         };
         if staged.is_none()
@@ -451,16 +457,6 @@ impl Session {
         {
             decoded.pool.set_plugin_factory(factory);
         }
-        if state.replacements != ticket.request || state.generation != ticket.generation {
-            return Err(Refusal::Superseded);
-        }
-        if state.edits != ticket.edits {
-            return Err(Refusal::Edited);
-        }
-        let controller = self.controller();
-        controller.stop();
-        controller.set_current_track(None);
-
         let project = document.project();
         let first_pattern = project.patterns.first().map(|pattern| pattern.id);
         let transport = match played {
@@ -471,11 +467,13 @@ impl Session {
                     .filter(|id| project.pattern(*id).is_some())
                     .or(first_pattern),
                 loop_song: Some(played.loop_song),
+                ..TransportPatch::default()
             },
             None => TransportPatch {
                 mode: Some(PlayMode::Pattern),
                 pattern: first_pattern,
                 loop_song: None,
+                ..TransportPatch::default()
             },
         };
         let mut prepared = preparation
@@ -517,13 +515,10 @@ impl Session {
             midi_import: None,
             midi_ticket: 0,
             slice_review: None,
-            slice_ticket: state.slice_ticket,
-        };
-        controller.set_prepared_project(state.document.project(), prepared);
-        self.refresh_input_monitor_signature(&state);
-        if let Some(staged) = staged {
-            staged.install_document();
-        }
+            slice_ticket: 0,
+        });
+        let mut old_state = None;
+        let mut retirement = None;
         #[cfg(test)]
         self.pause("sampler:install-prepared");
         for attempt in 0..8 {
@@ -554,6 +549,7 @@ impl Session {
                         candidate.slice_ticket = state.slice_ticket;
                         old_state = Some(std::mem::replace(&mut *state, candidate));
                         retirement = Some(lease.install());
+                        self.refresh_input_monitor_signature(&state);
                         if let Some(staged) = &staged {
                             staged.install_document();
                         }

@@ -67,7 +67,7 @@ const BAD_LOOPS = `Enter a whole number from 1 to ${MAX_PATTERN_LOOPS}.`
 const BAD_TAIL = `Enter a number of seconds from 0 to ${MAX_TAIL_SECS}.`
 
 function ExportForm({ onDone }: { onDone(): void }) {
-  const mixerRequest = useRef(useMixerRender.getState().request).current
+  const [mixerRequest] = useState(() => useMixerRender.getState().request)
   const exportTracks = useProjectStore((state) => state.project.mixer.tracks)
   const [draft, setDraft] = useState<Draft>(() => ({
     path: "",

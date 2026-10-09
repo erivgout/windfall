@@ -154,6 +154,7 @@ export class SimDocument {
       ...project,
       plugins: patch.plugins ?? project.plugins,
       settings: patch.settings ?? project.settings,
+      notebook: patch.notebook ?? project.notebook,
       samples: patch.samples ?? project.samples,
       channels: patch.channels ?? project.channels,
       mixer: patch.mixer ?? project.mixer,
@@ -162,6 +163,7 @@ export class SimDocument {
       patterns: mergePatterns(project.patterns, patch),
     }
     if (!this.mirror.plugins?.length) delete this.mirror.plugins
+    if (!this.mirror.notebook?.pages.length) delete this.mirror.notebook
     this.dirty = patch.dirty
     return patch
   }

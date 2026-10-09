@@ -86,6 +86,41 @@ function tap(target: HTMLElement, key: string, times = 1) {
 }
 
 describe("the settings panel", () => {
+  it("dispatches one sampler patch when the loop crossfade knob moves", async () => {
+    const user = userEvent.setup()
+    await openSettings("Kick")
+    const crossfade = slider("Loop crossfade")
+    expect(crossfade).toHaveAttribute("aria-valuenow", "0")
+    expect(crossfade).toHaveAttribute("aria-disabled", "true")
+    await user.click(
+      within(settings()).getByRole("button", { name: "Forward" })
+    )
+    await settle()
+    expect(crossfade).not.toHaveAttribute("aria-disabled", "true")
+    const send = vi.spyOn(backend, "dispatch")
+    tap(crossfade, "ArrowUp")
+    await settle()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith(
+      {
+        type: "updateSampler",
+        id: channel("Kick").id,
+        patch: { loopCrossfade: 0.001 },
+      },
+      expect.any(Number)
+    )
+    send.mockRestore()
+  })
+
+  it("leaves the crossfade knob inert while the loop is off", async () => {
+    await openSettings("Kick")
+    const send = vi.spyOn(backend, "dispatch")
+    tap(slider("Loop crossfade"), "End")
+    await settle()
+    expect(send).not.toHaveBeenCalled()
+    send.mockRestore()
+  })
+
   it("edits sampler loop modes and points through undoable project commands", async () => {
     const user = userEvent.setup()
     await openSettings("Kick")

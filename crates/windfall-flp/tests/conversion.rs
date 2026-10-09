@@ -33,8 +33,6 @@ fn fixture(ppq: u16) -> FlpProject {
         ..Default::default()
     });
     p.patterns.push(Pattern {
-        time_signature: None,
-        timeline: Default::default(),
         iid: 1,
         length: Some(u32::from(ppq) * 4),
         notes: vec![note(u32::from(ppq), u32::from(ppq))],
@@ -144,7 +142,16 @@ fn timeline_selected_arrangement_meters_and_named_markers_survive_actual_flp_byt
     assert_eq!(timeline.markers[0].name, "Chorus");
     assert_eq!(timeline.markers[0].tick, 7400);
     let report = format!("{:?}", converted.report);
-    assert!(report.contains("per-pattern meter maps"));
+    assert_eq!(
+        converted.project.patterns[0]
+            .timeline
+            .meters
+            .iter()
+            .map(|m| (m.tick, m.signature.numerator, m.signature.denominator))
+            .collect::<Vec<_>>(),
+        [(0, 5, 4)]
+    );
+    assert!(!report.contains("per-pattern meter maps"));
     assert!(report.contains("marker kind 3"));
 }
 #[test]
@@ -445,7 +452,7 @@ fn a_native_generator_uses_our_instrument_and_reports_sound_approximation() {
     assert_eq!(c.report.category(ReportSection::Channels).approximated, 1);
 }
 #[test]
-fn source_unknowns_metadata_and_markers_are_counted_as_losses() {
+fn source_unknowns_and_metadata_are_losses_while_named_markers_survive() {
     let mut p = fixture(96);
     p.settings.author = Some("Original author".into());
     p.patterns[0].markers.push(TimeMarker {
@@ -458,7 +465,9 @@ fn source_unknowns_metadata_and_markers_are_counted_as_losses() {
     });
     let c = converted(&p);
     assert!(c.report.unknown_event_ids.contains(&63));
-    assert!(c.report.category(ReportSection::Other).dropped >= 2);
+    assert_eq!(c.report.category(ReportSection::Other).dropped, 1);
+    let marker = &c.project.patterns[0].timeline.markers[0];
+    assert_eq!((marker.tick, marker.name.as_str()), (0, "Original marker"));
     assert!(c.report.category(ReportSection::Project).dropped >= 1);
 }
 #[test]

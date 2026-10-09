@@ -1,0 +1,1 @@
+The playlist timeline steps through Seek, Select time, and Zoom region. Seek stays seek when moved previous. Zoom region stays zoom region when moved next. Markers and the time selection stay as they are. This is not an undo step.

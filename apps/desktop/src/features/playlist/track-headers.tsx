@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 
-import type { PlaylistTrack } from "@/bindings"
+import type { PlaylistTrack, TrackGroup } from "@/bindings"
 import { ToggleLed } from "@/components/audio"
 import { ActionButton } from "@/components/action-button"
 import {
@@ -18,19 +18,41 @@ import {
   contextSeparator,
   type ContextItem,
 } from "@/components/context-actions"
+import { TRACK_COLORS } from "@/features/mixer/colors"
 import { useHint } from "@/lib/store/hint"
+import { dispatch, useProjectStore } from "@/lib/store/project"
+import { getProjectGeneration } from "@/lib/store/replaced"
+import { colorToCss } from "@/lib/units"
 import { cn } from "@/lib/utils"
 
 import { trackDropIndex } from "./edit"
-import { DRAG_THRESHOLD_PX, HEADER_WIDTH } from "./layout"
+import { DRAG_THRESHOLD_PX, HEADER_WIDTH, MIN_ROW_HEIGHT } from "./layout"
 import { useViewportValue, wheelInput, type GridMetrics } from "./metrics"
-import { moveTrack, setTrackName, toggleTrackMute } from "./ops"
-import { playlist, usePlaylistTracks } from "./selectors"
-import { usePlaylistStore } from "./store"
+import {
+  moveTrack,
+  setTrackColor,
+  setTrackName,
+  toggleTrackMute,
+  toggleTrackSolo,
+} from "./ops"
+import { playlistYToRow, rowGeometry } from "./row-geometry"
+import { playlist } from "./selectors"
+import {
+  beginTrackResize,
+  endTrackResize,
+  syncTrackHeights,
+  usePlaylistStore,
+} from "./store"
+import { toggleGroupMute, toggleGroupSolo } from "./track-group-ops"
+import { nextTrackHeightPreset } from "./track-height-preset-step"
+import { nextTrackHeight, TRACK_HEIGHT_PRESETS } from "./track-height-presets"
+import { nextTrackHeightScale } from "./track-height-scale"
+import { trackRowsNow, useTrackRows } from "./track-rows"
 
 /** A header's menu acts on the target track; a press on the header sets it. */
 const TRACK_MENU: ContextItem[] = [
   "playlist.renameTrack",
+  "playlist.selectTrackClips",
   "playlist.muteTrack",
   contextSeparator,
   "playlist.moveTrackUp",
@@ -43,18 +65,6 @@ const TRACK_MENU: ContextItem[] = [
 ]
 
 const SPARE_MENU: ContextItem[] = ["playlist.addTrack"]
-
-type RowBox = { top: number; height: number }
-
-/**
- * Where the canvas draws a row, in CSS pixels from the top of the scrolled
- * content. The canvas rounds every row line to a device pixel, so the
- * headers are placed by the same rounding instead of by multiplying.
- */
-function rowBox(row: number, rowHeight: number, dpr: number): RowBox {
-  const top = Math.round(row * rowHeight * dpr) / dpr
-  return { top, height: Math.round((row + 1) * rowHeight * dpr) / dpr - top }
-}
 
 function NameField({
   track,
@@ -92,6 +102,8 @@ function NameField({
 type TrackHeaderProps = {
   track: PlaylistTrack
   row: number
+  index: number
+  depth: number
   top: number
   height: number
   target: boolean
@@ -103,6 +115,8 @@ type TrackHeaderProps = {
 const TrackHeader = memo(function TrackHeader({
   track,
   row,
+  index,
+  depth,
   top,
   height,
   target,
@@ -110,28 +124,174 @@ const TrackHeader = memo(function TrackHeader({
   onGrab,
 }: TrackHeaderProps) {
   const [renaming, setRenaming] = useState(false)
+  const resize = useRef<{
+    pointer: number
+    y: number
+    height: number
+    generation: number
+  } | null>(null)
+  const cancelResize = useCallback(() => {
+    if (!resize.current) return
+    resize.current = null
+    endTrackResize(track.id)
+    const saved = playlist().tracks.find((item) => item.id === track.id)
+    usePlaylistStore.getState().setTrackHeight(track.id, saved?.height ?? 0)
+  }, [track.id])
+  useEffect(() => cancelResize, [cancelResize])
+  const resizeHint = useHint(`Drag to resize ${track.name}`)
+  const linkLabel = useProjectStore(({ project }) => {
+    const link = project.playlist.arrangementBook?.linkedTracks[track.id]
+    if (!link) return null
+    const name =
+      link.type === "instrument"
+        ? project.channels.find((channel) => channel.id === link.channel)?.name
+        : project.samples.find((sample) => sample.id === link.source)?.name
+    return name ?? "Missing link"
+  })
   const setTargetTrack = usePlaylistStore((state) => state.setTargetTrack)
   const hint = useHint(
-    `${track.name}${track.muted ? ", muted" : ""}. Drag up or down to reorder, double-click the name to rename, right-click for more`
+    `${track.name}${track.muted ? ", muted" : ""}${track.solo ? ", solo" : ""}. Drag up or down to reorder, double-click the name to rename, right-click for more`
   )
   const lampHint = useHint(
     `${track.name} is ${track.muted ? "muted" : "on"}. Click to ${track.muted ? "unmute" : "mute"} every clip on it`
   )
+  const soloHint = useHint(
+    `${track.name} is ${track.solo ? "solo" : "not solo"}. Click to ${track.solo ? "unsolo" : "solo"} this track. Mute still wins`
+  )
   const compact = height < 22
 
   return (
-    <ContextActions items={TRACK_MENU}>
+    <ContextActions
+      items={() => [
+        ...TRACK_MENU,
+        contextSeparator,
+        {
+          submenu: "Color",
+          items: [
+            {
+              title: "No color",
+              checked: !track.color,
+              run: () => setTrackColor(track.id, 0),
+            },
+            ...TRACK_COLORS.map(({ color, name }) => ({
+              title: name,
+              checked: track.color === color,
+              run: () => setTrackColor(track.id, color),
+            })),
+          ],
+        },
+        {
+          submenu: "Track height",
+          items: [
+            ...TRACK_HEIGHT_PRESETS.map(({ label, height: preset }) => {
+              const height = nextTrackHeight(track.height ?? 0, preset)
+              return {
+                title: label,
+                checked: height === null,
+                disabled: height === null,
+                run: () => {
+                  const height = nextTrackHeight(track.height ?? 0, preset)
+                  if (height !== null) {
+                    return dispatch({
+                      type: "updatePlaylistTrack",
+                      id: track.id,
+                      patch: { height },
+                    })
+                  }
+                },
+              }
+            }),
+            {
+              title: "Previous preset",
+              disabled:
+                nextTrackHeightPreset(track.height ?? 0, "previous") === null,
+              run: () => {
+                const saved = useProjectStore
+                  .getState()
+                  .project.playlist.tracks.find((item) => item.id === track.id)
+                const next = nextTrackHeightPreset(saved?.height ?? 0, "previous")
+                if (next === null) return
+                return dispatch({
+                  type: "updatePlaylistTrack",
+                  id: track.id,
+                  patch: { height: next },
+                })
+              },
+            },
+            {
+              title: "Next preset",
+              disabled:
+                nextTrackHeightPreset(track.height ?? 0, "next") === null,
+              run: () => {
+                const saved = useProjectStore
+                  .getState()
+                  .project.playlist.tracks.find((item) => item.id === track.id)
+                const next = nextTrackHeightPreset(saved?.height ?? 0, "next")
+                if (next === null) return
+                return dispatch({
+                  type: "updatePlaylistTrack",
+                  id: track.id,
+                  patch: { height: next },
+                })
+              },
+            },
+            {
+              title: "Half",
+              disabled: nextTrackHeightScale(track.height ?? 0, "half") === null,
+              run: () => {
+                const saved = useProjectStore
+                  .getState()
+                  .project.playlist.tracks.find((item) => item.id === track.id)
+                const next = nextTrackHeightScale(saved?.height ?? 0, "half")
+                if (next !== null) {
+                  return dispatch({
+                    type: "updatePlaylistTrack",
+                    id: track.id,
+                    patch: { height: next },
+                  })
+                }
+              },
+            },
+            {
+              title: "Double",
+              disabled: nextTrackHeightScale(track.height ?? 0, "double") === null,
+              run: () => {
+                const saved = useProjectStore
+                  .getState()
+                  .project.playlist.tracks.find((item) => item.id === track.id)
+                const next = nextTrackHeightScale(saved?.height ?? 0, "double")
+                if (next !== null) {
+                  return dispatch({
+                    type: "updatePlaylistTrack",
+                    id: track.id,
+                    patch: { height: next },
+                  })
+                }
+              },
+            },
+          ],
+        },
+      ]}
+    >
       <div
         role="group"
         aria-label={track.name}
         data-track={track.id}
+        data-solo={track.solo ? "" : undefined}
         data-target={target ? "" : undefined}
         data-lifted={lifted ? "" : undefined}
         onPointerDown={(event) => {
           setTargetTrack(track.id)
           if (!renaming) onGrab(event, row)
         }}
-        style={{ top, height }}
+        style={{
+          top,
+          height,
+          paddingLeft: depth > 0 ? 4 + depth * 12 : undefined,
+          backgroundColor: track.color
+            ? `${colorToCss(track.color)}2e`
+            : undefined,
+        }}
         className={cn(
           "absolute inset-x-0 flex items-center gap-1.5 border-t border-(--wf-grid-line) pr-1.5 pl-1 data-lifted:opacity-45",
           target ? "bg-accent/70" : "hover:bg-accent/30"
@@ -142,7 +302,7 @@ const TrackHeader = memo(function TrackHeader({
           aria-hidden
           className="w-5 shrink-0 text-right font-readout text-[0.625rem] text-muted-foreground"
         >
-          {row + 1}
+          {index + 1}
         </span>
         <ToggleLed
           variant="dot"
@@ -153,6 +313,16 @@ const TrackHeader = memo(function TrackHeader({
           onPressedChange={() => void toggleTrackMute(track.id)}
           {...lampHint}
         />
+        <ToggleLed
+          size={compact ? "sm" : "md"}
+          pressed={track.solo ?? false}
+          color="var(--wf-solo, var(--wf-meter-low))"
+          aria-label={`Solo ${track.name}`}
+          onPressedChange={() => void toggleTrackSolo(track.id)}
+          {...soloHint}
+        >
+          S
+        </ToggleLed>
         {renaming ? (
           <NameField track={track} onDone={() => setRenaming(false)} />
         ) : (
@@ -164,10 +334,140 @@ const TrackHeader = memo(function TrackHeader({
             )}
           >
             {track.name}
+            {track.solo && (
+              <span className="text-muted-foreground"> · Solo</span>
+            )}
+            {linkLabel !== null && (
+              <span title={linkLabel} className="text-muted-foreground">
+                {" · "}
+                {linkLabel}
+              </span>
+            )}
           </span>
         )}
+        <div
+          aria-label={`Resize ${track.name}`}
+          data-slot="track-resize-handle"
+          className="absolute inset-x-0 bottom-0 z-10 h-1 cursor-row-resize touch-none"
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            if (event.button !== 0) return
+            event.preventDefault()
+            resize.current = {
+              pointer: event.pointerId,
+              y: event.clientY,
+              height,
+              generation: getProjectGeneration(),
+            }
+            beginTrackResize(track.id)
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={(event) => {
+            const held = resize.current
+            if (!held || held.pointer !== event.pointerId) return
+            if (held.generation !== getProjectGeneration()) {
+              cancelResize()
+              return
+            }
+            usePlaylistStore
+              .getState()
+              .setTrackHeight(
+                track.id,
+                Math.max(
+                  MIN_ROW_HEIGHT,
+                  held.height + logicalDelta(event.clientY - held.y)
+                )
+              )
+          }}
+          onPointerUp={(event) => {
+            const held = resize.current
+            if (!held || held.pointer !== event.pointerId) return
+            if (held.generation !== getProjectGeneration()) {
+              cancelResize()
+              return
+            }
+            resize.current = null
+            endTrackResize(track.id)
+            event.currentTarget.releasePointerCapture(event.pointerId)
+            const saved = playlist().tracks.find((item) => item.id === track.id)
+            const height =
+              usePlaylistStore.getState().trackHeights.get(track.id) ?? 0
+            if (saved && height !== (saved.height ?? 0)) {
+              void dispatch({
+                type: "updatePlaylistTrack",
+                id: track.id,
+                patch: { height },
+              })
+            }
+          }}
+          onPointerCancel={(event) => {
+            if (resize.current?.pointer === event.pointerId) cancelResize()
+          }}
+          onLostPointerCapture={cancelResize}
+          {...resizeHint}
+        />
       </div>
     </ContextActions>
+  )
+})
+
+const GroupHeader = memo(function GroupHeader({
+  group,
+  members,
+  depth,
+  top,
+  height,
+}: {
+  group: TrackGroup
+  members: readonly PlaylistTrack[]
+  depth: number
+  top: number
+  height: number
+}) {
+  const collapsed = usePlaylistStore((state) =>
+    state.collapsedGroups.has(group.id)
+  )
+  const toggleCollapse = usePlaylistStore((state) => state.toggleGroupCollapse)
+  const on = members.some((track) => !track.muted)
+  const solo = members.length > 0 && members.every((track) => track.solo)
+  return (
+    <div
+      role="group"
+      aria-label={group.name}
+      data-track-group={group.id}
+      style={{ top, height, paddingLeft: 4 + depth * 12 }}
+      className="absolute inset-x-0 flex items-center gap-1.5 border-t border-(--wf-grid-line) bg-accent/40 pr-1.5 font-medium"
+    >
+      <button
+        type="button"
+        aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.name}`}
+        aria-expanded={!collapsed}
+        onClick={() => toggleCollapse(group.id)}
+        className="w-5 shrink-0 rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+      </button>
+      <ToggleLed
+        variant="dot"
+        size={height < 22 ? "sm" : "md"}
+        pressed={on}
+        disabled={members.length === 0}
+        color="var(--wf-meter-low)"
+        aria-label={`${on ? "Mute" : "Unmute"} ${group.name} tracks`}
+        onPressedChange={() => void toggleGroupMute(group.id)}
+      />
+      <ToggleLed
+        size={height < 22 ? "sm" : "md"}
+        pressed={solo}
+        disabled={members.length === 0}
+        color="var(--wf-solo, var(--wf-meter-low))"
+        aria-label={`Solo ${group.name}`}
+        onPressedChange={() => void toggleGroupSolo(group.id)}
+      >
+        S
+      </ToggleLed>
+      <span className="min-w-0 flex-1 truncate">{group.name}</span>
+    </div>
   )
 })
 
@@ -175,7 +475,26 @@ const TrackHeader = memo(function TrackHeader({
 type Reorder = { row: number; gap: number }
 type Grab = { row: number; y: number; pointer: number }
 
-const tracksNow = () => playlist().tracks
+/** Translate a visible header gap back to the document's track order. */
+function trackDrop(row: number, gap: number) {
+  const { rows } = trackRowsNow()
+  const source = rows[row]
+  if (source?.kind !== "track") return null
+  const next = rows.slice(gap).find((entry) => entry.kind === "track")
+  const before = rows.slice(0, gap).findLast((entry) => entry.kind === "track")
+  const documentGap =
+    next?.kind === "track"
+      ? next.index
+      : before?.kind === "track"
+        ? before.index + 1
+        : playlist().tracks.length
+  const index = trackDropIndex(
+    source.index,
+    documentGap,
+    playlist().tracks.length
+  )
+  return index === null ? null : { track: source.track.id, index }
+}
 
 /** A row with no track yet. Placing a clip on it makes the track. */
 const SpareHeader = memo(function SpareHeader({
@@ -232,14 +551,16 @@ export function TrackCorner() {
  * and scrolling shifts their container without rendering anything.
  */
 export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
-  const tracks = usePlaylistTracks()
+  useEffect(syncTrackHeights, [])
+  const { rows: trackRows } = useTrackRows()
+  usePlaylistStore((state) => state.trackHeights)
   const target = usePlaylistStore((state) => state.targetTrack)
   const first = useViewportValue(metrics, (viewport) =>
-    Math.floor(viewport.scrollRow)
+    Math.floor(playlistYToRow(viewport, 0))
   )
-  const shown = useViewportValue(
+  const end = useViewportValue(
     metrics,
-    (viewport) => Math.ceil(viewport.height / viewport.rowHeight) + 1
+    (viewport) => Math.ceil(playlistYToRow(viewport, viewport.height)) + 1
   )
   const rowHeight = useViewportValue(metrics, (viewport) => viewport.rowHeight)
   const dpr = useViewportValue(metrics, (viewport) => viewport.dpr)
@@ -270,14 +591,13 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
     const root = rootRef.current
     if (!root) return
     const gapAt = (clientY: number) => {
-      const { scrollRow, rowHeight } = metrics.viewport
       const y = logicalDelta(clientY - root.getBoundingClientRect().top)
-      return Math.round(scrollRow + y / rowHeight)
+      return Math.round(playlistYToRow(metrics.viewport, y))
     }
     const onMove = (event: PointerEvent) => {
       const held = grab.current
       if (!held || event.pointerId !== held.pointer) return
-      const count = tracksNow().length
+      const count = trackRowsNow().rows.length
       if (
         !root.hasPointerCapture(held.pointer) &&
         Math.abs(event.clientY - held.y) < DRAG_THRESHOLD_PX
@@ -301,10 +621,8 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
       lifted.current = null
       setReorder(null)
       if (!drop || !current) return
-      const tracks = tracksNow()
-      const index = trackDropIndex(current.row, current.gap, tracks.length)
-      const track = tracks[current.row]
-      if (index !== null && track) void moveTrack(track.id, index)
+      const destination = trackDrop(current.row, current.gap)
+      if (destination) void moveTrack(destination.track, destination.index)
     }
     const onUp = (event: PointerEvent) => finish(event, true)
     const onCancel = (event: PointerEvent) => finish(event, false)
@@ -345,19 +663,35 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
   }, [metrics])
 
   const rows: React.ReactNode[] = []
-  const last = Math.min(rowCount, first + shown)
+  const last = Math.min(rowCount, end)
   for (let row = first; row < last; row++) {
-    const track = tracks[row]
-    const box = rowBox(row, rowHeight, dpr)
+    const entry = trackRows[row]
+    const geometry = rowGeometry({ rowHeight })
+    const top = Math.round(geometry.top(row) * dpr) / dpr
+    const box = {
+      top,
+      height: Math.round(geometry.top(row + 1) * dpr) / dpr - top,
+    }
     rows.push(
-      track ? (
-        <TrackHeader
-          key={track.id}
-          track={track}
-          row={row}
+      entry?.kind === "group" ? (
+        <GroupHeader
+          key={`group-${entry.group.id}`}
+          group={entry.group}
+          members={entry.members}
+          depth={entry.depth}
           top={box.top}
           height={box.height}
-          target={track.id === target}
+        />
+      ) : entry?.kind === "track" ? (
+        <TrackHeader
+          key={entry.track.id}
+          track={entry.track}
+          row={row}
+          index={entry.index}
+          depth={entry.depth}
+          top={box.top}
+          height={box.height}
+          target={entry.track.id === target}
           lifted={reorder?.row === row}
           onGrab={onGrab}
         />
@@ -382,15 +716,18 @@ export function TrackHeaders({ metrics }: { metrics: GridMetrics }) {
     >
       <div ref={scrolledRef} className="absolute inset-x-0 top-0">
         {rows}
-        {reorder !== null &&
-          trackDropIndex(reorder.row, reorder.gap, tracks.length) !== null && (
-            <div
-              aria-hidden
-              data-slot="track-drop-line"
-              className="pointer-events-none absolute inset-x-0 z-10 h-0.5 -translate-y-px bg-brand"
-              style={{ top: rowBox(reorder.gap, rowHeight, dpr).top }}
-            />
-          )}
+        {reorder !== null && trackDrop(reorder.row, reorder.gap) !== null && (
+          <div
+            aria-hidden
+            data-slot="track-drop-line"
+            className="pointer-events-none absolute inset-x-0 z-10 h-0.5 -translate-y-px bg-brand"
+            style={{
+              top:
+                Math.round(rowGeometry({ rowHeight }).top(reorder.gap) * dpr) /
+                dpr,
+            }}
+          />
+        )}
       </div>
     </div>
   )

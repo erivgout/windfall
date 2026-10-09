@@ -2,11 +2,15 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
+#[cfg(windows)]
+mod drive;
 
 pub(super) struct SourceFile {
     file: File,
     #[cfg(windows)]
     _parents: Vec<File>,
+    #[cfg(windows)]
+    _drive: std::os::windows::io::OwnedHandle,
 }
 impl Read for SourceFile {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
@@ -15,6 +19,8 @@ impl Read for SourceFile {
 }
 
 pub(super) fn open(path: &Path) -> Result<SourceFile, String> {
+    #[cfg(windows)]
+    let drive = drive::pin(path)?;
     #[cfg(windows)]
     let parents = pin_parents(path)?;
     let mut options = OpenOptions::new();
@@ -41,6 +47,8 @@ pub(super) fn open(path: &Path) -> Result<SourceFile, String> {
         file,
         #[cfg(windows)]
         _parents: parents,
+        #[cfg(windows)]
+        _drive: drive,
     })
 }
 

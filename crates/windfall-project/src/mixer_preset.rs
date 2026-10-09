@@ -1,5 +1,6 @@
 //! Portable processing state; project routing and hardware remain destination-owned.
 use crate::{EffectSlot, MixerTrack, PluginBinding, PluginTarget, Project, TrackId, MAX_EFFECT_SLOTS, MAX_GAIN};
+use windfall_dsp::ParamSet;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 

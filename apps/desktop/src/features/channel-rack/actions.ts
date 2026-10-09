@@ -25,19 +25,24 @@ import {
   moveChannelBy,
   renameChannel,
   replaceSampleFromPickedFile,
+  resetChannelLevels,
   routeToNewTrack,
+  selectChannel,
   selectedChannel,
   setPatternLength,
   shiftSteps,
   showInMixer,
   toggleMute,
   toggleSolo,
+  unmuteAllChannels,
+  unsoloAllChannels,
 } from "./channel-ops"
 import {
   focusNotePreviewTarget,
   selectedNotePreviewLane,
 } from "./note-preview-target"
 import { rackNoteView, useRackStore, type RackNoteView } from "./rack-store"
+import { nextFlaggedChannelId } from "./select-next"
 import { matchingPreset, SYNTH_PRESETS } from "./synth/presets"
 import { openAdvancedFill } from "./advanced-fill"
 import { dispatch } from "@/lib/store/project"
@@ -400,6 +405,72 @@ export const CHANNEL_RACK_ACTIONS: Action[] = [
     enabled: hasSelection,
     checked: (state) => selected(state)?.solo ?? false,
     run: withSelected((channel) => toggleSolo(channel.id)),
+  },
+  {
+    id: "channel.unmuteAll",
+    title: "Unmute all",
+    section: "Channels",
+    enabled: (state) =>
+      state.document.project.channels.some((channel) => channel.muted),
+    run: unmuteAllChannels,
+  },
+  {
+    id: "channel.unsoloAll",
+    title: "Unsolo all",
+    section: "Channels",
+    enabled: (state) =>
+      state.document.project.channels.some((channel) => channel.solo),
+    run: unsoloAllChannels,
+  },
+  {
+    id: "channel.resetLevels",
+    title: "Reset levels",
+    section: "Channels",
+    enabled: (state) =>
+      state.document.project.channels.some(
+        (channel) => channel.volume !== 1 || channel.pan !== 0
+      ),
+    run: resetChannelLevels,
+  },
+  {
+    id: "channel.selectNextMuted",
+    title: "Select next muted channel",
+    section: "Channels",
+    enabled: (state) =>
+      nextFlaggedChannelId(
+        state.document.project.channels,
+        state.ui.selectedChannel,
+        "muted"
+      ) !== null,
+    run: () => {
+      const state = getAppState()
+      const id = nextFlaggedChannelId(
+        state.document.project.channels,
+        state.ui.selectedChannel,
+        "muted"
+      )
+      if (id !== null) selectChannel(id)
+    },
+  },
+  {
+    id: "channel.selectNextSolo",
+    title: "Select next solo channel",
+    section: "Channels",
+    enabled: (state) =>
+      nextFlaggedChannelId(
+        state.document.project.channels,
+        state.ui.selectedChannel,
+        "solo"
+      ) !== null,
+    run: () => {
+      const state = getAppState()
+      const id = nextFlaggedChannelId(
+        state.document.project.channels,
+        state.ui.selectedChannel,
+        "solo"
+      )
+      if (id !== null) selectChannel(id)
+    },
   },
   {
     id: "channel.clearSteps",

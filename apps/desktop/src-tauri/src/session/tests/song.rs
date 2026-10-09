@@ -98,6 +98,7 @@ fn an_audio_clip_from_a_file_is_one_undo_step_and_plays_in_the_song() {
                 sample: SampleId(sample),
                 mixer_track: TrackId(mixer_track),
                 output: Default::default(),
+                normalize: false,
                 gain: 1.0,
                 pan: 0.0,
                 fade_in: 0,
@@ -690,6 +691,7 @@ fn a_song_with_drums_a_melody_audio_effects_and_automation_is_made_and_exported(
                 key,
                 velocity: None,
                 pan: None,
+                expression: None,
             })
             .collect(),
     });

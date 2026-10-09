@@ -42,6 +42,7 @@ fn add_synth(rig: &Rig) -> (ChannelId, TrackId) {
         key,
         velocity: None,
         pan: None,
+        expression: None,
     };
     rig.session
         .dispatch(

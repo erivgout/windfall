@@ -11,10 +11,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { runAction, useShortcutLabel } from "@/lib/actions"
-import { errorMessage } from "@/lib/ipc"
+import { backend, errorMessage } from "@/lib/ipc"
+import { reportError } from "@/lib/errors"
+import type { PanelId } from "@/lib/store/ui"
 import { cn } from "@/lib/utils"
 
 import { panelMenu } from "./chrome-menus"
+import { detachPanel } from "./detach-panel"
 
 type BoundaryProps = { name: string; children: ReactNode }
 type BoundaryState = { error: unknown }
@@ -80,8 +83,35 @@ function HideButton({ title, action }: { title: string; action: string }) {
   )
 }
 
+export function PanelWindowButton({
+  panel,
+  title,
+  dock = false,
+}: {
+  panel: PanelId
+  title: string
+  dock?: boolean
+}) {
+  const label = `${dock ? "Dock" : "Detach"} ${title.toLowerCase()}`
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      aria-label={label}
+      onClick={() => {
+        const request = dock ? backend.dockPanel(panel) : detachPanel(panel)
+        void request.catch((error: unknown) => reportError(error, label))
+      }}
+    >
+      {dock ? "Dock" : "Detach"}
+    </Button>
+  )
+}
+
 type PanelFrameProps = {
   title: string
+  panel?: PanelId
+  detached?: boolean
   /** Registry action that shows and hides this panel. Adds a close button. */
   hideAction?: string
   /** Extra controls for the header, left of the close button. */
@@ -93,6 +123,8 @@ type PanelFrameProps = {
 /** The frame every docked panel sits in: a title strip above a scrolling body. */
 export function PanelFrame({
   title,
+  panel,
+  detached = false,
   hideAction,
   actions,
   className,
@@ -108,6 +140,9 @@ export function PanelFrame({
           <h2 className="truncate text-xs font-medium">{title}</h2>
           <div className="ml-auto flex items-center gap-0.5">
             {actions}
+            {panel && (
+              <PanelWindowButton panel={panel} title={title} dock={detached} />
+            )}
             {hideAction && <HideButton title={title} action={hideAction} />}
           </div>
         </header>

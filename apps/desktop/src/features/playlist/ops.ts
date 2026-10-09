@@ -28,7 +28,6 @@ import {
   duplicateRight,
   moveChanges,
   pasteAt,
-  rowIndex,
   spanFits,
   tracksNeeded,
   type ClipChange,
@@ -38,6 +37,7 @@ import { rowCountFor } from "./layout"
 import { playlist, project, selectedClips } from "./selectors"
 import { nudgeTicks, snapTicks } from "./snap"
 import { usePlaylistStore } from "./store"
+import { documentRowFor, trackRowsNow } from "./track-rows"
 
 /*
  * Everything the playlist does to the project and the transport. Each
@@ -58,7 +58,7 @@ export function currentSnapTicks(): number {
 }
 
 export function rowOfTrack(): (track: PlaylistTrackId) => number {
-  const rows = rowIndex(playlist().tracks)
+  const { trackRows: rows } = trackRowsNow()
   return (track) => rows.get(track) ?? 0
 }
 
@@ -107,6 +107,10 @@ export async function addClips(
   label: string
 ): Promise<ClipId[] | null> {
   if (clips.length === 0) return []
+  const layout = trackRowsNow()
+  const destinations = clips.map((clip) => documentRowFor(clip.row, layout))
+  if (destinations.some((row) => row === undefined)) return null
+  clips = clips.map((clip, index) => ({ ...clip, row: destinations[index]! }))
   if (!clips.every((clip) => spanFits(clip.start, clip.length))) {
     refusePastEnd()
     return null
@@ -131,6 +135,21 @@ export async function changeClips(
   label: string
 ): Promise<boolean> {
   if (changes.length === 0) return true
+  const layout = trackRowsNow()
+  const destinations = changes.map((change) =>
+    change.row === undefined ? undefined : documentRowFor(change.row, layout)
+  )
+  if (
+    changes.some(
+      (change, index) =>
+        change.row !== undefined && destinations[index] === undefined
+    )
+  )
+    return false
+  changes = changes.map((change, index) => ({
+    ...change,
+    row: destinations[index],
+  }))
   const byId = new Map(playlist().clips.map((clip) => [clip.id, clip]))
   const fits = changes.every((change) => {
     const clip = byId.get(change.id)
@@ -165,8 +184,29 @@ export async function deleteClips(ids: readonly ClipId[]): Promise<void> {
   const existing = new Set(playlist().clips.map((clip) => clip.id))
   const clips = ids.filter((id) => existing.has(id))
   if (clips.length === 0) return
+  const removed = new Set(clips)
+  const book = playlist().arrangementBook
+  const cleanup: Command[] = []
+  for (const group of book?.clipGroups ?? []) {
+    if (group.clips.every((id) => removed.has(id))) {
+      cleanup.push({ type: "removeClipGroup", id: group.id })
+    }
+  }
+  if (cleanup.length > 0) {
+    // Group erasure must also leave saved arrangement references valid.
+    for (const arrangement of book?.arrangements ?? []) {
+      if (arrangement.clips.some((id) => removed.has(id))) {
+        cleanup.push({
+          type: "setArrangementReferences",
+          id: arrangement.id,
+          clips: arrangement.clips.filter((id) => !removed.has(id)),
+          tracks: arrangement.tracks,
+        })
+      }
+    }
+  }
   await dispatch(
-    labelled(plural(clips.length, "Delete clip"), {
+    labelled(plural(clips.length, "Delete clip"), ...cleanup, {
       type: "removeClips",
       clips,
     })
@@ -300,7 +340,7 @@ export async function nudgeSelection(
     clips.map((clip) => ({ start: clip.start, row: rowOf(clip.track) })),
     cells * step,
     rows,
-    rowCountFor(playlist().tracks.length, 0)
+    rowCountFor(trackRowsNow().rows.length, 0)
   )
   await changeClips(
     moveChanges(clips, rowOf, move.ticks, move.rows),
@@ -380,6 +420,25 @@ export async function toggleTrackMute(id: PlaylistTrackId): Promise<void> {
     id,
     patch: { muted: !track.muted },
   })
+}
+
+export async function toggleTrackSolo(id: PlaylistTrackId): Promise<void> {
+  const track = playlist().tracks.find((item) => item.id === id)
+  if (!track) return
+  await dispatch({
+    type: "updatePlaylistTrack",
+    id,
+    patch: { solo: !track.solo },
+  })
+}
+
+export async function setTrackColor(
+  id: PlaylistTrackId,
+  color: number
+): Promise<void> {
+  const track = playlist().tracks.find((item) => item.id === id)
+  if (!track || (track.color ?? 0) === color) return
+  await dispatch({ type: "updatePlaylistTrack", id, patch: { color } })
 }
 
 /** Deletes a track and its clips, asking first when it has any. */

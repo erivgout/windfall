@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -59,6 +59,42 @@ describe("groupRuns", () => {
 })
 
 describe("HistoryList", () => {
+  it("filters rows while keeping run and individual step jump targets", async () => {
+    const user = userEvent.setup()
+    await makeHistory(4)
+    render(<HistoryList query=" tOgGlE " />)
+    expect(screen.queryByRole("button", { name: "Project opened" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add channel" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Add pattern" })).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Toggle step×4" }))
+    await settle()
+    expect(history().cursor).toBe(5)
+
+    await user.click(
+      screen.getByRole("button", { name: "Unfold the 4 steps of Toggle step" })
+    )
+    const steps = within(
+      screen.getByRole("list", { name: "Steps of Toggle step" })
+    ).getAllByRole("button")
+    await user.click(steps[1])
+    await settle()
+    expect(history().cursor).toBe(3)
+  })
+
+  it("shows the empty message when no rows match and restores blank queries", async () => {
+    await makeHistory(4)
+    const { rerender } = render(<HistoryList query="missing" />)
+    expect(screen.getByText("No steps match.")).toBeVisible()
+    expect(screen.queryByRole("list", { name: "Undo history" })).toBeNull()
+    expect(history().cursor).toBe(6)
+
+    rerender(<HistoryList query={" \t "} />)
+    expect(screen.queryByText("No steps match.")).toBeNull()
+    expect(screen.getByRole("button", { name: "Project opened" })).toBeVisible()
+    expect(screen.getByRole("button", { name: "Toggle step×4" })).toBeVisible()
+  })
+
   it("shows a run as one row with its count, and jumps to its end", async () => {
     const user = userEvent.setup()
     await makeHistory(16)
@@ -137,6 +173,36 @@ describe("HistoryList", () => {
 })
 
 describe("HistoryPopover", () => {
+  it("filters from its labeled input and clears the filter after closing", async () => {
+    const user = userEvent.setup()
+    await makeHistory(4)
+    render(<HistoryPopover />)
+    await user.click(screen.getByRole("button", { name: "Undo history" }))
+    const input = screen.getByRole("textbox", { name: "Filter history" })
+    await user.type(input, "missing")
+    expect(screen.getByText("No steps match.")).toBeVisible()
+
+    await user.keyboard("{Escape}")
+    await user.click(screen.getByRole("button", { name: "Undo history" }))
+    expect(screen.getByRole("textbox", { name: "Filter history" })).toHaveValue(
+      ""
+    )
+    expect(screen.getByRole("button", { name: "Add channel" })).toBeVisible()
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Filter history" }),
+      "pattern"
+    )
+    expect(screen.queryByRole("button", { name: "Add channel" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Add pattern" })).toBeVisible()
+    act(() => useUiStore.getState().setHistoryOpen(false))
+    await runAction("edit.history")
+    expect(
+      await screen.findByRole("textbox", { name: "Filter history" })
+    ).toHaveValue("")
+    expect(screen.getByRole("button", { name: "Add channel" })).toBeVisible()
+  })
+
   it("opens from its button and from Edit > History", async () => {
     const user = userEvent.setup()
     render(<HistoryPopover />)

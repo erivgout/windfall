@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils"
 
 import { dividerMenu, EMPTY_PROJECT_MENU, TABS_MENU } from "./chrome-menus"
 import { EmptyProject } from "./empty-states"
-import { PanelBoundary, PanelFrame } from "./panel-frame"
+import { PanelBoundary, PanelFrame, PanelWindowButton } from "./panel-frame"
 import { CENTER_TABS, PANELS } from "./panels"
 
 /**
@@ -41,12 +41,7 @@ function useSavedLayout(group: string, panels: string[]) {
 const MIXER_DIVIDER_MENU = dividerMenu("main", "view.mixer")
 const BROWSER_DIVIDER_MENU = dividerMenu("workspace", "view.browser")
 
-function CenterTabButton({ tab }: { tab: CenterTab }) {
-  // With something lying over the editors, none of their tabs is the one
-  // showing.
-  const active = useUiStore(
-    (state) => state.centerTab === tab && state.centerOverlay === null
-  )
+function CenterTabButton({ tab, active }: { tab: CenterTab; active: boolean }) {
   const { title, action } = PANELS[tab]
   const shortcut = useShortcutLabel(action)
 
@@ -110,22 +105,23 @@ function EffectsTab() {
 
 /** The middle of the window: channel rack, playlist and piano roll as tabs. */
 function CenterDock() {
-  const tab = useUiStore((state) => state.centerTab)
+  const preferredTab = useUiStore((state) => state.centerTab)
+  const detached = useUiStore((state) => state.detachedPanels)
+  const tabs = CENTER_TABS.filter((id) => !detached.includes(id))
+  const tab = tabs.includes(preferredTab) ? preferredTab : tabs[0]
   const overlay = useUiStore((state) => state.centerOverlay)
   const ready = useProjectReady()
   const channelCount = useChannelCount()
-  const { title, component: Panel } = PANELS[tab]
+  const info = tab ? PANELS[tab] : null
+  const Panel = info?.component
   const showStart = tab === "channelRack" && ready && channelCount === 0
 
   function onKeyDown(event: React.KeyboardEvent) {
     const step =
       event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0
-    if (step === 0) return
-    const next =
-      CENTER_TABS[
-        (CENTER_TABS.indexOf(tab) + step + CENTER_TABS.length) %
-          CENTER_TABS.length
-      ]
+    if (step === 0 || !tab) return
+    event.preventDefault()
+    const next = tabs[(tabs.indexOf(tab) + step + tabs.length) % tabs.length]
     void runAction(PANELS[next].action)
     document.getElementById(`center-tab-${next}`)?.focus()
   }
@@ -139,24 +135,36 @@ function CenterDock() {
           onKeyDown={onKeyDown}
           className="flex h-7 shrink-0 items-center border-b bg-chassis/60 px-1"
         >
-          {CENTER_TABS.map((item) => (
-            <CenterTabButton key={item} tab={item} />
+          {tabs.map((item) => (
+            <CenterTabButton
+              key={item}
+              tab={item}
+              active={item === tab && overlay === null}
+            />
           ))}
           {overlay === "effects" && <EffectsTab />}
+          {tab && info && overlay === null && (
+            <div className="ml-auto pr-1">
+              <PanelWindowButton panel={tab} title={info.title} />
+            </div>
+          )}
         </div>
       </ContextActions>
       <div
         role="tabpanel"
         id="center-panel"
-        aria-labelledby={`center-tab-${overlay ?? tab}`}
+        aria-labelledby={
+          overlay || tab ? `center-tab-${overlay ?? tab}` : undefined
+        }
+        aria-label={!overlay && !tab ? "Editors" : undefined}
         className="min-h-0 flex-1 overflow-auto"
       >
         {overlay === "effects" ? (
           <PanelBoundary key="effects" name="effects">
             <EnlargedEffects />
           </PanelBoundary>
-        ) : (
-          <PanelBoundary key={tab} name={title.toLowerCase()}>
+        ) : info && Panel ? (
+          <PanelBoundary key={tab} name={info.title.toLowerCase()}>
             {showStart ? (
               <ContextActions items={EMPTY_PROJECT_MENU}>
                 <div className="h-full">
@@ -167,6 +175,10 @@ function CenterDock() {
               <Panel />
             )}
           </PanelBoundary>
+        ) : (
+          <p className="p-4 text-sm text-muted-foreground">
+            The panels are in their own windows.
+          </p>
         )}
       </div>
     </div>
@@ -176,14 +188,16 @@ function CenterDock() {
 function SideDock({ panel }: { panel: "browser" | "mixer" }) {
   const { title, action, component: Panel } = PANELS[panel]
   return (
-    <PanelFrame title={title} hideAction={action}>
+    <PanelFrame title={title} panel={panel} hideAction={action}>
       <Panel />
     </PanelFrame>
   )
 }
 
 function MainColumn() {
-  const mixer = useUiStore((state) => state.panels.mixer)
+  const mixer = useUiStore(
+    (state) => state.panels.mixer && !state.detachedPanels.includes("mixer")
+  )
   const layout = useSavedLayout(
     "main",
     mixer ? ["center", "mixer"] : ["center"]
@@ -219,7 +233,9 @@ function MainColumn() {
  * be resized and hidden, and the arrangement is remembered.
  */
 export function Workspace() {
-  const browser = useUiStore((state) => state.panels.browser)
+  const browser = useUiStore(
+    (state) => state.panels.browser && !state.detachedPanels.includes("browser")
+  )
   const generation = useUiStore((state) => state.layoutGeneration)
   const layout = useSavedLayout(
     "workspace",

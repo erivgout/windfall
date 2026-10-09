@@ -6,11 +6,12 @@ import { colorToCss } from "@/lib/units"
 
 import { SoundMenu } from "../synth/sound-menu"
 import { SynthEditor } from "../synth/synth-editor"
+import { GenericInstrumentEditor } from "./generic-instrument-editor"
 import { Section } from "./parts"
 
 /**
  * The settings of an instrument channel: the instrument's own panel under
- * its name, with the list of starting sounds beside it.
+ * its name, with starting sounds beside the subtractive synth's panel.
  */
 export function InstrumentSection({ channel }: { channel: InstrumentChannel }) {
   const plugin = usePluginBinding({ type: "instrument", channel: channel.id })
@@ -24,13 +25,21 @@ export function InstrumentSection({ channel }: { channel: InstrumentChannel }) {
   return (
     <Section
       title={instrumentDescriptor(params.type).name}
-      aside={<SoundMenu params={params} />}
+      aside={
+        params.type === "subtractiveSynth" ? (
+          <SoundMenu params={params} />
+        ) : undefined
+      }
     >
-      <SynthEditor
-        channel={channel.id}
-        params={params}
-        color={colorToCss(channel.color)}
-      />
+      {params.type === "subtractiveSynth" ? (
+        <SynthEditor
+          channel={channel.id}
+          params={params}
+          color={colorToCss(channel.color)}
+        />
+      ) : (
+        <GenericInstrumentEditor channel={channel.id} params={params} />
+      )}
     </Section>
   )
 }

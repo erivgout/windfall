@@ -16,15 +16,20 @@ use std::ops::Range;
 
 use rtrb::Producer;
 use windfall_core::{AudioBuffer, db_to_gain, pan_gains};
+use windfall_dsp::{
+    NoteArticulation, NoteExpression,
+    blocks::svf::{Svf, SvfCoeffs},
+};
 use windfall_project::{ChannelId, Envelope, SamplerLoopMode, TrackId};
-use windfall_dsp::{NoteArticulation, NoteExpression, blocks::svf::{Svf, SvfCoeffs}};
 
+use crate::channel_voice::{ModulationBlock, PreparedChannelEnvelopes};
 use crate::message::{Garbage, retire};
 use crate::mixer::{Frame, Mixer};
+use crate::note_glide::NoteGlide;
 use crate::plan::Plan;
 use crate::sequencer::Clock;
 use crate::state::{Heard, PlanState, Strip};
-use crate::note_glide::NoteGlide;
+use windfall_dsp::NoteInstanceId;
 
 /// Most voices that sound at full level at once. One more steals a voice.
 pub(crate) const MAX_VOICES: usize = 256;
@@ -165,11 +170,12 @@ impl Region {
 /// Prepared loop bounds in the trimmed region's playing order. The voice's
 /// position advances through a virtual periodic sequence; reflected taps at
 /// ping-pong turns and wrapped taps at forward seams follow that sequence.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct LoopRegion {
     pub first: usize,
     pub frames: usize,
     pub mode: SamplerLoopMode,
+    pub crossfade: f32,
 }
 
 impl LoopRegion {
@@ -201,24 +207,66 @@ impl LoopRegion {
             if index < first && !cycled {
                 return region.frame(sample, index.max(0));
             }
-            let offset = index - first;
-            let mapped = if self.frames == 1 {
-                0
-            } else {
-                match self.mode {
-                    SamplerLoopMode::PingPong => {
-                        let period = self.period() as isize;
-                        let phase = offset.rem_euclid(period);
-                        phase.min(period - phase)
-                    }
-                    SamplerLoopMode::Off | SamplerLoopMode::Forward => {
-                        offset.rem_euclid(self.frames as isize)
-                    }
-                }
-            };
-            region.frame(sample, first + mapped)
+            loop_crossfade_mix(
+                self.frames,
+                self.mode,
+                self.crossfade,
+                index - first,
+                |mapped| region.frame(sample, first + mapped as isize),
+            )
         })
     }
+}
+
+/// Read one frame of a virtual loop, blending its tail into its start.
+/// `frame` reads in loop-relative playing order. Ping-pong reflects both taps.
+/// The blend spans `round(amount * frames)`, capped at half the source loop.
+/// Zero (including non-finite amounts) returns the dry frame unchanged.
+#[inline]
+pub fn loop_crossfade_mix(
+    frames: usize,
+    mode: SamplerLoopMode,
+    amount: f32,
+    offset: isize,
+    frame: impl Fn(usize) -> (f32, f32),
+) -> (f32, f32) {
+    if frames == 0 {
+        return (0.0, 0.0);
+    }
+    let period = match mode {
+        SamplerLoopMode::PingPong => 2 * frames.saturating_sub(1).max(1),
+        SamplerLoopMode::Off | SamplerLoopMode::Forward => frames,
+    };
+    let phase = offset.rem_euclid(period as isize) as usize;
+    let mapped = |phase: usize| {
+        if frames == 1 {
+            0
+        } else if mode == SamplerLoopMode::PingPong {
+            phase.min(period - phase)
+        } else {
+            phase
+        }
+    };
+    let dry = frame(mapped(phase));
+    if mode == SamplerLoopMode::Off || !amount.is_finite() || amount <= 0.0 {
+        return dry;
+    }
+    let count =
+        ((f64::from(amount.clamp(0.0, 1.0)) * frames as f64).round() as usize).min(frames / 2);
+    if count == 0 || phase < period - count {
+        return dry;
+    }
+    let tail = phase - (period - count);
+    let start = frame(mapped(tail));
+    if tail + 1 == count {
+        return start;
+    }
+    let angle = (tail + 1) as f32 / count as f32 * std::f32::consts::FRAC_PI_2;
+    let (wet_gain, dry_gain) = angle.sin_cos();
+    (
+        dry.0 * dry_gain + start.0 * wet_gain,
+        dry.1 * dry_gain + start.1 * wet_gain,
+    )
 }
 
 #[inline]
@@ -299,8 +347,12 @@ impl EnvelopeState {
     fn set_release_ms(&mut self, ms: f32, sample_rate: f64) {
         // Release duration is selected at key-up; later edits preserve the
         // already-running release trajectory.
-        if matches!(self.stage, Stage::Release | Stage::Done) { return; }
-        let frames = (f64::from(ms.max(MIN_RELEASE_SECONDS * 1000.0)) * sample_rate / 1000.0).round().max(1.0) as u64;
+        if matches!(self.stage, Stage::Release | Stage::Done) {
+            return;
+        }
+        let frames = (f64::from(ms.max(MIN_RELEASE_SECONDS * 1000.0)) * sample_rate / 1000.0)
+            .round()
+            .max(1.0) as u64;
         if frames != self.release_frames {
             self.release_frames = frames;
             self.release_ratio = curve_ratio(frames);
@@ -406,6 +458,11 @@ impl EnvelopeState {
 }
 
 struct Voice {
+    instance: NoteInstanceId,
+    channel_envelopes: Option<PreparedChannelEnvelopes>,
+    modulation_released: bool,
+    channel_pitch: f64,
+    glide_coefficient: f64,
     source: Option<crate::note_curves::CurveSource>,
     expression: NoteExpression,
     release_base_ms: f32,
@@ -457,6 +514,11 @@ struct Voice {
 impl Voice {
     fn idle() -> Self {
         Self {
+            instance: NoteInstanceId(0),
+            channel_envelopes: None,
+            modulation_released: false,
+            channel_pitch: 0.0,
+            glide_coefficient: 1.0,
             source: None,
             expression: NoteExpression::NEUTRAL,
             release_base_ms: 0.0,
@@ -508,6 +570,9 @@ impl Voice {
     ///
     /// Every piece of state moves one frame at a time, so cutting the output
     /// at different places gives the same samples.
+    // Per-voice rendering borrows the output and immutable mix/plan alongside
+    // frame, fade, and clock context; keep this realtime boundary explicit.
+    #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
         out: &mut [Frame],
@@ -528,29 +593,83 @@ impl Voice {
             Mix::Strip(strip) => {
                 let (left, right) =
                     stereo_gains(strip.gain.at(start), strip.pan.at(start) + self.pan);
-                let steady = strip.gain.settled(start) && strip.pan.settled(start) && !self.source.is_some_and(|source| source.active);
+                let steady = strip.gain.settled(start)
+                    && strip.pan.settled(start)
+                    && !self.source.is_some_and(|source| source.active);
                 ((!steady).then_some(strip), left, right)
             }
         };
 
+        let output_frames = out.len();
+        let mut modulation = ModulationBlock::default();
+        let mut modulation_at = 0;
+        let mut modulation_end = 0;
         for (offset, out) in out.iter_mut().enumerate() {
             let frame = start + offset as u64;
+            if let Some(envelopes) = &mut self.channel_envelopes {
+                if frame >= release_at && !self.modulation_released {
+                    envelopes.gate_off();
+                    self.modulation_released = true;
+                    modulation_end = offset;
+                }
+                if offset >= modulation_end {
+                    let until_release = if self.modulation_released {
+                        usize::MAX
+                    } else {
+                        release_at.saturating_sub(frame) as usize
+                    };
+                    envelopes.process_block(
+                        (output_frames - offset).min(until_release.max(1)),
+                        &mut modulation,
+                    );
+                    modulation_at = offset;
+                    modulation_end = offset + modulation.frames;
+                }
+            }
+            let mod_index = if self.channel_envelopes.is_some() {
+                offset - modulation_at
+            } else {
+                0
+            };
+            let cutoff_offset = modulation.filter_cutoff_offset[mod_index];
+            let pitch_cents = modulation.pitch_cents[mod_index];
+            let pan_offset = modulation.pan[mod_index];
             if let Some(source) = self.source.filter(|source| source.active) {
                 let (pan, expression) = source.controls(plan, clock.tick_at(frame));
-                let moved = f64::from(expression.fine_pitch_cents - self.expression.fine_pitch_cents) / 100.0;
+                let moved =
+                    f64::from(expression.fine_pitch_cents - self.expression.fine_pitch_cents)
+                        / 100.0;
                 if moved != 0.0 {
                     self.pitch += moved;
-                    if let Some(glide) = &mut self.glide { glide.from += moved; glide.to += moved; }
-                    if self.glide.is_none() { self.step = self.pitch_base_step * (self.pitch / 12.0).exp2(); }
+                    if let Some(glide) = &mut self.glide {
+                        glide.from += moved;
+                        glide.to += moved;
+                    }
+                    if self.glide.is_none() {
+                        self.step = self.pitch_base_step * (self.pitch / 12.0).exp2();
+                    }
                 }
-                if expression.modulation_x != self.expression.modulation_x || expression.modulation_y != self.expression.modulation_y {
-                    self.expression_filter = (expression.modulation_x != 0.5 || expression.modulation_y != 0.5).then(|| {
-                        SvfCoeffs::new((20_000.0 * expression.cutoff_octaves().exp2()).clamp(20.0, sample_rate as f32 * 0.45),
-                            std::f32::consts::FRAC_1_SQRT_2 * expression.resonance_multiplier(), sample_rate as f32)
-                    });
+                if expression.modulation_x != self.expression.modulation_x
+                    || expression.modulation_y != self.expression.modulation_y
+                {
+                    self.expression_filter = (expression.modulation_x != 0.5
+                        || expression.modulation_y != 0.5)
+                        .then(|| {
+                            SvfCoeffs::new(
+                                (20_000.0 * expression.cutoff_octaves().exp2())
+                                    .clamp(20.0, sample_rate as f32 * 0.45),
+                                std::f32::consts::FRAC_1_SQRT_2 * expression.resonance_multiplier(),
+                                sample_rate as f32,
+                            )
+                        });
                 }
-                if expression.release != self.expression.release {
-                    if let Some(envelope) = &mut self.envelope { envelope.set_release_ms(self.release_base_ms * expression.release_multiplier(), sample_rate); }
+                if expression.release != self.expression.release
+                    && let Some(envelope) = &mut self.envelope
+                {
+                    envelope.set_release_ms(
+                        self.release_base_ms * expression.release_multiplier(),
+                        sample_rate,
+                    );
                 }
                 self.expression = expression;
                 self.pan = pan;
@@ -559,10 +678,28 @@ impl Voice {
                 let tick = clock.tick_at(frame);
                 self.pitch = glide.at(tick);
                 self.step = self.pitch_base_step * (self.pitch / 12.0).exp2();
-                if tick >= glide.end { self.glide = None; }
+                if tick >= glide.end {
+                    self.glide = None;
+                }
+            }
+            if self.origin != Origin::Preview {
+                self.channel_pitch += self.glide_coefficient * (self.pitch - self.channel_pitch);
+                self.step = self.pitch_base_step
+                    * (self.channel_pitch / 12.0 + f64::from(pitch_cents) / 1200.0).exp2();
+            }
+            if let Mix::Strip(strip) = mix
+                && self.channel_envelopes.is_some()
+            {
+                (left, right) = stereo_gains(
+                    strip.gain.at(frame),
+                    (strip.pan.at(frame) + self.pan + pan_offset).clamp(-1.0, 1.0),
+                );
             }
             if let Some(strip) = gliding {
-                (left, right) = stereo_gains(strip.gain.at(frame), strip.pan.at(frame) + self.pan);
+                (left, right) = stereo_gains(
+                    strip.gain.at(frame),
+                    (strip.pan.at(frame) + self.pan + pan_offset).clamp(-1.0, 1.0),
+                );
             }
             let mut level = self.gain;
             if let Some(envelope) = &mut self.envelope {
@@ -587,7 +724,18 @@ impl Voice {
                 }
                 None => self.region.read(sample, self.position),
             };
-            if let Some(coeffs) = &self.expression_filter {
+            let modulated_filter = (cutoff_offset != 0.0).then(|| {
+                SvfCoeffs::new(
+                    (20_000.0 * (self.expression.cutoff_octaves() + cutoff_offset).exp2())
+                        .clamp(20.0, sample_rate as f32 * 0.45),
+                    std::f32::consts::FRAC_1_SQRT_2 * self.expression.resonance_multiplier(),
+                    sample_rate as f32,
+                )
+            });
+            if let Some(coeffs) = modulated_filter
+                .as_ref()
+                .or(self.expression_filter.as_ref())
+            {
                 sample_left = self.filters[0].tick(coeffs, sample_left).low;
                 sample_right = self.filters[1].tick(coeffs, sample_right).low;
             }
@@ -624,6 +772,7 @@ pub(crate) struct VoicePool {
     sample_rate: f64,
     fade_frames: u32,
     preview_gain: f32,
+    next_instance: u64,
 }
 
 impl VoicePool {
@@ -636,6 +785,7 @@ impl VoicePool {
             sample_rate,
             fade_frames: ((FADE_SECONDS * sample_rate).round() as u32).max(1),
             preview_gain: db_to_gain(PREVIEW_GAIN_DB),
+            next_instance: 1,
         }
     }
 
@@ -669,20 +819,43 @@ impl VoicePool {
 
     /// Starts a note on frame `now`, applying the channel's cut rules and
     /// stealing a voice if the pool is full.
-    pub fn start(&mut self, plan: &Plan, garbage: &mut Producer<Garbage>, note: Note, now: u64, clock: Clock, glide_end: f64) {
+    // Starting a voice transfers prepared envelopes while borrowing the plan
+    // and deferred-drop queue, with timing kept explicit for cut/steal ordering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start(
+        &mut self,
+        plan: &Plan,
+        garbage: &mut Producer<Garbage>,
+        note: Note,
+        now: u64,
+        clock: Clock,
+        glide_end: f64,
+        mut channel_envelopes: PreparedChannelEnvelopes,
+        glide_coefficient: f64,
+    ) -> Option<NoteInstanceId> {
+        let expression = note.expression.clamped();
         let channel = &plan.channels[note.channel];
         let sampler = &channel.sampler;
         let at = clock.tick_at(now);
-        let from = self.voices.iter().filter(|voice| voice.active && voice.channel == channel.id && voice.origin == note.origin && voice.color_group == expression.color_group.unwrap_or(0) && voice.fade == 0 && voice.end > at)
-            .max_by_key(|voice| voice.started).map(|voice| voice.glide.map_or(voice.pitch, |glide| glide.at(at)));
+        let from = self
+            .voices
+            .iter()
+            .filter(|voice| {
+                voice.active
+                    && voice.channel == channel.id
+                    && voice.origin == note.origin
+                    && voice.color_group == expression.color_group.unwrap_or(0)
+                    && voice.fade == 0
+                    && voice.end > at
+            })
+            .max_by_key(|voice| voice.started)
+            .map(|voice| voice.glide.map_or(voice.pitch, |glide| glide.at(at)));
         let selected = if sampler.spectral {
             sampler.bank.as_ref().and_then(|bank| bank.at(note.key))
         } else {
             sampler.sample.as_ref()
         };
-        let Some(sample) = selected else {
-            return;
-        };
+        let sample = selected?;
 
         // Notes that start on the same frame are a chord, not a retrigger,
         // so only voices from before this frame are cut.
@@ -704,26 +877,44 @@ impl VoicePool {
         // A note with no velocity cuts like any other note-on, but it can
         // never be heard, so it does not get a voice.
         if note.velocity <= 0.0 {
-            return;
+            return None;
         }
 
         self.make_room();
-        let Some(slot) = self.free_slot(plan, garbage) else {
-            return;
-        };
+        let slot = self.free_slot(plan, garbage)?;
         let expression = note.expression.clamped();
         let pitch = if sampler.spectral {
             2.0_f64.powf(f64::from(expression.fine_pitch_cents) / 1200.0)
         } else {
-            2.0_f64.powf(f64::from(f32::from(note.key) + sampler.key_offset + expression.fine_pitch_cents / 100.0) / 12.0)
+            2.0_f64.powf(
+                f64::from(
+                    f32::from(note.key) + sampler.key_offset + expression.fine_pitch_cents / 100.0,
+                ) / 12.0,
+            )
         };
         let target_pitch = f64::from(note.key) + f64::from(expression.fine_pitch_cents) / 100.0;
         let glide = if expression.articulation == NoteArticulation::Portamento {
             from.map(|from| NoteGlide::new(at, glide_end, from, target_pitch))
-        } else { None };
-        let pitch_base_step = pitch * f64::from(sample.sample_rate()) / self.sample_rate / (target_pitch / 12.0).exp2();
+        } else {
+            None
+        };
+        let pitch_base_step = pitch * f64::from(sample.sample_rate())
+            / self.sample_rate
+            / (target_pitch / 12.0).exp2();
         let current_pitch = glide.map_or(target_pitch, |glide| glide.from);
+        let instance = NoteInstanceId(self.next_instance);
+        self.next_instance = self.next_instance.wrapping_add(1);
+        channel_envelopes.gate_on();
         self.voices[slot] = Voice {
+            instance,
+            channel_envelopes: channel_envelopes.enabled().then_some(channel_envelopes),
+            modulation_released: false,
+            channel_pitch: if glide_coefficient < 1.0 {
+                from.unwrap_or(current_pitch)
+            } else {
+                current_pitch
+            },
+            glide_coefficient,
             active: true,
             sample: Some(sample.clone()),
             source: note.source,
@@ -750,28 +941,35 @@ impl VoicePool {
             position: 0.0,
             loop_region: sampler.loop_region,
             loop_cycled: sampler.loop_region.is_some_and(|region| region.first == 0),
-            step: if glide.is_some() { pitch_base_step * (current_pitch / 12.0).exp2() } else { pitch * f64::from(sample.sample_rate()) / self.sample_rate },
+            step: if glide.is_some() {
+                pitch_base_step * (current_pitch / 12.0).exp2()
+            } else {
+                pitch * f64::from(sample.sample_rate()) / self.sample_rate
+            },
             pitch: current_pitch,
             pitch_base_step,
             glide,
             gain: note.velocity * sampler.gain,
             pan: note.pan,
-            envelope: sampler
-                .envelope
-                .as_ref()
-                .map(|envelope| {
-                    let mut envelope = *envelope;
-                    envelope.release_ms *= expression.release_multiplier();
-                    EnvelopeState::new(&envelope, self.sample_rate)
-                }),
-            expression_filter: (expression.modulation_x != 0.5 || expression.modulation_y != 0.5).then(|| {
-                SvfCoeffs::new((20_000.0 * expression.cutoff_octaves().exp2()).clamp(20.0, self.sample_rate as f32 * 0.45),
-                    std::f32::consts::FRAC_1_SQRT_2 * expression.resonance_multiplier(), self.sample_rate as f32)
+            envelope: sampler.envelope.as_ref().map(|envelope| {
+                let mut envelope = *envelope;
+                envelope.release_ms *= expression.release_multiplier();
+                EnvelopeState::new(&envelope, self.sample_rate)
             }),
+            expression_filter: (expression.modulation_x != 0.5 || expression.modulation_y != 0.5)
+                .then(|| {
+                    SvfCoeffs::new(
+                        (20_000.0 * expression.cutoff_octaves().exp2())
+                            .clamp(20.0, self.sample_rate as f32 * 0.45),
+                        std::f32::consts::FRAC_1_SQRT_2 * expression.resonance_multiplier(),
+                        self.sample_rate as f32,
+                    )
+                }),
             filters: [Svf::default(); 2],
             fade: 0,
             fade_in: 0,
         };
+        Some(instance)
     }
 
     /// Plays a whole buffer straight into the master at
@@ -810,24 +1008,94 @@ impl VoicePool {
         None
     }
 
-    /// Ends a note played by hand. One-shots without an envelope play on to
-    /// the end of the sample; loops always release.
-    pub fn release_live(&mut self, channel: ChannelId, key: u8) {
-        self.release_origin(channel, key, Origin::Live);
-    }
-
-    pub fn release_origin(&mut self, channel: ChannelId, key: u8, origin: Origin) {
+    pub fn reset_channel_modulation(&mut self, channel: ChannelId) {
         for voice in self
             .voices
             .iter_mut()
-            .filter(|voice| voice.active && voice.origin == origin && voice.channel == channel)
+            .filter(|voice| voice.active && voice.channel == channel)
         {
-            if voice.key == key {
-                // Before anything the clock can read, so the note has ended
-                // by the next frame.
-                voice.end = f64::NEG_INFINITY;
+            if let Some(envelopes) = &mut voice.channel_envelopes {
+                envelopes.reset();
             }
         }
+    }
+
+    pub fn release_instance(&mut self, channel: ChannelId, id: NoteInstanceId) {
+        self.end_instance(channel, id, true);
+    }
+
+    /// Ordinary key-up releases envelopes; a one-shot still plays to its end.
+    pub fn key_up_instance(&mut self, channel: ChannelId, id: NoteInstanceId) {
+        self.end_instance(channel, id, false);
+    }
+
+    fn end_instance(&mut self, channel: ChannelId, id: NoteInstanceId, force: bool) {
+        for voice in self
+            .voices
+            .iter_mut()
+            .filter(|voice| voice.active && voice.channel == channel && voice.instance == id)
+        {
+            voice.end = f64::NEG_INFINITY;
+            if let Some(envelopes) = &mut voice.channel_envelopes {
+                envelopes.gate_off();
+                voice.modulation_released = true;
+            }
+            if force && voice.envelope.is_none() {
+                voice.fade = self.fade_frames;
+            }
+        }
+    }
+
+    pub fn retarget_instance(
+        &mut self,
+        plan: &Plan,
+        id: NoteInstanceId,
+        note: Note,
+        at: f64,
+        glide_end: f64,
+    ) -> bool {
+        let channel = &plan.channels[note.channel];
+        let Some(voice) = self.voices.iter_mut().find(|voice| {
+            voice.active && voice.channel == channel.id && voice.instance == id && voice.fade == 0
+        }) else {
+            return false;
+        };
+        if channel.sampler.spectral {
+            // Existing prepared bank selection, preserving envelope and playback position.
+            if let Some(sample) = channel
+                .sampler
+                .bank
+                .as_ref()
+                .and_then(|bank| bank.at(note.key))
+            {
+                voice.sample = Some(sample.clone());
+                voice.region.frames = sample.frames();
+                voice.position = voice.position.min(sample.frames().saturating_sub(1) as f64);
+                let pitch =
+                    f64::from(note.key) + f64::from(note.expression.fine_pitch_cents) / 100.0;
+                voice.pitch_base_step = f64::from(sample.sample_rate()) / self.sample_rate
+                    * (-f64::from(note.key) / 12.0).exp2();
+                voice.pitch = pitch;
+            } else {
+                return false;
+            }
+        } else {
+            voice.pitch = f64::from(note.key) + f64::from(note.expression.fine_pitch_cents) / 100.0;
+        }
+        let target = voice.pitch;
+        voice.glide = if note.expression.articulation == NoteArticulation::Portamento {
+            Some(NoteGlide::new(at, glide_end, voice.channel_pitch, target))
+        } else {
+            None
+        };
+        voice.pitch = voice.glide.map_or(target, |glide| glide.from);
+        voice.key = note.key;
+        voice.source = note.source;
+        voice.expression = note.expression.clamped();
+        voice.pan = note.pan;
+        voice.end = note.end;
+        voice.origin = note.origin;
+        true
     }
 
     /// Moves the end of every note by `ticks`. The sequencer's clock reads
@@ -836,8 +1104,12 @@ impl VoicePool {
     pub fn shift_ends(&mut self, ticks: f64) {
         for voice in &mut self.voices {
             voice.end += ticks;
-            if let Some(source) = &mut voice.source { source.shift(ticks); }
-            if let Some(glide) = &mut voice.glide { glide.shift(ticks); }
+            if let Some(source) = &mut voice.source {
+                source.shift(ticks);
+            }
+            if let Some(glide) = &mut voice.glide {
+                glide.shift(ticks);
+            }
         }
     }
 
@@ -847,8 +1119,12 @@ impl VoicePool {
     pub fn move_ends(&mut self, moved: impl Fn(f64) -> f64) {
         for voice in self.voices.iter_mut().filter(|voice| voice.active) {
             voice.end = moved(voice.end);
-            if let Some(source) = &mut voice.source { source.move_clock(&moved); }
-            if let Some(glide) = &mut voice.glide { glide.move_clock(&moved); }
+            if let Some(source) = &mut voice.source {
+                source.move_clock(&moved);
+            }
+            if let Some(glide) = &mut voice.glide {
+                glide.move_clock(&moved);
+            }
         }
     }
 
@@ -920,7 +1196,9 @@ impl VoicePool {
             if !voice.active {
                 continue;
             }
-            if let Some(source) = &mut voice.source { source.refresh(plan); }
+            if let Some(source) = &mut voice.source {
+                source.refresh(plan);
+            }
             let leaving = voice.fade > 0;
             match voice.route {
                 Route::Channel(old_index) => {
@@ -1021,22 +1299,65 @@ impl VoicePool {
             };
             let out = &mut out[frames.clone()];
             let release_at = clock.frame_of(voice.end);
-            if voice.render(out, mix, start, release_at, self.fade_frames, clock, plan, self.sample_rate) {
+            if voice.render(
+                out,
+                mix,
+                start,
+                release_at,
+                self.fade_frames,
+                clock,
+                plan,
+                self.sample_rate,
+            ) {
                 self.end(index, plan, garbage);
             }
         }
     }
 
-    pub fn slide_notes(&mut self, channel: ChannelId, key: u8, expression: NoteExpression, at: f64, end: f64, origin: Origin) {
+    pub fn slide_notes(
+        &mut self,
+        channel: ChannelId,
+        key: u8,
+        expression: NoteExpression,
+        at: f64,
+        end: f64,
+        origin: Origin,
+    ) {
         let group = expression.color_group.unwrap_or(0);
-        let Some(anchor) = self.voices.iter().filter(|voice| voice.active && voice.channel == channel && voice.origin == origin && voice.color_group == group && voice.fade == 0 && voice.end > at)
-            .max_by_key(|voice| voice.started) else { return; };
-        let delta = f64::from(key.min(127)) + f64::from(expression.clamped().fine_pitch_cents) / 100.0
+        let Some(anchor) = self
+            .voices
+            .iter()
+            .filter(|voice| {
+                voice.active
+                    && voice.channel == channel
+                    && voice.origin == origin
+                    && voice.color_group == group
+                    && voice.fade == 0
+                    && voice.end > at
+            })
+            .max_by_key(|voice| voice.started)
+        else {
+            return;
+        };
+        let delta = f64::from(key.min(127))
+            + f64::from(expression.clamped().fine_pitch_cents) / 100.0
             - anchor.glide.map_or(anchor.pitch, |glide| glide.at(at));
-        for voice in self.voices.iter_mut().filter(|voice| voice.active && voice.channel == channel && voice.origin == origin && voice.color_group == group && voice.fade == 0 && voice.end > at) {
+        for voice in self.voices.iter_mut().filter(|voice| {
+            voice.active
+                && voice.channel == channel
+                && voice.origin == origin
+                && voice.color_group == group
+                && voice.fade == 0
+                && voice.end > at
+        }) {
             let from = voice.glide.map_or(voice.pitch, |glide| glide.at(at));
             voice.pitch = from;
-            voice.glide = Some(NoteGlide::new(at, end, from, (from + delta).clamp(-12.0, 139.0)));
+            voice.glide = Some(NoteGlide::new(
+                at,
+                end,
+                from,
+                (from + delta).clamp(-12.0, 139.0),
+            ));
         }
     }
 
@@ -1175,6 +1496,7 @@ mod tests {
                 first: 1,
                 frames: 2,
                 mode,
+                crossfade: 0.0,
             };
             // Both two-frame modes alternate, and the half-way points average.
             for position in [1.5, 2.5] {
@@ -1203,6 +1525,7 @@ mod tests {
             first: 0,
             frames: 3,
             mode: SamplerLoopMode::PingPong,
+            crossfade: 0.0,
         };
         let mut position = 0.0;
         let mut cycled = true;
@@ -1237,6 +1560,7 @@ mod tests {
                 first: 1,
                 frames: 1,
                 mode,
+                crossfade: 0.0,
             };
             for step in [0.01, 0.5, 1.0, 13.7, 1000.25] {
                 let mut position = 1.0;

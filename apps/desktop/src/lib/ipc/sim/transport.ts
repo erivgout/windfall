@@ -253,7 +253,7 @@ export class TransportSim {
       const gain =
         channel.source.type === "sampler"
           ? channel.source.gain
-          : channel.source.params.gain
+          : "gain" in channel.source.params ? channel.source.params.gain : 1
       const hit = onset.velocity * channel.volume * gain
       // A channel whose track is gone plays into the master.
       const track = tracks.has(channel.mixerTrack)

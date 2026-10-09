@@ -1,0 +1,1 @@
+The sampler loop section halves or doubles the crossfade. Half of no crossfade stays at no crossfade. Double stops at a long crossfade. The buttons stay disabled while the loop is off, and a scale does not turn the loop on. Loop start and loop end stay as they are. None, Short, Medium, and Long stay as they are.

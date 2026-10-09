@@ -8,7 +8,7 @@ running: boolean,
 /**
  * Driver family, such as "WASAPI", "ASIO" or "CoreAudio".
  */
-host: string, device: string | null, sampleRate: number, 
+host: string, device: string | null, sampleRate: number, outputChannels?: number, 
 /**
  * Frames per audio callback.
  */
@@ -29,4 +29,4 @@ latencyFrames: number,
 /**
  * Why the stream is not running, when it is not.
  */
-error: string | null, outputChannels?: number, };
+error: string | null, };

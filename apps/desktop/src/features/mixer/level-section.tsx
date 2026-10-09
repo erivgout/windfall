@@ -8,11 +8,21 @@ import {
   LevelMeter,
   type LevelMeterHandle,
 } from "@/components/audio"
+import type { ContextItem } from "@/components/context-actions"
 import { ValueContextItems } from "@/components/value-context-menu"
 import { automationFeed, useAutomationMarker } from "@/features/automation/live"
-import { meterFeed, useHint, useUiStore } from "@/lib/store"
+import {
+  dispatch,
+  meterFeed,
+  useHint,
+  useProjectStore,
+  useUiStore,
+} from "@/lib/store"
 import { cn } from "@/lib/utils"
 
+import { nextFaderPreset } from "./fader-preset-step"
+import { FADER_PRESETS, nextFaderVolume } from "./fader-presets"
+import { nextFaderVolumeScale } from "./fader-scale"
 import { trackValueItems } from "./menus"
 import { CLIP_GAIN, resetPeak, subscribePeak } from "./peaks"
 import { useTrackGroupGesture } from "./group-gesture"
@@ -138,7 +148,64 @@ export function LevelSection({
   )
   // What the fader is bound to adds its own entries to the fader's menu,
   // and automation of it moves the fader while the song plays.
-  const items = useMemo(() => trackValueItems(id, "volume"), [id])
+  const items = useMemo<ContextItem[]>(
+    () => [
+      ...trackValueItems(id, "volume"),
+      {
+        submenu: "Volume",
+        items: [
+          ...FADER_PRESETS.map((preset) => ({
+            title: preset.label,
+            disabled: nextFaderVolume(volume, preset.value) === null,
+            run: () => {
+              const next = nextFaderVolume(volume, preset.value)
+              if (next === null) return
+              return dispatch({
+                type: "updateMixerTrack",
+                id,
+                patch: { volume: next },
+              })
+            },
+          })),
+          ...(["previous", "next"] as const).map((direction) => ({
+            title: direction === "previous" ? "Previous preset" : "Next preset",
+            disabled: nextFaderPreset(volume, direction) === null,
+            run: () => {
+              const track = useProjectStore
+                .getState()
+                .project.mixer.tracks.find((track) => track.id === id)
+              if (!track) return
+              const next = nextFaderPreset(track.volume, direction)
+              if (next === null) return
+              return dispatch({
+                type: "updateMixerTrack",
+                id,
+                patch: { volume: next },
+              })
+            },
+          })),
+          ...(["half", "double"] as const).map((factor) => ({
+            title: factor === "half" ? "Half" : "Double",
+            disabled: nextFaderVolumeScale(volume, factor) === null,
+            run: () => {
+              const track = useProjectStore
+                .getState()
+                .project.mixer.tracks.find((track) => track.id === id)
+              if (!track) return
+              const next = nextFaderVolumeScale(track.volume, factor)
+              if (next === null) return
+              return dispatch({
+                type: "updateMixerTrack",
+                id,
+                patch: { volume: next },
+              })
+            },
+          })),
+        ],
+      },
+    ],
+    [id, volume]
+  )
   const live = useMemo(
     () => automationFeed({ type: "trackVolume", track: id }),
     [id]

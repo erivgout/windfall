@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { ActionButton } from "@/components/action-button"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,12 @@ import {
 } from "@/components/ui/select"
 import { useProjectStore } from "@/lib/store/project"
 import { setTransport, useTransportStore } from "@/lib/store/transport"
+import { nextCountInScale } from "./count-in-scale"
+import { nextDialogBufferScale } from "./dialog-buffer-scale"
+import { nextDialogLoopScale } from "./dialog-loop-scale"
+import { nextDialogMonitorScale } from "./dialog-monitor-scale"
+import { nextDialogOffsetScale } from "./dialog-offset-scale"
+import { nextDialogStartScale } from "./dialog-start-scale"
 import { refreshRecording, useRecordingStore } from "./recording-store"
 function Choice({
   label,
@@ -100,7 +107,31 @@ export function RecordingDialog() {
             <FieldLabel htmlFor="record-armed">Record all armed mixer tracks</FieldLabel>
           </Field>
           {s.armedTracks && <FieldDescription>Choose dry inputs or processed track sound and arm tracks in the mixer inspector. Each armed source gets its own aligned recording. {mixerTracks.filter((track) => track.recording?.armed).length} tracks armed.</FieldDescription>}
-          <Field><FieldLabel>Count-in</FieldLabel><Choice label="Count-in bars" value={countInBars} disabled={disabled} items={[{ value: 0, label: "None" }, { value: 1, label: "1 bar" }, { value: 2, label: "2 bars" }, { value: 4, label: "4 bars" }, { value: 8, label: "8 bars" }]} onChange={(countInBars) => void setTransport({ countInBars })} /><FieldDescription>Count-in follows the song meter and tempo at the chosen start. Playback begins there after the clicks.</FieldDescription></Field>
+          <Field>
+            <FieldLabel>Count-in</FieldLabel>
+            <Choice label="Count-in bars" value={countInBars} disabled={disabled} items={[{ value: 0, label: "None" }, { value: 1, label: "1 bar" }, { value: 2, label: "2 bars" }, { value: 4, label: "4 bars" }, { value: 8, label: "8 bars" }]} onChange={(countInBars) => void setTransport({ countInBars })} />
+            <div className="flex gap-2">
+              {(["half", "double"] as const).map((factor) => (
+                <Button
+                  key={factor}
+                  variant="outline"
+                  size="sm"
+                  aria-label={factor === "half" ? "Halve count-in" : "Double count-in"}
+                  disabled={disabled || nextCountInScale(countInBars, factor) === null}
+                  onClick={() => {
+                    const recording = useRecordingStore.getState()
+                    if (recording.busy || recording.state.active) return
+                    const latest = useTransportStore.getState().countInBars ?? 0
+                    const next = nextCountInScale(latest, factor)
+                    if (next !== null) void setTransport({ countInBars: next })
+                  }}
+                >
+                  {factor === "half" ? "Half" : "Double"}
+                </Button>
+              ))}
+            </div>
+            <FieldDescription>Count-in follows the song meter and tempo at the chosen start. Playback begins there after the clicks.</FieldDescription>
+          </Field>
           <Field orientation="horizontal">
             <Checkbox id="record-sync" checked={s.synchronize || s.loopRecording || s.armedTracks || countInBars > 0} disabled={disabled || countInBars > 0 || s.loopRecording || s.armedTracks} onCheckedChange={(checked) => useRecordingStore.setState({ synchronize: checked === true })} />
             <FieldLabel htmlFor="record-sync">Start playback with recording</FieldLabel>
@@ -136,6 +167,24 @@ export function RecordingDialog() {
             <FieldLabel htmlFor="record-offset">Recording offset (milliseconds)</FieldLabel>
             <Input id="record-offset" type="number" min={-1000} max={1000} step={0.1} value={s.offsetMs} disabled={disabled} onChange={(event) => useRecordingStore.setState({ offsetMs: Math.max(-1000, Math.min(1000, Number(event.target.value))) })} />
             <FieldDescription>Positive values advance captured audio. Driver timestamps supply automatic input/output latency alignment.</FieldDescription>
+            <div className="flex gap-2">
+              {(["half", "double"] as const).map((factor) => (
+                <Button
+                  key={factor}
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled || nextDialogOffsetScale(s.offsetMs, factor) === null}
+                  onClick={() => {
+                    const current = useRecordingStore.getState()
+                    if (current.busy || current.state.active) return
+                    const next = nextDialogOffsetScale(current.offsetMs, factor)
+                    if (next !== null) useRecordingStore.setState({ offsetMs: next })
+                  }}
+                >
+                  {factor === "half" ? "Half" : "Double"}
+                </Button>
+              ))}
+            </div>
           </Field>
           <Field>
             <FieldLabel>Left or mono channel</FieldLabel>
@@ -175,6 +224,25 @@ export function RecordingDialog() {
                 })
               }
             />
+            <div className="flex gap-2">
+              {(["half", "double"] as const).map((factor) => (
+                <Button
+                  key={factor}
+                  variant="outline"
+                  size="sm"
+                  aria-label={factor === "half" ? "Halve playlist start" : "Double playlist start"}
+                  disabled={disabled || nextDialogStartScale(s.start, factor) === null}
+                  onClick={() => {
+                    const latest = useRecordingStore.getState()
+                    if (latest.busy || latest.state.active) return
+                    const next = nextDialogStartScale(latest.start, factor)
+                    if (next !== null) useRecordingStore.setState({ start: next })
+                  }}
+                >
+                  {factor === "half" ? "Half" : "Double"}
+                </Button>
+              ))}
+            </div>
           </Field>
           <Field>
             <FieldLabel>Playlist track</FieldLabel>
@@ -197,6 +265,25 @@ export function RecordingDialog() {
             <Field>
               <FieldLabel htmlFor="record-loop-end">Loop end tick</FieldLabel>
               <Input id="record-loop-end" type="number" min={s.start + 1} step={1} value={s.loopEnd} disabled={disabled} onChange={(event) => useRecordingStore.setState({ loopEnd: Math.max(s.start + 1, Math.floor(Number(event.target.value))) })} />
+              <div className="flex gap-2">
+                {(["half", "double"] as const).map((factor) => (
+                  <Button
+                    key={factor}
+                    variant="outline"
+                    size="sm"
+                    aria-label={factor === "half" ? "Halve recording loop" : "Double recording loop"}
+                    disabled={disabled || nextDialogLoopScale(s.start, s.loopEnd, factor) === null}
+                    onClick={() => {
+                      const latest = useRecordingStore.getState()
+                      if (latest.busy || latest.state.active || latest.loopRecording !== true) return
+                      const next = nextDialogLoopScale(latest.start, latest.loopEnd, factor)
+                      if (next !== null) useRecordingStore.setState({ loopEnd: next })
+                    }}
+                  >
+                    {factor === "half" ? "Halve loop" : "Double loop"}
+                  </Button>
+                ))}
+              </div>
               <FieldDescription>Each pass from the start tick to this end becomes a take. The final partial pass is retained too.</FieldDescription>
             </Field>
             <Field orientation="horizontal">
@@ -217,10 +304,48 @@ export function RecordingDialog() {
             <Field>
               <FieldLabel htmlFor="record-monitor-gain">Monitor level (%)</FieldLabel>
               <Input id="record-monitor-gain" type="number" min={0} max={100} step={1} value={Math.round(s.monitorGain * 100)} disabled={disabled} onChange={(event) => useRecordingStore.setState({ monitorGain: Math.max(0, Math.min(1, Number(event.target.value) / 100)) })} />
+              <div className="flex gap-2">
+                {(["half", "double"] as const).map((factor) => (
+                  <Button
+                    key={factor}
+                    variant="outline"
+                    size="sm"
+                    aria-label={factor === "half" ? "Halve dialog monitor level" : "Double dialog monitor level"}
+                    disabled={disabled || nextDialogMonitorScale(s.monitorGain, factor) === null}
+                    onClick={() => {
+                      const latest = useRecordingStore.getState()
+                      if (latest.busy || latest.state.active || latest.monitor !== true || latest.armedTracks === true) return
+                      const next = nextDialogMonitorScale(latest.monitorGain, factor)
+                      if (next !== null) useRecordingStore.setState({ monitorGain: next })
+                    }}
+                  >
+                    {factor === "half" ? "Half" : "Double"}
+                  </Button>
+                ))}
+              </div>
             </Field>
             <Field>
               <FieldLabel htmlFor="record-monitor-buffer">Monitor buffer (milliseconds)</FieldLabel>
               <Input id="record-monitor-buffer" type="number" min={5} max={100} step={1} value={s.monitorBufferMs} disabled={disabled} onChange={(event) => useRecordingStore.setState({ monitorBufferMs: Math.max(5, Math.min(100, Math.round(Number(event.target.value)))) })} />
+              <div className="flex gap-2">
+                {(["half", "double"] as const).map((factor) => (
+                  <Button
+                    key={factor}
+                    variant="outline"
+                    size="sm"
+                    aria-label={factor === "half" ? "Halve dialog monitor buffer" : "Double dialog monitor buffer"}
+                    disabled={disabled || nextDialogBufferScale(s.monitorBufferMs, factor) === null}
+                    onClick={() => {
+                      const latest = useRecordingStore.getState()
+                      if (latest.busy || latest.state.active || latest.monitor !== true || latest.armedTracks === true) return
+                      const next = nextDialogBufferScale(latest.monitorBufferMs, factor)
+                      if (next !== null) useRecordingStore.setState({ monitorBufferMs: next })
+                    }}
+                  >
+                    {factor === "half" ? "Half" : "Double"}
+                  </Button>
+                ))}
+              </div>
               <FieldDescription>A larger buffer accommodates driver scheduling delays and adds monitoring latency.</FieldDescription>
             </Field>
           </>}

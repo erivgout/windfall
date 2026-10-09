@@ -147,7 +147,11 @@ export function TreeView() {
 
   function rowAt(target: EventTarget | null): TreeRow | null {
     if (!(target instanceof Element)) return null
-    const line = target.closest<HTMLElement>("[data-index]")
+    // Menu primitives also mark their trigger with data-index. Match actual
+    // entries and status rows (including Retry), never the blank-space trigger.
+    const line = target.closest<HTMLElement>(
+      "[role=treeitem][data-index], [data-status][data-index]"
+    )
     if (!line) return null
     return rows[Number(line.dataset.index)] ?? null
   }

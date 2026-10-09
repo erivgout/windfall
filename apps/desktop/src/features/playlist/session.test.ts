@@ -430,6 +430,93 @@ describe("Draw tool", () => {
   })
 })
 
+describe("brush meter length", () => {
+  async function pickBarBrush() {
+    const made = await dispatch({
+      type: "addAutomation",
+      target: { type: "trackVolume", track: project().mixer.tracks[0].id },
+      points: [{ tick: 0, value: 0.5, curve: 0, hold: false }],
+    })
+    ui().setBrush({ type: "automation", automation: made!.created[0] })
+  }
+
+  it.each(["draw", "paint"] as const)(
+    "uses a 7/8 bar at the later paint tick with %s",
+    async (tool) => {
+      await pickBarBrush()
+      await dispatch({
+        type: "addMeterChange",
+        tick: 2 * BAR,
+        signature: { numerator: 7, denominator: 8 },
+      })
+      ui().setTool(tool)
+      const later = at(2 * BAR, 0)
+      session.pointerDown(later)
+      expect(session.ghosts[0]).toMatchObject({
+        start: 2 * BAR,
+        length: (7 * BEAT) / 2,
+      })
+      await session.pointerUp(later)
+      await settle()
+      expect(clips()[0]).toMatchObject({
+        start: 2 * BAR,
+        length: (7 * BEAT) / 2,
+      })
+    }
+  )
+
+  it("uses the project signature before the first meter change", async () => {
+    await pickBarBrush()
+    await dispatch({
+      type: "addMeterChange",
+      tick: 2 * BAR,
+      signature: { numerator: 7, denominator: 8 },
+    })
+    ui().setTool("paint")
+    await click(session, at(BAR, 0))
+    expect(clips()[0]).toMatchObject({ start: BAR, length: BAR })
+  })
+
+  it("keeps the old bar length and spacing with no meter changes", async () => {
+    await pickBarBrush()
+    ui().setTool("paint")
+    await drag(session, at(BAR + 100, 0), at(3 * BAR + 100, 0))
+    expect(layout()).toEqual([
+      `0:${BAR}+${BAR}`,
+      `0:${2 * BAR}+${BAR}`,
+      `0:${3 * BAR}+${BAR}`,
+    ])
+  })
+
+  it.each(["right", "left"] as const)(
+    "uses each clip's local bar length in a stroke crossing meters to the %s",
+    async (direction) => {
+      await pickBarBrush()
+      await dispatch({
+        type: "addMeterChange",
+        tick: 2 * BAR,
+        signature: { numerator: 7, denominator: 8 },
+      })
+      ui().setTool("paint")
+      ui().setSnap("none")
+      const shortBar = (7 * BEAT) / 2
+      const first = at(BAR, 0)
+      const last = at(2 * BAR + 2 * shortBar, 0)
+      await drag(
+        session,
+        direction === "right" ? first : last,
+        direction === "right" ? last : first
+      )
+      expect(layout()).toEqual([
+        `0:${BAR}+${BAR}`,
+        `0:${2 * BAR}+${shortBar}`,
+        `0:${2 * BAR + shortBar}+${shortBar}`,
+        `0:${2 * BAR + 2 * shortBar}+${shortBar}`,
+      ])
+    }
+  )
+})
+
 describe("Paint tool", () => {
   beforeEach(() => ui().setTool("paint"))
 

@@ -600,6 +600,7 @@ fn song_automation_and_sequenced_expiry_reconcile_before_resumed_processing() {
                     key: 60,
                     velocity: Some(0.8),
                     pan: None,
+                    expression: None,
                 }],
             },
             None,

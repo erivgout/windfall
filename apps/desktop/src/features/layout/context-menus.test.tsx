@@ -111,7 +111,16 @@ async function expectMenus(places: Place[]) {
     const element = find()
     if (!element) throw new Error(`Nothing to right-click for "${what}"`)
     // Handled by the app, so the webview's own menu stays away.
-    const left = fireEvent.contextMenu(element, { clientX: 30, clientY: 30 })
+    const left = fireEvent(
+      element,
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: 30,
+        clientY: 30,
+      })
+    )
     await flush()
     expect(left, `${what}: the right-click was not taken`).toBe(false)
     const menu = screen.queryByRole("menu")
@@ -261,8 +270,9 @@ describe("a right-click anywhere opens the app's menu", () => {
     ])
     expect(offered.get("a send")?.slice(0, 2)).toEqual([
       "Create automation clip",
-      "Remove send",
+      "Send level",
     ])
+    expect(offered.get("a send")).toContain("Remove send")
     for (const control of ["an effect's mix", "an effect's setting"]) {
       expect(offered.get(control)?.[0]).toBe("Create automation clip")
     }

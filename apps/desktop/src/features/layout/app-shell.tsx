@@ -6,11 +6,17 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { RetainedSoundsDialog } from "@/features/flp-import/retained-dialog"
 import { FlpImportDialog } from "@/features/flp-import/import-dialog"
 import { ExportDialog } from "@/features/export/export-dialog"
+import { GettingStartedDialog } from "@/features/help/getting-started-dialog"
 import { LfoDialog } from "@/features/automation/lfo-dialog"
 import { PatternTimelineDialog } from "@/features/piano-roll/pattern-timeline"
 import { MidiDialogs } from "@/features/midi/dialogs"
 import { CommandPalette } from "@/features/palette/command-palette"
 import { SettingsDialog } from "@/features/settings/settings-dialog"
+import { StageViews } from "@/features/stage/views"
+import { SpectrumPanel } from "@/features/spectrum/panel"
+import { ProjectOverviewPanel } from "@/features/project-overview/panel"
+import { PhaseMeterPanel } from "@/features/phase-meter/panel"
+import { SpectrogramPanel } from "@/features/spectrogram/panel"
 import { TransportBar } from "@/features/transport/transport-bar"
 import { resolveTheme, useUiStore } from "@/lib/store/ui"
 
@@ -56,6 +62,11 @@ export function Overlays() {
       <PluginManager />
       <LfoDialog />
       <PatternTimelineDialog />
+      <StageViews />
+      <SpectrumPanel />
+      <ProjectOverviewPanel />
+      <PhaseMeterPanel />
+      <SpectrogramPanel />
       <Toaster
         theme={theme}
         position="bottom-right"
@@ -87,6 +98,7 @@ export function AppShell() {
         </div>
         <CommandPalette />
         <SettingsDialog />
+        <GettingStartedDialog />
         <ExportDialog />
         <MidiDialogs />
         <FlpImportDialog />
@@ -110,7 +122,7 @@ export function PanelWindow({ panel }: { panel: PanelId }) {
     <TooltipProvider delay={500}>
       <ValueContextMenus>
         <div className="h-full">
-          <PanelFrame title={title}>
+          <PanelFrame title={title} panel={panel} detached>
             <Panel />
           </PanelFrame>
         </div>

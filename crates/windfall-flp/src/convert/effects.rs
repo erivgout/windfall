@@ -1,7 +1,7 @@
 //! From FL Studio's own effects to Windfall's.
 //!
-//! The table at the bottom says which effect stands for which. The names
-//! on its left are the internal names FL Studio writes into a project
+//! The name tables say which effect stands for which. The names
+//! in their source column are the internal names FL Studio writes into a project
 //! file, which is the only way to tell what a slot holds. They are used
 //! here to recognise the plugins and nowhere else: Windfall's effects have
 //! their own names.
@@ -15,7 +15,11 @@
 //! | Fruity Delay 2, Fruity Delay | Delay | time, feedback, ping-pong, mix |
 //! | Fruity Delay 3 | Delay | none: defaults |
 //!
-//! Every state is a row of 32-bit numbers. Their order comes from DawVert
+//! The additional names in `DEFAULT_EFFECTS` select registered effects with
+//! sanitized defaults. Their settings are not decoded, and the import report
+//! says so. The full mapping is documented in `docs/integration/seams/flp-effects.md`.
+//!
+//! Decoded states are rows of 32-bit numbers. Their order comes from DawVert
 //! `data_main/datadef/fl_studio.ddef`, their ranges from DawVert
 //! `data_main/dataset/fl_studio.dset`, and what they mean in real units
 //! from DawVert `plugins/plugconv/universal__n_flstudio.py` and
@@ -24,8 +28,8 @@
 //! Windfall's defaults.
 
 use windfall_dsp::{
-    CompressorParams, DelayMode, DelayParams, EffectParams, EqBand, EqCutBand, EqParams,
-    LimiterParams, NoteDivision, ParamSet, ReverbParams,
+    CompressorParams, DelayMode, DelayParams, EffectKind, EffectParams, EqBand, EqCutBand,
+    EqParams, LimiterParams, NoteDivision, ParamSet, ReverbParams,
 };
 
 use crate::plugin::Numbers;
@@ -76,13 +80,85 @@ pub(crate) fn translate(internal_name: &str, state: &[u8], tempo_bpm: f64) -> Op
             EffectParams::Delay(DelayParams::default()),
             "its settings are not understood, so it starts from Windfall's defaults",
         ),
-        _ => return None,
+        _ => {
+            let (_, kind) = DEFAULT_EFFECTS
+                .iter()
+                .find(|(source, _)| source.eq_ignore_ascii_case(&name))?;
+            untranslated(kind.default_params(), SETTINGS_NOT_DECODED)
+        }
     })
 }
 
+const SETTINGS_NOT_DECODED: &str =
+    "its settings were not decoded, so it starts from Windfall's defaults";
+
+/// Import keys only: these names do not define Windfall processor names.
+/// Keep mappings limited to kinds registered in `windfall_dsp::EffectKind`.
+const DEFAULT_EFFECTS: &[(&str, EffectKind)] = &[
+    ("Fruity Balance", EffectKind::Balance),
+    ("Fruity Center", EffectKind::DcBlock),
+    ("Fruity Mute 2", EffectKind::ChannelMute),
+    ("Fruity Phase Inverter", EffectKind::Polarity),
+    ("Fruity Stereo Shaper", EffectKind::StereoMatrix),
+    ("Fruity Soft Clipper", EffectKind::SoftClipper),
+    ("Fruity Fast Dist", EffectKind::Distortion),
+    ("Fruity Fast LP", EffectKind::FastLowpass),
+    ("Fruity Free Filter", EffectKind::SelectableFilter),
+    ("Fruity Bass Boost", EffectKind::BassShelf),
+    ("Fruity Squeeze", EffectKind::Lofi),
+    ("Fruity Chorus", EffectKind::Chorus),
+    ("Fruity Flanger", EffectKind::Flanger),
+    ("Fruity Phaser", EffectKind::Phaser),
+    ("Frequency Splitter", EffectKind::BandSplit),
+    (
+        "Fruity Multiband Compressor",
+        EffectKind::MultibandCompressor,
+    ),
+    ("Maximus", EffectKind::MultibandMaximizer),
+    ("Transient Processor", EffectKind::TransientShaper),
+    ("Transmitter", EffectKind::TransientSplit),
+    ("Soundgoodizer", EffectKind::OneKnob),
+    ("Low Lifter", EffectKind::BassHarmonics),
+    ("Fruity Waveshaper", EffectKind::Waveshaper),
+    ("Fruity Blood Overdrive", EffectKind::Overdrive),
+    ("Hardcore", EffectKind::GuitarRack),
+    ("Distructor", EffectKind::DriveChain),
+    ("Vintage Chorus", EffectKind::VintageChorus),
+    ("Hyper Chorus", EffectKind::HyperChorus),
+    ("Vintage Phaser", EffectKind::VintagePhaser),
+    ("Fruity Flangus", EffectKind::StackedFlanger),
+    ("Multiband Delay", EffectKind::BandDelay),
+    ("Spreader", EffectKind::Spreader),
+    ("Fruity Stereo Enhancer", EffectKind::StereoEnhancer),
+    ("Gross Beat", EffectKind::VolumeGate),
+    ("Transporter", EffectKind::TimeTransport),
+    ("Fruity Scratcher", EffectKind::Scratch),
+    ("Effector", EffectKind::PerformanceRack),
+    ("Fruity Convolver", EffectKind::Convolver),
+    ("Frequency Shifter", EffectKind::FrequencyShifter),
+    ("Pitch Shifter", EffectKind::PitchShift),
+    ("Pitcher", EffectKind::PitchCorrect),
+    ("Fruity Vocoder", EffectKind::Vocoder),
+    ("Vocodex", EffectKind::Vocoder),
+    ("Fruity Delay Bank", EffectKind::EchoBank),
+    ("Fruity 7 Band EQ", EffectKind::SevenBand),
+    ("EQUO", EffectKind::MorphEq),
+    ("Fruity Love Philter", EffectKind::FilterBank),
+    ("LuxeVerb", EffectKind::LushSpace),
+    ("Emphasis", EffectKind::StageStack),
+    ("Emphasizer", EffectKind::StageStack),
+    ("Tuner", EffectKind::Tuner),
+    ("Control Surface", EffectKind::ControlSurface),
+    ("Fruity PanOMatic", EffectKind::PanLfo),
+    ("Fruity Peak Controller", EffectKind::EnvelopeFollower),
+    ("Fruity X-Y Controller", EffectKind::XyPad),
+    ("Fruity X-Y-Z Controller", EffectKind::XyzPad),
+    ("Fruity Send", EffectKind::SendTap),
+];
+
 fn untranslated(params: EffectParams, note: &'static str) -> Translated {
     Translated {
-        params,
+        params: params.sanitized(),
         notes: vec![note],
         links: Vec::new(),
     }
@@ -560,9 +636,10 @@ fn delay_1(numbers: Numbers<'_>, tempo_bpm: f64) -> Translated {
 
 #[cfg(test)]
 mod tests {
-    use windfall_dsp::EffectKind;
-
     use super::*;
+    use crate::convert::{ConvertOptions, PluginPlace, convert};
+    use crate::model::{FlpProject, Insert, Plugin, Slot};
+    use crate::report::{Outcome, ReportSection};
 
     fn state(values: &[i32]) -> Vec<u8> {
         values
@@ -603,6 +680,65 @@ mod tests {
             ("Fruity Delay 2", EffectKind::Delay),
             ("Fruity Delay", EffectKind::Delay),
             ("Fruity Delay 3", EffectKind::Delay),
+            ("Fruity Balance", EffectKind::Balance),
+            ("Fruity Center", EffectKind::DcBlock),
+            ("Fruity Mute 2", EffectKind::ChannelMute),
+            ("Fruity Phase Inverter", EffectKind::Polarity),
+            ("Fruity Stereo Shaper", EffectKind::StereoMatrix),
+            ("Fruity Soft Clipper", EffectKind::SoftClipper),
+            ("Fruity Fast Dist", EffectKind::Distortion),
+            ("Fruity Fast LP", EffectKind::FastLowpass),
+            ("Fruity Free Filter", EffectKind::SelectableFilter),
+            ("Fruity Bass Boost", EffectKind::BassShelf),
+            ("Fruity Squeeze", EffectKind::Lofi),
+            ("Fruity Chorus", EffectKind::Chorus),
+            ("Fruity Flanger", EffectKind::Flanger),
+            ("Fruity Phaser", EffectKind::Phaser),
+            ("Frequency Splitter", EffectKind::BandSplit),
+            (
+                "Fruity Multiband Compressor",
+                EffectKind::MultibandCompressor,
+            ),
+            ("Maximus", EffectKind::MultibandMaximizer),
+            ("Transient Processor", EffectKind::TransientShaper),
+            ("Transmitter", EffectKind::TransientSplit),
+            ("Soundgoodizer", EffectKind::OneKnob),
+            ("Low Lifter", EffectKind::BassHarmonics),
+            ("Fruity Waveshaper", EffectKind::Waveshaper),
+            ("Fruity Blood Overdrive", EffectKind::Overdrive),
+            ("Hardcore", EffectKind::GuitarRack),
+            ("Distructor", EffectKind::DriveChain),
+            ("Vintage Chorus", EffectKind::VintageChorus),
+            ("Hyper Chorus", EffectKind::HyperChorus),
+            ("Vintage Phaser", EffectKind::VintagePhaser),
+            ("Fruity Flangus", EffectKind::StackedFlanger),
+            ("Multiband Delay", EffectKind::BandDelay),
+            ("Spreader", EffectKind::Spreader),
+            ("Fruity Stereo Enhancer", EffectKind::StereoEnhancer),
+            ("Gross Beat", EffectKind::VolumeGate),
+            ("Transporter", EffectKind::TimeTransport),
+            ("Fruity Scratcher", EffectKind::Scratch),
+            ("Effector", EffectKind::PerformanceRack),
+            ("Fruity Convolver", EffectKind::Convolver),
+            ("Frequency Shifter", EffectKind::FrequencyShifter),
+            ("Pitch Shifter", EffectKind::PitchShift),
+            ("Pitcher", EffectKind::PitchCorrect),
+            ("Fruity Vocoder", EffectKind::Vocoder),
+            ("Vocodex", EffectKind::Vocoder),
+            ("Fruity Delay Bank", EffectKind::EchoBank),
+            ("Fruity 7 Band EQ", EffectKind::SevenBand),
+            ("EQUO", EffectKind::MorphEq),
+            ("Fruity Love Philter", EffectKind::FilterBank),
+            ("LuxeVerb", EffectKind::LushSpace),
+            ("Emphasis", EffectKind::StageStack),
+            ("Emphasizer", EffectKind::StageStack),
+            ("Tuner", EffectKind::Tuner),
+            ("Control Surface", EffectKind::ControlSurface),
+            ("Fruity PanOMatic", EffectKind::PanLfo),
+            ("Fruity Peak Controller", EffectKind::EnvelopeFollower),
+            ("Fruity X-Y Controller", EffectKind::XyPad),
+            ("Fruity X-Y-Z Controller", EffectKind::XyzPad),
+            ("Fruity Send", EffectKind::SendTap),
         ];
         for (name, kind) in table {
             // An empty state is what a damaged file gives: defaults.
@@ -616,6 +752,123 @@ mod tests {
         );
         assert!(translate("Some Other Effect", &[], 120.0).is_none());
         assert!(translate("", &[], 120.0).is_none());
+    }
+
+    fn project_with_effect(name: &str, state: Vec<u8>) -> FlpProject {
+        let mut project = FlpProject::default();
+        project.mixer.inserts.push(Insert {
+            slots: vec![Slot {
+                index: 3,
+                plugin: Plugin {
+                    internal_name: name.to_owned(),
+                    state,
+                    ..Plugin::default()
+                },
+                ..Slot::default()
+            }],
+            ..Insert::default()
+        });
+        project
+    }
+
+    #[test]
+    fn undecoded_effects_use_defaults_without_parameter_links_and_report_the_loss() {
+        let states = [
+            Vec::new(),
+            state(&[i32::MIN, i32::MAX, -1, 42]),
+            vec![255; 3],
+        ];
+        for &(name, kind) in DEFAULT_EFFECTS {
+            for state in &states {
+                let translated = translate(name, state, 120.0).expect(name);
+                assert_eq!(
+                    translated.params,
+                    kind.default_params().sanitized(),
+                    "{name}"
+                );
+                assert_eq!(translated.notes, [SETTINGS_NOT_DECODED], "{name}");
+                assert!(translated.links.is_empty(), "{name}");
+            }
+            let normalized = format!("  {}  ", name.to_ascii_uppercase());
+            assert_eq!(
+                translate(&normalized, &[], 120.0).unwrap().params.kind(),
+                kind,
+                "{name}"
+            );
+
+            let project = project_with_effect(name, states[1].clone());
+            let imported = convert(&project, &ConvertOptions::default());
+            let effects = &imported.project.mixer.tracks[0].effects;
+            assert_eq!(effects.len(), 1, "{name}");
+            assert_eq!(
+                effects[0].params,
+                kind.default_params().sanitized(),
+                "{name}"
+            );
+            assert!(imported.plugins.is_empty(), "{name}");
+            let report = imported.report.category(ReportSection::Effects);
+            assert_eq!(report.approximated, 1, "{name}");
+            assert!(
+                report.lines.iter().any(|line| {
+                    line.outcome == Outcome::Approximated
+                        && line.text.contains(name)
+                        && line.text.contains(SETTINGS_NOT_DECODED)
+                }),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_names_stay_out_of_the_chain_and_keep_their_state() {
+        for name in [
+            "Some Other Effect",
+            "Fruity Filter",
+            "Fruity Formula Controller",
+            "Fruity LSD",
+            "Patcher",
+            "Fruity HTML NoteBook",
+            "Fruity NoteBook",
+            "Fruity NoteBook 2",
+            "Razer Chroma",
+            "VFX Color Mapper",
+            "VFX Envelope",
+            "VFX Level Scaler",
+            "VFX Keyboard Splitter",
+            "VFX Key Mapper",
+            "VFX Sequencer",
+            "VFX Script",
+        ] {
+            let state = vec![0, 255, 1, 128, 42];
+            assert!(translate(name, &state, 120.0).is_none(), "{name}");
+            let project = project_with_effect(name, state.clone());
+            let imported = convert(&project, &ConvertOptions::default());
+            assert!(
+                imported.project.mixer.tracks[0].effects.is_empty(),
+                "{name}"
+            );
+            assert_eq!(imported.plugins.len(), 1, "{name}");
+            let kept = &imported.plugins[0];
+            assert_eq!(kept.internal_name, name);
+            assert_eq!(kept.state, state, "{name}");
+            assert_eq!(
+                kept.place,
+                PluginPlace::Effect {
+                    track: imported.project.mixer.tracks[0].id,
+                    slot: 3,
+                },
+                "{name}"
+            );
+            let report = imported.report.category(ReportSection::Effects);
+            assert_eq!(report.placeholders, 1, "{name}");
+            assert!(
+                report.lines.iter().any(|line| {
+                    line.outcome == Outcome::Placeholder
+                        && line.text.contains("its settings were kept")
+                }),
+                "{name}"
+            );
+        }
     }
 
     #[test]

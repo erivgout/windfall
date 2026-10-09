@@ -60,7 +60,7 @@ export function drag(slider: HTMLElement, steps: number[], travel = 100) {
 /** Gives the strip scroller a size, which jsdom would report as 0. */
 export function sizeMixer(width: number, height: number) {
   const isScroller = (element: Element) =>
-    element instanceof HTMLElement && element.dataset.slot === "mixer-inserts"
+    element instanceof HTMLElement && element.dataset.slot === "mixer-dock-middle"
   vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(
     function (this: Element) {
       return isScroller(this) ? width : 0

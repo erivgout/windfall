@@ -2,6 +2,10 @@
 //! a [`Processor`] the tests run by hand.
 
 mod analysis_jobs;
+#[path = "../recording_completion_qa.rs"]
+mod recording_completion_qa;
+#[path = "../mixer_render_qa.rs"]
+mod mixer_render_qa;
 mod archive;
 mod audio_editor;
 mod beat;
@@ -18,6 +22,7 @@ mod library;
 mod midi;
 mod midi_hardware;
 mod playback;
+mod playlist_bounce;
 mod plugin_recording;
 #[cfg(windows)]
 mod plugin_update;

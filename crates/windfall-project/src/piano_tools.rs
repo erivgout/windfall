@@ -909,7 +909,7 @@ impl NoteRandom {
     }
     fn unit(&mut self) -> f64 { f64::from(self.next()) / 4_294_967_296.0 }
     fn signed(&mut self) -> f64 { self.unit() * 2.0 - 1.0 }
-    fn index(&mut self, count: usize) -> usize { (u64::from(self.next()) * count as u64 >> 32) as usize }
+    fn index(&mut self, count: usize) -> usize { ((u64::from(self.next()) * count as u64) >> 32) as usize }
     fn integer(&mut self, spread: i32) -> i32 { self.index((spread * 2 + 1) as usize) as i32 - spread }
 }
 
@@ -940,7 +940,9 @@ fn shifted(note: &Note, offset: i32) -> Result<u32, CommandError> {
     Ok(start as u32)
 }
 
-fn identity(note: &Note) -> (u32, u32, u8, u32, u32, u32, u32, u32, u32, u8, u32, Option<u8>) {
+type NoteIdentity = (u32, u32, u8, u32, u32, u32, u32, u32, u32, u8, u32, Option<u8>);
+
+fn identity(note: &Note) -> NoteIdentity {
     let bits = |n: f32| if n == 0.0 { 0 } else { n.to_bits() };
     (
         note.start,

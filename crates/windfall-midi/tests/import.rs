@@ -8,7 +8,7 @@ use common::*;
 use windfall_midi::*;
 use windfall_project::{
     AutomationRange, AutomationTarget, ChannelSource, ClipContent, Command, DEFAULT_CHANNEL_VOLUME,
-    DEFAULT_KEY, Document, MAX_AUTOMATION_POINTS, MAX_MIXER_TRACKS, MAX_PATTERN_STEPS,
+    DEFAULT_KEY, Document, MAX_AUTOMATION_POINTS, MAX_MIXER_SIGNAL_TRACKS, MAX_PATTERN_STEPS,
     MAX_SONG_TICKS, Pattern, Project, SamplePath, TimeSignature, TrackId,
 };
 
@@ -983,7 +983,6 @@ fn what_a_project_has_no_place_for_is_listed() {
             left(Unsupported::PitchBend, 3),
             left(Unsupported::Aftertouch, 3),
             left(Unsupported::KeySignatures, 1),
-            left(Unsupported::Markers, 2),
         ]
     );
     let lines: Vec<String> = plan.adjustments.iter().map(ToString::to_string).collect();
@@ -993,8 +992,24 @@ fn what_a_project_has_no_place_for_is_listed() {
             "3 pitch bend messages not imported",
             "3 aftertouch messages not imported",
             "1 key signature not imported",
-            "2 markers not imported",
         ]
+    );
+    assert_eq!(
+        plan.markers,
+        [(0, "Intro".to_owned()), (50, "Verse".to_owned())]
+    );
+    let (project, _) = imported(&song, &ImportOptions::default());
+    let markers = |timeline: &windfall_project::Timeline| {
+        timeline
+            .markers
+            .iter()
+            .map(|m| (m.tick, m.name.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(markers(&project.playlist.timeline), plan.markers);
+    assert_eq!(
+        markers(&project.patterns.last().unwrap().timeline),
+        plan.markers
     );
 }
 
@@ -1109,9 +1124,19 @@ fn an_empty_song_imports_as_nothing() {
 
 #[test]
 fn a_full_mixer_sends_the_channels_it_has_no_room_for_to_the_master() {
+    assert_full_mixer_import(false);
+    assert_full_mixer_import(true);
+}
+
+fn assert_full_mixer_import(with_current: bool) {
     let mut document = Document::new(Project::new("Test"));
+    if with_current {
+        document
+            .dispatch(Command::EnsureCurrentMixerTrack, None)
+            .unwrap();
+    }
     // Room for exactly one more mixer track.
-    for _ in 0..MAX_MIXER_TRACKS - 2 {
+    for _ in 0..MAX_MIXER_SIGNAL_TRACKS - 2 {
         let command = Command::AddMixerTrack { name: None };
         document
             .dispatch(command, None)
@@ -1123,7 +1148,19 @@ fn a_full_mixer_sends_the_channels_it_has_no_room_for_to_the_master() {
     let plan = import(&song_of(tracks), &ImportOptions::default());
     dispatch(&mut document, &plan);
     let project = document.project();
-    assert_eq!(project.mixer.tracks.len(), MAX_MIXER_TRACKS);
+    assert_eq!(
+        project.mixer.tracks.len(),
+        MAX_MIXER_SIGNAL_TRACKS + usize::from(with_current)
+    );
+    assert_eq!(
+        project
+            .mixer
+            .tracks
+            .iter()
+            .filter(|track| track.current)
+            .count(),
+        usize::from(with_current)
+    );
     let routed: Vec<_> = project
         .channels
         .iter()

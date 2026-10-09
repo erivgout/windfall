@@ -73,7 +73,11 @@ beforeEach(async () => {
 })
 afterEach(() => stop())
 
-const params = () => instrumentChannel(SYNTH).source.params
+const params = () => {
+  const value = instrumentChannel(SYNTH).source.params
+  if (value.type !== "subtractiveSynth") throw new Error("Expected subtractive synth")
+  return value
+}
 const stored = (id: string) => readParam(params(), paramInfo(descriptor, id))
 const settings = () =>
   screen.getByRole("complementary", { name: "Channel settings" })

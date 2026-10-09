@@ -22,7 +22,6 @@ import {
   indexBatch,
   queryRect,
   xToTick,
-  yToRow,
   type Hit,
   type IndexedBatch,
   type Marquee,
@@ -32,8 +31,9 @@ import { useProjectStore } from "@/lib/store/project"
 import { ticksPerBar } from "@/lib/time"
 
 import { onPeaksChanged, samplePeaks, type SamplePeaks } from "./audio/peaks"
+import { arrangementPlaylist } from "./arrangement-view"
 import { buildClipBatch } from "./clip-batch"
-import { patternTicks, rowIndex, songEnd, type NewClip } from "./edit"
+import { patternTicks, songEnd, type NewClip } from "./edit"
 import { formatAutomationValue } from "./automation/format"
 import { POINT_RADIUS } from "./automation/hit"
 import { useCurveViews } from "./automation/view-store"
@@ -56,11 +56,15 @@ import {
   type DragState,
   type DropPreview,
   type PaintSource,
+  type PointSelection,
+  type SlipDraft,
 } from "./painter"
+import { playlistYToRow, rowGeometry } from "./row-geometry"
 import { project } from "./selectors"
 import { gridSpecFor } from "./snap"
 import { usePlaylistStore } from "./store"
 import type { GridSurface } from "./surface"
+import { buildTrackRows, type TrackRow } from "./track-rows"
 
 /** A point or a bend handle of a curve, and the clip that shows it. */
 export type CurveMark = {
@@ -95,7 +99,9 @@ export class PlaylistScene implements PaintSource {
   songEnd = 0
   tempoBpm = 120
   draft: CurveDraft | null = null
+  pointSelection: PointSelection | null = null
   audioDraft: AudioDraft | null = null
+  slipDraft: SlipDraft | null = null
   holds: readonly HoldSegment[] = NO_HOLDS
   shared: ReadonlySet<AutomationId> = NOT_SHARED
   hover: ClipId | null = null
@@ -112,6 +118,8 @@ export class PlaylistScene implements PaintSource {
   private readonly metrics: GridMetrics
   private readonly stops: (() => void)[]
   private tracks: readonly PlaylistTrack[] = []
+  private visibleRows: readonly TrackRow[] = []
+  private collapsedGroups: ReadonlySet<number> | null = null
   private seen: Project | null = null
   private colors = ""
   private rows = new Map<PlaylistTrackId, number>()
@@ -142,6 +150,11 @@ export class PlaylistScene implements PaintSource {
         }
       }),
       usePlaylistStore.subscribe((state, previous) => {
+        if (state.collapsedGroups !== previous.collapsedGroups) this.sync()
+        if (state.trackHeights !== previous.trackHeights) {
+          this.metrics.setViewport(this.surface.viewport)
+          this.redraw()
+        }
         if (state.selection !== previous.selection) this.showSelection()
         if (state.snap !== previous.snap) this.showGrid()
       }),
@@ -253,16 +266,14 @@ export class PlaylistScene implements PaintSource {
     if (!items) return null
     const viewport = this.surface.viewport
     const tick = xToTick(viewport, x)
-    const row = yToRow(viewport, y)
     const ticks = POINT_RADIUS / viewport.pxPerTick
-    const rows = POINT_RADIUS / viewport.rowHeight
     let handle: CurveMark | null = null
     for (const index of queryRect(
       items,
       tick - ticks,
       tick + ticks,
-      row - rows,
-      row + rows
+      playlistYToRow(viewport, y - POINT_RADIUS),
+      playlistYToRow(viewport, y + POINT_RADIUS)
     )) {
       const clip = this.clipById.get(items.batch.ids[index])
       if (clip?.content.type !== "automation") continue
@@ -279,8 +290,12 @@ export class PlaylistScene implements PaintSource {
     const seen = this.seen
     this.seen = current
     const { playlist } = current
-    const clipsChanged = playlist.clips !== this.clips
+    const clipsChanged = !seen || playlist.clips !== seen.playlist.clips
     const tracksChanged = playlist.tracks !== this.tracks
+    const rowsChanged =
+      tracksChanged ||
+      playlist.arrangementBook !== seen?.playlist.arrangementBook ||
+      ui().collapsedGroups !== this.collapsedGroups
     const lookupsChanged =
       !seen ||
       seen.patterns !== current.patterns ||
@@ -288,6 +303,27 @@ export class PlaylistScene implements PaintSource {
       seen.mixer !== current.mixer ||
       seen.automations !== current.automations
     if (lookupsChanged) this.lookups = lookupsOf(current)
+    const selectedPoints = this.pointSelection
+    if (selectedPoints) {
+      const clip = playlist.clips.find(
+        (clip) => clip.id === selectedPoints.clip
+      )
+      const points = this.lookups.automations.get(
+        selectedPoints.automation
+      )?.points
+      const before = seen?.automations.find(
+        (automation) => automation.id === selectedPoints.automation
+      )?.points
+      if (
+        clip?.content.type !== "automation" ||
+        clip.content.automation !== selectedPoints.automation ||
+        !points ||
+        (before && before.length !== points.length)
+      ) {
+        // Inserting or deleting a point invalidates indices held by the view.
+        this.pointSelection = null
+      }
+    }
     const colors = lookupsChanged ? colorSignature(this.lookups) : this.colors
     const colorsChanged = colors !== this.colors
     this.colors = colors
@@ -296,34 +332,49 @@ export class PlaylistScene implements PaintSource {
       seen !== null &&
       !clipsChanged &&
       !tracksChanged &&
+      !rowsChanged &&
       !colorsChanged &&
       seen.patterns === current.patterns &&
       seen.samples === current.samples &&
       seen.automations === current.automations &&
+      seen.playlist.timeline?.meters === current.playlist.timeline?.meters &&
       seen.settings === current.settings
     if (onlyMixer) return
 
     this.tracks = playlist.tracks
-    this.clips = playlist.clips
+    const activePlaylist = arrangementPlaylist(playlist)
+    if (rowsChanged) {
+      const layout = buildTrackRows(playlist, ui().collapsedGroups)
+      this.visibleRows = layout.rows
+      this.rows = layout.trackRows
+      this.collapsedGroups = ui().collapsedGroups
+    }
     if (tracksChanged) {
-      this.rows = rowIndex(playlist.tracks)
       this.mutedTracks = new Set(
         playlist.tracks.filter((track) => track.muted).map((track) => track.id)
       )
     }
-    if (clipsChanged) {
-      this.clipById = new Map(playlist.clips.map((clip) => [clip.id, clip]))
-      this.songEnd = songEnd(playlist.clips)
+    if (clipsChanged || rowsChanged) {
+      this.clips = activePlaylist.clips.filter((clip) =>
+        this.rows.has(clip.track)
+      )
+      this.clipById = new Map(
+        activePlaylist.clips.map((clip) => [clip.id, clip])
+      )
       this.onClipsChanged()
+    }
+    if (clipsChanged || rowsChanged) {
+      this.songEnd = songEnd(activePlaylist.clips)
     }
     this.tempoBpm = current.settings.tempoBpm
     if (
       clipsChanged ||
+      rowsChanged ||
       tracksChanged ||
       !seen ||
       seen.automations !== current.automations
     ) {
-      this.followAutomation(current)
+      this.followAutomation({ ...current, playlist: activePlaylist })
     }
 
     const { selection } = ui()
@@ -335,7 +386,7 @@ export class PlaylistScene implements PaintSource {
     this.fitRows(true)
     // The batch holds places and colors. What is inside a clip (its notes,
     // its curve, its waveform) is painted over it and needs no new batch.
-    if (clipsChanged || tracksChanged || colorsChanged) this.rebuild()
+    if (clipsChanged || rowsChanged || colorsChanged) this.rebuild()
     else this.redraw()
   }
 
@@ -395,8 +446,14 @@ export class PlaylistScene implements PaintSource {
   }
 
   private showGrid(): void {
-    const signature = project().settings.timeSignature
-    this.surface.setTimeGrid(gridSpecFor(ui().snap, signature))
+    const current = project()
+    this.surface.setTimeGrid(
+      gridSpecFor(
+        ui().snap,
+        current.settings.timeSignature,
+        current.playlist.timeline?.meters
+      )
+    )
   }
 
   /**
@@ -406,8 +463,8 @@ export class PlaylistScene implements PaintSource {
   private fitRows(force = false): void {
     const viewport = this.surface.viewport
     const rowCount = rowCountFor(
-      this.tracks.length,
-      viewport.height / viewport.rowHeight
+      this.visibleRows.length,
+      rowGeometry(viewport).rowAt(viewport.height)
     )
     const contentTicks = contentTicksFor(
       this.songEnd,
@@ -424,14 +481,22 @@ export class PlaylistScene implements PaintSource {
     this.rowCount = rowCount
     const shaded = new Uint8Array(rowCount)
     const strong = new Uint8Array(rowCount + 1)
-    this.tracks.forEach((track, row) => {
-      if (track.muted) shaded[row] = 1
+    this.visibleRows.forEach((entry, row) => {
+      if (entry.kind === "group") {
+        shaded[row] = 1
+        strong[row] = 1
+      } else if (entry.track.muted) shaded[row] = 1
     })
-    for (let row = this.tracks.length; row < rowCount; row++) shaded[row] = 1
-    if (this.tracks.length > 0) strong[this.tracks.length] = 1
+    for (let row = this.visibleRows.length; row < rowCount; row++)
+      shaded[row] = 1
+    if (this.visibleRows.length > 0) strong[this.visibleRows.length] = 1
     const style: RowStyle = { rowCount, shaded, strong }
     this.surface.setRows(style)
-    if (rowCount !== limits.rowCount || contentTicks !== limits.contentTicks) {
+    if (
+      force ||
+      rowCount !== limits.rowCount ||
+      contentTicks !== limits.contentTicks
+    ) {
       this.metrics.setLimits({ rowCount, contentTicks })
     }
   }
@@ -471,9 +536,20 @@ export class PlaylistScene implements PaintSource {
     this.redraw()
   }
 
+  setPointSelection(selection: PointSelection | null): void {
+    this.pointSelection = selection
+    this.redraw()
+  }
+
   /** Shows an audio clip with settings a handle is being dragged to. */
   setAudioDraft(draft: AudioDraft | null): void {
     this.audioDraft = draft
+    this.redraw()
+  }
+
+  /** Slides content in the painter without changing the clip's geometry. */
+  setSlipDraft(draft: SlipDraft | null): void {
+    this.slipDraft = draft
     this.redraw()
   }
 
@@ -511,6 +587,7 @@ export class PlaylistScene implements PaintSource {
     this.draft = null
     this.viewHold = null
     this.audioDraft = null
+    this.slipDraft = null
     this.badge = null
     this.surface.setMarquee(null)
     this.setDrag(NO_DRAG)

@@ -6,9 +6,17 @@ import {
   type AppState,
   type PresetShortcuts,
 } from "@/lib/actions"
+import { dispatch } from "@/lib/store/project"
+import { realtimeFrame } from "@/lib/store/realtime"
 
 import { activeMetrics, activeSession, zoomBy, zoomToFit } from "./active"
+import { bounceSelectedClips } from "./bounce"
+import { setSelectedClipFromEndScale } from "./clip-from-end-scale"
+import { CLIP_LENGTH_BARS, setSelectedClipLength } from "./clip-length-presets"
+import { setSelectedClipLengthScale } from "./clip-length-scale"
+import { setSelectedClipStartScale } from "./clip-start-scale"
 import type { Tool } from "./intents"
+import { makeUniqueClipIds } from "./make-unique"
 import { patchSelectedAudioClips, selectedAudioClips } from "./audio/ops"
 import { openAudioComp, openTakeGroupComp } from "./audio/comp-dialog"
 import { groupSelectedAudioTakes } from "./audio/take-group-controls"
@@ -32,6 +40,10 @@ import {
   toggleTrackMute,
 } from "./ops"
 import { playlist, selectedClips } from "./selectors"
+import { selectMatchingClips } from "./select-matching"
+import { clipsOnMutedTracks, mutedClipIds } from "./select-muted"
+import { clipsAtTick } from "./select-playhead"
+import { clipIdsOnTrack } from "./select-track-clips"
 import { SNAP_MODES } from "./snap"
 import { usePlaylistStore } from "./store"
 import { TIMELINE_ACTIONS } from "./timeline-actions"
@@ -122,6 +134,27 @@ const TOOL_ACTIONS: {
     flKey: "T",
     words: "silence clips",
   },
+  {
+    tool: "slip",
+    title: "Slip tool",
+    key: "Y",
+    flKey: "Y",
+    words: "slide content offset fixed window",
+  },
+  {
+    tool: "playback",
+    title: "Playback tool",
+    key: "Q",
+    flKey: "Q",
+    words: "scrub seek transport position",
+  },
+  {
+    tool: "slice",
+    title: "Slice tool",
+    key: "C",
+    flKey: "C",
+    words: "cut split clips vertical line",
+  },
 ]
 
 function capital(word: string): string {
@@ -132,6 +165,16 @@ export const toolActionId = (tool: Tool) => `playlist.tool${capital(tool)}`
 
 const ACTIONS: Action[] = [
   ...TIMELINE_ACTIONS,
+  {
+    id: "playlist.step",
+    title: "Step",
+    section: SECTION,
+    defaultShortcut: "H",
+    keywords: "automation draw held steps",
+    enabled: inPlaylist,
+    checked: () => ui().step,
+    run: () => ui().toggleStep(),
+  },
   ...TOOL_ACTIONS.map(({ tool, title, key, words }): Action => ({
     id: toolActionId(tool),
     title,
@@ -159,6 +202,48 @@ const ACTIONS: Action[] = [
     defaultShortcut: "Mod+A",
     enabled: hasClips,
     run: selectAll,
+  },
+  {
+    id: "playlist.selectMatchingClips",
+    title: "Select matching clips",
+    section: SECTION,
+    enabled: hasSelection,
+    run: () => ui().select(selectMatchingClips(selectedClips(), playlist().clips)),
+  },
+  {
+    id: "playlist.selectAtPlayhead",
+    title: "Select clips at the playhead",
+    section: SECTION,
+    enabled: (state) =>
+      inPlaylist(state) &&
+      clipsAtTick(playlist().clips, realtimeFrame().tick).length > 0,
+    run: () => {
+      const ids = clipsAtTick(playlist().clips, realtimeFrame().tick)
+      if (ids.length > 0) usePlaylistStore.getState().select(ids)
+    },
+  },
+  {
+    id: "playlist.selectMutedClips",
+    title: "Select muted clips",
+    section: SECTION,
+    enabled: (state) =>
+      inPlaylist(state) && mutedClipIds(playlist().clips).length > 0,
+    run: () => {
+      const ids = mutedClipIds(playlist().clips)
+      if (ids.length > 0) usePlaylistStore.getState().select(ids)
+    },
+  },
+  {
+    id: "playlist.selectClipsOnMutedTracks",
+    title: "Select clips on muted tracks",
+    section: SECTION,
+    enabled: (state) =>
+      inPlaylist(state) &&
+      clipsOnMutedTracks(playlist().clips, playlist().tracks).length > 0,
+    run: () => {
+      const ids = clipsOnMutedTracks(playlist().clips, playlist().tracks)
+      if (ids.length > 0) usePlaylistStore.getState().select(ids)
+    },
   },
   {
     id: "playlist.deselect",
@@ -224,6 +309,85 @@ const ACTIONS: Action[] = [
     enabled: hasSelection,
     run: duplicateSelection,
   },
+  ...CLIP_LENGTH_BARS.map((bars): Action => ({
+    id: `playlist.length.${bars}`,
+    title: `Set selected clips: ${bars} ${bars === 1 ? "bar" : "bars"}`,
+    section: SECTION,
+    keywords: "clip length bars duration",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipLength(bars),
+  })),
+  {
+    id: "playlist.length.half",
+    title: "Halve selected clip lengths",
+    section: SECTION,
+    keywords: "clip length half double duration",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipLengthScale("half"),
+  },
+  {
+    id: "playlist.length.double",
+    title: "Double selected clip lengths",
+    section: SECTION,
+    keywords: "clip length half double duration",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipLengthScale("double"),
+  },
+  {
+    id: "playlist.start.half",
+    title: "Halve selected clip starts",
+    section: SECTION,
+    keywords: "clip start half double position",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipStartScale("half"),
+  },
+  {
+    id: "playlist.start.double",
+    title: "Double selected clip starts",
+    section: SECTION,
+    keywords: "clip start half double position",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipStartScale("double"),
+  },
+  {
+    id: "playlist.fromEnd.half",
+    title: "Halve selected clips from the end",
+    section: SECTION,
+    keywords: "clip end half double length duration position",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipFromEndScale("half"),
+  },
+  {
+    id: "playlist.fromEnd.double",
+    title: "Double selected clips from the end",
+    section: SECTION,
+    keywords: "clip end half double length duration position",
+    enabled: hasSelection,
+    whyDisabled: () => "Select clips in the playlist",
+    run: () => setSelectedClipFromEndScale("double"),
+  },
+  {
+    id: "playlist.makeUnique",
+    title: "Make unique",
+    section: SECTION,
+    enabled: (state) =>
+      inPlaylist(state) && makeUniqueClipIds(selectedClips()).length > 0,
+    run: async () => {
+      const clips = makeUniqueClipIds(selectedClips())
+      if (clips.length === 0) return
+      await dispatch({
+        type: "batch",
+        label: "Make unique",
+        commands: clips.map((clip) => ({ type: "makeUnique", clip })),
+      })
+    },
+  },
   {
     id: "playlist.muteClips",
     title: "Mute clips",
@@ -236,6 +400,14 @@ const ACTIONS: Action[] = [
       return clips.length > 0 && clips.every((clip) => clip.muted)
     },
     run: toggleMuteSelection,
+  },
+  {
+    id: "playlist.bounceSelectedClips",
+    title: "Bounce selected clips",
+    section: SECTION,
+    keywords: "render audio consolidate mute sources",
+    enabled: hasSelection,
+    run: bounceSelectedClips,
   },
   {
     id: "playlist.nudgeLeft",
@@ -326,7 +498,10 @@ const ACTIONS: Action[] = [
     title: "Comp selected audio takes…",
     section: SECTION,
     keywords: "recording loop take composite ranges crossfade",
-    enabled: (state) => inPlaylist(state) && selectedAudioClips().length > 0 && selectedAudioClips().length <= 256,
+    enabled: (state) =>
+      inPlaylist(state) &&
+      selectedAudioClips().length > 0 &&
+      selectedAudioClips().length <= 256,
     whyDisabled: () => "Select 1–256 audio source clips",
     run: openAudioComp,
   },
@@ -343,7 +518,10 @@ const ACTIONS: Action[] = [
     title: "Group selected audio takes",
     section: SECTION,
     keywords: "recording retained multitrack link passes",
-    enabled: (state) => inPlaylist(state) && selectedAudioClips().length > 0 && selectedAudioClips().length <= 256,
+    enabled: (state) =>
+      inPlaylist(state) &&
+      selectedAudioClips().length > 0 &&
+      selectedAudioClips().length <= 256,
     run: groupSelectedAudioTakes,
   },
   {
@@ -351,7 +529,16 @@ const ACTIONS: Action[] = [
     title: "Comp the selected recording group…",
     section: SECTION,
     keywords: "linked synchronized multitrack takes crossfade",
-    enabled: (state) => inPlaylist(state) && (state.document.project.playlist.takeGroups ?? []).some((group) => group.lanes.length > 0 && (group.lanes.some((lane) => lane.takes.some((take) => ui().selection.has(take.clip))) || group.comp?.some((clip) => ui().selection.has(clip)))),
+    enabled: (state) =>
+      inPlaylist(state) &&
+      (state.document.project.playlist.takeGroups ?? []).some(
+        (group) =>
+          group.lanes.length > 0 &&
+          (group.lanes.some((lane) =>
+            lane.takes.some((take) => ui().selection.has(take.clip))
+          ) ||
+            group.comp?.some((clip) => ui().selection.has(clip)))
+      ),
     run: () => openTakeGroupComp(),
   },
   {
@@ -473,6 +660,21 @@ const ACTIONS: Action[] = [
     defaultShortcut: "F2",
     enabled: hasTarget,
     run: withTarget((track) => renameTrack(track.id)),
+  },
+  {
+    id: "playlist.selectTrackClips",
+    title: "Select clips on this track",
+    section: SECTION,
+    enabled: () => {
+      const track = targetTrack()
+      return (
+        track !== undefined &&
+        clipIdsOnTrack(playlist().clips, track.id).length > 0
+      )
+    },
+    run: withTarget((track) =>
+      ui().select(clipIdsOnTrack(playlist().clips, track.id))
+    ),
   },
   {
     id: "playlist.muteTrack",

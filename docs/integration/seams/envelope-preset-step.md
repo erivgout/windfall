@@ -1,0 +1,1 @@
+The sampler envelope section steps the shape from Pluck toward Pad. Pluck stays Pluck when moved previous. Pad stays Pad when moved next. A shape that is not one of the presets stays as it is. Attack, decay, sustain, and release change together.

@@ -114,7 +114,8 @@ describe("the whole list of actions", () => {
   it("finds the common ones by a word or two", () => {
     expect(titles("mixer")[0]).toBe("Mixer")
     expect(titles("playlist")[0]).toBe("Playlist")
-    expect(titles("unmute all")[0]).toBe("Unmute all tracks")
+    expect(titles("unmute all")[0]).toBe("Unmute all")
+    expect(titles("unmute all").indexOf("Unmute all tracks")).toBeGreaterThan(0)
     expect(titles("delete track")[0]).toBe("Delete mixer track")
     expect(titles("new proj")[0]).toBe("New project")
     expect(titles("export audio")[0]).toBe("Export audio…")

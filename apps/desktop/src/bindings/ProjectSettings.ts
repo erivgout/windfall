@@ -3,6 +3,18 @@ import type { TimeSignature } from "./TimeSignature";
 
 export type ProjectSettings = { name: string, 
 /**
+ * Project author, at most 256 UTF-8 bytes after trimming.
+ */
+author?: string, 
+/**
+ * Project genre, at most 128 UTF-8 bytes after trimming.
+ */
+genre?: string, 
+/**
+ * Project comments, at most 16,384 UTF-8 bytes after trimming.
+ */
+comments?: string, 
+/**
  * Tempo in beats per minute, [`MIN_TEMPO_BPM`] to [`MAX_TEMPO_BPM`].
  */
 tempoBpm: number, timeSignature: TimeSignature, 

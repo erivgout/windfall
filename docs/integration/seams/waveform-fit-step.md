@@ -1,0 +1,1 @@
+The piano-roll waveform helper steps its time mapping from the original duration toward a custom length. The original duration stays the original duration when moved previous. A custom length stays a custom length when moved next. The chosen sample, the start, and the length stay as they are. Notes stay as they are. This is not an undo step.

@@ -27,7 +27,7 @@ pub use decode::{
     decode_bytes_with, decode_file, decode_file_strict_with, decode_file_with, probe_bytes,
     probe_file,
 };
-pub use encoder::{AudioFormat, Encoder, EncoderSettings};
+pub use encoder::{AudioFormat, AudioTags, Encoder, EncoderSettings};
 pub use error::CodecError;
 pub use flac::{
     DEFAULT_FLAC_LEVEL, FlacBitDepth, FlacWriter, MAX_FLAC_CHANNELS, MAX_FLAC_LEVEL,

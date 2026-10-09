@@ -206,7 +206,7 @@ function ToolForm({ request }: { request: ToolRequest }) {
               strength: number(strength) / 100,
               edge,
               groove,
-              musical: gridUnit === "ticks" ? null : { ...request.musical, unit: gridUnit, divisor: number(divisor) },
+              musical: gridUnit === "ticks" ? undefined : { ...request.musical, unit: gridUnit, divisor: number(divisor) },
             }
           : null
       case "staccato":

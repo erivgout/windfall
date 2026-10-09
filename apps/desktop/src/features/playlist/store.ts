@@ -7,13 +7,27 @@ import type {
   PlaylistTrackId,
   SampleId,
 } from "@/bindings"
+import { useProjectStore } from "@/lib/store/project"
 import { onProjectReplaced } from "@/lib/store/replaced"
+import { useSnapStore } from "@/lib/store/snap"
 
+import { MAX_ROW_HEIGHT, MIN_ROW_HEIGHT } from "./layout"
 import type { NewClip } from "./edit"
 import type { Tool } from "./intents"
 import type { SnapMode } from "./snap"
 
 const NO_CLIPS: ReadonlySet<ClipId> = new Set()
+const NO_HEIGHTS: ReadonlyMap<PlaylistTrackId, number> = new Map()
+const NO_GROUPS: ReadonlySet<number> = new Set()
+const resizingTracks = new Set<PlaylistTrackId>()
+
+export function beginTrackResize(track: PlaylistTrackId) {
+  resizingTracks.add(track)
+}
+
+export function endTrackResize(track: PlaylistTrackId) {
+  resizingTracks.delete(track)
+}
 
 /**
  * What the Draw and Paint tools place. A pattern brush places the pattern
@@ -36,6 +50,8 @@ export type PointRef = {
 type PlaylistUiState = {
   tool: Tool
   snap: SnapMode
+  /** Session-only: draw held steps across automation curve bodies. */
+  step: boolean
   /** Keep the playhead in view while the song plays. */
   follow: boolean
   pickerOpen: boolean
@@ -45,6 +61,10 @@ type PlaylistUiState = {
   selection: ReadonlySet<ClipId>
   /** The track the track actions act on: the header last pressed. */
   targetTrack: PlaylistTrackId | null
+  /** Session-only: opening a project starts with every group expanded. */
+  collapsedGroups: ReadonlySet<number>
+  /** Saved heights with live drag previews; missing tracks follow the global height. */
+  trackHeights: ReadonlyMap<PlaylistTrackId, number>
   /**
    * Where the song will play from. In song mode it follows the playhead; in
    * pattern mode the engine keeps no song position, so the ruler sets it.
@@ -66,6 +86,7 @@ type PlaylistUiState = {
 
   setTool(tool: Tool): void
   setSnap(snap: SnapMode): void
+  toggleStep(): void
   toggleFollow(): void
   togglePicker(): void
   toggleInspector(): void
@@ -73,6 +94,8 @@ type PlaylistUiState = {
   select(ids: Iterable<ClipId>): void
   clearSelection(): void
   setTargetTrack(track: PlaylistTrackId | null): void
+  toggleGroupCollapse(group: number): void
+  setTrackHeight(track: PlaylistTrackId, height: number): void
   setCursorTick(tick: number): void
   setClipboard(clips: readonly NewClip[]): void
   setMenuOnClips(onClips: boolean): void
@@ -84,19 +107,22 @@ type PlaylistUiState = {
 
 /**
  * View state of the playlist that is not part of the project. The tool, the
- * snap and the layout choices survive a restart; the selection does not.
+ * layout choices survive a restart; snap belongs to the shared session store.
  */
 export const usePlaylistStore = create<PlaylistUiState>()(
   persist(
     (set, get) => ({
       tool: "draw",
-      snap: "bar",
+      snap: useSnapStore.getState().snap,
+      step: false,
       follow: true,
       pickerOpen: true,
       inspectorOpen: true,
       brush: PATTERN_BRUSH,
       selection: NO_CLIPS,
       targetTrack: null,
+      collapsedGroups: NO_GROUPS,
+      trackHeights: NO_HEIGHTS,
       cursorTick: 0,
       clipboard: [],
       menuOnClips: false,
@@ -105,7 +131,8 @@ export const usePlaylistStore = create<PlaylistUiState>()(
       focusRequested: false,
 
       setTool: (tool) => set({ tool }),
-      setSnap: (snap) => set({ snap }),
+      setSnap: (snap) => useSnapStore.getState().setSnap(snap),
+      toggleStep: () => set((state) => ({ step: !state.step })),
       toggleFollow: () => set((state) => ({ follow: !state.follow })),
       togglePicker: () => set((state) => ({ pickerOpen: !state.pickerOpen })),
       toggleInspector: () =>
@@ -138,6 +165,28 @@ export const usePlaylistStore = create<PlaylistUiState>()(
         if (get().selection.size > 0) set({ selection: NO_CLIPS })
       },
       setTargetTrack: (targetTrack) => set({ targetTrack }),
+      toggleGroupCollapse: (group) =>
+        set((state) => {
+          const collapsedGroups = new Set(state.collapsedGroups)
+          if (collapsedGroups.has(group)) collapsedGroups.delete(group)
+          else collapsedGroups.add(group)
+          return { collapsedGroups }
+        }),
+      setTrackHeight: (track, height) => {
+        if (!Number.isFinite(height)) return
+        const next =
+          height === 0
+            ? 0
+            : Math.min(
+                MAX_ROW_HEIGHT,
+                Math.max(MIN_ROW_HEIGHT, Math.round(height))
+              )
+        if ((get().trackHeights.get(track) ?? 0) === next) return
+        const trackHeights = new Map(get().trackHeights)
+        if (next === 0) trackHeights.delete(track)
+        else trackHeights.set(track, next)
+        set({ trackHeights })
+      },
       setCursorTick: (tick) => {
         const cursorTick = Math.max(0, tick)
         if (cursorTick !== get().cursorTick) set({ cursorTick })
@@ -162,22 +211,58 @@ export const usePlaylistStore = create<PlaylistUiState>()(
       version: 1,
       partialize: (state) => ({
         tool: state.tool,
-        snap: state.snap,
         follow: state.follow,
         pickerOpen: state.pickerOpen,
         inspectorOpen: state.inspectorOpen,
+      }),
+      // Ignore snap in preferences saved before it became a session choice.
+      merge: (saved, current) => ({
+        ...current,
+        ...(saved as Partial<PlaylistUiState>),
+        snap: useSnapStore.getState().snap,
       }),
     }
   )
 )
 
+// Keep the existing editor read interface as a projection of the shared owner.
+useSnapStore.subscribe(({ snap }) => usePlaylistStore.setState({ snap }))
+
+/** Every document update restores the saved copy except under a held pointer. */
+export function syncTrackHeights() {
+  const tracks = useProjectStore.getState().project.playlist.tracks
+  const current = usePlaylistStore.getState().trackHeights
+  const trackHeights = new Map<PlaylistTrackId, number>()
+  for (const track of tracks) {
+    const height = resizingTracks.has(track.id)
+      ? current.get(track.id)
+      : track.height
+    if (height) trackHeights.set(track.id, height)
+  }
+  if (
+    current.size !== trackHeights.size ||
+    [...trackHeights].some(([id, height]) => current.get(id) !== height)
+  )
+    usePlaylistStore.setState({ trackHeights })
+}
+
+syncTrackHeights()
+useProjectStore.subscribe((state, previous) => {
+  if (state.project.playlist.tracks !== previous.project.playlist.tracks)
+    syncTrackHeights()
+})
+
 // Ids start over in every project, so whatever points into the old one is
 // dropped: a clip with the same id in the new project is not the clip that
 // was selected.
-onProjectReplaced(() =>
+onProjectReplaced(() => {
+  resizingTracks.clear()
   usePlaylistStore.setState({
+    step: false,
     selection: NO_CLIPS,
     targetTrack: null,
+    collapsedGroups: NO_GROUPS,
+    trackHeights: NO_HEIGHTS,
     cursorTick: 0,
     clipboard: [],
     menuOnClips: false,
@@ -185,4 +270,5 @@ onProjectReplaced(() =>
     reveal: null,
     brush: PATTERN_BRUSH,
   })
-)
+  syncTrackHeights()
+})

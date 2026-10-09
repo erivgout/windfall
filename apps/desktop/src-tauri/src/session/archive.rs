@@ -208,6 +208,8 @@ impl Session {
                 decoded.warnings.join("\n")
             ));
         }
+        #[cfg(test)]
+        self.pause("archive:install");
         let snapshot = self
             .install(
                 &ticket,

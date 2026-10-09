@@ -1,0 +1,204 @@
+//! Bounded sample-table slice, granular and position-envelope instruments.
+mod engine;
+mod params;
+
+use crate::instrument::Instrument;
+use crate::param::ParamSet;
+use crate::{NoteExpression, NoteInstanceId};
+use engine::{Engine, Mode, Settings};
+pub use params::{
+    GrainCloudParams, SampleTable, SliceDeckParams, SliceMapParams, SliceSettings, WaveRideParams,
+};
+
+pub const MAX_SAMPLE_FRAMES: usize = 4096;
+pub const SLICE_COUNT: usize = 16;
+pub const MAX_POLYPHONY: usize = 16;
+pub const MAX_GRAINS_PER_VOICE: usize = 32;
+
+macro_rules! instrument {
+    ($name:ident, $params:ident, $mode:ident) => {
+        /// Fixed-storage realtime instrument; construction and prepare belong off audio.
+        pub struct $name {
+            engine: Engine,
+            params: $params,
+            current: $params,
+            moving: bool,
+        }
+        impl Default for $name {
+            fn default() -> Self {
+                Self {
+                    engine: Engine::new(Mode::$mode),
+                    params: $params::default(),
+                    current: $params::default(),
+                    moving: false,
+                }
+            }
+        }
+        impl Instrument for $name {
+            type Params = $params;
+            fn prepare(&mut self, sample_rate: f32, _max_block: usize) {
+                self.engine.prepare(sample_rate);
+                self.reset();
+            }
+            fn reset(&mut self) {
+                self.engine.reset();
+                self.current = self.params;
+                self.moving = false;
+            }
+            fn set_params(&mut self, params: &$params) {
+                self.params = params.sanitized();
+                self.current.table = self.params.table;
+                if self.engine.fresh {
+                    self.current = self.params;
+                    self.moving = false;
+                } else {
+                    self.moving = true;
+                }
+            }
+            fn note_on(&mut self, key: u8, velocity: f32) {
+                self.note_on_expression(key, velocity, 0.0, NoteExpression::default());
+            }
+            fn note_on_expression(
+                &mut self,
+                key: u8,
+                velocity: f32,
+                pan: f32,
+                expression: NoteExpression,
+            ) {
+                if !velocity.is_finite() || velocity <= 0.0 {
+                    self.note_off(key);
+                    return;
+                }
+                let id = self.engine.legacy_id();
+                self.note_on_instance(id, key, velocity, pan, expression);
+            }
+            fn supports_note_instances(&self) -> bool {
+                true
+            }
+            fn note_on_instance(
+                &mut self,
+                id: NoteInstanceId,
+                key: u8,
+                velocity: f32,
+                pan: f32,
+                expression: NoteExpression,
+            ) {
+                if !velocity.is_finite() || velocity <= 0.0 {
+                    self.note_off_instance(id, key);
+                    return;
+                }
+                self.engine.note_on(
+                    id,
+                    key,
+                    velocity,
+                    pan,
+                    expression,
+                    &self.current.table,
+                    self.current.settings(),
+                );
+            }
+            fn note_off(&mut self, key: u8) {
+                self.engine
+                    .release_key(key.min(127), self.current.release_ms);
+            }
+            fn note_off_instance(&mut self, id: NoteInstanceId, _key: u8) {
+                self.engine.release_instance(id, self.current.release_ms);
+            }
+            fn set_note_expression(
+                &mut self,
+                id: NoteInstanceId,
+                pan: f32,
+                expression: NoteExpression,
+            ) {
+                self.engine.expression(id, pan, expression);
+            }
+            fn set_note_pitch(&mut self, id: NoteInstanceId, pitch: f32) {
+                self.engine.pitch(id, pitch);
+            }
+            fn all_notes_off(&mut self) {
+                self.engine.stop();
+            }
+            fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+                left.fill(0.0);
+                right.fill(0.0);
+                for (left, right) in left.iter_mut().zip(right.iter_mut()) {
+                    if self.engine.control_due() && self.moving {
+                        self.moving = self.current.approach(&self.params, self.engine.smoothing);
+                    }
+                    let (l, r) = self
+                        .engine
+                        .tick(&self.current.table, self.current.settings());
+                    *left = l;
+                    *right = r;
+                }
+            }
+            fn active_voices(&self) -> usize {
+                self.engine.active_voices()
+            }
+        }
+    };
+}
+instrument!(SliceMap, SliceMapParams, Map);
+instrument!(SliceDeck, SliceDeckParams, Deck);
+instrument!(GrainCloud, GrainCloudParams, Cloud);
+instrument!(WaveRide, WaveRideParams, Wave);
+
+impl GrainCloud {
+    /// Successfully scheduled grain events since prepare/reset, across all voices.
+    /// Excess events at the fixed overlap limit drop without being deferred.
+    pub fn grains_spawned(&self) -> u64 {
+        self.engine.grains_spawned
+    }
+}
+
+impl SliceMapParams {
+    fn settings(&self) -> Settings {
+        Settings {
+            key: self.base_key,
+            starts: self.slice_starts,
+            level: self.level,
+            ..Settings::default()
+        }
+    }
+}
+impl SliceDeckParams {
+    fn settings(&self) -> Settings {
+        Settings {
+            key: self.base_key,
+            starts: self.slice_starts,
+            slices: self.slices,
+            level: self.level,
+            ..Settings::default()
+        }
+    }
+}
+impl GrainCloudParams {
+    fn settings(&self) -> Settings {
+        Settings {
+            key: self.root_key,
+            grain_ms: self.grain_size_ms,
+            density: self.density,
+            position: self.position,
+            spray: self.spray,
+            pitch: self.pitch,
+            seed: self.seed,
+            level: self.level,
+            ..Settings::default()
+        }
+    }
+}
+impl WaveRideParams {
+    fn settings(&self) -> Settings {
+        Settings {
+            key: self.root_key,
+            duration_ms: self.duration_ms,
+            positions: self.positions,
+            pitch: self.pitch,
+            level: self.level,
+            ..Settings::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

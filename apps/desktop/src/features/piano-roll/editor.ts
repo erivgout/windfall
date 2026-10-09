@@ -12,6 +12,8 @@ import type {
 } from "@/bindings"
 import {
   hitTestPoint,
+  clampViewport,
+  DEFAULT_LIMITS,
   keyToRow,
   queryRect,
   rowToKey,
@@ -24,6 +26,7 @@ import {
   type Marquee,
   type Rgba,
   type Viewport,
+  type ViewportLimits,
 } from "@/lib/canvas"
 import { ignoresSnap } from "@/lib/edit-modifiers"
 import { DEFAULT_NOTE_EXPRESSION } from "@/lib/note-expression"
@@ -37,6 +40,7 @@ import {
   copyNotes,
   curveInserts,
   noteInsertionCommand,
+  noteEnd,
   duplicateRight,
   endAfterUpdates,
   endOfInits,
@@ -70,9 +74,12 @@ import {
   type Scene,
 } from "./scene"
 import { snapFloor, snapRound } from "./snap"
+import { mutedNoteIds } from "./select-muted"
 import { nearestScaleKey, scaleMoveKeys, type PitchScale } from "./scales"
 import { placeStamp, type Stamp, type StampPlacement } from "./stamps"
 import type { Tool } from "./store"
+import { sliceNoteCommand, toggledVelocity } from "./pointer-tools"
+import { createDrumStroke, visitDrumCell, type DrumStroke } from "./drum-paint"
 
 /** A pointer position in CSS pixels inside the grid, with the modifiers held. */
 export type PointerInput = {
@@ -86,6 +93,8 @@ export type PointerInput = {
 /** The part of the canvas view the editor drives. `TimeGridView` is one. */
 export type EditorSurface = {
   readonly viewport: Viewport
+  readonly limits?: ViewportLimits
+  setViewport?(viewport: Viewport): void
   setItems(items: IndexedBatch | null): void
   setDragOffset(ticks: number, rows: number): void
   setDragResize(startTicks: number, endTicks: number, minLength?: number): void
@@ -102,6 +111,7 @@ export type EditorContext = {
 
 export type EditorSettings = {
   tool: Tool
+  drum?: boolean
   /** Snap interval in ticks. 0 is off. */
   snap: number
   snapOrigin?: number
@@ -128,6 +138,7 @@ export type EditorHost = {
   refuse(what: string, why: string): void
   noteOn(channel: ChannelId, key: number, velocity: number): void
   noteOff(channel: ChannelId, key: number): void
+  seek?(tick: number): void
 }
 
 /** How a drag in progress shows the selected notes, before it is committed. */
@@ -232,6 +243,20 @@ type Gesture =
       pastEnd: boolean
     }
   | { kind: "erase"; ids: Set<number>; tick: number; row: number }
+  | {
+      kind: "drum"
+      stroke: DrumStroke
+      tick: number
+      row: number
+      fallbackLength: number
+      velocity: number
+      expression?: NoteExpression
+      pastEnd: boolean
+    }
+  | { kind: "mute"; note: Note | null }
+  | { kind: "slice"; note: Note | null; tick: number }
+  | { kind: "zoom"; press: Press; tick: number; row: number; tick1: number; row1: number; moved: boolean }
+  | { kind: "playback" }
 
 const IDLE: Gesture = { kind: "idle" }
 const PAST_END = `Notes cannot go past step ${MAX_PATTERN_STEPS.toLocaleString("en-US")}`
@@ -279,6 +304,7 @@ export class Editor {
   private stampLane: EditorContext | null = null
   private stampGeneration: number | undefined
   private disposed = false
+  private previousZoom: Viewport | null = null
 
   constructor(host: EditorHost) {
     this.host = host
@@ -327,6 +353,14 @@ export class Editor {
 
   get busy(): boolean {
     return this.hasPointerGesture || this.hasStampChoice
+  }
+
+  get canRestoreZoom(): boolean {
+    return this.previousZoom !== null
+  }
+
+  get scrubbing(): boolean {
+    return this.gesture.kind === "playback"
   }
 
   /** Only a started pointer gesture owns capture, not an idle stamp choice. */
@@ -457,11 +491,11 @@ export class Editor {
       return
     }
     const hit = this.hitAt(input)
-    const { tool } = this.host.settings()
+    const { tool, drum } = this.host.settings()
     this.setHover(
       xToTick(surface.viewport, input.x),
       this.keyAt(input.y),
-      pressIntent(tool, "left", hit?.part ?? null, input)
+      pressIntent(tool, "left", hit?.part ?? null, input, drum)
     )
   }
 
@@ -498,11 +532,26 @@ export class Editor {
     const tick = xToTick(surface.viewport, input.x)
     const settings = this.host.settings(tick)
     const hit = this.hitAt(input)
-    const intent = pressIntent(settings.tool, button, hit?.part ?? null, input)
+    const intent = pressIntent(settings.tool, button, hit?.part ?? null, input, settings.drum)
     const row = yToRow(surface.viewport, input.y)
     const press = { x: input.x, y: input.y }
 
     switch (intent.kind) {
+      case "mute":
+        this.gesture = { kind: "mute", note: hit ? this.scene.notes[hit.index] : null }
+        break
+      case "slice":
+        this.gesture = { kind: "slice", note: hit ? this.scene.notes[hit.index] : null,
+          tick: snapRound(tick, noSnap(input) ? 0 : settings.snap, settings.snapOrigin) }
+        break
+      case "zoom":
+        if (this.canRestoreZoom) this.restoreZoom()
+        else this.gesture = { kind: "zoom", press, tick, row, tick1: tick, row1: row, moved: false }
+        break
+      case "playback":
+        this.gesture = { kind: "playback" }
+        this.scrub(tick, input)
+        break
       case "menu":
         if (hit && !this.selected.has(hit.id)) this.setSelection([hit.id])
         break
@@ -533,7 +582,19 @@ export class Editor {
         this.beginDraw(input, press, tick, row, settings)
         break
       case "paint":
-        this.beginPaint(input, tick, row, settings)
+        if (settings.drum) {
+          this.gesture = {
+            kind: "drum",
+            stroke: createDrumStroke(),
+            tick,
+            row,
+            fallbackLength: settings.lastLength,
+            velocity: settings.lastVelocity,
+            expression: drawnExpression(settings),
+            pastEnd: false,
+          }
+          this.drumAlong(this.gesture, tick, row)
+        } else this.beginPaint(input, tick, row, settings)
         break
       default: {
         const _exhaustive: never = intent
@@ -552,6 +613,20 @@ export class Editor {
     const row = yToRow(viewport, input.y)
 
     switch (gesture.kind) {
+      case "mute":
+      case "slice":
+        return
+      case "zoom": {
+        if (!gesture.moved && !pastDeadZone(gesture.press, input)) return
+        gesture.moved = true
+        gesture.tick1 = xToTick(viewport, Math.max(0, Math.min(viewport.width, input.x)))
+        gesture.row1 = yToRow(viewport, Math.max(0, Math.min(viewport.height, input.y)))
+        surface.setMarquee({ tick0: gesture.tick, row0: gesture.row, tick1: gesture.tick1, row1: gesture.row1 })
+        return
+      }
+      case "playback":
+        this.scrub(tick, input)
+        return
       case "stamp":
         this.previewStamp(input)
         return
@@ -638,6 +713,10 @@ export class Editor {
         this.emit("drag")
         return
       }
+      case "drum":
+        this.drumAlong(gesture, tick, row)
+        this.setHover(tick, this.keyAt(input.y), { kind: "paint", drum: true })
+        return
       case "paint": {
         if (this.ctx?.pattern.timeline?.meters.length && !noSnap(input)) {
           this.paintCells(gesture, this.meterPaintStarts(gesture, gesture.lastTick, tick), row, input)
@@ -681,6 +760,31 @@ export class Editor {
     }
 
     switch (gesture.kind) {
+      case "mute":
+        if (gesture.note) this.commitDrag({ type: "updateNotes", pattern: ctx.pattern.id, channel: ctx.channel,
+          updates: [{ id: gesture.note.id, patch: { velocity: toggledVelocity(ctx.pattern.id, ctx.channel, gesture.note, this.host.settings().lastVelocity) } }] })
+        break
+      case "slice": {
+        if (!gesture.note) break
+        const command = sliceNoteCommand({ pattern: ctx.pattern.id, channel: ctx.channel }, gesture.note, gesture.tick, ctx.pattern.noteCurves)
+        if (command) this.commitDrag(command)
+        break
+      }
+      case "zoom": {
+        const surface = this.surface
+        const ticks = Math.abs(gesture.tick1 - gesture.tick)
+        const rows = Math.abs(gesture.row1 - gesture.row)
+        if (!surface?.setViewport || !gesture.moved || ticks <= 0 || rows <= 0) break
+        this.previousZoom = { ...surface.viewport }
+        surface.setViewport(clampViewport({ ...surface.viewport,
+          scrollTick: Math.min(gesture.tick, gesture.tick1), scrollRow: Math.min(gesture.row, gesture.row1),
+          pxPerTick: surface.viewport.width / ticks, rowHeight: surface.viewport.height / rows,
+        }, surface.limits ?? DEFAULT_LIMITS))
+        this.emit("drag")
+        break
+      }
+      case "playback":
+        break
       case "stamp": {
         const stamp = this.armedStamp
         if (!stamp || stamp.error) break
@@ -757,6 +861,30 @@ export class Editor {
         )
         break
       }
+      case "drum": {
+        const { adds, deletes } = gesture.stroke
+        if (gesture.pastEnd) this.host.refuse(PAST_END, PAST_END_WHY)
+        const commands: Command[] = []
+        if (deletes.size) commands.push({
+          type: "removeNotes",
+          pattern: ctx.pattern.id,
+          channel: ctx.channel,
+          notes: [...deletes],
+        })
+        if (adds.length) commands.push({
+          type: "addNotes",
+          pattern: ctx.pattern.id,
+          channel: ctx.channel,
+          notes: adds,
+        })
+        if (commands.length) this.commitDrag(withExtension(
+          { type: "batch", label: "Paint drum steps", commands },
+          "Paint drum steps",
+          ctx.pattern,
+          endOfInits(adds)
+        ))
+        break
+      }
       case "paint": {
         const painted = [...gesture.cells.values()].sort(
           (a, b) => a.start - b.start
@@ -802,6 +930,7 @@ export class Editor {
 
   /** Drops the gesture in progress and puts everything back. */
   cancel(): void {
+    this.restoreZoom()
     const gesture = this.gesture
     if (gesture.kind === "idle" && !this.armedStamp && !this.pendingStamp)
       return
@@ -826,6 +955,20 @@ export class Editor {
 
   selectAll(): void {
     this.setSelection(this.scene.notes.map((note) => note.id))
+  }
+
+  /** Expands the selection to every note on the selected pitches. */
+  selectMatchingPitches(): void {
+    const keys = new Set(this.selectedNotes().map((note) => note.key))
+    if (keys.size === 0) return
+    this.setSelection(
+      this.scene.notes.filter((note) => keys.has(note.key)).map((note) => note.id)
+    )
+  }
+
+  /** Replaces the selection with every muted note in the open channel. */
+  selectMutedNotes(): void {
+    this.setSelection(mutedNoteIds(this.scene.notes))
   }
 
   /** Selects every note on one key. With `add`, keeps what is selected. */
@@ -966,7 +1109,7 @@ export class Editor {
       strength: 1,
       edge,
       groove: "straight",
-      musical: musicalGrid,
+      musical: musicalGrid ?? undefined,
     })
   }
 
@@ -1046,6 +1189,27 @@ export class Editor {
     for (const listener of [...this.listeners]) listener(event)
   }
 
+  private restoreZoom(): void {
+    if (!this.previousZoom) return
+    const previous = this.previousZoom
+    this.previousZoom = null
+    const surface = this.surface
+    if (surface) surface.setViewport?.({ ...surface.viewport,
+      scrollTick: previous.scrollTick, scrollRow: previous.scrollRow,
+      pxPerTick: previous.pxPerTick, rowHeight: previous.rowHeight })
+    this.emit("drag")
+  }
+
+  private scrub(tick: number, input: PointerInput): void {
+    const last = (this.ctx?.pattern.lengthSteps ?? 16) * 240 - 1
+    const position = Math.max(0, Math.min(last, Math.round(tick)))
+    this.host.seek?.(position)
+    const key = this.keyAt(input.y)
+    const note = this.ctx?.notes.find((note) => note.key === key && note.start <= position && noteEnd(note) > position && note.velocity > 0 && note.expression?.articulation !== "slide")
+    this.sound(note?.key ?? null, note?.velocity)
+    this.setHover(position, key, { kind: "playback" })
+  }
+
   private previewStamp(input: PointerInput): StampPlacement | null {
     const armed = this.armedStamp
     const lane = this.stampLane
@@ -1085,7 +1249,7 @@ export class Editor {
       settings.lastLength,
       settings.lastVelocity
     )
-    const placement: StampPlacement = {
+    const placement: StampPlacement = rawPlacement.error !== null ? rawPlacement : {
       ...rawPlacement,
       notes: rawPlacement.notes.map((note) => ({ ...note, expression: note.expression ?? drawnExpression(settings) })),
     }
@@ -1148,8 +1312,10 @@ export class Editor {
   }
 
   private rebuild(): void {
+    const notes = this.ctx?.notes ?? []
+    const deleted = this.gesture.kind === "drum" ? this.gesture.stroke.deletes : null
     this.scene = buildScene(
-      this.ctx?.notes ?? [],
+      deleted?.size ? notes.filter((note) => !deleted.has(note.id)) : notes,
       this.provisional,
       this.palette,
       this.armedStamp
@@ -1210,6 +1376,7 @@ export class Editor {
 
   /** Ends whatever is in progress without committing it. No rebuild. */
   private abandon(): void {
+    this.restoreZoom()
     this.sound(null)
     this.gesture = IDLE
     if (this.armedStamp || this.pendingStamp) {
@@ -1423,6 +1590,60 @@ export class Editor {
       moved: false,
     }
     if (note.expression?.articulation !== "slide") this.sound(key, note.velocity)
+  }
+
+  /** Drum cells follow the snap grid, including local meter origins. */
+  private drumAlong(
+    gesture: Extract<Gesture, { kind: "drum" }>,
+    tick: number,
+    row: number
+  ): void {
+    const ctx = this.ctx
+    if (!ctx) return
+    const segments = meterSegments(ctx.pattern.signature, ctx.pattern.timeline?.meters ?? [])
+    for (const span of rowsAlongSegment(gesture.tick, gesture.row, tick, row)) {
+      const key = rowToKey(span.row)
+      if (key < 0 || key > MAX_KEY) continue
+      for (const segment of segments) {
+        if (segment.start > span.tick1 || segment.end <= span.tick0) continue
+        const settings = this.host.settings(segment.start)
+        const spacing = paintSpacing(
+          settings.snap,
+          settings.snap > 0 ? settings.snap : gesture.fallbackLength
+        )
+        const first = Math.max(segment.start, span.tick0)
+        const last = Math.min(MAX_PATTERN_TICKS, segment.end - 1, span.tick1)
+        if (first > last) continue
+        const cell0 = Math.floor((first - segment.start) / spacing)
+        const cell1 = Math.floor((last - segment.start) / spacing)
+        for (const cell of cellsBetween(cell0, cell1)) {
+          const start = segment.start + cell * spacing
+          const length = Math.min(spacing, segment.end - start)
+          if (start < 0 || start > MAX_PATTERN_TICKS) continue
+          if (start + length > MAX_PATTERN_TICKS) {
+            gesture.pastEnd = true
+            continue
+          }
+          visitDrumCell(gesture.stroke, ctx.notes, {
+            start,
+            length,
+            key,
+            velocity: gesture.velocity,
+            pan: 0,
+            expression: gesture.expression ? { ...gesture.expression } : undefined,
+          })
+        }
+      }
+    }
+    gesture.tick = tick
+    gesture.row = row
+    this.provisional = gesture.stroke.adds.map((note, index) => ({
+      ...note,
+      id: PROVISIONAL_ID - index,
+      velocity: note.velocity ?? gesture.velocity,
+      pan: note.pan ?? 0,
+    }))
+    this.rebuild()
   }
 
   private beginPaint(

@@ -83,6 +83,7 @@ fn engine_with_loop(loop_mode: SamplerLoopMode) -> (Processor, Controller) {
         muted: false,
         solo: false,
         group: String::new(),
+        voice: Default::default(),
         timing: windfall_project::ChannelTiming::default(),
         mixer_track: TrackId::MASTER,
         source: ChannelSource::Sampler(SamplerSettings {

@@ -257,6 +257,7 @@ impl Session {
                     sample,
                     mixer_track,
                     output,
+                    normalize: false,
                     gain: 1.0,
                     pan: 0.0,
                     fade_in: 0,

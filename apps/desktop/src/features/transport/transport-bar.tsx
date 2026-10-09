@@ -8,10 +8,16 @@ import {
   Undo02Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { useEffect } from "react"
 
 import { ActionButton } from "@/components/action-button"
 import { ContextActions } from "@/components/context-actions"
+import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import {
+  useAutomationRecordStore,
+  watchAutomationRecording,
+} from "@/features/automation/record"
 import { HistoryPopover } from "@/features/history/history-popover"
 import { TRANSPORT_MENU } from "@/features/layout/chrome-menus"
 import { useTransportStore } from "@/lib/store/transport"
@@ -84,6 +90,8 @@ function Display() {
  */
 export function TransportBar() {
   const recording = useRecordingStore((state) => state.state.active)
+  const recordArmed = useAutomationRecordStore((state) => state.recordArmed)
+  useEffect(() => watchAutomationRecording(), [])
   return (
     <ContextActions items={TRANSPORT_MENU}>
       <div
@@ -99,6 +107,18 @@ export function TransportBar() {
           {recording ? "Recording..." : "Record"}
         </ActionButton>
         <RecordingDialog />
+        <Button
+          title="Record automation"
+          aria-pressed={recordArmed}
+          variant={recordArmed ? "destructive" : "secondary"}
+          onClick={() =>
+            useAutomationRecordStore.setState((state) => ({
+              recordArmed: !state.recordArmed,
+            }))
+          }
+        >
+          Record automation
+        </Button>
         <ModeSwitch />
         <MetronomeControls />
         <Divider />

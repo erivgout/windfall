@@ -30,6 +30,7 @@ import {
 } from "@/lib/store/replaced"
 import { PPQ } from "@/lib/units"
 import { usePlaylistStore } from "@/features/playlist/store"
+import { nextSliceGrid } from "./grid-step"
 import type { SliceOptions, SliceReview } from "./types"
 
 /** Entry point for one selected playlist clip; markers remain review-only. */
@@ -286,6 +287,38 @@ function SliceForm({
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Choose a finer slice grid"
+              disabled={busy || nextSliceGrid(grid, "finer") === null}
+              onClick={() => {
+                const next = nextSliceGrid(grid, "finer")
+                if (next !== null) {
+                  reset()
+                  setGrid(next)
+                }
+              }}
+            >
+              Finer
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Choose a coarser slice grid"
+              disabled={busy || nextSliceGrid(grid, "coarser") === null}
+              onClick={() => {
+                const next = nextSliceGrid(grid, "coarser")
+                if (next !== null) {
+                  reset()
+                  setGrid(next)
+                }
+              }}
+            >
+              Coarser
+            </Button>
+          </div>
           <FieldDescription>
             Note divisions aligned to the song, measured in quarter-note beats.
           </FieldDescription>

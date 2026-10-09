@@ -21,6 +21,7 @@ fn song_mode(loop_song: bool) -> TransportPatch {
         mode: Some(PlayMode::Song),
         pattern: None,
         loop_song: Some(loop_song),
+        ..Default::default()
     }
 }
 

@@ -442,6 +442,7 @@ fn transport_message(transport: TransportState) -> Message {
         mode: transport.mode,
         pattern: transport.pattern,
         loop_song: transport.loop_song,
+        metronome: transport.metronome.unwrap_or_default(),
     }
 }
 
@@ -582,7 +583,7 @@ impl Controller {
         let (message_tx, message_rx) = RingBuffer::new(MESSAGE_CAPACITY);
         let (garbage_tx, garbage_rx) = RingBuffer::new(GARBAGE_CAPACITY);
         let gain = self.lock().output_gain;
-        let processor = Processor::with_queues(
+        let mut processor = Processor::with_queues(
             rate,
             plan.clone(),
             Box::new(plan_state),
@@ -591,9 +592,16 @@ impl Controller {
             garbage_tx,
             self.inner.shared.clone(),
         );
+        // All analyzer allocation is outside the controller/document guards.
+        let spectrum = crate::spectrum::prepare(snapshot.plan_generation, rate)
+            .map(|(tap, reader)| {
+                processor.set_spectrum(tap);
+                reader
+            });
         let mut link = Some(Link {
             messages: message_tx,
             garbage: garbage_rx,
+            spectrum,
         });
         let mut retirement = ProjectRetirement::default();
         let admission;
@@ -915,6 +923,8 @@ mod tests {
                             name: "P1".into(),
                             state: vec![],
                             parameters: vec![],
+                            sidechain_input: None,
+                            auxiliary_inputs: Vec::new(),
                         },
                     },
                     None,
@@ -957,6 +967,9 @@ mod tests {
             muted: false,
             solo: false,
             mixer_track: TrackId(0),
+            group: String::new(),
+            timing: Default::default(),
+            voice: Default::default(),
             source: ChannelSource::Sampler(SamplerSettings {
                 sample: Some(sample),
                 ..Default::default()
@@ -1066,6 +1079,7 @@ mod tests {
                 state.link = Some(Link {
                     messages: producer,
                     garbage,
+                    spectrum: None,
                 });
                 state.stream_phase = StreamPhase::Running;
                 state.sequence = u32::MAX;
@@ -1176,7 +1190,7 @@ mod tests {
             let displaced;
             {
                 let mut state = controller.lock();
-                displaced = state.link.replace(Link { messages, garbage });
+                displaced = state.link.replace(Link { messages, garbage, spectrum: None });
                 state.plan = restored.clone();
                 state.hosted = Some(Arc::new(ledger));
             }

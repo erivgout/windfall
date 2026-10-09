@@ -78,7 +78,7 @@ export async function setSelectedColorGroup(colorGroup: number | null): Promise<
   if (!context || session?.editor.busy || !notes.length) return
   const updates = notes.filter((note) => (note.expression?.colorGroup ?? null) !== colorGroup).map((note) => ({
     id: note.id,
-    patch: { expression: { ...DEFAULT_NOTE_EXPRESSION, ...note.expression, colorGroup } },
+    patch: { expression: { ...DEFAULT_NOTE_EXPRESSION, ...note.expression, colorGroup: colorGroup ?? undefined } },
   }))
   if (updates.length) await dispatch({ type: "updateCapturedNotes", pattern: context.pattern.id, channel: context.channel, expected: notes, updates })
 }
@@ -140,7 +140,7 @@ function PropertyForm({ request }: { request: Request }) {
         expressionChanged = true
       }
       if (colorTouched && colorGroup !== "keep" && (note.expression?.colorGroup ?? null) !== colorGroup) {
-        expression.colorGroup = colorGroup
+        expression.colorGroup = colorGroup ?? undefined
         expressionChanged = true
       }
       if (expressionChanged) patch.expression = expression

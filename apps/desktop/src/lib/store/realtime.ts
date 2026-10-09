@@ -42,7 +42,10 @@ function receive(frame: RealtimeFrame) {
   latest.cpu = frame.cpu
   latest.xruns = frame.xruns
   latest.voices = frame.voices
+  latest.correlation = frame.correlation
   latest.waveforms = frame.waveforms ?? []
+  latest.spectrum = frame.spectrum ?? []
+  latest.spectrogram = frame.spectrogram ?? []
   // Meters are peaks since the previous frame. When the screen draws slower
   // than frames arrive, keep the highest so a short hit is not skipped.
   if (undrawn && latest.meters.length === frame.meters.length) {
@@ -72,7 +75,10 @@ function receive(frame: RealtimeFrame) {
 // and its tracks and effects share ids with the new one's.
 onProjectReplaced(() => {
   latest.meters = []
+  latest.correlation = undefined
   latest.waveforms = []
+  latest.spectrum = []
+  latest.spectrogram = []
   latest.gainReductions = []
   latest.automated = []
   reductions.clear()

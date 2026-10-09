@@ -2,7 +2,7 @@
 
 use super::{
     adapter::{Audio, ParameterSpec, Signals},
-    control::{ControlParameter, Decoder, Message, Owner, Packet, ReadStep},
+    control::{ControlParameter, Decoder, DescribedParameter, Message, Owner, Packet, ReadStep},
     mapping::Mapping,
     protocol::{Config, Identity},
     slots::Region,
@@ -123,6 +123,20 @@ impl Drop for Inner {
 #[derive(Clone)]
 pub struct Control(Arc<Inner>);
 impl Control {
+    /// Discover on a fresh helper before any audio submission. Native metadata
+    /// and state are queried on the creating owner, never inside the desktop.
+    pub fn describe(
+        &self,
+        timeout: Duration,
+    ) -> Result<(Vec<u8>, Vec<DescribedParameter>, crate::PluginLayout), String> {
+        let packet = self.call(Message::Describe, timeout)?;
+        packet.validate().map_err(|error| error.to_string())?;
+        match packet.body {
+            Message::Described { parameters, layout } => Ok((packet.state, parameters, layout)),
+            Message::Error { message } => Err(message),
+            _ => Err("unexpected native discovery response".into()),
+        }
+    }
     /// Control/render caller only. Ends this instance and confirms process exit
     /// before returning; audio may retain its mapping for bounded fallback.
     pub fn terminate(&self) -> Status {

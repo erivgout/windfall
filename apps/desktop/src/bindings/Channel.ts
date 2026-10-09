@@ -2,12 +2,25 @@
 import type { ChannelId } from "./ChannelId";
 import type { ChannelSource } from "./ChannelSource";
 import type { ChannelTiming } from "./ChannelTiming";
+import type { ChannelVoiceSettings } from "./ChannelVoiceSettings";
 import type { TrackId } from "./TrackId";
 
 /**
  * One row of the channel rack.
  */
-export type Channel = { id: ChannelId, name: string, group?: string, timing?: ChannelTiming,
+export type Channel = { 
+/**
+ * Additional note generators and modulation; absent in older files.
+ */
+voice?: ChannelVoiceSettings, id: ChannelId, name: string, 
+/**
+ * Named rack group. The empty string is the ungrouped category.
+ */
+group?: string, 
+/**
+ * Non-destructive gate, shift and per-channel swing.
+ */
+timing?: ChannelTiming, 
 /**
  * Display color as 0xRRGGBB.
  */

@@ -373,7 +373,7 @@ fn a_fader_move_glides_under_a_sounding_instrument() {
 }
 
 #[test]
-fn a_notes_velocity_reaches_the_instrument_and_its_pan_does_not() {
+fn a_notes_velocity_and_pan_reach_the_instrument() {
     let play = |velocity: f32, pan: f32| {
         let (mut rig, synth) = synth_rig();
         rig.synth_mut(synth).amp_velocity = 1.0;
@@ -388,8 +388,10 @@ fn a_notes_velocity_reaches_the_instrument_and_its_pan_does_not() {
     assert!(peak(&soft) > 0.05);
     // A note with no velocity is silent.
     assert!(play(0.0, 0.0).iter().all(|s| *s == 0.0));
-    // The synth places its own voices, so the note's pan changes nothing.
-    assert!(play(1.0, -1.0) == loud);
+    // Per-note expression pans the synth voice independently of track pan.
+    let panned = play(1.0, -1.0);
+    assert_eq!(left(&panned), left(&loud));
+    assert!(right(&panned).iter().all(|sample| *sample == 0.0));
     assert_eq!(left(&loud), right(&loud));
 }
 

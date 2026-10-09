@@ -4,6 +4,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -14,6 +15,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
+import { nextScaleRoot } from "./scale-root-step"
+import { nextScale } from "./scale-step"
 import { isScaleId, ROOT_NAMES, scaleDefinition, SCALES } from "./scales"
 import { usePianoRollStore } from "./store"
 
@@ -60,6 +63,24 @@ export function ScaleControls() {
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          <DropdownMenuItem
+            onClick={() => {
+              const state = usePianoRollStore.getState()
+              const next = nextScaleRoot(state.scaleRoot, "lower")
+              if (next !== null) state.setScaleRoot(next)
+            }}
+          >
+            Lower root
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              const state = usePianoRollStore.getState()
+              const next = nextScaleRoot(state.scaleRoot, "higher")
+              if (next !== null) state.setScaleRoot(next)
+            }}
+          >
+            Higher root
+          </DropdownMenuItem>
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>Musical scale</DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-64">
@@ -79,6 +100,24 @@ export function ScaleControls() {
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          <DropdownMenuItem
+            onClick={() => {
+              const state = usePianoRollStore.getState()
+              const next = nextScale(state.scaleId, "previous")
+              if (next !== null) state.setScaleId(next)
+            }}
+          >
+            Previous scale
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              const state = usePianoRollStore.getState()
+              const next = nextScale(state.scaleId, "next")
+              if (next !== null) state.setScaleId(next)
+            }}
+          >
+            Next scale
+          </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>

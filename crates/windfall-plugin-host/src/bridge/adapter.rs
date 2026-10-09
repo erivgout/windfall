@@ -144,7 +144,9 @@ impl Audio {
     pub fn set_sidechain_input(&mut self, input: Option<u32>) {
         self.sidechain_input = input.filter(|index| *index < 64);
         // Commit at the next complete block, preserving collection phase.
-        if self.cursor == 0 { self.input.sidechain_input = self.sidechain_input; }
+        if self.cursor == 0 {
+            self.input.sidechain_input = self.sidechain_input;
+        }
     }
     pub fn health(&self) -> Health {
         self.health
@@ -445,8 +447,15 @@ impl Audio {
         // discarded on a future boundary without native-generation ack.
         self.region.discard_before(expected + 1);
     }
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) { self.process_sidechain(left, right, None); }
-    pub fn process_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>) {
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process_sidechain(left, right, None);
+    }
+    pub fn process_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
+    ) {
         if left.len() != right.len() {
             self.signals.failed.store(true, Ordering::Release);
             return;
@@ -461,7 +470,11 @@ impl Audio {
             let input = [finite_input(*left), finite_input(*right)];
             self.input.left[self.cursor] = input[0];
             self.input.right[self.cursor] = input[1];
-            self.input.key[self.cursor] = key.and_then(|key| key.get(index)).copied().unwrap_or([0.0; 2]).map(finite_input);
+            self.input.key[self.cursor] = key
+                .and_then(|key| key.get(index))
+                .copied()
+                .unwrap_or([0.0; 2])
+                .map(finite_input);
             let dry = self.dry[self.dry_cursor];
             self.dry[self.dry_cursor] = input;
             self.dry_cursor += 1;
@@ -541,12 +554,39 @@ impl Audio {
         )
     }
     // Private off-realtime scheduler seam for deterministic DONE/cancel races.
-    fn process_offline_with_scheduler(&mut self, left: &mut [f32], right: &mut [f32], deadline: std::time::Instant, cancelled: &AtomicBool, now: impl FnMut() -> std::time::Instant, wait: impl FnMut()) -> Result<(), OfflineError> {
+    fn process_offline_with_scheduler(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        deadline: std::time::Instant,
+        cancelled: &AtomicBool,
+        now: impl FnMut() -> std::time::Instant,
+        wait: impl FnMut(),
+    ) -> Result<(), OfflineError> {
         self.process_offline_key_with_scheduler(left, right, None, deadline, cancelled, now, wait)
     }
-    pub fn process_offline_sidechain(&mut self, left: &mut [f32], right: &mut [f32], key: Option<&[[f32; 2]]>, deadline: std::time::Instant, cancelled: &AtomicBool) -> Result<(), OfflineError> {
-        self.process_offline_key_with_scheduler(left, right, key, deadline, cancelled, std::time::Instant::now, || std::thread::sleep(std::time::Duration::from_micros(200)))
+    pub fn process_offline_sidechain(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<&[[f32; 2]]>,
+        deadline: std::time::Instant,
+        cancelled: &AtomicBool,
+    ) -> Result<(), OfflineError> {
+        self.process_offline_key_with_scheduler(
+            left,
+            right,
+            key,
+            deadline,
+            cancelled,
+            std::time::Instant::now,
+            || std::thread::sleep(std::time::Duration::from_micros(200)),
+        )
     }
+    // Keep stereo/optional-key buffers and independent deadline, cancellation,
+    // clock and wait seams explicit so deterministic race tests exercise the
+    // same off-realtime scheduler as production, without changing public APIs.
+    #[allow(clippy::too_many_arguments)]
     fn process_offline_key_with_scheduler(
         &mut self,
         left: &mut [f32],
@@ -567,6 +607,9 @@ impl Audio {
         }
         result
     }
+    // Mirrors the scheduler boundary above; each buffer/authority is borrowed
+    // independently and none is retained or allocated while processing.
+    #[allow(clippy::too_many_arguments)]
     fn process_offline_inner(
         &mut self,
         left: &mut [f32],

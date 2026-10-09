@@ -59,12 +59,83 @@ describe("descriptors", () => {
       chorus: true,
       flanger: true,
       phaser: true,
+      bandSplit: true,
+      multibandCompressor: true,
+      multibandMaximizer: true,
+      transientShaper: true,
+      transientSplit: true,
+      oneKnob: true,
+      bassHarmonics: true,
+      exciter: true,
+      waveshaper: true,
+      overdrive: true,
+      guitarRack: true,
+      driveChain: true,
+      vintageChorus: true,
+      hyperChorus: true,
+      vintagePhaser: true,
+      stackedFlanger: true,
+      bandDelay: true,
+      room: true,
+      spreader: true,
+      stereoEnhancer: true,
+      volumeGate: true,
+      timeTransport: true,
+      scratch: true,
+      performanceRack: true,
+      convolver: true,
+      frequencyShifter: true,
+      pitchShift: true,
+      pitchCorrect: true,
+      vocoder: true,
+      echoBank: true,
+      frequencyDelay: true,
+      sevenBand: true,
+      morphEq: true,
+      filterBank: true,
+      xyPad: true,
+      xyzPad: true,
+      panLfo: true,
+      envelopeFollower: true,
+      noteEnvelope: true,
+      lushSpace: true,
+      tuner: true,
+      stageStack: true,
+      controlSurface: true,
+      sendTap: true,
     }
     const instruments: Record<InstrumentKind, true> = {
       subtractiveSynth: true,
+      fourOp: true,
+      matrixFm: true,
+      ringHybrid: true,
+      harmonicStack: true,
+      partialMorph: true,
+      inharmonic: true,
+      resynth: true,
+      seedPatch: true,
+      scanSynth: true,
+      pluck: true,
+      fingerBass: true,
+      acousticString: true,
+      membrane: true,
+      drumRack: true,
+      kick: true,
+      drumVoice: true,
+      sliceMap: true,
+      sliceDeck: true,
+      grainCloud: true,
+      waveRide: true,
+      acidLine: true,
+      tripleOsc: true,
+      waveLane: true,
+      macroVoice: true,
+      speechVoice: true,
     }
     expect([...EFFECT_KINDS].sort()).toEqual(Object.keys(effects).sort())
-    expect(INSTRUMENT_KINDS).toEqual(Object.keys(instruments))
+    expect([...INSTRUMENT_KINDS].sort()).toEqual(
+      Object.keys(instruments).sort()
+    )
     expect(instrumentDescriptor("subtractiveSynth").name).toBe(
       "Subtractive synth"
     )
@@ -221,8 +292,14 @@ describe("readParam and writeParam", () => {
         type: "addChannel",
         instrument: "subtractiveSynth",
       })
+      let effectTrack = track
       for (const [index, kind] of EFFECT_KINDS.entries()) {
-        run({ type: "addEffect", track: index < 10 ? track : 0, kind })
+        // Mixer tracks hold at most ten effects.
+        if (index > 0 && index % 10 === 0) {
+          const [nextTrack] = run({ type: "addMixerTrack" })
+          effectTrack = nextTrack
+        }
+        run({ type: "addEffect", track: effectTrack, kind })
       }
     })
     const source = project.channels[0].source

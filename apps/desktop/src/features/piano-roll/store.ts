@@ -2,18 +2,19 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
 import { onProjectReplaced } from "@/lib/store/replaced"
+import { isSharedSnap, useSnapStore } from "@/lib/store/snap"
 import type { NoteArticulation } from "@/bindings"
 import { isNoteArticulation } from "@/lib/note-expression"
 import { isNoteColorGroup } from "@/lib/note-colors"
 import { DEFAULT_VELOCITY, TICKS_PER_STEP } from "@/lib/units"
 
 import { LANE_KINDS, type LaneKind } from "./lane-math"
-import { DEFAULT_SNAP, isSnapId, type SnapId } from "./snap"
+import type { SnapId } from "./snap"
 import { isScaleId, isScaleRoot, type ScaleId } from "./scales"
 
-export type Tool = "draw" | "paint" | "select" | "erase"
+export type Tool = "draw" | "paint" | "select" | "erase" | "mute" | "slice" | "zoom" | "playback"
 
-export const TOOLS: Tool[] = ["draw", "paint", "select", "erase"]
+export const TOOLS: Tool[] = ["draw", "paint", "select", "erase", "mute", "slice", "zoom", "playback"]
 
 export const MIN_LANE_HEIGHT = 44
 export const MAX_LANE_HEIGHT = 260
@@ -21,6 +22,8 @@ export const DEFAULT_LANE_HEIGHT = 84
 
 type PianoRollState = {
   tool: Tool
+  /** Session-only step toggling for Paint. */
+  drum: boolean
   snap: SnapId
   scaleRoot: number
   scaleId: ScaleId
@@ -44,6 +47,7 @@ type PianoRollState = {
   clipboardCount: number
 
   setTool(tool: Tool): void
+  setDrum(enabled: boolean): void
   setDrawArticulation(articulation: NoteArticulation): void
   setDrawGlideTicks(ticks: number): void
   setDrawColorGroup(group: number | null): void
@@ -69,7 +73,8 @@ export const usePianoRollStore = create<PianoRollState>()(
   persist(
     (set) => ({
       tool: "draw",
-      snap: DEFAULT_SNAP,
+      drum: false,
+      snap: useSnapStore.getState().snap,
       scaleRoot: 0,
       scaleId: "major",
       highlightScale: false,
@@ -88,6 +93,7 @@ export const usePianoRollStore = create<PianoRollState>()(
       clipboardCount: 0,
 
       setTool: (tool) => set({ tool }),
+      setDrum: (drum) => set({ drum }),
       setDrawArticulation: (drawArticulation) => {
         if (isNoteArticulation(drawArticulation)) set({ drawArticulation })
       },
@@ -97,7 +103,10 @@ export const usePianoRollStore = create<PianoRollState>()(
       setDrawColorGroup: (drawColorGroup) => {
         if (drawColorGroup === null || isNoteColorGroup(drawColorGroup)) set({ drawColorGroup })
       },
-      setSnap: (snap) => set({ snap }),
+      setSnap: (snap) => {
+        if (isSharedSnap(snap)) useSnapStore.getState().setSnap(snap)
+        else set({ snap })
+      },
       setScaleRoot: (scaleRoot) => {
         if (isScaleRoot(scaleRoot)) set({ scaleRoot })
       },
@@ -126,7 +135,6 @@ export const usePianoRollStore = create<PianoRollState>()(
       name: "windfall.pianoRoll",
       version: 1,
       partialize: (state) => ({
-        snap: state.snap,
         scaleRoot: state.scaleRoot,
         scaleId: state.scaleId,
         highlightScale: state.highlightScale,
@@ -143,7 +151,8 @@ export const usePianoRollStore = create<PianoRollState>()(
         ) as Partial<PianoRollState>
         return {
           ...current,
-          snap: isSnapId(stored.snap) ? stored.snap : current.snap,
+          // Snap is session-only, including piano-only divisions. Ignore old saves.
+          snap: current.snap,
           scaleRoot: isScaleRoot(stored.scaleRoot)
             ? stored.scaleRoot
             : current.scaleRoot,
@@ -181,11 +190,16 @@ export const usePianoRollStore = create<PianoRollState>()(
   )
 )
 
+// A shared choice replaces any piano-only division, even if the shared value
+// itself did not change. Finer choices stay local and never write to the owner.
+useSnapStore.subscribe(({ snap }) => usePianoRollStore.setState({ snap }))
+
 // The Draw tool gives a new note the length and velocity of the last one
 // touched. Those belong to the song that note was in: the first note of a
 // new project came out four bars long, and grew its pattern to match.
 onProjectReplaced(() =>
   usePianoRollStore.setState({
+    drum: false,
     lastLength: TICKS_PER_STEP,
     lastVelocity: DEFAULT_VELOCITY,
     drawArticulation: "normal",

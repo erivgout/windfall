@@ -577,8 +577,10 @@ fn an_edit_to_a_sounding_clip_glides_or_starts_it_again_where_it_belongs() {
 fn a_hundred_and_twenty_eight_clips_sound_at_once_and_the_rest_stay_silent() {
     // Each clip puts out a steady 1/256 for half a second.
     let mut rig = Rig::new();
-    let lane = rig.playlist_track();
     for _ in 0..140 {
+        // Independent layers avoid the adjacent same-track crossfade policy;
+        // this test measures voice capacity and the dropped-clip contract.
+        let lane = rig.playlist_track();
         rig.audio_clip(
             lane,
             level(RATE, 1.0 / 256.0, 0.5),
@@ -625,8 +627,9 @@ fn the_clips_left_out_are_the_ones_that_start_last_and_then_the_newest() {
     // made: one at 1/8 that starts two beats later, and two more on the
     // first tick, at 1/16 and at 1/32.
     let mut rig = Rig::new();
-    let lane = rig.playlist_track();
     let mut add = |value: f32, start: u32| {
+        // Keep the scheduling/order test independent of automatic crossfades.
+        let lane = rig.playlist_track();
         let audio = level(RATE, value, 2.0);
         rig.audio_clip(lane, audio, TrackId::MASTER, start, 3_840 - start)
     };

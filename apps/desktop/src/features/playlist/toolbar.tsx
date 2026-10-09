@@ -1,5 +1,6 @@
 import {
   ArrowDown01Icon,
+  ArrowHorizontalIcon,
   ArrowVerticalIcon,
   CursorRectangleSelection01Icon,
   Eraser01Icon,
@@ -11,6 +12,7 @@ import {
   PencilEdit01Icon,
   PlayIcon,
   RepeatIcon,
+  ScissorIcon,
   VolumeMute01Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
@@ -44,6 +46,8 @@ import { TOOLS, type Tool } from "./intents"
 import { OverlapWarning } from "./audio/overlap-warning"
 import { PANEL_MENU } from "./menu"
 import { useViewportValue, type GridMetrics } from "./metrics"
+import { nextPlaylistSnapScale } from "./playlist-snap-scale"
+import { nextPlaylistTool } from "./playlist-tool-step"
 import { SNAP_MODES, type SnapMode } from "./snap"
 import { usePlaylistStore } from "./store"
 
@@ -53,6 +57,9 @@ const TOOL_ICONS: Record<Tool, IconSvgElement> = {
   select: CursorRectangleSelection01Icon,
   erase: Eraser01Icon,
   mute: VolumeMute01Icon,
+  slip: ArrowHorizontalIcon,
+  playback: PlayIcon,
+  slice: ScissorIcon,
 }
 
 const TOOL_ABOUT: Record<Tool, string> = {
@@ -61,6 +68,9 @@ const TOOL_ABOUT: Record<Tool, string> = {
   select: "drag a box around clips, then move, copy or delete them",
   erase: "click or drag across clips to delete them",
   mute: "click or drag across clips to mute or unmute them",
+  slip: "drag a clip's content left or right inside its fixed start and end",
+  playback: "click or drag to seek the transport on the playlist grid",
+  slice: "drag a vertical line, then release to split every clip crossing it",
 }
 
 type IconActionProps = {
@@ -124,23 +134,72 @@ function IconAction({
 
 function Tools() {
   const tool = usePlaylistStore((state) => state.tool)
+
+  function stepTool(direction: "previous" | "next") {
+    const latest = usePlaylistStore.getState().tool
+    const next = nextPlaylistTool(latest, direction)
+    if (next !== null) usePlaylistStore.getState().setTool(next)
+  }
+
   return (
-    <div
-      role="group"
-      aria-label="Tools"
-      className="flex items-center rounded-md bg-(--wf-step-off)/60 p-px"
-    >
-      {TOOLS.map((item) => (
-        <IconAction
-          key={item}
-          action={toolActionId(item)}
-          icon={TOOL_ICONS[item]}
-          pressed={item === tool}
-          about={TOOL_ABOUT[item]}
-          className="aria-pressed:bg-background aria-pressed:shadow-xs"
-        />
-      ))}
+    <div className="flex items-center gap-1.5">
+      <div
+        role="group"
+        aria-label="Tools"
+        className="flex items-center rounded-md bg-(--wf-step-off)/60 p-px"
+      >
+        {TOOLS.map((item) => (
+          <IconAction
+            key={item}
+            action={toolActionId(item)}
+            icon={TOOL_ICONS[item]}
+            pressed={item === tool}
+            about={TOOL_ABOUT[item]}
+            className="aria-pressed:bg-background aria-pressed:shadow-xs"
+          />
+        ))}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose the previous playlist tool"
+        disabled={nextPlaylistTool(tool, "previous") === null}
+        onClick={() => stepTool("previous")}
+      >
+        Previous
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose the next playlist tool"
+        disabled={nextPlaylistTool(tool, "next") === null}
+        onClick={() => stepTool("next")}
+      >
+        Next
+      </Button>
     </div>
+  )
+}
+
+function StepToggle() {
+  const step = usePlaylistStore((state) => state.step)
+  const shortcut = useShortcutLabel("playlist.step")
+  const hint = useHint(
+    `Step${shortcut ? ` (${shortcut})` : ""}: drag across an automation curve to write held points on the snap grid`
+  )
+  return (
+    <Button
+      variant={step ? "secondary" : "ghost"}
+      size="sm"
+      aria-label="Step"
+      aria-pressed={step}
+      onClick={() => void runAction("playlist.step")}
+      {...hint}
+    >
+      Step
+    </Button>
   )
 }
 
@@ -152,54 +211,82 @@ function SnapMenu() {
     "Snap: what clips line up with when placed, moved and resized. Hold Alt to ignore it for one drag"
   )
 
+  function scaleSnap(direction: "finer" | "coarser") {
+    const latest = usePlaylistStore.getState().snap
+    const next = nextPlaylistSnapScale(latest, direction)
+    if (next !== null) usePlaylistStore.getState().setSnap(next)
+  }
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label={`Snap: ${current?.label ?? snap}`}
-            className="gap-1.5 px-1.5"
-            {...hint}
+    <div className="flex items-center gap-1.5">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={`Snap: ${current?.label ?? snap}`}
+              className="gap-1.5 px-1.5"
+              {...hint}
+            />
+          }
+        >
+          <HugeiconsIcon
+            icon={Magnet01Icon}
+            strokeWidth={2}
+            className={snap === "none" ? "text-muted-foreground" : "text-brand"}
           />
-        }
+          <span className="w-7 text-left">{current?.label}</span>
+          <HugeiconsIcon
+            icon={ArrowDown01Icon}
+            strokeWidth={2}
+            className="text-muted-foreground"
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent className="w-56">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Snap</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={snap}
+              onValueChange={(mode: SnapMode) => setSnap(mode)}
+            >
+              {SNAP_MODES.map((item) => (
+                <DropdownMenuRadioItem
+                  key={item.mode}
+                  value={item.mode}
+                  closeOnClick
+                >
+                  <span>{item.label}</span>
+                  <span className="ml-auto pl-3 text-muted-foreground">
+                    {item.about}
+                  </span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose a finer playlist snap"
+        disabled={nextPlaylistSnapScale(snap, "finer") === null}
+        onClick={() => scaleSnap("finer")}
       >
-        <HugeiconsIcon
-          icon={Magnet01Icon}
-          strokeWidth={2}
-          className={snap === "none" ? "text-muted-foreground" : "text-brand"}
-        />
-        <span className="w-7 text-left">{current?.label}</span>
-        <HugeiconsIcon
-          icon={ArrowDown01Icon}
-          strokeWidth={2}
-          className="text-muted-foreground"
-        />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Snap</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={snap}
-            onValueChange={(mode: SnapMode) => setSnap(mode)}
-          >
-            {SNAP_MODES.map((item) => (
-              <DropdownMenuRadioItem
-                key={item.mode}
-                value={item.mode}
-                closeOnClick
-              >
-                <span>{item.label}</span>
-                <span className="ml-auto pl-3 text-muted-foreground">
-                  {item.about}
-                </span>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        Finer
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Choose a coarser playlist snap"
+        disabled={nextPlaylistSnapScale(snap, "coarser") === null}
+        onClick={() => scaleSnap("coarser")}
+      >
+        Coarser
+      </Button>
+    </div>
   )
 }
 
@@ -295,6 +382,7 @@ export function PlaylistToolbar({ metrics }: { metrics: GridMetrics }) {
           about="show or hide the patterns, sounds and automations to place"
         />
         <Tools />
+        <StepToggle />
         <SnapMenu />
         <IconAction
           action="playlist.zoomToFit"

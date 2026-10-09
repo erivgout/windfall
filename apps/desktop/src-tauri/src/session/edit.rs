@@ -84,6 +84,22 @@ impl Session {
         )?;
         drop(state);
         drop(_recording);
+        let mut prepared = ticket.prepare()?;
+        #[cfg(test)]
+        self.pause("plugin-capture:prepared");
+        let mut retirement = None;
+        let result = {
+            let _recording = self.recording_idle()?;
+            let mut state = self.state();
+            if !current(&state) {
+                return Ok(crate::plugins::CaptureOutcome::Obsolete);
+            }
+            prepared.commit(&mut state, &mut retirement)
+        };
+        if let Some(retirement) = &mut retirement {
+            self.retire_project(retirement);
+        }
+        result?;
         Ok(crate::plugins::CaptureOutcome::Accepted {
             restart: captured.restart,
             acknowledgement: runtime.acknowledge_committed_capture(&request, &captured),
@@ -264,17 +280,17 @@ impl Session {
         touched: &Touched,
         prepared: &windfall_engine::SamplePool,
     ) -> ProjectPatch {
-        self.publish_with_prepared(state, touched, Some(prepared))
+        self.publish_with_prepared(state, touched, prepared)
     }
 
     fn publish_with_prepared(
         &self,
         state: &mut State,
         touched: &Touched,
-        prepared: Option<windfall_engine::PreparedProject>,
+        prepared: &windfall_engine::SamplePool,
     ) -> ProjectPatch {
         self.refresh_input_monitor_signature(state);
-        let patch = if prepared.is_some() && touched.is_empty() {
+        let patch = if touched.is_empty() {
             state.document.unchanged_patch()
         } else {
             state.document.patch(touched)

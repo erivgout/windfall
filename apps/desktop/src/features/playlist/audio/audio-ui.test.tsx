@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { ClipContent } from "@/bindings"
 import type { Backend } from "@/lib/ipc"
-import { dispatch, undo } from "@/lib/store/project"
+import { dispatch, undo, useProjectStore } from "@/lib/store/project"
 import { setPlayMode, setTransportPattern } from "@/lib/store/transport"
 import { settle } from "@/test/harness"
 
@@ -146,6 +146,46 @@ describe("the audio clip settings", () => {
     ).toHaveTextContent("1.06× speed")
   })
 
+  it.each([undefined, false, true])(
+    "dispatches one normalize patch for all selected clips when stored as %s",
+    async (normalize) => {
+      render(<PlaylistPanel />)
+      const first = await addLoop(0)
+      const second = await addLoop(4 * BAR)
+      await act(async () => {
+        useProjectStore.setState((state) => ({
+          project: {
+            ...state.project,
+            playlist: {
+              ...state.project.playlist,
+              clips: state.project.playlist.clips.map((clip) =>
+                clip.content.type === "audio"
+                  ? { ...clip, content: { ...clip.content, normalize } }
+                  : clip
+              ),
+            },
+          },
+        }))
+        ui().select([first, second])
+      })
+      const toggle = within(inspector()!).getByRole("button", {
+        name: "Normalize",
+      })
+      expect(toggle).toHaveAttribute("aria-pressed", String(normalize === true))
+      const send = vi.spyOn(backend, "dispatch")
+      fireEvent.click(toggle)
+      await flush()
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.mock.lastCall?.[0]).toEqual({
+        type: "updateAudioClips",
+        updates: [
+          { id: first, patch: { normalize: normalize !== true } },
+          { id: second, patch: { normalize: normalize !== true } },
+        ],
+      })
+    }
+  )
+
   it("reverse a clip and set its fades", async () => {
     render(<PlaylistPanel />)
     const id = await addLoop()
@@ -212,15 +252,15 @@ describe("the audio clip settings", () => {
     render(<PlaylistPanel />)
     const id = await addLoop()
     const route = () =>
-      within(inspector()!).getByRole("button", { name: /^Mixer track:/ })
-    expect(route()).toHaveAccessibleName("Mixer track: Drum loop 128")
+      within(inspector()!).getByRole("button", { name: /^Playback route:/ })
+    expect(route()).toHaveAccessibleName("Playback route: Drum loop 128")
 
     fireEvent.click(route())
     fireEvent.click(await screen.findByRole("menuitem", { name: "Kick" }))
     await flush()
     const kick = project().mixer.tracks.find((track) => track.name === "Kick")!
     expect(audio(id).mixerTrack).toBe(kick.id)
-    expect(route()).toHaveAccessibleName("Mixer track: Kick")
+    expect(route()).toHaveAccessibleName("Playback route: Kick")
 
     const count = project().mixer.tracks.length
     fireEvent.click(route())

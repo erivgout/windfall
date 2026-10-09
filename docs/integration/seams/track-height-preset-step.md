@@ -1,0 +1,1 @@
+The playlist track menu steps the row height from Follow toward Tall. Follow stays Follow when moved previous. Tall stays Tall when moved next. A height between two presets moves to the neighboring preset. A missing height counts as Follow. Each height change is one undo step. Name and color stay as they are.

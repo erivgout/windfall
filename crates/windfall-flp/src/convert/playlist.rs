@@ -1,4 +1,5 @@
 //! Playlist placement, with automation linked only to understood controls.
+use super::arrangements::PlaylistReferences;
 use super::{Builder, ChannelRole, name_or};
 use crate::{
     model::PlaylistSource,
@@ -8,7 +9,7 @@ use crate::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use windfall_project::{
-    AutomationId, AutomationPoint, AutomationTarget, ClipContent, ClipInit, Command,
+    AutomationId, AutomationPoint, AutomationTarget, ClipContent, ClipId, ClipInit, Command,
     MAX_AUTOMATION_POINTS, MAX_SONG_TICKS, PlaylistTrackId, PlaylistTrackPatch,
 };
 
@@ -228,9 +229,12 @@ impl Builder<'_> {
         ids
     }
 
-    pub(super) fn playlist(&mut self) {
-        let Some(arrangement) = self.flp.main_arrangement() else {
-            return;
+    pub(super) fn playlist(&mut self) -> Option<PlaylistReferences> {
+        let arrangement = self.flp.main_arrangement()?;
+        let mut references = PlaylistReferences {
+            items: vec![Vec::new(); arrangement.items.len()],
+            legacy_items: vec![Vec::new(); arrangement.legacy_items.len()],
+            tracks: BTreeMap::new(),
         };
         let mut used: BTreeSet<u16> = arrangement.items.iter().map(|i| i.track).collect();
         used.extend(
@@ -273,6 +277,9 @@ impl Builder<'_> {
                         patch: PlaylistTrackPatch {
                             name: None,
                             muted: Some(!source.enabled),
+                            solo: None,
+                            color: None,
+                            height: None,
                         },
                     },
                 );
@@ -296,7 +303,7 @@ impl Builder<'_> {
                 automations.insert(channel.iid, self.automation_for(channel.iid));
             }
         }
-        for item in &arrangement.items {
+        for (index, item) in arrangement.items.iter().enumerate() {
             let Some(&track) = tracks.get(&item.track) else {
                 continue;
             };
@@ -332,6 +339,7 @@ impl Builder<'_> {
                                     sample,
                                     mixer_track: source.mixer_track,
                                     output: Default::default(),
+                                    normalize: false,
                                     gain: source.gain
                                         * extra.map_or(1.0, |e| {
                                             if e.gain.is_finite() { e.gain } else { 1.0 }
@@ -389,33 +397,32 @@ impl Builder<'_> {
                 continue;
             }
             for content in contents {
-                if self
-                    .apply(
-                        ReportSection::Playlist,
-                        "A playlist clip",
-                        Command::AddClips {
-                            clips: vec![ClipInit {
-                                track,
-                                start: start.ticks as u32,
-                                length: Some(length.ticks as u32),
-                                offset: Some(offset as u32),
-                                muted: Some(muted),
-                                content,
-                            }],
-                        },
-                    )
-                    .is_none()
-                {
+                if let Some(ids) = self.apply(
+                    ReportSection::Playlist,
+                    "A playlist clip",
+                    Command::AddClips {
+                        clips: vec![ClipInit {
+                            track,
+                            start: start.ticks as u32,
+                            length: Some(length.ticks as u32),
+                            offset: Some(offset as u32),
+                            muted: Some(muted),
+                            content,
+                        }],
+                    },
+                ) {
+                    references.items[index].extend(ids.into_iter().map(ClipId));
+                } else {
                     outcome = Outcome::Dropped;
                 }
             }
             self.report.count(ReportSection::Playlist, outcome, 1);
         }
-        for item in &arrangement.legacy_items {
+        for (index, item) in arrangement.legacy_items.iter().enumerate() {
             if let (Some(&track), Some(&(pattern, _))) =
                 (tracks.get(&0), self.patterns.get(&item.pattern))
             {
-                self.apply(
+                if let Some(ids) = self.apply(
                     ReportSection::Playlist,
                     "A legacy playlist block",
                     Command::AddClips {
@@ -428,10 +435,14 @@ impl Builder<'_> {
                             content: ClipContent::Pattern { pattern },
                         }],
                     },
-                );
+                ) {
+                    references.legacy_items[index].extend(ids.into_iter().map(ClipId));
+                }
                 self.report
                     .count(ReportSection::Playlist, Outcome::Approximated, 1);
             }
         }
+        references.tracks = tracks;
+        Some(references)
     }
 }

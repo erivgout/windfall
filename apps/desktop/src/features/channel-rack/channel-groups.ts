@@ -15,7 +15,10 @@ export function channelGroups(channels: readonly Channel[]): string[] {
 }
 
 export function validGroupName(name: string): boolean {
-  return new TextEncoder().encode(name.trim()).length <= 128 && !/[\u0000-\u001f\u007f-\u009f]/u.test(name.trim())
+  return new TextEncoder().encode(name.trim()).length <= 128 && !Array.from(name.trim()).some((character) => {
+    const code = character.codePointAt(0)!
+    return code <= 31 || (code >= 127 && code <= 159)
+  })
 }
 
 export type GroupRequest = {

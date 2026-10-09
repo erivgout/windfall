@@ -7,6 +7,10 @@ import { NOTE_COLOR_GROUPS } from "@/lib/note-colors"
 const COLOR_GROUPS = ["auto", ...NOTE_COLOR_GROUPS.map((_, group) => String(group))]
 
 export const NOTE_MENU: ContextItem[] = [
+  "pianoRoll.dumpPlayedNotes",
+  "pianoRoll.exportSheetMusic",
+  "pianoRoll.generateRiff",
+  "pianoRoll.generateProgression",
   "pianoRoll.noteProperties",
   "pianoRoll.noteCurves",
   { submenu: "Note articulation", items: ["pianoRoll.articulation.normal", "pianoRoll.articulation.slide", "pianoRoll.articulation.portamento"] },
@@ -20,6 +24,10 @@ export const NOTE_MENU: ContextItem[] = [
   "pianoRoll.delete",
   contextSeparator,
   "pianoRoll.selectAll",
+  "pianoRoll.selectMatchingPitches",
+  "pianoRoll.selectMutedNotes",
+  "pianoRoll.restoreMutedNotes",
+  "pianoRoll.selectNotesAtPlayhead",
   "pianoRoll.deselect",
   contextSeparator,
   "pianoRoll.quantize",
@@ -53,6 +61,7 @@ export const NOTE_MENU: ContextItem[] = [
 ]
 
 export const VIEW_MENU: ContextItem[] = [
+  "pianoRoll.exportSheetMusic",
   "pianoRoll.patternTimeline",
   "pianoRoll.zoomFit",
   "pianoRoll.zoomSelection",
@@ -71,6 +80,10 @@ const TOOLS: ContextItem = {
     "pianoRoll.toolPaint",
     "pianoRoll.toolSelect",
     "pianoRoll.toolErase",
+    "pianoRoll.toolMute",
+    "pianoRoll.toolSlice",
+    "pianoRoll.toolZoom",
+    "pianoRoll.toolPlayback",
   ],
 }
 
@@ -81,8 +94,15 @@ const TOOLS: ContextItem = {
 export const PANEL_MENU: ContextItem[] = [
   TOOLS,
   contextSeparator,
+  "pianoRoll.dumpPlayedNotes",
+  "pianoRoll.generateRiff",
+  "pianoRoll.generateProgression",
   "pianoRoll.paste",
   "pianoRoll.selectAll",
+  "pianoRoll.selectMatchingPitches",
+  "pianoRoll.selectMutedNotes",
+  "pianoRoll.restoreMutedNotes",
+  "pianoRoll.selectNotesAtPlayhead",
   contextSeparator,
   ...VIEW_MENU,
 ]

@@ -1,6 +1,7 @@
 import type {
   Channel,
   ChannelId,
+  ChannelPatch,
   Command,
   InstrumentKind,
   InstrumentParams,
@@ -164,6 +165,44 @@ export async function toggleSolo(id: ChannelId): Promise<void> {
       ? commands[0]
       : { type: "batch", label: "Solo channel", commands }
   )
+}
+
+export async function unmuteAllChannels(): Promise<void> {
+  const commands: Command[] = project()
+    .channels.filter((channel) => channel.muted)
+    .map((channel) => ({
+      type: "updateChannel",
+      id: channel.id,
+      patch: { muted: false },
+    }))
+  if (commands.length === 0) return
+  await dispatch({ type: "batch", label: "Unmute channels", commands })
+}
+
+export async function unsoloAllChannels(): Promise<void> {
+  const commands: Command[] = project()
+    .channels.filter((channel) => channel.solo)
+    .map((channel) => ({
+      type: "updateChannel",
+      id: channel.id,
+      patch: { solo: false },
+    }))
+  if (commands.length === 0) return
+  await dispatch({ type: "batch", label: "Unsolo channels", commands })
+}
+
+/** Returns every channel's volume and pan to unity as a single undo step. */
+export async function resetChannelLevels(): Promise<void> {
+  const commands: Command[] = []
+  for (const channel of project().channels) {
+    const patch: ChannelPatch = {}
+    if (channel.volume !== 1) patch.volume = 1
+    if (channel.pan !== 0) patch.pan = 0
+    if (patch.volume === undefined && patch.pan === undefined) continue
+    commands.push({ type: "updateChannel", id: channel.id, patch })
+  }
+  if (commands.length === 0) return
+  await dispatch({ type: "batch", label: "Reset channel levels", commands })
 }
 
 export async function setChannelColor(

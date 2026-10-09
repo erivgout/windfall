@@ -4,7 +4,11 @@ import type { DetectorMode } from "./DetectorMode";
 /**
  * Settings of the [`Compressor`].
  */
-export type CompressorParams = { sidechain?: boolean, 
+export type CompressorParams = { 
+/**
+ * Use the track's detector-only key bus; silence when no key arrives.
+ */
+sidechain?: boolean, 
 /**
  * Level above which the signal is turned down, in dB relative to full
  * scale. -60 to 0, default -18.

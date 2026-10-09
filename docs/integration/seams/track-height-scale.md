@@ -1,0 +1,1 @@
+The playlist track-height menu halves or doubles that one track's saved height. Follow stays on follow. Half uses the whole number of pixels at or below half, and stops at the short height. Double stops at the tallest saved height. Follow, Short, Normal, and Tall stay as they are. Color, mute, and solo stay as they are.

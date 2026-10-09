@@ -351,7 +351,7 @@ fn instrument_params_carry_their_kind_as_a_tag() {
         let params = kind.default_params();
         assert_eq!(params.kind(), kind);
         let json = serde_json::to_value(params).unwrap();
-        assert_eq!(json["type"], "subtractiveSynth");
+        assert_eq!(json["type"], serde_json::to_value(kind).unwrap());
         let back: InstrumentParams = serde_json::from_value(json).unwrap();
         assert_eq!(back, params);
         assert!(!kind.name().is_empty() && !kind.descriptors().is_empty());
@@ -360,7 +360,10 @@ fn instrument_params_carry_their_kind_as_a_tag() {
     let mut params = InstrumentKind::SubtractiveSynth.default_params();
     let waveform = SynthParams::index_of("oscillators.1.waveform").unwrap();
     assert!(params.set(waveform, 4.0));
-    let InstrumentParams::SubtractiveSynth(synth) = params;
+    let synth = match params {
+        InstrumentParams::SubtractiveSynth(synth) => synth,
+        _ => panic!("expected the subtractive synth"),
+    };
     assert_eq!(synth.oscillators[1].waveform, Waveform::Pulse);
     assert_eq!(params.sanitized(), params);
 }
@@ -394,7 +397,76 @@ fn names_are_plain_descriptions() {
             "Chorus",
             "Flanger",
             "Phaser",
-            "Subtractive synth"
+            "Band Split",
+            "Multiband Compressor",
+            "Multiband Maximizer",
+            "Transient Shaper",
+            "Transient Split",
+            "One Knob",
+            "Bass Harmonics",
+            "Exciter",
+            "Waveshaper",
+            "Overdrive",
+            "Guitar Rack",
+            "Drive Chain",
+            "Vintage Chorus",
+            "Hyper Chorus",
+            "Vintage Phaser",
+            "Stacked Flanger",
+            "Band Delay",
+            "Room",
+            "Spreader",
+            "Stereo Enhancer",
+            "Volume Gate",
+            "Time Transport",
+            "Scratch",
+            "Performance Rack",
+            "Convolver",
+            "Frequency Shifter",
+            "Pitch Shift",
+            "Pitch Correct",
+            "Vocoder",
+            "Echo bank",
+            "Frequency delay",
+            "Seven Band",
+            "Morph EQ",
+            "Filter Bank",
+            "XY Pad",
+            "XYZ Pad",
+            "Pan Motion",
+            "Envelope Follower",
+            "Note Envelope",
+            "Lush Space",
+            "Tuner",
+            "Stage Stack",
+            "Control Surface",
+            "Send Tap",
+            "Subtractive synth",
+            "Four Operator",
+            "Matrix FM",
+            "Ring Hybrid",
+            "Harmonic stack",
+            "Partial morph",
+            "Inharmonic",
+            "Resynth",
+            "Seed patch",
+            "Scan synth",
+            "Pluck",
+            "Finger Bass",
+            "Acoustic String",
+            "Membrane",
+            "Drum Rack",
+            "Kick",
+            "Drum Voice",
+            "Slice Map",
+            "Slice Deck",
+            "Grain Cloud",
+            "Wave Ride",
+            "Sequenced resonant bass",
+            "Three oscillator synth",
+            "Wavetable synth",
+            "Macro synth",
+            "Speech Voice",
         ]
     );
 }

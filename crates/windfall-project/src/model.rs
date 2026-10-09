@@ -173,6 +173,10 @@ pub struct Project {
     /// The next id to hand out. Id 0 is reserved for the master mixer track.
     pub next_id: u32,
     pub settings: ProjectSettings,
+    /// Up to eight saved plain-text song notebook pages.
+    #[serde(default, skip_serializing_if = "crate::Notebook::is_empty")]
+    #[ts(as = "Option<crate::Notebook>", optional)]
+    pub notebook: crate::Notebook,
     pub samples: Vec<SampleAsset>,
     /// Channel rack, in display order.
     pub channels: Vec<Channel>,
@@ -235,6 +239,9 @@ impl Project {
             next_id: pattern.0 + 1,
             settings: ProjectSettings {
                 name: name.into(),
+                author: String::new(),
+                genre: String::new(),
+                comments: String::new(),
                 tempo_bpm: 120.0,
                 time_signature: TimeSignature {
                     numerator: 4,
@@ -243,9 +250,10 @@ impl Project {
                 swing: 0.0,
             },
             samples: Vec::new(),
+            notebook: crate::Notebook::default(),
             channels: Vec::new(),
             patterns: vec![Pattern {
-            note_curves: Vec::new(),
+                note_curves: Vec::new(),
                 time_signature: None,
                 timeline: Default::default(),
                 id: pattern,
@@ -276,6 +284,7 @@ impl Project {
                 }],
             },
             playlist: Playlist {
+                arrangement_book: Default::default(),
                 tracks: Vec::new(),
                 clips: Vec::new(),
                 timeline: crate::Timeline::default(),
@@ -311,6 +320,18 @@ impl Project {
 #[ts(export)]
 pub struct ProjectSettings {
     pub name: String,
+    /// Project author, at most 256 UTF-8 bytes after trimming.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub author: String,
+    /// Project genre, at most 128 UTF-8 bytes after trimming.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub genre: String,
+    /// Project comments, at most 16,384 UTF-8 bytes after trimming.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[ts(as = "Option<String>", optional)]
+    pub comments: String,
     /// Tempo in beats per minute, [`MIN_TEMPO_BPM`] to [`MAX_TEMPO_BPM`].
     pub tempo_bpm: f64,
     pub time_signature: TimeSignature,
@@ -401,6 +422,13 @@ pub(crate) fn relative_path_problem(path: &str) -> Option<&'static str> {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Channel {
+    /// Additional note generators and modulation; absent in older files.
+    #[serde(
+        default,
+        deserialize_with = "crate::channel_voice::deserialize_settings"
+    )]
+    #[ts(as = "Option<crate::ChannelVoiceSettings>", optional)]
+    pub voice: crate::ChannelVoiceSettings,
     pub id: ChannelId,
     pub name: String,
     /// Named rack group. The empty string is the ungrouped category.
@@ -429,6 +457,9 @@ pub struct Channel {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
+// Instrument settings remain inline in the public project model, preserving
+// callers' value construction and avoiding a separate settings allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum ChannelSource {
     Sampler(SamplerSettings),
     /// A built-in instrument that turns the channel's notes into sound. A
@@ -483,6 +514,10 @@ pub struct SamplerSettings {
     #[serde(default = "loop_end_default", skip_serializing_if = "is_one")]
     #[ts(as = "Option<f32>", optional)]
     pub loop_end: f32,
+    /// Playback crossfade at the loop seam, 0 to 1. Zero preserves the dry loop.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<f32>", optional)]
+    pub loop_crossfade: f32,
     /// With no envelope a one-shot ignores note length, which drum hits want.
     /// Loops use a short release when this is absent; an envelope gates either.
     pub envelope: Option<Envelope>,
@@ -507,6 +542,7 @@ impl Default for SamplerSettings {
             loop_mode: SamplerLoopMode::Off,
             loop_start: 0.0,
             loop_end: 1.0,
+            loop_crossfade: 0.0,
             envelope: None,
             cut_self: false,
             cut_group: 0,
@@ -652,14 +688,26 @@ pub struct Pattern {
 }
 
 impl Pattern {
-    pub fn effective_signature(&self, legacy: TimeSignature) -> TimeSignature { self.time_signature.unwrap_or(legacy) }
+    pub fn effective_signature(&self, legacy: TimeSignature) -> TimeSignature {
+        self.time_signature.unwrap_or(legacy)
+    }
 
     pub fn check_musical(&self, legacy: TimeSignature, next_id: u32) -> Result<(), String> {
         crate::note_curves::check(self)?;
-        self.timeline.check(self.effective_signature(legacy), next_id)?;
-        if self.timeline.meters.iter().any(|meter| meter.tick > MAX_PATTERN_TICKS) ||
-            self.timeline.markers.iter().any(|marker| marker.tick > MAX_PATTERN_TICKS || marker.kind != crate::MarkerKind::Named) {
-            return Err("pattern meters and named markers must fit the maximum pattern span".to_owned());
+        self.timeline
+            .check(self.effective_signature(legacy), next_id)?;
+        if self
+            .timeline
+            .meters
+            .iter()
+            .any(|meter| meter.tick > MAX_PATTERN_TICKS)
+            || self.timeline.markers.iter().any(|marker| {
+                marker.tick > MAX_PATTERN_TICKS || marker.kind != crate::MarkerKind::Named
+            })
+        {
+            return Err(
+                "pattern meters and named markers must fit the maximum pattern span".to_owned(),
+            );
         }
         Ok(())
     }
@@ -795,11 +843,24 @@ pub struct ExternalOutputRoute {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub enum MixerDock { Left, #[default] Middle, Right }
-impl MixerDock { pub fn is_middle(&self) -> bool { *self == Self::Middle } }
+pub enum MixerDock {
+    Left,
+    #[default]
+    Middle,
+    Right,
+}
+impl MixerDock {
+    pub fn is_middle(&self) -> bool {
+        *self == Self::Middle
+    }
+}
 impl ExternalOutputRoute {
     pub fn check(&self) -> Result<(), String> {
-        if self.left >= 256 || self.right.is_some_and(|right| right >= 256 || right == self.left) {
+        if self.left >= 256
+            || self
+                .right
+                .is_some_and(|right| right >= 256 || right == self.left)
+        {
             return Err("Choose distinct hardware output ports below 256, or mono".into());
         }
         Ok(())
@@ -810,7 +871,12 @@ impl ExternalOutputRoute {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct AudioInputRoute { pub host: String, pub device: String, pub left: u16, pub right: Option<u16> }
+pub struct AudioInputRoute {
+    pub host: String,
+    pub device: String,
+    pub left: u16,
+    pub right: Option<u16>,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -828,29 +894,58 @@ pub struct MixerRecording {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub enum MixerRecordMode { #[default] Input, PostEffects, PostFader }
-impl MixerRecordMode { pub fn is_input(&self) -> bool { *self == Self::Input } }
+pub enum MixerRecordMode {
+    #[default]
+    Input,
+    PostEffects,
+    PostFader,
+}
+impl MixerRecordMode {
+    pub fn is_input(&self) -> bool {
+        *self == Self::Input
+    }
+}
 impl Default for MixerRecording {
-    fn default() -> Self { Self { input: None, armed: false, monitor: false, monitor_gain: 0.5, monitor_buffer_ms: 20, offset_ms: 0.0, mode: MixerRecordMode::Input } }
+    fn default() -> Self {
+        Self {
+            input: None,
+            armed: false,
+            monitor: false,
+            monitor_gain: 0.5,
+            monitor_buffer_ms: 20,
+            offset_ms: 0.0,
+            mode: MixerRecordMode::Input,
+        }
+    }
 }
 impl MixerRecording {
     pub fn check(&self) -> Result<(), String> {
-        if !self.monitor_gain.is_finite() || !(0.0..=1.0).contains(&self.monitor_gain) || !(5..=100).contains(&self.monitor_buffer_ms) {
+        if !self.monitor_gain.is_finite()
+            || !(0.0..=1.0).contains(&self.monitor_gain)
+            || !(5..=100).contains(&self.monitor_buffer_ms)
+        {
             return Err("monitor gain must be 0–1 and buffering 5–100 ms".into());
         }
-        if !self.offset_ms.is_finite() || self.offset_ms.abs() > 1000.0 { return Err("recording offset must be -1000 to 1000 ms".into()); }
+        if !self.offset_ms.is_finite() || self.offset_ms.abs() > 1000.0 {
+            return Err("recording offset must be -1000 to 1000 ms".into());
+        }
         if let Some(input) = &self.input {
-            if input.host.trim().is_empty() || input.device.trim().is_empty() || input.host.len() > 1024 || input.device.len() > 4096 {
+            if input.host.trim().is_empty()
+                || input.device.trim().is_empty()
+                || input.host.len() > 1024
+                || input.device.len() > 4096
+            {
                 return Err("input host and device must have usable names".into());
             }
-            if input.left >= 256 || input.right.is_some_and(|right| right >= 256) { return Err("hardware input channels must be below 256".into()); }
+            if input.left >= 256 || input.right.is_some_and(|right| right >= 256) {
+                return Err("hardware input channels must be below 256".into());
+            }
         }
         Ok(())
     }
 }
 
 impl MixerTrack {
-    dock: crate::MixerDock::default(),
     pub fn effect(&self, id: EffectId) -> Option<&EffectSlot> {
         self.effects.iter().find(|effect| effect.id == id)
     }
@@ -893,6 +988,10 @@ pub struct Send {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Playlist {
+    /// Saved arrangement references and grouping metadata.
+    #[serde(default, skip_serializing_if = "crate::ArrangementBook::is_empty")]
+    #[ts(as = "Option<crate::ArrangementBook>", optional)]
+    pub arrangement_book: crate::ArrangementBook,
     /// Lanes of the timeline, in display order.
     pub tracks: Vec<PlaylistTrack>,
     /// Sorted by `start`, then `id`.
@@ -914,6 +1013,30 @@ pub struct PlaylistTrack {
     pub id: PlaylistTrackId,
     pub name: String,
     pub muted: bool,
+    /// Limits playlist playback to solo tracks; mute still wins.
+    #[serde(default, skip_serializing_if = "playlist_track_solo_is_false")]
+    #[ts(as = "Option<bool>", optional)]
+    pub solo: bool,
+    /// 0 means uncolored; other values are 0xRRGGBB.
+    #[serde(default, skip_serializing_if = "playlist_track_color_is_zero")]
+    #[ts(as = "Option<u32>", optional)]
+    pub color: u32,
+    /// Row height in CSS pixels; 0 follows the global row height.
+    #[serde(default, skip_serializing_if = "playlist_track_height_is_zero")]
+    #[ts(as = "Option<u32>", optional)]
+    pub height: u32,
+}
+
+fn playlist_track_solo_is_false(solo: &bool) -> bool {
+    !*solo
+}
+
+fn playlist_track_color_is_zero(color: &u32) -> bool {
+    *color == 0
+}
+
+fn playlist_track_height_is_zero(height: &u32) -> bool {
+    *height == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1044,6 +1167,10 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "ClipAudioOutput::is_mixer")]
         #[ts(as = "Option<ClipAudioOutput>", optional)]
         output: ClipAudioOutput,
+        /// Peak normalization applied during plan construction; the gain knob stays unchanged.
+        #[serde(default, skip_serializing_if = "audio_clip_normalize_is_false")]
+        #[ts(as = "Option<bool>", optional)]
+        normalize: bool,
         /// Linear gain, 0 to [`MAX_GAIN`].
         gain: f32,
         /// -1 is hard left, 1 is hard right.
@@ -1110,6 +1237,10 @@ pub enum ClipContent {
     /// hand.
     #[serde(rename_all = "camelCase")]
     Automation { automation: AutomationId },
+}
+
+fn audio_clip_normalize_is_false(normalize: &bool) -> bool {
+    !*normalize
 }
 
 /// Playback destination for audio clips. Direct prints retain their own gain,
@@ -1207,26 +1338,43 @@ pub enum AutomationTarget {
     /// silence, 0.7071 is 0 dB and 1 is +6 dB ([`MAX_GAIN`]). A channel
     /// that is muted, or silenced by another channel's solo, stays silent.
     #[serde(rename_all = "camelCase")]
-    ChannelVolume { channel: ChannelId },
+    ChannelVolume {
+        channel: ChannelId,
+    },
     /// A channel's pan: `2 * value - 1`, from hard left at 0 through the
     /// center at 0.5 to hard right at 1.
     #[serde(rename_all = "camelCase")]
-    ChannelPan { channel: ChannelId },
+    ChannelPan {
+        channel: ChannelId,
+    },
     /// A mixer track's fader, the master's included: linear gain
     /// `2 * value * value`, as for a channel's volume. A track that is
     /// muted, or silenced by another track's solo, stays silent.
     #[serde(rename_all = "camelCase")]
-    TrackVolume { track: TrackId },
+    TrackVolume {
+        track: TrackId,
+    },
     /// A mixer track's pan: `2 * value - 1`.
     #[serde(rename_all = "camelCase")]
-    TrackPan { track: TrackId },
+    TrackPan {
+        track: TrackId,
+    },
     #[serde(rename_all = "camelCase")]
-    TrackParam { track: TrackId, param: u32 },
+    TrackParam {
+        track: TrackId,
+        param: u32,
+    },
     /// The level of the send from `track` to `target`: linear gain
     /// `2 * value * value`. The send has to exist.
     #[serde(rename_all = "camelCase")]
-    SendGain { track: TrackId, target: TrackId },
-    SidechainGain { track: TrackId, target: TrackId },
+    SendGain {
+        track: TrackId,
+        target: TrackId,
+    },
+    SidechainGain {
+        track: TrackId,
+        target: TrackId,
+    },
     /// One setting of an effect. `param` is its index in the descriptors
     /// of the effect's kind, and the value maps onto the descriptor's
     /// `min` to `max`: linearly, or in equal ratios
@@ -1243,11 +1391,17 @@ pub enum AutomationTarget {
     /// The mix of an effect slot: 0 is the untouched signal and 1 is the
     /// effect alone.
     #[serde(rename_all = "camelCase")]
-    EffectMix { track: TrackId, effect: EffectId },
+    EffectMix {
+        track: TrackId,
+        effect: EffectId,
+    },
     /// One setting of a channel's instrument, addressed and mapped like
     /// [`AutomationTarget::EffectParam`].
     #[serde(rename_all = "camelCase")]
-    InstrumentParam { channel: ChannelId, param: u32 },
+    InstrumentParam {
+        channel: ChannelId,
+        param: u32,
+    },
     /// The tempo: `10 + 512 * value` beats per minute, from
     /// [`MIN_TEMPO_BPM`] to [`MAX_TEMPO_BPM`], so 120 bpm is 0.21484375.
     /// It moves the song's own clock: notes, clip edges and the playhead

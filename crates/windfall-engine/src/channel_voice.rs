@@ -1,0 +1,888 @@
+//! Fixed-storage channel voice tools. Settings are persisted; prepared state is
+//! transient. These modulations supplement the sampler's volume envelope.
+
+#[cfg(test)]
+use serde::Deserialize;
+use windfall_dsp::blocks::adsr::Adsr;
+
+pub const MAX_CHORD_NOTES: usize = 16;
+pub const MAX_HELD_NOTES: usize = 32;
+/// Split larger blocks and consume each returned batch before continuing.
+pub const MAX_BLOCK_FRAMES: usize = 256;
+pub const MAX_EVENTS: usize = MAX_BLOCK_FRAMES * 2;
+pub const ECHO_EVENT_CAPACITY: usize = 256;
+/// Echoes below -60 dB velocity are not scheduled.
+pub const ECHO_VELOCITY_FLOOR: f32 = 0.001;
+
+fn finite(value: f32, low: f32, high: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(low, high)
+    } else {
+        fallback
+    }
+}
+fn sample_rate(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(1.0, 384_000.0)
+    } else {
+        48_000.0
+    }
+}
+pub use windfall_project::channel_voice::*;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HeldNote {
+    pub key: u8,
+    pub velocity: f32,
+}
+impl HeldNote {
+    pub fn sanitized(self) -> Self {
+        Self {
+            key: self.key.min(127),
+            velocity: finite(self.velocity, 0.0, 1.0, 0.0),
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NoteEventKind {
+    #[default]
+    On,
+    Off,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NoteEvent {
+    /// Stable within one processor until reset. Match on/off by this id,
+    /// scoped to the channel and processor, rather than by MIDI key.
+    pub id: u64,
+    /// Offset inside the processed portion of this block.
+    pub frame: usize,
+    pub kind: NoteEventKind,
+    pub note: HeldNote,
+}
+/// Bounded, chronological events. Off precedes on at a shared frame.
+pub struct NoteEvents {
+    events: [NoteEvent; MAX_EVENTS],
+    len: usize,
+    pub processed_frames: usize,
+}
+impl Default for NoteEvents {
+    fn default() -> Self {
+        Self {
+            events: [NoteEvent::default(); MAX_EVENTS],
+            len: 0,
+            processed_frames: 0,
+        }
+    }
+}
+impl NoteEvents {
+    pub fn as_slice(&self) -> &[NoteEvent] {
+        &self.events[..self.len]
+    }
+    fn push(&mut self, frame: usize, kind: NoteEventKind, note: HeldNote, id: u64) {
+        // Block and queue bounds guarantee capacity, including gate=1.
+        assert!(self.len < MAX_EVENTS);
+        self.events[self.len] = NoteEvent {
+            frame,
+            kind,
+            note,
+            id,
+        };
+        self.len += 1;
+    }
+    fn begin(&mut self, frames: usize) {
+        self.len = 0;
+        self.processed_frames = frames.min(MAX_BLOCK_FRAMES);
+    }
+}
+
+pub struct Arpeggiator {
+    settings: ArpeggiatorSettings,
+    chord: [HeldNote; MAX_CHORD_NOTES],
+    chord_len: usize,
+    expanded: [HeldNote; MAX_CHORD_NOTES * 4],
+    expanded_len: usize,
+    step: usize,
+    until_step: f64,
+    until_off: f64,
+    sounding: Option<(HeldNote, u64)>,
+    next_id: u64,
+    release_pending: bool,
+}
+impl Arpeggiator {
+    pub fn prepare(settings: ArpeggiatorSettings) -> Self {
+        Self {
+            settings: settings.sanitized(),
+            chord: [HeldNote::default(); MAX_CHORD_NOTES],
+            chord_len: 0,
+            expanded: [HeldNote::default(); MAX_CHORD_NOTES * 4],
+            expanded_len: 0,
+            step: 0,
+            until_step: 0.0,
+            until_off: 0.0,
+            sounding: None,
+            next_id: 1,
+            release_pending: false,
+        }
+    }
+    /// Input order is play order. Duplicate keys are ignored; first 16 win.
+    /// A chord edit releases the old generated note at the next processed frame.
+    pub fn set_chord(&mut self, notes: &[HeldNote]) {
+        self.chord_len = 0;
+        for &note in notes {
+            let note = note.sanitized();
+            if self.chord[..self.chord_len]
+                .iter()
+                .any(|held| held.key == note.key)
+            {
+                continue;
+            }
+            if self.chord_len == MAX_CHORD_NOTES {
+                break;
+            }
+            self.chord[self.chord_len] = note;
+            self.chord_len += 1;
+        }
+        self.expanded_len = 0;
+        for octave in 0..self.settings.range_octaves {
+            for note in &self.chord[..self.chord_len] {
+                let key = u16::from(note.key) + u16::from(octave) * 12;
+                if key <= 127 {
+                    self.expanded[self.expanded_len] = HeldNote {
+                        key: key as u8,
+                        ..*note
+                    };
+                    self.expanded_len += 1;
+                }
+            }
+        }
+        if self.settings.mode != ArpeggiatorMode::AsPlayed {
+            self.expanded[..self.expanded_len].sort_unstable_by_key(|note| note.key);
+        }
+        self.step = 0;
+        self.until_step = 0.0;
+        self.release_pending = self.sounding.is_some();
+    }
+    /// Remaining known gate after the current one-frame routing subblock.
+    pub(crate) fn gate_frames(&self) -> usize {
+        (self.until_off.ceil().max(0.0) as usize).saturating_add(1)
+    }
+    /// Reset on stop/seek. The caller releases the returned sounding note.
+    pub fn reset(&mut self) -> Option<(HeldNote, u64)> {
+        self.step = 0;
+        self.until_step = 0.0;
+        self.release_pending = false;
+        self.sounding.take()
+    }
+    pub fn process_block(&mut self, rate: f64, bpm: f64, frames: usize, out: &mut NoteEvents) {
+        out.begin(frames);
+        let interval = self.settings.rate.frames(rate, bpm);
+        for frame in 0..out.processed_frames {
+            if self.release_pending || self.until_off <= 0.0 {
+                if let Some((note, id)) = self.sounding.take() {
+                    out.push(frame, NoteEventKind::Off, note, id);
+                }
+                self.release_pending = false;
+            }
+            if self.until_step <= 0.0
+                && self.expanded_len > 0
+                && self.settings.mode != ArpeggiatorMode::Off
+            {
+                if let Some((note, id)) = self.sounding.take() {
+                    out.push(frame, NoteEventKind::Off, note, id);
+                }
+                let len = self.expanded_len;
+                let index = match self.settings.mode {
+                    ArpeggiatorMode::Down => len - 1 - self.step % len,
+                    ArpeggiatorMode::UpDown if len > 1 => {
+                        let position = self.step % (2 * (len - 1));
+                        position.min(2 * (len - 1) - position)
+                    }
+                    _ => self.step % len,
+                };
+                let note = self.expanded[index];
+                if self.settings.gate > 0.0 && note.velocity > 0.0 {
+                    let id = self.next_id;
+                    self.next_id = self.next_id.wrapping_add(1);
+                    out.push(frame, NoteEventKind::On, note, id);
+                    self.sounding = Some((note, id));
+                    // Include fractional step residual so gate=1 meets the next
+                    // step without a gap at non-integral note divisions.
+                    self.until_off = (interval * f64::from(self.settings.gate) + self.until_step)
+                        .max(1.0)
+                        .min(interval);
+                }
+                self.step = (self.step + 1) % (2 * len.max(2) * (len.max(2) - 1));
+                self.until_step += interval;
+            }
+            self.until_step = (self.until_step - 1.0).max(-1.0);
+            self.until_off -= 1.0;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DelayedEvent {
+    id: u64,
+    at: u64,
+    kind: NoteEventKind,
+    note: HeldNote,
+}
+pub struct NoteEcho {
+    settings: NoteEchoSettings,
+    queue: [Option<DelayedEvent>; ECHO_EVENT_CAPACITY],
+    frame: u64,
+    next_id: u64,
+}
+impl NoteEcho {
+    pub fn prepare(settings: NoteEchoSettings) -> Self {
+        Self {
+            settings: settings.sanitized(),
+            queue: [None; ECHO_EVENT_CAPACITY],
+            frame: 0,
+            next_id: 1,
+        }
+    }
+    /// Schedule echoes of one completed note; original is not emitted.
+    /// `offset` is relative to the next block; `duration` is the original gate.
+    /// Repeat n adds n*pitch offset and multiplies velocity by feedback^n.
+    /// False rejects the entire request for capacity. Never feed echoes back.
+    pub fn schedule_note(
+        &mut self,
+        note: HeldNote,
+        offset: usize,
+        duration: usize,
+        rate: f64,
+        bpm: f64,
+    ) -> bool {
+        if !self.settings.enabled {
+            return true;
+        }
+        let delay = match self.settings.time {
+            EchoTime::Milliseconds { ms } => (sample_rate(rate) * f64::from(ms) / 1000.0).max(1.0),
+            EchoTime::Division { division } => division.frames(rate, bpm),
+        };
+        let note = note.sanitized();
+        let mut pending = [None; 16];
+        let mut count = 0;
+        let mut velocity = note.velocity;
+        for repeat in 1..=self.settings.repeats {
+            velocity *= self.settings.feedback;
+            if velocity < ECHO_VELOCITY_FLOOR {
+                break;
+            }
+            let key =
+                i16::from(note.key) + i16::from(self.settings.pitch_semitones) * i16::from(repeat);
+            if !(0..=127).contains(&key) {
+                break;
+            }
+            let at = self
+                .frame
+                .saturating_add(offset as u64)
+                .saturating_add((delay * f64::from(repeat)).round() as u64);
+            let echoed = HeldNote {
+                key: key as u8,
+                velocity,
+            };
+            pending[count] = Some(DelayedEvent {
+                id: self.next_id.wrapping_add(u64::from(repeat) - 1),
+                at,
+                kind: NoteEventKind::On,
+                note: echoed,
+            });
+            pending[count + 1] = Some(DelayedEvent {
+                id: self.next_id.wrapping_add(u64::from(repeat) - 1),
+                at: at.saturating_add(duration.max(1) as u64),
+                kind: NoteEventKind::Off,
+                note: echoed,
+            });
+            count += 2;
+        }
+        if self.queue.iter().filter(|slot| slot.is_none()).count() < count {
+            return false;
+        }
+        let mut events = pending[..count].iter().copied();
+        for slot in self
+            .queue
+            .iter_mut()
+            .filter(|slot| slot.is_none())
+            .take(count)
+        {
+            *slot = events.next().flatten();
+        }
+        self.next_id = self.next_id.wrapping_add((count / 2) as u64);
+        true
+    }
+    /// Discard future events on stop/seek after the caller releases voices.
+    pub fn reset(&mut self) {
+        self.queue.fill(None);
+        self.frame = 0;
+    }
+    /// Identity range assigned by the next successful scheduling call.
+    pub(crate) fn next_id(&self) -> u64 {
+        self.next_id
+    }
+    pub fn pending_events(&self) -> usize {
+        self.queue.iter().filter(|event| event.is_some()).count()
+    }
+    pub fn process_block(&mut self, frames: usize, out: &mut NoteEvents) {
+        out.begin(frames);
+        let end = self.frame.saturating_add(out.processed_frames as u64);
+        // Scan the fixed event queue once per block, rather than once per
+        // sample. Unstable sorting is allocation-free and ids break ties.
+        for slot in &mut self.queue {
+            if let Some(event) = *slot
+                && event.at < end
+            {
+                let frame = event.at.saturating_sub(self.frame) as usize;
+                out.push(frame, event.kind, event.note, event.id);
+                *slot = None;
+            }
+        }
+        out.events[..out.len].sort_unstable_by_key(|event| {
+            (
+                event.frame,
+                if event.kind == NoteEventKind::Off {
+                    0
+                } else {
+                    1
+                },
+                event.id,
+            )
+        });
+        self.frame = end;
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PolyphonyDecision {
+    released: [u8; MAX_HELD_NOTES],
+    released_len: usize,
+    /// False only when another mono-legato note is still held.
+    pub retrigger: bool,
+}
+
+impl PolyphonyDecision {
+    /// Release these existing keys before admitting the new note. Includes
+    /// duplicate-key retriggers and all victims when a voice limit shrinks.
+    pub fn released_keys(&self) -> &[u8] {
+        &self.released[..self.released_len]
+    }
+}
+/// Surviving keys, oldest first. Evicted keys are not remembered for fallback.
+pub struct HeldNotes {
+    keys: [u8; MAX_HELD_NOTES],
+    len: usize,
+}
+impl Default for HeldNotes {
+    fn default() -> Self {
+        Self {
+            keys: [0; MAX_HELD_NOTES],
+            len: 0,
+        }
+    }
+}
+impl HeldNotes {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.keys[..self.len]
+    }
+    pub fn note_off(&mut self, key: u8) {
+        if let Some(index) = self.as_slice().iter().position(|&held| held == key) {
+            self.keys.copy_within(index + 1..self.len, index);
+            self.len -= 1;
+        }
+    }
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+}
+/// Mono legato enforces one survivor even with max_voices > 1. Oldest keys
+/// are evicted first, and the decision includes every victim if limits shrink.
+pub fn admit_note(held: &mut HeldNotes, key: u8, settings: PolyphonySettings) -> PolyphonyDecision {
+    let settings = settings.sanitized();
+    let key = key.min(127);
+    let overlapping = held.len > 0;
+    let duplicate = held.as_slice().contains(&key);
+    held.note_off(key);
+    let limit = if settings.mono_legato {
+        1
+    } else {
+        usize::from(settings.max_voices)
+    };
+    let mut decision = PolyphonyDecision {
+        retrigger: !(settings.mono_legato && overlapping),
+        ..Default::default()
+    };
+    if duplicate {
+        decision.released[0] = key;
+        decision.released_len = 1;
+    }
+    while held.len >= limit {
+        decision.released[decision.released_len] = held.keys[0];
+        decision.released_len += 1;
+        held.keys.copy_within(1..held.len, 0);
+        held.len -= 1;
+    }
+    held.keys[held.len] = key;
+    held.len += 1;
+    decision
+}
+
+/// One instance per sounding voice, separate from its volume envelope.
+#[derive(Clone, Copy)]
+pub struct PreparedChannelEnvelopes {
+    settings: ChannelEnvelopes,
+    generators: [Adsr; 3],
+    phase: f64,
+    rate: f64,
+}
+pub struct ModulationBlock {
+    /// Octaves: multiply base cutoff by 2^offset, then clamp below Nyquist.
+    pub filter_cutoff_offset: [f32; MAX_BLOCK_FRAMES],
+    pub pitch_cents: [f32; MAX_BLOCK_FRAMES],
+    pub pan: [f32; MAX_BLOCK_FRAMES],
+    pub frames: usize,
+}
+impl Default for ModulationBlock {
+    fn default() -> Self {
+        Self {
+            filter_cutoff_offset: [0.0; MAX_BLOCK_FRAMES],
+            pitch_cents: [0.0; MAX_BLOCK_FRAMES],
+            pan: [0.0; MAX_BLOCK_FRAMES],
+            frames: 0,
+        }
+    }
+}
+impl PreparedChannelEnvelopes {
+    pub fn prepare(settings: ChannelEnvelopes, rate: f64) -> Self {
+        let settings = settings.sanitized();
+        let rate = sample_rate(rate);
+        let mut generators = [Adsr::default(); 3];
+        for (generator, envelope) in
+            generators
+                .iter_mut()
+                .zip([settings.filter, settings.pitch, settings.pan])
+        {
+            generator.configure(
+                envelope.attack_ms,
+                envelope.decay_ms,
+                envelope.sustain,
+                envelope.release_ms,
+                rate as f32,
+            );
+        }
+        Self {
+            settings,
+            generators,
+            phase: 0.0,
+            rate,
+        }
+    }
+    pub(crate) fn enabled(&self) -> bool {
+        self.settings.filter.enabled
+            || self.settings.pitch.enabled
+            || self.settings.pan.enabled
+            || self.settings.lfo.enabled
+    }
+    /// Call only on retrigger; mono legato preserves this state.
+    pub fn gate_on(&mut self) {
+        for envelope in &mut self.generators {
+            envelope.gate_on();
+        }
+    }
+    pub fn gate_off(&mut self) {
+        for envelope in &mut self.generators {
+            envelope.gate_off();
+        }
+    }
+    pub fn reset(&mut self) {
+        for envelope in &mut self.generators {
+            envelope.reset();
+        }
+        self.phase = 0.0;
+    }
+    pub fn process_block(&mut self, frames: usize, out: &mut ModulationBlock) {
+        out.frames = frames.min(MAX_BLOCK_FRAMES);
+        out.filter_cutoff_offset.fill(0.0);
+        out.pitch_cents.fill(0.0);
+        out.pan.fill(0.0);
+        for frame in 0..out.frames {
+            let mut values = [0.0; 3];
+            for (index, settings) in [self.settings.filter, self.settings.pitch, self.settings.pan]
+                .iter()
+                .enumerate()
+            {
+                let level = self.generators[index].tick();
+                if settings.enabled {
+                    values[index] = level * settings.depth;
+                }
+            }
+            let lfo = self.settings.lfo;
+            if lfo.enabled {
+                let wave = match lfo.shape {
+                    LfoShape::Sine => (self.phase * std::f64::consts::TAU).sin(),
+                    LfoShape::Triangle => 1.0 - 4.0 * (self.phase - 0.5).abs(),
+                    LfoShape::Square => {
+                        if self.phase < 0.5 {
+                            1.0
+                        } else {
+                            -1.0
+                        }
+                    }
+                } as f32
+                    * lfo.depth;
+                match lfo.target {
+                    LfoTarget::Filter => values[0] += wave * 8.0,
+                    LfoTarget::Pitch => values[1] += wave * 2400.0,
+                    LfoTarget::Pan => values[2] += wave,
+                }
+            }
+            self.phase = (self.phase + f64::from(lfo.rate_hz) / self.rate).rem_euclid(1.0);
+            out.filter_cutoff_offset[frame] = values[0].clamp(-8.0, 8.0);
+            out.pitch_cents[frame] = values[1].clamp(-2400.0, 2400.0);
+            out.pan[frame] = values[2].clamp(-1.0, 1.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn note(key: u8) -> HeldNote {
+        HeldNote { key, velocity: 1.0 }
+    }
+
+    #[test]
+    fn arp_up_orders_low_to_high_inside_octave_range() {
+        let mut arp = Arpeggiator::prepare(ArpeggiatorSettings {
+            mode: ArpeggiatorMode::Up,
+            range_octaves: 2,
+            rate: NoteDivision::ThirtySecond,
+            ..Default::default()
+        });
+        arp.set_chord(&[note(67), note(60), note(64)]);
+        let mut events = NoteEvents::default();
+        arp.process_block(80.0, 120.0, 36, &mut events);
+        let keys: Vec<_> = events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == NoteEventKind::On)
+            .map(|e| e.note.key)
+            .collect();
+        assert_eq!(keys, [60, 64, 67, 72, 76, 79, 60, 64]);
+        assert!(keys.iter().all(|key| (60..=79).contains(key)));
+    }
+
+    #[test]
+    fn arp_modes_and_gate_off_order() {
+        for (mode, expected) in [
+            (ArpeggiatorMode::Down, [67, 64, 60, 67]),
+            (ArpeggiatorMode::UpDown, [60, 64, 67, 64]),
+            (ArpeggiatorMode::AsPlayed, [64, 60, 67, 64]),
+        ] {
+            let mut arp = Arpeggiator::prepare(ArpeggiatorSettings {
+                mode,
+                gate: 1.0,
+                rate: NoteDivision::ThirtySecond,
+                ..Default::default()
+            });
+            arp.set_chord(&[note(64), note(60), note(67)]);
+            let mut events = NoteEvents::default();
+            arp.process_block(80.0, 120.0, 16, &mut events);
+            let keys: Vec<_> = events
+                .as_slice()
+                .iter()
+                .filter(|e| e.kind == NoteEventKind::On)
+                .map(|e| e.note.key)
+                .collect();
+            assert_eq!(keys, expected);
+            assert_eq!(events.as_slice()[1].kind, NoteEventKind::Off);
+            assert_eq!(events.as_slice()[1].frame, events.as_slice()[2].frame);
+            assert_eq!(events.as_slice()[0].id, events.as_slice()[1].id);
+            arp.set_chord(&[]);
+            arp.process_block(80.0, 120.0, 1, &mut events);
+            assert_eq!(events.as_slice().len(), 1);
+            assert_eq!(events.as_slice()[0].kind, NoteEventKind::Off);
+        }
+    }
+
+    #[test]
+    fn arp_fractional_timing_is_block_independent_and_midi_bounded() {
+        let settings = ArpeggiatorSettings {
+            mode: ArpeggiatorMode::Up,
+            range_octaves: 4,
+            gate: 0.4,
+            ..Default::default()
+        };
+        let mut whole = Arpeggiator::prepare(settings);
+        let mut split = Arpeggiator::prepare(settings);
+        whole.set_chord(&[note(126)]);
+        split.set_chord(&[note(126)]);
+        let mut out = NoteEvents::default();
+        whole.process_block(100.0, 137.0, 200, &mut out);
+        let expected = out.as_slice().to_vec();
+        let mut got = Vec::new();
+        for base in (0..200).step_by(10) {
+            split.process_block(100.0, 137.0, 10, &mut out);
+            got.extend(out.as_slice().iter().map(|event| NoteEvent {
+                frame: event.frame + base,
+                ..*event
+            }));
+        }
+        assert_eq!(expected, got);
+        assert!(got.iter().all(|event| event.note.key == 126));
+    }
+
+    #[test]
+    fn echo_requested_repeats_and_feedback_bound() {
+        let mut echo = NoteEcho::prepare(NoteEchoSettings {
+            enabled: true,
+            repeats: 8,
+            feedback: 1.0,
+            time: EchoTime::Milliseconds { ms: 2.0 },
+            pitch_semitones: 1,
+        });
+        assert_eq!(echo.settings.feedback, 0.95);
+        assert!(echo.schedule_note(note(60), 0, 1, 1000.0, 120.0));
+        let mut out = NoteEvents::default();
+        echo.process_block(32, &mut out);
+        let ons: Vec<_> = out
+            .as_slice()
+            .iter()
+            .filter(|event| event.kind == NoteEventKind::On)
+            .collect();
+        assert_eq!(ons.len(), 8);
+        assert_eq!(ons[7].note.key, 68);
+        for (index, event) in ons.iter().enumerate() {
+            assert!((event.note.velocity - 0.95_f32.powi(index as i32 + 1)).abs() < 1e-6);
+            let off = out
+                .as_slice()
+                .iter()
+                .find(|off| off.id == event.id && off.kind == NoteEventKind::Off)
+                .unwrap();
+            assert_eq!(off.frame, event.frame + 1);
+        }
+        assert_eq!(echo.pending_events(), 0);
+        echo.process_block(32, &mut out);
+        assert!(out.as_slice().is_empty());
+        let mut quiet = NoteEcho::prepare(NoteEchoSettings {
+            enabled: true,
+            repeats: 8,
+            feedback: 0.1,
+            ..Default::default()
+        });
+        assert!(quiet.schedule_note(note(60), 0, 1, 1000.0, 120.0));
+        assert_eq!(quiet.pending_events(), 6);
+        let mut zero = NoteEcho::prepare(NoteEchoSettings {
+            enabled: true,
+            feedback: 0.0,
+            ..Default::default()
+        });
+        assert!(zero.schedule_note(note(60), 0, 1, 1000.0, 120.0));
+        assert_eq!(zero.pending_events(), 0);
+    }
+
+    #[test]
+    fn echo_capacity_rejects_atomically_and_division_is_tempo_synced() {
+        let mut echo = NoteEcho::prepare(NoteEchoSettings {
+            enabled: true,
+            repeats: 8,
+            time: EchoTime::Division {
+                division: NoteDivision::Quarter,
+            },
+            feedback: 0.95,
+            ..Default::default()
+        });
+        for _ in 0..16 {
+            assert!(echo.schedule_note(note(60), 0, 20, 100.0, 120.0));
+        }
+        assert!(!echo.schedule_note(note(60), 0, 20, 100.0, 120.0));
+        assert_eq!(echo.pending_events(), ECHO_EVENT_CAPACITY);
+        let mut out = NoteEvents::default();
+        echo.process_block(51, &mut out);
+        assert_eq!(out.as_slice().len(), 16);
+        assert!(out.as_slice().iter().all(|event| event.frame == 50));
+        echo.reset();
+        assert_eq!(echo.pending_events(), 0);
+    }
+
+    #[test]
+    fn polyphony_one_replaces_and_legato_preserves_envelopes() {
+        let mut held = HeldNotes::default();
+        let settings = PolyphonySettings {
+            max_voices: 1,
+            ..Default::default()
+        };
+        assert!(admit_note(&mut held, 60, settings).retrigger);
+        assert_eq!(admit_note(&mut held, 64, settings).released_keys(), [60]);
+        assert_eq!(held.as_slice(), [64]);
+        let legato = admit_note(
+            &mut held,
+            67,
+            PolyphonySettings {
+                mono_legato: true,
+                ..settings
+            },
+        );
+        assert!(!legato.retrigger);
+        assert_eq!(legato.released_keys(), [64]);
+        held.note_off(67);
+        assert!(held.as_slice().is_empty());
+    }
+
+    #[test]
+    fn polyphony_limit_reduction_reports_all_victims_and_duplicate_retriggers() {
+        let mut held = HeldNotes::default();
+        for key in 60..64 {
+            admit_note(&mut held, key, PolyphonySettings::default());
+        }
+        let decision = admit_note(
+            &mut held,
+            67,
+            PolyphonySettings {
+                max_voices: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(decision.released_keys(), [60, 61, 62, 63]);
+        assert_eq!(held.as_slice(), [67]);
+        assert_eq!(
+            admit_note(&mut held, 67, PolyphonySettings::default()).released_keys(),
+            [67]
+        );
+        assert_eq!(held.as_slice(), [67]);
+    }
+
+    #[test]
+    fn portamento_moves_toward_target() {
+        let coefficient = PolyphonySettings {
+            portamento_ms: 100.0,
+            ..Default::default()
+        }
+        .glide_coefficient(1000.0);
+        let mut pitch = 60.0;
+        for _ in 0..100 {
+            let before = pitch;
+            pitch += (72.0 - pitch) * coefficient;
+            assert!(pitch > before && pitch < 72.0);
+        }
+        assert!((pitch - (60.0 + 12.0 * (1.0 - (-1.0_f64).exp()))).abs() < 1e-9);
+        assert_eq!(PolyphonySettings::default().glide_coefficient(1000.0), 1.0);
+    }
+
+    #[test]
+    fn envelope_attack_rises_and_release_falls() {
+        let settings = ChannelEnvelopes {
+            pitch: ModulationEnvelope {
+                enabled: true,
+                attack_ms: 10.0,
+                sustain: 1.0,
+                release_ms: 10.0,
+                depth: 100.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut envelope = PreparedChannelEnvelopes::prepare(settings, 1000.0);
+        let mut out = ModulationBlock::default();
+        envelope.gate_on();
+        envelope.process_block(12, &mut out);
+        assert!(
+            out.pitch_cents[..10]
+                .windows(2)
+                .all(|pair| pair[1] >= pair[0])
+        );
+        assert!(out.pitch_cents[9] > 99.0);
+        envelope.gate_off();
+        envelope.process_block(20, &mut out);
+        assert!(
+            out.pitch_cents[..20]
+                .windows(2)
+                .all(|pair| pair[1] <= pair[0])
+        );
+        assert_eq!(out.pitch_cents[19], 0.0);
+    }
+
+    #[test]
+    fn lfo_sine_changes_sign_over_period() {
+        let settings = ChannelEnvelopes {
+            lfo: ChannelLfoSettings {
+                enabled: true,
+                target: LfoTarget::Pan,
+                rate_hz: 10.0,
+                depth: 1.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut envelopes = PreparedChannelEnvelopes::prepare(settings, 1000.0);
+        let mut out = ModulationBlock::default();
+        envelopes.process_block(100, &mut out);
+        assert!(out.pan[25] > 0.99);
+        assert!(out.pan[75] < -0.99);
+        assert!(out.pan[50].abs() < 1e-5);
+    }
+
+    #[test]
+    fn sanitizer_clamps_and_recovers_non_finite_values() {
+        let mut settings = ChannelVoiceSettings::default();
+        settings.arpeggiator.gate = 3.0;
+        settings.arpeggiator.range_octaves = 0;
+        settings.echo.feedback = 10.0;
+        settings.echo.repeats = 255;
+        settings.echo.pitch_semitones = -127;
+        settings.echo.time = EchoTime::Milliseconds { ms: f32::NAN };
+        settings.polyphony.max_voices = 0;
+        settings.polyphony.portamento_ms = -1.0;
+        settings.envelopes.pitch.sustain = f32::INFINITY;
+        settings.envelopes.pan.depth = 4.0;
+        settings.envelopes.lfo.rate_hz = 100.0;
+        let settings = settings.sanitized();
+        assert_eq!(settings.arpeggiator.gate, 1.0);
+        assert_eq!(settings.arpeggiator.range_octaves, 1);
+        assert_eq!(settings.echo.feedback, 0.95);
+        assert_eq!(settings.echo.repeats, 8);
+        assert_eq!(settings.echo.pitch_semitones, -48);
+        assert_eq!(settings.echo.time, EchoTime::Milliseconds { ms: 250.0 });
+        assert_eq!(settings.polyphony.max_voices, 1);
+        assert_eq!(settings.polyphony.portamento_ms, 0.0);
+        assert_eq!(settings.envelopes.pitch.sustain, 0.8);
+        assert_eq!(settings.envelopes.pan.depth, 1.0);
+        assert_eq!(settings.envelopes.lfo.rate_hz, 30.0);
+    }
+
+    #[test]
+    fn processing_is_bounded_and_defaults_are_neutral() {
+        let mut arp = Arpeggiator::prepare(ArpeggiatorSettings {
+            mode: ArpeggiatorMode::Up,
+            gate: 1.0,
+            ..Default::default()
+        });
+        arp.set_chord(&[note(60)]);
+        let mut events = NoteEvents::default();
+        arp.process_block(1.0, 999.0, 10_000, &mut events);
+        assert_eq!(events.processed_frames, MAX_BLOCK_FRAMES);
+        assert_eq!(events.as_slice().len(), 511);
+        let mut envelopes =
+            PreparedChannelEnvelopes::prepare(ChannelEnvelopes::default(), 48_000.0);
+        let mut out = ModulationBlock::default();
+        envelopes.gate_on();
+        envelopes.process_block(256, &mut out);
+        assert!(
+            out.filter_cutoff_offset
+                .iter()
+                .chain(&out.pitch_cents)
+                .chain(&out.pan)
+                .all(|value| *value == 0.0)
+        );
+    }
+
+    #[test]
+    fn omitted_settings_deserialize_to_defaults() {
+        let empty = serde::de::value::MapDeserializer::<_, serde::de::value::Error>::new(
+            std::iter::empty::<(String, i32)>(),
+        );
+        let settings = ChannelVoiceSettings::deserialize(empty).unwrap();
+        assert_eq!(settings, ChannelVoiceSettings::default());
+    }
+}

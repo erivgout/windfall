@@ -21,6 +21,8 @@ import type { EntryRow } from "./tree-model"
 export const BROWSER_MENU: ContextItem[] = [
   "browser.addFolder",
   "browser.refresh",
+  "browser.collapseFolders",
+  "browser.expandLoadedFolders",
   contextSeparator,
   "browser.toggleAutoPreview",
   "browser.focusSearch",

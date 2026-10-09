@@ -115,6 +115,65 @@ describe("pattern picker", () => {
     )
   })
 
+  it("filters pattern rows without changing the selected pattern", async () => {
+    await dispatch({ type: "addPattern", name: "Bass" })
+    render(<PlaylistPanel />)
+    const selected = useTransportStore.getState().pattern
+    const list = screen.getByRole("group", { name: "Pattern to place" })
+    const field = screen.getByRole("textbox", { name: "Filter patterns" })
+
+    fireEvent.change(field, { target: { value: "  bAsS  " } })
+    expect(within(list).getAllByRole("button")).toHaveLength(1)
+    expect(within(list).getByRole("button", { name: /^Bass/ })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    )
+    expect(useTransportStore.getState().pattern).toBe(selected)
+
+    fireEvent.change(field, { target: { value: "missing" } })
+    expect(within(list).queryAllByRole("button")).toHaveLength(0)
+    expect(within(list).getByText("No patterns match.")).toBeInTheDocument()
+    expect(useTransportStore.getState().pattern).toBe(selected)
+
+    fireEvent.change(field, { target: { value: "" } })
+    expect(within(list).getAllByRole("button")).toHaveLength(2)
+    expect(within(list).queryByText("No patterns match.")).toBeNull()
+    expect(
+      within(list).getByRole("button", { name: /^Pattern 1/ })
+    ).toHaveAttribute("aria-pressed", "true")
+  })
+
+  it("keeps filter arrow keys from changing the selected pattern", async () => {
+    await dispatch({ type: "addPattern", name: "Bass" })
+    render(<PlaylistPanel />)
+    const selected = useTransportStore.getState().pattern
+    const field = screen.getByRole("textbox", { name: "Filter patterns" })
+
+    for (const key of ["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"]) {
+      fireEvent.keyDown(field, { key })
+      await flush()
+      expect(useTransportStore.getState().pattern).toBe(selected)
+    }
+  })
+
+  it("clears the local filter when the picker is reopened", async () => {
+    render(<PlaylistPanel />)
+    fireEvent.change(screen.getByRole("textbox", { name: "Filter patterns" }), {
+      target: { value: "missing" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Clip list" }))
+    await flush()
+    fireEvent.click(screen.getByRole("button", { name: "Clip list" }))
+    await flush()
+
+    expect(
+      screen.getByRole("textbox", { name: "Filter patterns" })
+    ).toHaveValue("")
+    expect(
+      screen.getByRole("button", { name: /^Pattern 1/ })
+    ).toBeInTheDocument()
+  })
+
   it("adds a pattern and renames one through the pattern actions", async () => {
     render(<PlaylistPanel />)
     fireEvent.click(screen.getByRole("button", { name: "Add pattern" }))

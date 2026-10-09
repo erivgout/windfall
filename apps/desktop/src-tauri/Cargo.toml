@@ -18,6 +18,7 @@ tauri-build = { version = "2.7.1", features = [] }
 [dependencies]
 windfall-analysis.workspace = true
 windfall-core.workspace = true
+windfall-dsp.workspace = true
 windfall-project.workspace = true
 windfall-archive.workspace = true
 windfall-flp.workspace = true

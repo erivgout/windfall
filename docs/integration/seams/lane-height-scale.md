@@ -1,0 +1,1 @@
+The piano-roll lane menu halves or doubles the lane under the notes. Half uses the whole number of pixels at or below half, and stops at 44 pixels. Double stops at 260 pixels. Notes stay as they are. Dragging the divider still works. This is not a project edit.

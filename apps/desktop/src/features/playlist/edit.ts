@@ -244,15 +244,41 @@ export function resizeChanges(
 }
 
 /**
- * Starts of the clips a paint stroke lays down: one pass of the pattern
+ * Starts of the clips a paint stroke lays down: one pass of the brush
  * after another from where the stroke began to where the pointer is, in
  * either direction.
  */
 export function paintStarts(
   anchor: number,
   pointerTick: number,
-  passTicks: number
+  passTicks: number | ((tick: number) => number)
 ): number[] {
+  if (typeof passTicks === "function") {
+    if (passTicks(anchor) <= 0) return []
+    const starts = [anchor]
+    // Each new clip uses the meter at its own start. Looking just before
+    // the prior start keeps a leftward stroke in the preceding segment.
+    if (pointerTick < anchor) {
+      let start = anchor
+      while (start > pointerTick) {
+        const pass = passTicks(Math.max(0, start - 1))
+        if (pass <= 0) break
+        start -= pass
+        if (start < 0) break
+        starts.unshift(start)
+      }
+    } else {
+      let start = anchor
+      while (true) {
+        const pass = passTicks(start)
+        if (pass <= 0) break
+        start += pass
+        if (start > pointerTick) break
+        starts.push(start)
+      }
+    }
+    return starts
+  }
   if (passTicks <= 0) return []
   const reach = Math.floor((pointerTick - anchor) / passTicks)
   const starts: number[] = []

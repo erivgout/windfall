@@ -6,14 +6,27 @@ import {
 } from "@/lib/actions"
 import { useUiStore } from "@/lib/store"
 import { useProjectStore } from "@/lib/store/project"
-import { openRecording, useRecordingStore } from "@/features/transport/recording-store"
+import {
+  openRecording,
+  useRecordingStore,
+} from "@/features/transport/recording-store"
 import { MASTER_TRACK, MAX_MIXER_TRACKS } from "@/lib/units"
 import { showCurrentUtility } from "./current-source"
-import { selectedMixerTracks, useMixerUi } from "./mixer-ui"
-import { openMixerRender, renderableMixerTracks } from "@/features/export/mixer-render"
+import { selectedMixerTracks, useMixerUi, visualMixerOrder } from "./mixer-ui"
+import { mutedTrackIds, soloTrackIds } from "./select-flags"
+import { routedTrackIds } from "./select-routed"
+import {
+  openMixerRender,
+  renderableMixerTracks,
+} from "@/features/export/mixer-render"
 
 import { EFFECT_ACTIONS } from "./effect-actions"
-import { keepEffectOnSelectedTrack } from "./effect-ops"
+import { effectEnableUpdates } from "./effect-enable"
+import {
+  bypassSelectedEffects,
+  enableSelectedEffects,
+  keepEffectOnSelectedTrack,
+} from "./effect-ops"
 import { useEffectsUi } from "./effects-ui"
 import {
   addTrack,
@@ -21,6 +34,7 @@ import {
   deleteTrack,
   moveSelection,
   resetAllPeaks,
+  resetLevels,
   resetVolume,
   setOutput,
   startColoring,
@@ -59,13 +73,35 @@ function onSelected(work: (id: number) => void | Promise<void>) {
  */
 export const MIXER_ACTIONS: Action[] = [
   {
-    id: "mixer.extendNext", title: "Extend mixer selection right", section: SECTION,
-    scope: "mixer", defaultShortcut: "Shift+ArrowRight", repeats: true,
+    id: "mixer.bypassEffects",
+    title: "Bypass effects",
+    section: SECTION,
+    enabled: () => effectEnableUpdates(selectedMixerTracks(), false).length > 0,
+    run: bypassSelectedEffects,
+  },
+  {
+    id: "mixer.enableEffects",
+    title: "Enable effects",
+    section: SECTION,
+    enabled: () => effectEnableUpdates(selectedMixerTracks(), true).length > 0,
+    run: enableSelectedEffects,
+  },
+  {
+    id: "mixer.extendNext",
+    title: "Extend mixer selection right",
+    section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "Shift+ArrowRight",
+    repeats: true,
     run: () => moveSelection(1, true),
   },
   {
-    id: "mixer.extendPrevious", title: "Extend mixer selection left", section: SECTION,
-    scope: "mixer", defaultShortcut: "Shift+ArrowLeft", repeats: true,
+    id: "mixer.extendPrevious",
+    title: "Extend mixer selection left",
+    section: SECTION,
+    scope: "mixer",
+    defaultShortcut: "Shift+ArrowLeft",
+    repeats: true,
     run: () => moveSelection(-1, true),
   },
   {
@@ -82,13 +118,23 @@ export const MIXER_ACTIONS: Action[] = [
     keywords: "record input microphone interface",
     enabled: (state) => {
       const recording = selected(state)?.recording
-      return !!recording && (!!recording.input || (recording.mode ?? "input") !== "input") && !useRecordingStore.getState().state.active && !useRecordingStore.getState().busy
+      return (
+        !!recording &&
+        (!!recording.input || (recording.mode ?? "input") !== "input") &&
+        !useRecordingStore.getState().state.active &&
+        !useRecordingStore.getState().busy
+      )
     },
     checked: (state) => selected(state)?.recording?.armed ?? false,
     run: async () => {
       const id = useUiStore.getState().selectedTrack
-      const recording = useProjectStore.getState().project.mixer.tracks.find((track) => track.id === id)?.recording
-      if (id !== null && recording) await patchTrack(id, { recording: { ...recording, armed: !recording.armed } })
+      const recording = useProjectStore
+        .getState()
+        .project.mixer.tracks.find((track) => track.id === id)?.recording
+      if (id !== null && recording)
+        await patchTrack(id, {
+          recording: { ...recording, armed: !recording.armed },
+        })
     },
   },
   {
@@ -96,8 +142,14 @@ export const MIXER_ACTIONS: Action[] = [
     title: "Record armed mixer tracks…",
     section: SECTION,
     keywords: "multitrack audio input drums band microphone take",
-    enabled: (state) => state.document.project.mixer.tracks.some((track) => track.recording?.armed) && !useRecordingStore.getState().state.active,
-    run: async () => { useRecordingStore.setState({ armedTracks: true }); await openRecording() },
+    enabled: (state) =>
+      state.document.project.mixer.tracks.some(
+        (track) => track.recording?.armed
+      ) && !useRecordingStore.getState().state.active,
+    run: async () => {
+      useRecordingStore.setState({ armedTracks: true })
+      await openRecording()
+    },
   },
   {
     id: "mixer.renderSelected",
@@ -113,9 +165,17 @@ export const MIXER_ACTIONS: Action[] = [
     title: "Render armed mixer tracks…",
     section: SECTION,
     keywords: "offline stems export wave disk audio files",
-    enabled: (state) => state.document.project.mixer.tracks.some((track) => track.recording?.armed && !track.current),
+    enabled: (state) =>
+      state.document.project.mixer.tracks.some(
+        (track) => track.recording?.armed && !track.current
+      ),
     whyDisabled: () => "Arm a mixer insert or Master",
-    run: () => openMixerRender(useProjectStore.getState().project.mixer.tracks.filter((track) => track.recording?.armed)),
+    run: () =>
+      openMixerRender(
+        useProjectStore
+          .getState()
+          .project.mixer.tracks.filter((track) => track.recording?.armed)
+      ),
   },
   {
     id: "mixer.addTrack",
@@ -124,7 +184,8 @@ export const MIXER_ACTIONS: Action[] = [
     defaultShortcut: "Alt+M",
     keywords: "new insert bus",
     enabled: (state) =>
-      state.document.project.mixer.tracks.filter((track) => !track.current).length < MAX_MIXER_TRACKS,
+      state.document.project.mixer.tracks.filter((track) => !track.current)
+        .length < MAX_MIXER_TRACKS,
     run: addTrack,
   },
   {
@@ -174,7 +235,8 @@ export const MIXER_ACTIONS: Action[] = [
     scope: "mixer",
     defaultShortcut: "S",
     keywords: "isolate",
-    enabled: (state) => selectedInsert(state) !== undefined && !selectedInsert(state)?.current,
+    enabled: (state) =>
+      selectedInsert(state) !== undefined && !selectedInsert(state)?.current,
     checked: (state) => selectedInsert(state)?.solo ?? false,
     run: onSelected(toggleSolo),
   },
@@ -185,6 +247,70 @@ export const MIXER_ACTIONS: Action[] = [
     enabled: (state) =>
       state.document.project.mixer.tracks.some((track) => track.muted),
     run: unmuteAll,
+  },
+  {
+    id: "mixer.resetLevels",
+    title: "Reset levels",
+    section: SECTION,
+    enabled: (state) =>
+      state.document.project.mixer.tracks.some(
+        (track) => track.volume !== 1 || track.pan !== 0
+      ),
+    run: resetLevels,
+  },
+  {
+    id: "mixer.selectRoutedHere",
+    title: "Select tracks routed here",
+    section: SECTION,
+    enabled: (state) => {
+      const track = selected(state)
+      return (
+        track !== undefined &&
+        routedTrackIds(state.document.project.mixer.tracks, track.id).length > 0
+      )
+    },
+    run: onSelected((id) => {
+      const ids = routedTrackIds(
+        useProjectStore.getState().project.mixer.tracks,
+        id
+      )
+      const first = ids[0]
+      if (first === undefined) return
+      useMixerUi.setState({ selected: ids, anchor: first })
+      useUiStore.getState().selectTrack(first)
+    }),
+  },
+  {
+    id: "mixer.selectMutedTracks",
+    title: "Select muted tracks",
+    section: SECTION,
+    enabled: (state) =>
+      mutedTrackIds(state.document.project.mixer.tracks).length > 0,
+    run: () => {
+      const ids = mutedTrackIds(
+        visualMixerOrder(useProjectStore.getState().project.mixer.tracks)
+      )
+      const first = ids[0]
+      if (first === undefined) return
+      useMixerUi.setState({ selected: ids, anchor: first })
+      useUiStore.getState().selectTrack(first)
+    },
+  },
+  {
+    id: "mixer.selectSoloTracks",
+    title: "Select solo tracks",
+    section: SECTION,
+    enabled: (state) =>
+      soloTrackIds(state.document.project.mixer.tracks).length > 0,
+    run: () => {
+      const ids = soloTrackIds(
+        visualMixerOrder(useProjectStore.getState().project.mixer.tracks)
+      )
+      const first = ids[0]
+      if (first === undefined) return
+      useMixerUi.setState({ selected: ids, anchor: first })
+      useUiStore.getState().selectTrack(first)
+    },
   },
   {
     id: "mixer.unsoloAll",
@@ -217,7 +343,9 @@ export const MIXER_ACTIONS: Action[] = [
     keywords: "output reset routing",
     enabled: (state) => {
       const track = selectedInsert(state)
-      return track !== undefined && !track.current && track.output !== MASTER_TRACK
+      return (
+        track !== undefined && !track.current && track.output !== MASTER_TRACK
+      )
     },
     run: onSelected((id) => setOutput(id, MASTER_TRACK)),
   },
@@ -267,6 +395,17 @@ export const MIXER_ACTIONS: Action[] = [
 let holders = 0
 let unregister: (() => void) | null = null
 
+// The registry survives a hot module replacement, but these module-local
+// holders do not. Release the old batch and its subscriptions before the new
+// module registers the replacement actions. Existing holder cleanup remains
+// safe and cannot remove the new module's registration.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unregister?.()
+    unregister = null
+  })
+}
+
 /**
  * Puts the mixer's actions in the registry. The app registers them at boot
  * and the panel does too, so they are there whichever comes first; they
@@ -283,7 +422,10 @@ export function registerMixerActions(): () => void {
       state.inspectorOpen,
     ])
     const unwatch = keepEffectOnSelectedTrack()
-    const unrecord = invalidateActionsOn(useRecordingStore, (state) => [state.state.active, state.busy])
+    const unrecord = invalidateActionsOn(useRecordingStore, (state) => [
+      state.state.active,
+      state.busy,
+    ])
     const unmixer = invalidateActionsOn(useMixerUi, (state) => state.selected)
     unregister = () => {
       remove()

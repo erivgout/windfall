@@ -1,5 +1,6 @@
 import type { MixerDock, MixerTrackPatch } from "@/bindings"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { dispatch, useProjectStore, useUiStore } from "@/lib/store"
@@ -9,7 +10,10 @@ import { outputChoices } from "./routing"
 import { useWaveformUi } from "./waveform-meter"
 import { openMixerRender, renderableMixerTracks } from "@/features/export/mixer-render"
 
-export function MixerToolbar() {
+export function MixerToolbar({ filter, onFilterChange }: {
+  filter: string
+  onFilterChange: (query: string) => void
+}) {
   const tracks = useProjectStore((state) => state.project.mixer.tracks)
   const selection = useMixerUi((state) => state.selected)
   const primary = useUiStore((state) => state.selectedTrack)
@@ -18,7 +22,9 @@ export function MixerToolbar() {
   const waveformError = useWaveformUi((state) => state.error)
   const selected = tracks.filter((track) => (selection.length ? selection : [primary]).includes(track.id))
   const inserts = selected.filter((track) => track.id !== 0 && !track.current)
-  const routeChoices = tracks.filter((track) => inserts.length > 0 && !inserts.some((source) => source.id === track.id) && inserts.every((source) => outputChoices(tracks, source.id).tracks.some((candidate) => candidate.id === track.id)))
+  const sourceIds = new Set(inserts.map((source) => source.id))
+  const allowedTargets = inserts.map((source) => new Set(outputChoices(tracks, source.id).tracks.map((candidate) => candidate.id)))
+  const routeChoices = tracks.filter((track) => inserts.length > 0 && !sourceIds.has(track.id) && allowedTargets.every((targets) => targets.has(track.id)))
   const moveChoices = tracks.filter((track) => track.id !== 0 && !track.current && !inserts.some((source) => source.id === track.id))
   function patch(patch: MixerTrackPatch, ordinary = false) {
     const targets = selectedMixerTracks().filter((track) => !ordinary || track.id !== 0 && !track.current)
@@ -30,6 +36,18 @@ export function MixerToolbar() {
     useUiStore.getState().selectTrack(ids[0] ?? null)
   }
   return <div className="absolute inset-x-0 top-0 z-20 flex h-9 items-center gap-2 border-b bg-chassis px-2">
+    <Input
+      aria-label="Filter tracks"
+      placeholder="Filter tracks"
+      className="w-40 shrink-0"
+      value={filter}
+      onChange={(event) => onFilterChange(event.target.value)}
+      onKeyDownCapture={(event) => {
+        if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+          event.stopPropagation()
+        }
+      }}
+    />
     <Select items={[...MIXER_LAYOUTS]} value={layout} onValueChange={(value: string | null) => { if (value) useUiStore.getState().setMixerLayout(value) }}>
       <SelectTrigger size="sm" className="w-32" aria-label="Mixer size layout"><SelectValue /></SelectTrigger>
       <SelectContent><SelectGroup>{MIXER_LAYOUTS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>

@@ -34,10 +34,18 @@ describe("browser MIDI uses the Rust converter", () => {
       const before = await backend.documentSnapshot()
       const preview = await backend.midiPreview("test.mid", DEFAULT_IMPORT)
       expect(preview.notes).toBe(1)
-      expect(preview.adjustments.length).toBeGreaterThan(0)
+      // Named markers are now imported without loss or adjustment warnings.
+      expect(preview.adjustments).toEqual([])
       expect(await backend.documentSnapshot()).toEqual(before)
       await backend.importMidi(preview.token)
       const after = await backend.documentSnapshot()
+      expect(after.project.playlist.timeline?.markers).toContainEqual(
+        expect.objectContaining({
+          tick: 0,
+          name: "Verse",
+          kind: { type: "named" },
+        })
+      )
       expect(after.project.channels).toHaveLength(
         before.project.channels.length + 1
       )

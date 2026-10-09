@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::blocks::delay_line::DelayLine;
+use crate::blocks::lfo::{Lfo, LfoShape};
 use crate::blocks::math::{flush, lerp, ms_to_samples};
 use crate::blocks::shaper::soft_clip;
 use crate::blocks::smooth::{LinearRamp, OnePole};
@@ -17,6 +18,9 @@ const MAX_DELAY_MS: f32 = 4_000.0;
 
 /// Largest offset between the channels, in ms.
 const MAX_OFFSET_MS: f32 = 50.0;
+
+/// Largest excursion of the delay-time modulation, in ms.
+const MAX_MOD_DEPTH_MS: f32 = 20.0;
 
 /// Length of the crossfade from the old delay time to a new one.
 const TIME_FADE_MS: f32 = 30.0;
@@ -128,6 +132,12 @@ pub struct DelayParams {
     /// Balance between the dry input (0) and the echoes (1). Default 0.3.
     /// Use 1 on a send track.
     pub mix: f32,
+    /// Speed of the delay-time sine LFO, in Hz. 0 to 8, default 0.
+    /// Zero holds the LFO at its current phase.
+    pub mod_rate_hz: f32,
+    /// Peak excursion around the delay time, in ms. 0 to 20, default 0.
+    /// Zero keeps the original, unmodulated delay time.
+    pub mod_depth_ms: f32,
 }
 
 impl Default for DelayParams {
@@ -143,6 +153,8 @@ impl Default for DelayParams {
             high_cut_hz: 12_000.0,
             saturation: 0.0,
             mix: 0.3,
+            mod_rate_hz: 0.0,
+            mod_depth_ms: 0.0,
         }
     }
 }
@@ -179,6 +191,9 @@ param_set!(DelayParams, "Delay", {
     float [high_cut_hz] "highCutHz" "High cut" { Hertz, Logarithmic, 500.0, 20_000.0, 12_000.0 }
     float [saturation] "saturation" "Saturation" { Fraction, Linear, 0.0, 1.0, 0.0 }
     float [mix] "mix" "Mix" { Fraction, Linear, 0.0, 1.0, 0.3 }
+    float [mod_rate_hz] "modRateHz" "Modulation rate" { Hertz, Linear, 0.0, 8.0, 0.0 }
+    float [mod_depth_ms] "modDepthMs" "Modulation depth"
+        { Milliseconds, Linear, 0.0, MAX_MOD_DEPTH_MS, 0.0 }
 });
 
 impl DelayParams {
@@ -195,8 +210,8 @@ impl DelayParams {
 
 /// Where one channel's echo is read from the delay line. A new delay time
 /// is reached by fading from the old position to the new one, so changing
-/// the time never clicks and never bends the pitch of what is already in
-/// the line.
+/// the base time never clicks and never bends the pitch of what is already
+/// in the line. Modulation offsets both positions during a fade.
 #[derive(Debug, Clone, Copy)]
 struct Tap {
     current: usize,
@@ -233,12 +248,22 @@ impl Tap {
     }
 
     #[inline]
-    fn read(&mut self, line: &DelayLine) -> f32 {
+    fn read(&mut self, line: &DelayLine, modulation: f32) -> f32 {
+        let read = |delay: usize| {
+            if modulation == 0.0 {
+                // Preserve the exact original samples when modulation is off.
+                line.tap(delay)
+            } else {
+                let delay = (delay as f32 + modulation).clamp(1.0, line.max_delay().max(1) as f32);
+                // Linear interpolation has unity maximum gain in the feedback loop.
+                line.tap_linear(delay)
+            }
+        };
         if self.fade_left == 0 {
-            return line.tap(self.current);
+            return read(self.current);
         }
         let old = self.fade_left as f32 / self.fade_len as f32;
-        let value = lerp(line.tap(self.next), line.tap(self.current), old);
+        let value = lerp(read(self.next), read(self.current), old);
         self.fade_left -= 1;
         if self.fade_left == 0 {
             self.current = self.next;
@@ -273,10 +298,12 @@ fn saturate(input: f32, amount: f32) -> f32 {
 /// through the low cut, the high cut and the saturation once more than the
 /// one before, so a trail thins, darkens and warms as it fades.
 ///
-/// Delay times are whole numbers of samples, so an echo is an exact copy
-/// with no interpolation loss. Changing the time, the tempo or the offset
-/// crossfades from the old echoes to the new ones over 30 ms; it does not
-/// glide in pitch the way a tape delay does.
+/// With modulation off, delay times are whole numbers of samples, so an
+/// echo is an exact copy with no interpolation loss. Changing the time,
+/// the tempo or the offset crossfades from the old echoes to the new ones
+/// over 30 ms; it does not
+/// glide in pitch the way a tape delay does. Optional sine modulation
+/// moves the read positions continuously with linear interpolation.
 ///
 /// Feedback stops at 0.95 and nothing in the loop has a gain above 1, so
 /// the delay cannot run away. It adds no latency.
@@ -296,6 +323,8 @@ pub struct Delay {
     feedback: LinearRamp,
     saturation: LinearRamp,
     mix: LinearRamp,
+    mod_lfo: Lfo,
+    mod_depth_samples: LinearRamp,
     /// 0 for stereo routing, 1 for ping-pong, in between while switching.
     cross: LinearRamp,
     until_control: usize,
@@ -320,6 +349,8 @@ impl Default for Delay {
             feedback: LinearRamp::new(0.0),
             saturation: LinearRamp::new(0.0),
             mix: LinearRamp::new(0.0),
+            mod_lfo: Lfo::new(1),
+            mod_depth_samples: LinearRamp::new(0.0),
             cross: LinearRamp::new(0.0),
             until_control: 0,
             fresh: true,
@@ -350,6 +381,8 @@ impl Delay {
         self.feedback.set_target(params.feedback, ramp);
         self.saturation.set_target(params.saturation, ramp);
         self.mix.set_target(params.mix, ramp);
+        self.mod_depth_samples
+            .set_target(params.mod_depth_ms * (0.001 * rate), ramp);
         let cross = match params.mode {
             DelayMode::Stereo => 0.0,
             DelayMode::PingPong => 1.0,
@@ -395,6 +428,25 @@ impl Delay {
             filter.flush();
         }
     }
+
+    #[inline]
+    fn modulation_samples(&mut self) -> f32 {
+        let wave = self
+            .mod_lfo
+            .tick(LfoShape::Sine, self.params.mod_rate_hz / self.sample_rate);
+        wave * self.mod_depth_samples.tick()
+    }
+
+    /// Include the current and target depth while depth changes are smoothing.
+    fn longest_delay(&self) -> usize {
+        let depth = self
+            .mod_depth_samples
+            .value()
+            .max(self.mod_depth_samples.target())
+            .ceil() as usize;
+        (self.taps[0].longest().max(self.taps[1].longest()) + depth)
+            .min(self.lines[0].max_delay().max(1))
+    }
 }
 
 impl Effect for Delay {
@@ -402,7 +454,10 @@ impl Effect for Delay {
 
     fn prepare(&mut self, sample_rate: f32, _max_block: usize) {
         self.sample_rate = sample_rate.max(1.0);
-        let longest = ms_to_samples(MAX_DELAY_MS + MAX_OFFSET_MS, self.sample_rate) as usize;
+        let longest = ms_to_samples(
+            MAX_DELAY_MS + MAX_OFFSET_MS + MAX_MOD_DEPTH_MS,
+            self.sample_rate,
+        ) as usize;
         self.lines = [DelayLine::new(longest), DelayLine::new(longest)];
         let control_rate = self.sample_rate / CONTROL_PERIOD as f32;
         self.low_cut_log.set_time(CUTOFF_SMOOTHING_MS, control_rate);
@@ -420,6 +475,7 @@ impl Effect for Delay {
             filter.reset();
         }
         self.until_control = 0;
+        self.mod_lfo.reset();
         self.apply();
     }
 
@@ -449,8 +505,9 @@ impl Effect for Delay {
             }
             self.until_control -= 1;
 
-            let echo_left = self.taps[0].read(&self.lines[0]);
-            let echo_right = self.taps[1].read(&self.lines[1]);
+            let modulation = self.modulation_samples();
+            let echo_left = self.taps[0].read(&self.lines[0], modulation);
+            let echo_right = self.taps[1].read(&self.lines[1], modulation);
 
             let feedback = self.feedback.tick();
             let saturation = self.saturation.tick();
@@ -487,7 +544,7 @@ impl Effect for Delay {
         } else {
             0.0
         };
-        let longest = self.taps[0].longest().max(self.taps[1].longest());
+        let longest = self.longest_delay();
         // Ping-pong takes two hops for a full round trip at the same loss
         // per hop, so the count of hops stays the same.
         longest * (repeats as usize + 2)
@@ -496,13 +553,193 @@ impl Effect for Delay {
     fn gap_samples(&self) -> usize {
         // The wait for the next echo. Every echo is quieter than the one
         // before it, so a silent one is the last.
-        self.taps[0].longest().max(self.taps[1].longest())
+        self.longest_delay()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_modulation_fields_default_to_zero() {
+        let params: DelayParams = serde_json::from_str(
+            r#"{"sync":false,"timeMs":123.0,"division":"eighth","feedback":0.4,
+                "mode":"stereo","stereoOffsetMs":5.0,"lowCutHz":40.0,
+                "highCutHz":8000.0,"saturation":0.2,"mix":0.7}"#,
+        )
+        .unwrap();
+        assert_eq!(params.mod_rate_hz, 0.0);
+        assert_eq!(params.mod_depth_ms, 0.0);
+        assert_eq!(params.time_ms, 123.0);
+        assert_eq!(params.mix, 0.7);
+    }
+
+    #[test]
+    fn modulation_parameters_follow_all_existing_automation_indices() {
+        let ids: Vec<_> = DelayParams::descriptors()
+            .iter()
+            .map(|info| info.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "sync",
+                "timeMs",
+                "division",
+                "feedback",
+                "mode",
+                "stereoOffsetMs",
+                "lowCutHz",
+                "highCutHz",
+                "saturation",
+                "mix",
+                "modRateHz",
+                "modDepthMs",
+            ]
+        );
+        let mut params = DelayParams::default();
+        assert!(params.set(10, 8.0));
+        assert!(params.set(11, 20.0));
+        assert_eq!(params.mod_rate_hz, 8.0);
+        assert_eq!(params.mod_depth_ms, 20.0);
+        let clean = DelayParams {
+            mod_rate_hz: f32::NAN,
+            mod_depth_ms: f32::INFINITY,
+            ..params
+        }
+        .sanitized();
+        assert_eq!(clean.mod_rate_hz, 0.0);
+        assert_eq!(clean.mod_depth_ms, 0.0);
+    }
+
+    #[test]
+    fn zero_depth_preserves_the_unmodulated_delay_time() {
+        let rate = 44_100.0;
+        for sync in [false, true] {
+            for offset in [-3.5, 0.0, 3.5] {
+                let params = DelayParams {
+                    sync,
+                    time_ms: 13.37,
+                    stereo_offset_ms: offset,
+                    feedback: 0.0,
+                    mix: 1.0,
+                    mod_rate_hz: 8.0,
+                    mod_depth_ms: 0.0,
+                    ..DelayParams::default()
+                };
+                let mut delay = Delay::default();
+                delay.prepare(rate, 64);
+                delay.set_tempo(137.0);
+                delay.set_params(&params);
+                let base = params.time_ms_at(137.0);
+                let expected = [base + (-offset).max(0.0), base + offset.max(0.0)]
+                    .map(|ms| (ms * (0.001 * rate)).round() as usize);
+                assert_eq!(delay.delays(), expected);
+                let mut left = vec![0.0; expected[0].max(expected[1]) + 10];
+                let mut right = left.clone();
+                left[0] = 1.0;
+                right[0] = 1.0;
+                delay.process(&mut left, &mut right);
+                for (output, at) in [(&left, expected[0]), (&right, expected[1])] {
+                    assert_eq!(output[at], 1.0);
+                    assert_eq!(output.iter().filter(|sample| **sample != 0.0).count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nonzero_depth_moves_the_echoes_and_stays_finite() {
+        for mode in [DelayMode::Stereo, DelayMode::PingPong] {
+            let params = DelayParams {
+                sync: false,
+                time_ms: 50.0,
+                stereo_offset_ms: 50.0,
+                feedback: 0.95,
+                mix: 1.0,
+                mode,
+                mod_rate_hz: 8.0,
+                mod_depth_ms: 20.0,
+                ..DelayParams::default()
+            };
+            let mut moving = Delay::default();
+            let mut stationary = Delay::default();
+            for delay in [&mut moving, &mut stationary] {
+                delay.prepare(1_000.0, 64);
+            }
+            moving.set_params(&params);
+            stationary.set_params(&DelayParams {
+                mod_depth_ms: 0.0,
+                ..params
+            });
+            let input: Vec<_> = (0..2_000)
+                .map(|n| (std::f32::consts::TAU * 0.037 * n as f32).sin() * 0.25)
+                .collect();
+            let mut left = input.clone();
+            let mut right = input.clone();
+            let mut plain_left = input.clone();
+            let mut plain_right = input;
+            moving.process(&mut left, &mut right);
+            stationary.process(&mut plain_left, &mut plain_right);
+            assert!(left.iter().chain(&right).all(|sample| sample.is_finite()));
+            assert!(
+                left.iter()
+                    .zip(&plain_left)
+                    .any(|(a, b)| (a - b).abs() > 0.01)
+            );
+            assert_eq!(moving.gap_samples(), stationary.gap_samples() + 20);
+        }
+    }
+
+    #[test]
+    fn modulation_reads_stay_inside_the_line_including_during_time_fades() {
+        let mut line = DelayLine::new(64);
+        let longest = line.max_delay();
+        // Distinguish every valid read from a wrapped position.
+        for n in 0..longest + 4 {
+            line.push(n as f32);
+        }
+        let mut tap = Tap::new();
+        tap.set_target(1, 4, true);
+        for offset in [-1_000.0, -0.5, 0.0, 0.5, 1_000.0] {
+            let expected = if offset == 0.0 {
+                line.tap(1)
+            } else {
+                line.tap_linear((1.0_f32 + offset).clamp(1.0, longest as f32))
+            };
+            assert_eq!(tap.read(&line, offset), expected);
+        }
+        tap.set_target(longest, 4, false);
+        for _ in 0..5 {
+            assert_eq!(tap.read(&line, 1_000.0), line.tap(longest));
+        }
+        assert_eq!(tap.read(&line, -1_000.0), line.tap(1));
+    }
+
+    #[test]
+    fn zero_rate_holds_the_lfo_and_reset_restarts_it() {
+        let mut delay = Delay::default();
+        delay.prepare(1_000.0, 64);
+        let mut params = DelayParams {
+            mod_rate_hz: 1.0,
+            mod_depth_ms: 20.0,
+            ..DelayParams::default()
+        };
+        delay.set_params(&params);
+        for _ in 0..250 {
+            delay.modulation_samples();
+        }
+        params.mod_rate_hz = 0.0;
+        delay.set_params(&params);
+        let held = delay.modulation_samples();
+        assert!(held > 19.9);
+        for _ in 0..1_000 {
+            assert_eq!(delay.modulation_samples(), held);
+        }
+        delay.reset();
+        assert_eq!(delay.modulation_samples(), 0.0);
+    }
 
     #[test]
     fn divisions_are_the_right_number_of_beats() {
@@ -552,11 +789,11 @@ mod tests {
         }
         let mut tap = Tap::new();
         tap.set_target(10, 4, true);
-        assert_eq!(tap.read(&line), 54.0);
+        assert_eq!(tap.read(&line, 0.0), 54.0);
         tap.set_target(20, 4, false);
         tap.set_target(30, 4, false);
         // Four samples of fade to 20, then four more to 30.
-        let values: Vec<f32> = (0..9).map(|_| tap.read(&line)).collect();
+        let values: Vec<f32> = (0..9).map(|_| tap.read(&line, 0.0)).collect();
         assert_eq!(values[0], 54.0);
         assert!(values[1] < 54.0 && values[1] > 44.0);
         assert_eq!(values[4], 44.0);

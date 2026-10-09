@@ -22,6 +22,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { backend } from "@/lib/ipc"
 import { receivePatch, useProjectStore } from "@/lib/store/project"
+import { nextClipStretchQuality } from "./clip-quality-step"
 import {
   beatFitRatio,
   fitRatio,
@@ -201,6 +202,34 @@ function ProcessingForm({
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Choose the previous clip stretch quality"
+                disabled={
+                  busy || nextClipStretchQuality(quality, "previous") === null
+                }
+                onClick={() => {
+                  const next = nextClipStretchQuality(quality, "previous")
+                  if (next !== null) setQuality(next)
+                }}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Choose the next clip stretch quality"
+                disabled={busy || nextClipStretchQuality(quality, "next") === null}
+                onClick={() => {
+                  const next = nextClipStretchQuality(quality, "next")
+                  if (next !== null) setQuality(next)
+                }}
+              >
+                Next
+              </Button>
+            </div>
           </Field>
           <Field orientation="horizontal">
             <Checkbox

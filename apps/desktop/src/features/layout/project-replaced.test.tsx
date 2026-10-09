@@ -132,6 +132,8 @@ describe("what the tools remember", () => {
     useRackStore.getState().openColorPicker(channel)
     await newProject()
     expect(useMixerUi.getState()).toEqual({
+      selected: [],
+      anchor: null,
       renaming: null,
       coloring: null,
       focusing: null,

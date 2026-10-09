@@ -6,6 +6,7 @@ import {
   useRecordingStore,
 } from "@/features/transport/recording-store"
 import { toast } from "sonner"
+import { openGettingStarted } from "@/features/help/getting-started-store"
 import {
   canArchive,
   portableUnavailable,
@@ -555,6 +556,13 @@ export const BUILTIN_ACTIONS: Action[] = [
     run: () => ui().setKeymap("fl"),
   },
 
+  {
+    id: "help.gettingStarted",
+    title: "Getting started",
+    section: "Help",
+    keywords: "tutorial first track basics",
+    run: openGettingStarted,
+  },
   {
     id: "help.shortcuts",
     title: "Keyboard shortcuts",

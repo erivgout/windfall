@@ -1,11 +1,9 @@
 use windfall_project::*;
 
 fn binding() -> PluginBinding {
-            sidechain_input: None,
-            auxiliary_inputs: Vec::new(),
     PluginBinding {
-            sidechain_input: None,
-            auxiliary_inputs: Vec::new(),
+        sidechain_input: None,
+        auxiliary_inputs: Vec::new(),
         target: PluginTarget::Instrument {
             channel: ChannelId(999),
         },

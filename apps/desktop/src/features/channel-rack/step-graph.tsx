@@ -36,6 +36,12 @@ function LaneGraph({ pattern, channel, lengthSteps, groupSize }: { pattern: Patt
   const [lengthRange, setLengthRange] = useState(PPQ)
   const [preview, setPreview] = useState(new Map<NoteId, NoteUpdate>())
   const [readout, setReadout] = useState("")
+  const [previousInputs, setPreviousInputs] = useState({ notes, property, lengthRange, lengthSteps })
+  if (previousInputs.notes !== notes || previousInputs.property !== property || previousInputs.lengthRange !== lengthRange || previousInputs.lengthSteps !== lengthSteps) {
+    setPreviousInputs({ notes, property, lengthRange, lengthSteps })
+    setPreview(new Map())
+    setReadout("")
+  }
   const [pending, setPending] = useState(false)
   const submitting = useRef(false)
   const stroke = useRef<Stroke | null>(null)
@@ -55,7 +61,11 @@ function LaneGraph({ pattern, channel, lengthSteps, groupSize }: { pattern: Patt
     const stopHistory = onHistoryNavigation(cancel)
     return () => { stopReplace(); stopHistory(); stroke.current = null }
   }, [])
-  useEffect(() => { cancel() }, [notes, property, lengthRange, lengthSteps])
+  useEffect(() => {
+    const current = stroke.current
+    stroke.current = null
+    if (current && surface.current?.hasPointerCapture(current.pointer)) surface.current.releasePointerCapture(current.pointer)
+  }, [notes, property, lengthRange, lengthSteps])
 
   function position(event: PointerEvent<HTMLDivElement>) {
     const rect = event.currentTarget.getBoundingClientRect()

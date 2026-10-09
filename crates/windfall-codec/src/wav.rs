@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use windfall_core::AudioBuffer;
 
+use crate::encoder::AudioTags;
 use crate::error::CodecError;
 
 /// Seed the dither starts from unless [`WavWriter::with_dither_seed`] sets
@@ -102,7 +103,19 @@ impl WavWriter {
         channels: u16,
         format: WavSampleFormat,
     ) -> Result<Self, CodecError> {
-        let layout = Layout::new(sample_rate, channels, format)?;
+        Self::create_with_tags(path, sample_rate, channels, format, &AudioTags::default())
+    }
+
+    /// Starts a WAV file with a LIST/INFO chunk for nonempty project fields.
+    pub fn create_with_tags(
+        path: impl AsRef<Path>,
+        sample_rate: u32,
+        channels: u16,
+        format: WavSampleFormat,
+        tags: &AudioTags<'_>,
+    ) -> Result<Self, CodecError> {
+        let mut layout = Layout::new(sample_rate, channels, format)?;
+        layout.info_chunk = info_chunk(tags, layout.max_data_bytes())?;
         let final_path = path.as_ref().to_path_buf();
         let name = final_path.file_name().ok_or_else(|| {
             CodecError::InvalidInput(format!("{} is not a file name", final_path.display()))
@@ -251,13 +264,14 @@ pub(crate) fn check_layout(
 }
 
 /// The parts of the header that are known before any audio is written.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Layout {
     sample_rate: u32,
     channels: u16,
     format: WavSampleFormat,
     block_align: u16,
     byte_rate: u32,
+    info_chunk: Vec<u8>,
 }
 
 impl Layout {
@@ -283,6 +297,7 @@ impl Layout {
             format,
             block_align,
             byte_rate,
+            info_chunk: Vec::new(),
         })
     }
 
@@ -362,6 +377,7 @@ impl Layout {
             chunks.extend_from_slice(&4_u32.to_le_bytes());
             chunks.extend_from_slice(&(frames as u32).to_le_bytes());
         }
+        chunks.extend_from_slice(&self.info_chunk);
         chunks.extend_from_slice(b"data");
         chunks.extend_from_slice(&(data_bytes as u32).to_le_bytes());
 
@@ -372,6 +388,48 @@ impl Layout {
         header.extend_from_slice(&chunks);
         header
     }
+}
+
+/// INFO strings include a terminating NUL; sizes exclude word-alignment padding.
+fn info_chunk(tags: &AudioTags<'_>, max_bytes: u64) -> Result<Vec<u8>, CodecError> {
+    let fields = [
+        (b"INAM", tags.title),
+        (b"IART", tags.author),
+        (b"IGNR", tags.genre),
+        (b"ICMT", tags.comments),
+    ];
+    if fields.iter().all(|(_, value)| value.is_empty()) {
+        return Ok(Vec::new());
+    }
+    let bytes =
+        fields
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .fold(12_u64, |total, (_, value)| {
+                let size = value.len() as u64 + 1;
+                total + 8 + size + size % 2
+            });
+    if bytes > max_bytes {
+        return Err(CodecError::WavTooLarge);
+    }
+    let mut chunk = Vec::with_capacity(bytes as usize);
+    chunk.extend_from_slice(b"LIST");
+    chunk.extend_from_slice(&((bytes - 8) as u32).to_le_bytes());
+    chunk.extend_from_slice(b"INFO");
+    for (id, value) in fields {
+        if value.is_empty() {
+            continue;
+        }
+        let size = value.len() as u32 + 1;
+        chunk.extend_from_slice(id);
+        chunk.extend_from_slice(&size.to_le_bytes());
+        chunk.extend_from_slice(value.as_bytes());
+        chunk.push(0);
+        if !size.is_multiple_of(2) {
+            chunk.push(0);
+        }
+    }
+    Ok(chunk)
 }
 
 /// Triangular dither from a SplitMix64 generator: no clock and no operating

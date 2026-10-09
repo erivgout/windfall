@@ -15,13 +15,16 @@ import { EffectEditor } from "@/features/effects"
 import { PluginControls } from "@/features/plugins/controls"
 import { usePluginBinding } from "@/features/plugins/store"
 import { useShortcutScope } from "@/lib/actions"
-import { useHint, useProjectStore } from "@/lib/store"
+import { dispatch, useHint, useProjectStore } from "@/lib/store"
 import { clamp } from "@/lib/units"
 
 import { endEffectDrag, startEffectDrag } from "../effect-drag"
 import { EffectMenuButton, effectMenu } from "../effect-menu"
 import { effectName, selectEffect, setEffectEnabled } from "../effect-ops"
 import { useEffectsUi } from "../effects-ui"
+import { nextMixPreset } from "../mix-preset-step"
+import { MIX_PRESETS, nextMix } from "../mix-presets"
+import { nextMixScale } from "../mix-scale"
 import { useGestureValue } from "../use-gesture-value"
 
 function useEffectSlot(track: TrackId, effect: EffectId) {
@@ -64,7 +67,69 @@ function MixKnob({ track, slot }: { track: TrackId; slot: EffectSlot }) {
       >
         {formatPercent(mix.value)}
       </span>
-      <ValueContextItems items={automation.items}>
+      <ValueContextItems
+        items={[
+          ...automation.items,
+          {
+            submenu: "Mix",
+            items: [
+              ...MIX_PRESETS.map((preset) => ({
+                title: preset.label,
+                disabled: nextMix(slot.mix, preset.value) === null,
+                run: () => {
+                  const mix = nextMix(slot.mix, preset.value)
+                  if (mix === null) return
+                  return dispatch({
+                    type: "updateEffect",
+                    track,
+                    effect: slot.id,
+                    patch: { mix },
+                  })
+                },
+              })),
+              ...(["previous", "next"] as const).map((direction) => ({
+                title:
+                  direction === "previous" ? "Previous preset" : "Next preset",
+                disabled: nextMixPreset(slot.mix, direction) === null,
+                run: () => {
+                  const latest = useProjectStore
+                    .getState()
+                    .project.mixer.tracks.find((item) => item.id === track)
+                    ?.effects.find((effect) => effect.id === slot.id)
+                  if (!latest) return
+                  const next = nextMixPreset(latest.mix, direction)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateEffect",
+                    track,
+                    effect: slot.id,
+                    patch: { mix: next },
+                  })
+                },
+              })),
+              ...(["halve", "double"] as const).map((factor) => ({
+                title: factor === "halve" ? "Halve" : "Double",
+                disabled: nextMixScale(slot.mix, factor) === null,
+                run: () => {
+                  const latest = useProjectStore
+                    .getState()
+                    .project.mixer.tracks.find((item) => item.id === track)
+                    ?.effects.find((effect) => effect.id === slot.id)
+                  if (!latest) return
+                  const next = nextMixScale(latest.mix, factor)
+                  if (next === null) return
+                  return dispatch({
+                    type: "updateEffect",
+                    track,
+                    effect: slot.id,
+                    patch: { mix: next },
+                  })
+                },
+              })),
+            ],
+          },
+        ]}
+      >
         <Knob
           size="sm"
           min={0}

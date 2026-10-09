@@ -494,7 +494,14 @@ describe("folders in the right-click menu", () => {
 
   it("offers what can be done to the browser below the last row", async () => {
     await start()
-    fireEvent.contextMenu(document.querySelector("[data-slot=browser-scroll]")!)
+    fireEvent(
+      document.querySelector("[data-slot=browser-scroll]")!,
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      })
+    )
     const menu = await screen.findByRole("menu")
     expect(
       within(menu)
@@ -503,6 +510,8 @@ describe("folders in the right-click menu", () => {
     ).toEqual([
       "Add folder to the browser…",
       "Refresh browser folder",
+      "Collapse folders",
+      "Expand loaded folders",
       "Filter the browserCtrl+F",
     ])
     // Previewing on selection is switched on and off from here too.

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use windfall_codec::{
-    AudioFormat, DEFAULT_FLAC_LEVEL, DEFAULT_VORBIS_QUALITY, Encoder, EncoderSettings,
+    AudioFormat, AudioTags, DEFAULT_FLAC_LEVEL, DEFAULT_VORBIS_QUALITY, Encoder, EncoderSettings,
     FlacBitDepth, MAX_FLAC_LEVEL, Mp3Channels, Mp3Rate, Mp3Settings, WavSampleFormat,
 };
 use windfall_core::samples_per_tick;
@@ -643,12 +643,20 @@ fn write_files(
     // here before the files are in place leaves nothing behind.
     let mut encoders = Vec::with_capacity(job.targets.len());
     let mut transaction = FileTransaction::new(&job.targets);
+    let project_settings = &job.project.settings;
+    let tags = AudioTags {
+        title: &project_settings.name,
+        author: &project_settings.author,
+        genre: &project_settings.genre,
+        comments: &project_settings.comments,
+    };
     for (target, file) in job.targets.iter().zip(&transaction.files) {
-        let encoder = Encoder::open(
+        let encoder = Encoder::open_with_tags(
             &file.stage,
             &job.settings,
             options.sample_rate,
             encoder_channels(&job.settings),
+            &tags,
         );
         encoders.push(encoder.map_err(|error| named(&target.path, job, &error.to_string()))?);
     }

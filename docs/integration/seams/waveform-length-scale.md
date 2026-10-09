@@ -1,0 +1,1 @@
+The waveform helper halves or doubles its custom length. Half uses the whole number of ticks at or below half, and 1 tick stays 1 tick. Double stops at the song limit. The buttons are shown only for custom length, and a scale does not switch the time mapping. Start, height, opacity, and center key stay as they are. This is not an undo step.

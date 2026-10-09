@@ -4,7 +4,7 @@ use super::{
     AudioSource, Builder, ChannelRole, PluginPlace, PluginPlaceholder, chosen_color, name_or, synth,
 };
 use crate::{
-    model::ChannelKind,
+    model::{Channel, ChannelKind},
     paths::resolve,
     report::{Outcome, ReportSection},
     units,
@@ -56,10 +56,11 @@ impl Builder<'_> {
 
     fn preserve_clip_channel_notes(
         &mut self,
-        iid: u16,
+        channel: &Channel,
         name: &str,
         track: windfall_project::TrackId,
     ) -> bool {
+        let iid = channel.iid;
         if !self.flp.patterns.iter().any(|p| {
             p.notes.iter().any(|n| n.channel == iid)
                 || p.legacy_steps.iter().any(|s| s.channel == iid)
@@ -78,6 +79,7 @@ impl Builder<'_> {
             },
         );
         if let Some(id) = id {
+            self.channel_voice(ChannelId(id), channel);
             self.note_fallbacks.insert(iid, ChannelId(id));
             self.report.say(ReportSection::Channels, Outcome::Placeholder, "Notes addressed to an audio or automation clip channel were retained on a silent sampler; playlist clips still use their original content.");
             true
@@ -107,7 +109,7 @@ impl Builder<'_> {
                     continue;
                 }
                 ChannelKind::AutomationClip => {
-                    let notes = self.preserve_clip_channel_notes(channel.iid, &name, mixer_track);
+                    let notes = self.preserve_clip_channel_notes(channel, &name, mixer_track);
                     self.report.count(
                         ReportSection::Channels,
                         if notes {
@@ -121,7 +123,7 @@ impl Builder<'_> {
                     continue;
                 }
                 ChannelKind::AudioClip => {
-                    let notes = self.preserve_clip_channel_notes(channel.iid, &name, mixer_track);
+                    let notes = self.preserve_clip_channel_notes(channel, &name, mixer_track);
                     let sample = self.sample(&name, channel.sample_path.as_deref());
                     let stretched = channel.params.is_some_and(|p| {
                         p.stretch_time.unwrap_or(0) != 0 || p.stretch_multiplier.unwrap_or(0) != 0
@@ -175,6 +177,7 @@ impl Builder<'_> {
                 continue;
             };
             let id = ChannelId(id);
+            let voice_outcome = self.channel_voice(id, channel);
             self.channels.insert(channel.iid, ChannelRole::Plays(id));
             self.apply(
                 ReportSection::Channels,
@@ -310,7 +313,8 @@ impl Builder<'_> {
                     });
                 }
             }
-            self.report.count(ReportSection::Channels, outcome, 1);
+            self.report
+                .count(ReportSection::Channels, outcome.max(voice_outcome), 1);
         }
     }
 }

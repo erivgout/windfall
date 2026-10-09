@@ -1,12 +1,13 @@
-//! Mixer inserts to mixer tracks: faders, routing, sends and effects.
+//! Mixer inserts to mixer tracks: faders, track processing, routing,
+//! sends and effects.
 //!
 //! FL Studio always has its whole mixer in a file, 127 inserts from
 //! version 12.9 on, used or not. Only the inserts that are in use are
 //! brought over: the master, and any insert that has a name, an effect, a
-//! fader, pan, mute or solo that was touched, routing other than "to the
-//! master", or something playing into it. The last insert of a full mixer
-//! is the "current" one, which follows whatever is selected in FL Studio
-//! and is never brought over.
+//! fader, pan, mute, solo or track processing that was touched, routing
+//! other than "to the master", or something playing into it. The last
+//! insert of a full mixer is the "current" one, which follows whatever
+//! is selected in FL Studio and is never brought over.
 //!
 //! Routing: an insert feeds any number of others, each at its own level.
 //! A Windfall track has one output without a level, and sends with one.
@@ -17,6 +18,7 @@
 
 use std::collections::BTreeSet;
 
+use windfall_dsp::TrackParams;
 use windfall_project::{
     Command, EffectSlotPatch, MAX_EFFECT_SLOTS, MAX_MIXER_SIGNAL_TRACKS, MixerTrackPatch, TrackId,
 };
@@ -127,8 +129,8 @@ impl Builder<'_> {
             .collect()
     }
 
-    /// Sets the name, colour, fader, pan, mute and solo of the track an
-    /// insert became, and says what else the insert had.
+    /// Sets the name, colour, fader, pan, mute, solo and processing of the
+    /// track an insert became, and says what could not be decoded.
     fn fader(&mut self, insert: &Insert, index: u16) {
         let section = ReportSection::Mixer;
         let Some(&track) = self.tracks.get(&index) else {
@@ -169,6 +171,7 @@ impl Builder<'_> {
             pan: Some(insert_pan(insert.pan.unwrap_or(0))),
             muted: Some(!insert.enabled()),
             solo: Some(insert.solo()),
+            processing: Some(track_processing(insert)),
             recording: None,
             ..MixerTrackPatch::default()
         };
@@ -184,31 +187,23 @@ impl Builder<'_> {
             worst.note(Outcome::Dropped);
         }
 
-        let mut lost = Vec::new();
-        if insert.polarity_reversed() {
-            lost.push("reversed polarity");
-        }
-        if insert.channels_swapped() {
-            lost.push("swapped left and right");
-        }
         if insert.stereo_separation.is_some_and(|amount| amount != 0) {
-            lost.push("stereo separation");
-        }
-        if insert
-            .eq
-            .iter()
-            .any(|band| band.gain.is_some_and(|gain| gain != 0))
-        {
-            lost.push("the track's own three-band equaliser");
-        }
-        if !lost.is_empty() {
             worst.note(Outcome::Approximated);
             self.report.say(
                 section,
                 Outcome::Approximated,
                 format!(
-                    "Mixer track \"{name}\": Windfall's tracks have no {}, so that was left out.",
-                    lost.join(", no ")
+                    "Mixer track \"{name}\": stereo separation was mapped linearly from -64..64 to -1..1; -1 doubles the side signal and +1 sums to mono. FL Studio's listening direction is unverified."
+                ),
+            );
+        }
+        if has_eq_gain(insert) || has_eq_shape(insert) {
+            worst.note(Outcome::Approximated);
+            self.report.say(
+                section,
+                Outcome::Approximated,
+                format!(
+                    "Mixer track \"{name}\": the insert EQ frequency and width were not decoded; Windfall's default frequencies and Q values were kept."
                 ),
             );
         }
@@ -502,7 +497,60 @@ fn touched(insert: &Insert) -> bool {
         && insert.routes[0].target == 0
         && insert.routes[0].level.unwrap_or(FULL) == FULL;
     let rerouted = !insert.routes.is_empty() && !to_master_only;
-    named || moved || rerouted || !insert.slots.is_empty() || !insert.enabled() || insert.solo()
+    named
+        || moved
+        || rerouted
+        || !insert.slots.is_empty()
+        || !insert.enabled()
+        || insert.solo()
+        || !track_processing(insert).is_default()
+        || has_eq_shape(insert)
+}
+
+fn has_eq_gain(insert: &Insert) -> bool {
+    insert
+        .eq
+        .iter()
+        .any(|band| band.gain.is_some_and(|gain| gain != 0))
+}
+
+fn has_eq_shape(insert: &Insert) -> bool {
+    insert
+        .eq
+        .iter()
+        .any(|band| band.frequency.is_some() || band.width.is_some())
+}
+
+/// The insert's one polarity switch inverts both channels. Separation
+/// uses raw / 64: -1 doubles side, +1 sums to mono in TrackParams. The
+/// source's listening direction has not been verified.
+fn track_processing(insert: &Insert) -> TrackParams {
+    let mut params = TrackParams {
+        invert_left: insert.polarity_reversed(),
+        invert_right: insert.polarity_reversed(),
+        swap: insert.channels_swapped(),
+        separation: (insert.stereo_separation.unwrap_or(0) as f32 / 64.0).clamp(-1.0, 1.0),
+        ..TrackParams::default()
+    };
+    // Preserve all defaults for a neutral insert, including the enabled
+    // switches. A zero-gain enabled band leaves the signal unchanged.
+    if has_eq_gain(insert) {
+        params.eq_enabled = true;
+        for (source, target) in
+            insert
+                .eq
+                .iter()
+                .zip([&mut params.low, &mut params.mid, &mut params.high])
+        {
+            // TrackParams gives each band's gain the range -24..24 dB.
+            target.gain_db = (source.gain.unwrap_or(0) as f32 / 100.0).clamp(-24.0, 24.0);
+            target.enabled = target.gain_db != 0.0;
+            // effects.rs has distinct curves for the two Fruity EQ
+            // plugins, but no established curve for this insert EQ.
+            // Frequency and Q therefore stay at TrackParams defaults.
+        }
+    }
+    params
 }
 
 /// The number of FL Studio's "current" insert, the last of a full mixer.
@@ -520,5 +568,256 @@ fn lower_first(text: &str) -> String {
     match characters.next() {
         Some(first) => first.to_lowercase().chain(characters).collect(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::convert::{Conversion, ConvertOptions, convert};
+    use crate::model::{FlpProject, InsertEqBand};
+
+    fn import_insert(insert: Insert) -> Conversion {
+        let mut source = FlpProject::default();
+        source.mixer.inserts = vec![Insert::default(), insert];
+        let imported = convert(&source, &ConvertOptions::default());
+        imported.project.check().expect("valid imported project");
+        assert_eq!(imported.project.mixer.tracks.len(), 2);
+        imported
+    }
+
+    #[test]
+    fn polarity_reversal_inverts_both_channels() {
+        // Leave mute and effect-slot enable switches on.
+        let imported = import_insert(Insert {
+            flags: Some(0xc | 0x1),
+            ..Insert::default()
+        });
+        assert_eq!(
+            imported.project.mixer.tracks[1].processing,
+            TrackParams {
+                invert_left: true,
+                invert_right: true,
+                ..TrackParams::default()
+            }
+        );
+        assert!(
+            imported
+                .report
+                .category(ReportSection::Mixer)
+                .lines
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn swapped_channels_set_the_track_switch() {
+        let imported = import_insert(Insert {
+            flags: Some(0xc | 0x2),
+            ..Insert::default()
+        });
+        assert_eq!(
+            imported.project.mixer.tracks[1].processing,
+            TrackParams {
+                swap: true,
+                ..TrackParams::default()
+            }
+        );
+        assert!(
+            imported
+                .report
+                .category(ReportSection::Mixer)
+                .lines
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn separation_is_linear_and_clamped_at_both_endpoints() {
+        for (raw, expected) in [
+            (-128, -1.0),
+            (-64, -1.0),
+            (-32, -0.5),
+            (0, 0.0),
+            (32, 0.5),
+            (64, 1.0),
+            (128, 1.0),
+        ] {
+            let imported = import_insert(Insert {
+                name: Some("Stereo".into()),
+                stereo_separation: Some(raw),
+                ..Insert::default()
+            });
+            assert_eq!(
+                imported.project.mixer.tracks[1].processing.separation, expected,
+                "source separation {raw}"
+            );
+            let lines = &imported.report.category(ReportSection::Mixer).lines;
+            if raw == 0 {
+                assert!(lines.is_empty());
+            } else {
+                assert!(lines.iter().any(|line| {
+                    line.outcome == Outcome::Approximated
+                        && line.text.contains("listening direction is unverified")
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn insert_eq_gains_are_hundredths_of_db_in_low_mid_high_order() {
+        let imported = import_insert(Insert {
+            eq: [625, -1800, 1800].map(|gain| InsertEqBand {
+                gain: Some(gain),
+                frequency: Some(65_536),
+                width: Some(0),
+            }),
+            ..Insert::default()
+        });
+        let params = imported.project.mixer.tracks[1].processing;
+        let defaults = TrackParams::default();
+        assert!(params.eq_enabled);
+        for (band, default, gain_db) in [
+            (params.low, defaults.low, 6.25),
+            (params.mid, defaults.mid, -18.0),
+            (params.high, defaults.high, 18.0),
+        ] {
+            assert!(band.enabled);
+            assert_eq!(band.gain_db, gain_db);
+            assert_eq!(band.frequency_hz, default.frequency_hz);
+            assert_eq!(band.q, default.q);
+        }
+    }
+
+    #[test]
+    fn imported_gains_clamp_to_track_ranges_and_only_nonzero_bands_are_enabled() {
+        let imported = import_insert(Insert {
+            eq: [
+                InsertEqBand {
+                    gain: Some(i32::MIN),
+                    ..InsertEqBand::default()
+                },
+                InsertEqBand {
+                    gain: Some(0),
+                    ..InsertEqBand::default()
+                },
+                InsertEqBand {
+                    gain: Some(i32::MAX),
+                    ..InsertEqBand::default()
+                },
+            ],
+            ..Insert::default()
+        });
+        let params = imported.project.mixer.tracks[1].processing;
+        assert!(params.eq_enabled);
+        assert!(params.low.enabled);
+        assert_eq!(params.low.gain_db, -24.0);
+        assert!(!params.mid.enabled);
+        assert_eq!(params.mid.gain_db, 0.0);
+        assert!(params.high.enabled);
+        assert_eq!(params.high.gain_db, 24.0);
+    }
+
+    #[test]
+    fn neutral_inserts_keep_default_processing_without_a_new_report_line() {
+        for insert in [
+            Insert::default(),
+            Insert {
+                flags: Some(0xc),
+                stereo_separation: Some(0),
+                eq: [InsertEqBand {
+                    gain: Some(0),
+                    ..InsertEqBand::default()
+                }; 3],
+                ..Insert::default()
+            },
+        ] {
+            assert!(!touched(&insert));
+            let imported = import_insert(Insert {
+                name: Some("Neutral".into()),
+                ..insert
+            });
+            assert_eq!(
+                imported.project.mixer.tracks[1].processing,
+                TrackParams::default()
+            );
+            assert!(
+                imported
+                    .report
+                    .category(ReportSection::Mixer)
+                    .lines
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn eq_import_reports_undecoded_shape_without_the_old_unsupported_sentence() {
+        let imported = import_insert(Insert {
+            eq: [
+                InsertEqBand {
+                    gain: Some(300),
+                    ..InsertEqBand::default()
+                },
+                InsertEqBand::default(),
+                InsertEqBand::default(),
+            ],
+            ..Insert::default()
+        });
+        let params = imported.project.mixer.tracks[1].processing;
+        assert_eq!(params.low.gain_db, 3.0);
+        assert!(params.low.enabled);
+        assert!(!params.mid.enabled);
+        assert!(!params.high.enabled);
+        let category = imported.report.category(ReportSection::Mixer);
+        assert_eq!(category.approximated, 1);
+        assert!(category.lines.iter().any(|line| {
+            line.text.contains("frequency and width were not decoded")
+                && line.outcome == Outcome::Approximated
+        }));
+        assert!(imported.report.categories.iter().all(|category| {
+            category.lines.iter().all(|line| {
+                !line.text.contains("Windfall's tracks have no")
+                    && !line.text.contains("no three-band equaliser")
+            })
+        }));
+    }
+
+    #[test]
+    fn undecoded_eq_shape_without_gain_is_reported_and_keeps_default_processing() {
+        let imported = import_insert(Insert {
+            eq: [InsertEqBand {
+                frequency: Some(32_768),
+                width: Some(32_768),
+                ..InsertEqBand::default()
+            }; 3],
+            ..Insert::default()
+        });
+        assert_eq!(
+            imported.project.mixer.tracks[1].processing,
+            TrackParams::default()
+        );
+        assert!(
+            imported
+                .report
+                .category(ReportSection::Mixer)
+                .lines
+                .iter()
+                .any(|line| line.text.contains("frequency and width were not decoded"))
+        );
+    }
+
+    #[test]
+    fn master_insert_uses_the_same_track_processing() {
+        let mut source = FlpProject::default();
+        source.mixer.inserts.push(Insert {
+            flags: Some(0xf),
+            stereo_separation: Some(64),
+            ..Insert::default()
+        });
+        let imported = convert(&source, &ConvertOptions::default());
+        let params = imported.project.mixer.tracks[0].processing;
+        assert!(params.invert_left && params.invert_right && params.swap);
+        assert_eq!(params.separation, 1.0);
     }
 }

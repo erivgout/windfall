@@ -621,9 +621,17 @@ fn a_missing_sample_plays_nothing() {
 #[test]
 fn a_full_pool_steals_voices_with_a_fade() {
     let mut rig = Rig::new();
-    let channel = rig.channel(level(RATE, 0.001, 1.0));
-    for _ in 0..300 {
-        rig.note(channel, 0, 240);
+    // Fill the global pool across channels, respecting the per-channel cap.
+    let channels: Vec<_> = (0..10)
+        .map(|_| rig.channel(level(RATE, 0.001, 1.0)))
+        .collect();
+    // Fractional note pitches otherwise interpolate the sample's leading
+    // boundary. A constant loop isolates pool retirement from that transient.
+    for &channel in &channels {
+        rig.sampler_mut(channel).loop_mode = SamplerLoopMode::Forward;
+    }
+    for index in 0..300 {
+        rig.note(channels[index / 30], 0, 240).key = (index % 30) as u8;
     }
     let (mut processor, controller) = rig.processor(RATE);
     controller.play();
@@ -636,15 +644,29 @@ fn a_full_pool_steals_voices_with_a_fade() {
     let audio = left(&audio);
     assert!((audio[0] - 0.3).abs() < 1e-4);
     assert!((audio[1_000] - 0.256).abs() < 1e-4);
-    assert!(largest_step(&audio) <= 0.044 / FADE_FRAMES as f32 * 1.05);
+    let step = largest_step(&audio);
+    let bound = 0.044 / FADE_FRAMES as f32 * 1.05;
+    assert!(step <= bound, "pool fade step {step} exceeds {bound}");
 }
 
 #[test]
 fn far_more_notes_than_voices_never_overflows_the_pool() {
     let mut rig = Rig::new();
-    let channel = rig.channel(level(RATE, 0.001, 1.0));
+    // Each wave exceeds the global pool without retriggering one held key.
+    let channels: Vec<_> = (0..12)
+        .map(|_| rig.channel(level(RATE, 0.001, 1.0)))
+        .collect();
+    for &channel in &channels {
+        rig.sampler_mut(channel).loop_mode = SamplerLoopMode::Forward;
+    }
     for index in 0..700 {
-        rig.note(channel, (index / 350) * 240, 240);
+        let within_wave = index % 350;
+        rig.note(
+            channels[(within_wave / 30) as usize],
+            (index / 350) * 240,
+            240,
+        )
+        .key = (within_wave % 30) as u8;
     }
     let (mut processor, controller) = rig.processor(RATE);
     controller.play();

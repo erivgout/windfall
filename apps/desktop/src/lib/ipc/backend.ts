@@ -11,6 +11,7 @@ import type {
   LibraryResults,
   LibrarySearch,
   ChannelId,
+  ClipId,
   Command,
   DispatchResult,
   DocumentSnapshot,
@@ -33,6 +34,7 @@ import type {
   MidiExportOptions,
 } from "@/bindings"
 import type { AnalysisBackend } from "@/features/analysis/types"
+import type { PanelId } from "@/lib/store/ui"
 
 export type Unsubscribe = () => void
 
@@ -64,7 +66,7 @@ export type AudioClipPlace = {
  * the shell needs. A failed call rejects with an `Error` whose message is
  * plain text that can be shown to the user.
  */
-export interface Backend {
+export interface Backend extends AnalysisBackend {
   mixerWaveformTracks(tracks: TrackId[], generation: number, revision: number): Promise<void>
   mixerPresetCapture(id: TrackId, generation: number, revision: number): Promise<import("@/bindings").MixerTrackPreset>
   mixerPresetSave(preset: import("@/bindings").MixerTrackPreset): Promise<string | null>
@@ -166,6 +168,8 @@ export interface Backend {
   importMidi(token: number): Promise<DispatchResult>
   midiDiscard(token: number): Promise<void>
   exportMidi(path: string, options: MidiExportOptions): Promise<string>
+  /** Native save dialog, then MusicXML write. Cancellation writes nothing. */
+  sheetMusicSave(suggestedName: string, xml: string): Promise<string | null>
 
   transportPlay(
     guard?: import("@/bindings").TimelinePlaybackState
@@ -253,6 +257,8 @@ export interface Backend {
     sample: SampleId,
     place: AudioClipPlace
   ): Promise<DispatchResult>
+  /** Render selected tracks' span from a copy, then add audio and mute sources in one undo batch. */
+  bounceSelectedClips(clips: ClipId[]): Promise<DispatchResult>
   /**
    * One undo step, "Create automation clip": an automation of `target`
    * with one point at the value it has now, a new playlist track at the
@@ -297,6 +303,9 @@ export interface Backend {
   pickMidiExportPath(suggestedName: string): Promise<string | null>
 
   setWindowTitle(title: string): Promise<void>
+  detachPanel(id: PanelId): Promise<void>
+  dockPanel(id: PanelId): Promise<void>
+  onPanelDocked(listener: (id: PanelId) => void): Unsubscribe
   /**
    * Asks `guard` before the window closes. The window closes only when it
    * resolves to true.
@@ -305,6 +314,7 @@ export interface Backend {
 }
 
 export const EVENTS = {
+  panelDocked: "panel-docked",
   projectPatch: "project:patch",
   projectLoaded: "project:loaded",
   transportState: "transport:state",

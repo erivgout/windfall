@@ -1,0 +1,1 @@
+The recording dialog halves or doubles the recording offset in milliseconds. Half moves it toward no offset, and no offset stays at no offset. Double stops at 1000 ms in either direction. The buttons stay disabled while recording or while the dialog is busy. Each track's own recording offset stays as it is. Positive values still advance captured audio.

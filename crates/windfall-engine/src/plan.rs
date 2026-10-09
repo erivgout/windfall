@@ -7,6 +7,7 @@
 //! it plays, from the gain ramps to the effects themselves, lives in a
 //! [`PlanState`](crate::state::PlanState) sized to match.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{
     Arc,
@@ -15,7 +16,7 @@ use std::sync::{
 
 use windfall_core::{AudioBuffer, PPQ, TICKS_PER_STEP};
 use windfall_project::{
-    Channel, ChannelId, ChannelSource, Clip, ClipContent, ClipId, DEFAULT_PATTERN_STEPS, EffectId,
+    Channel, ChannelId, ChannelSource, ClipContent, ClipId, DEFAULT_PATTERN_STEPS, EffectId,
     EffectParams, Envelope, InstrumentParams, MAX_EFFECT_SLOTS, MAX_ENVELOPE_MS, MAX_GAIN, MAX_KEY,
     MAX_MIXER_TRACKS, MAX_TEMPO_BPM, MAX_TUNE_SEMITONES, MIN_TEMPO_BPM, Mixer, MixerTrack, Pattern,
     PatternId, Playlist, Project, SamplerSettings, TrackId,
@@ -96,7 +97,7 @@ pub(crate) struct Plan {
     pub audio_clips: Vec<PlanAudioClip>,
     /// Finds an audio clip that sounds: an index into `audio_clips`.
     pub audio_clip_ids: IdIndex,
-    /// End of the last clip on the playlist in ticks, muted clips included.
+    /// End of the last clip in the active playlist in ticks, muted clips included.
     pub song_end: u32,
     /// What automation does to each of its targets along the song.
     pub lanes: Arc<[Lane]>,
@@ -107,6 +108,7 @@ pub(crate) struct Plan {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PlanChannel {
+    pub voice: windfall_project::ChannelVoiceSettings,
     pub id: ChannelId,
     /// Index of the mixer track the channel plays into.
     pub track: usize,
@@ -288,7 +290,6 @@ pub(crate) struct DepartureReservation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DepartureSource {
-    pub effect: EffectId,
     pub life: Arc<EffectLife>,
     pub params: EffectParams,
     pub enabled: bool,
@@ -510,6 +511,7 @@ impl Plan {
             }
             let track = previous.tracks[channel.track].id;
             self.channels.push(PlanChannel {
+                voice: channel.voice,
                 id: channel.id,
                 track: self.track_ids.get(track.0).unwrap_or(0),
                 gain: channel.gain,
@@ -582,7 +584,6 @@ impl Plan {
                     // adoption. Finished departures alone can be excluded.
                     if !before.leaving || before.life.progress.load(Ordering::Acquire) != 2 {
                         sources.push(DepartureSource {
-                            effect: before.id,
                             life: before.life.clone(),
                             params: before.params,
                             enabled: before.enabled,
@@ -663,6 +664,7 @@ impl Plan {
                 && self.channel_ids.get(channel.id.0).is_none()
             {
                 self.channels.push(PlanChannel {
+                voice: channel.voice,
                     id: channel.id,
                     track: self
                         .track_ids
@@ -804,8 +806,9 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         .collect();
     let pattern_ids = IdIndex::new(patterns.iter().map(|pattern| pattern.id.0));
 
-    let (clips, song_end) = compile_playlist(&project.playlist, &pattern_ids, &patterns);
-    let audio_clips = compile_audio_clips(&project.playlist, pool, &track_ids, tempo_bpm);
+    let playlist = arrangement_playlist(&project.playlist);
+    let (clips, song_end) = compile_playlist(&playlist, &pattern_ids, &patterns);
+    let audio_clips = compile_audio_clips(&playlist, pool, &track_ids, tempo_bpm);
     let audio_clip_ids = IdIndex::new(audio_clips.iter().map(|clip| clip.id.0));
 
     let mut plan = Plan {
@@ -843,7 +846,7 @@ pub(crate) fn compile(project: &Project, pool: &SamplePool) -> Plan {
         plan.snapshot_native_owners();
     }
     plan.link();
-    plan.lanes = automation::compile(project, &plan).into();
+    plan.lanes = automation::compile(project, &playlist, &plan).into();
     let tempo_lane = plan.lanes.iter().find(|lane| lane.is_tempo());
     plan.tempo_map = tempo_lane.map(|lane| TempoMap::new(lane, tempo_bpm, f64::from(song_end)));
     plan
@@ -871,6 +874,7 @@ fn compile_channel(
     };
     let audible = !channel.muted && (!any_solo || channel.solo);
     PlanChannel {
+        voice: channel.voice.sanitized(),
         id: channel.id,
         // A channel whose track is gone plays into the master.
         track: track_ids.get(channel.mixer_track.0).unwrap_or(0),
@@ -931,6 +935,7 @@ fn compile_sampler(settings: &SamplerSettings, pool: &SamplePool) -> PlanSampler
                 },
                 frames: end - first,
                 mode: settings.loop_mode,
+                crossfade: settings.loop_crossfade,
             }
         });
     PlanSampler {
@@ -1012,26 +1017,64 @@ fn swing_warp(tick: f64, swing: f64, swung_length: f64) -> f64 {
     windfall_project::note_timing::swing_warp(tick, swing, swung_length)
 }
 
+/// Resolve arrangement references on the control side, before mute, solo and
+/// crossfade compilation. The stored playlist and its clip positions stay intact.
+fn arrangement_playlist(playlist: &Playlist) -> Cow<'_, Playlist> {
+    let book = &playlist.arrangement_book;
+    if book.arrangements.is_empty() || book.active.is_none() {
+        return Cow::Borrowed(playlist);
+    }
+    let arrangement = book
+        .arrangements
+        .iter()
+        .find(|item| Some(item.id) == book.active);
+    let mut selected = playlist.clone();
+    selected.tracks = arrangement
+        .filter(|item| !item.clips.is_empty())
+        .into_iter()
+        .flat_map(|item| &item.tracks)
+        .filter_map(|id| playlist.tracks.iter().find(|track| track.id == *id))
+        .cloned()
+        .collect();
+    let tracks: HashSet<_> = selected.tracks.iter().map(|track| track.id).collect();
+    let clips: HashSet<_> = arrangement
+        .into_iter()
+        .flat_map(|item| &item.clips)
+        .collect();
+    selected
+        .clips
+        .retain(|clip| clips.contains(&clip.id) && tracks.contains(&clip.track));
+    Cow::Owned(selected)
+}
+
+/// Playlist mute and solo share one rule for pattern, audio and automation clips.
+pub(crate) fn silent_playlist_tracks(
+    playlist: &Playlist,
+) -> HashSet<windfall_project::PlaylistTrackId> {
+    let any_solo = playlist.tracks.iter().any(|track| track.solo);
+    playlist
+        .tracks
+        .iter()
+        .filter(|track| track.muted || (any_solo && !track.solo))
+        .map(|track| track.id)
+        .collect()
+}
+
 fn compile_playlist(
     playlist: &Playlist,
     pattern_ids: &IdIndex,
     patterns: &[PlanPattern],
 ) -> (Vec<PlanClip>, u32) {
-    let muted_tracks: HashSet<_> = playlist
-        .tracks
-        .iter()
-        .filter(|track| track.muted)
-        .map(|track| track.id)
-        .collect();
+    let silent_tracks = silent_playlist_tracks(playlist);
 
     let mut song_end = 0;
     let mut clips = Vec::new();
     for clip in &playlist.clips {
         let end = clip.start.saturating_add(clip.length);
-        // A muted clip still takes up room on the timeline, so muting the
-        // last clip does not shorten the song.
+        // A silent clip still takes up room on the timeline, so mute and
+        // solo do not shorten the song.
         song_end = song_end.max(end);
-        if clip.muted || muted_tracks.contains(&clip.track) || end == clip.start {
+        if clip.muted || silent_tracks.contains(&clip.track) || end == clip.start {
             continue;
         }
         let ClipContent::Pattern { pattern } = &clip.content else {
@@ -1057,27 +1100,23 @@ fn compile_playlist(
     (clips, song_end)
 }
 
-/// The audio clips that sound: not muted, not on a muted playlist track, and
-/// with audio in the pool. A clip whose mixer track is gone plays into the
-/// master.
+/// The audio clips that sound: allowed by clip mute and playlist mute/solo,
+/// with audio in the pool. A clip whose mixer track is gone plays into the master.
 fn compile_audio_clips(
     playlist: &Playlist,
     pool: &SamplePool,
     track_ids: &IdIndex,
     tempo_bpm: f64,
 ) -> Vec<PlanAudioClip> {
-    let muted_track = |clip: &Clip| {
-        let tracks = playlist.tracks.iter();
-        tracks
-            .into_iter()
-            .any(|track| track.id == clip.track && track.muted)
-    };
+    let silent_tracks = silent_playlist_tracks(playlist);
     let mut clips = Vec::new();
+    let mut playlist_order = Vec::new();
     for clip in &playlist.clips {
         let ClipContent::Audio {
             sample,
             mixer_track,
             output,
+            normalize,
             gain: clip_gain,
             pan: clip_pan,
             fade_in,
@@ -1096,7 +1135,7 @@ fn compile_audio_clips(
         let Some(buffer) = buffer.filter(|_| !clip.muted && end > clip.start) else {
             continue;
         };
-        if muted_track(clip) {
+        if silent_tracks.contains(&clip.track) {
             continue;
         }
         let pitch = if pitch.is_finite() {
@@ -1111,6 +1150,7 @@ fn compile_audio_clips(
         };
         let offset_seconds = f64::from(clip.offset) * 60.0 / (tempo_bpm * f64::from(PPQ));
         let track = track_ids.get(mixer_track.0);
+        playlist_order.push((clip.track, clips.len()));
         clips.push(PlanAudioClip {
             id: clip.id,
             start: clip.start,
@@ -1120,7 +1160,27 @@ fn compile_audio_clips(
             track: track.unwrap_or(0),
             track_id: track.map_or(TrackId::MASTER, |_| mixer_track),
             direct_output: output == windfall_project::ClipAudioOutput::Direct,
-            gain: gain(clip_gain),
+            gain: {
+                let knob_gain = gain(clip_gain);
+                if normalize {
+                    // Prepared audio is scanned on the control side, never in the callback.
+                    // Propagate any non-finite sample instead of letting f32::max hide NaN.
+                    let peak = buffer.samples().iter().fold(0.0_f32, |peak, sample| {
+                        if peak.is_finite() && sample.is_finite() {
+                            peak.max(sample.abs())
+                        } else {
+                            f32::NAN
+                        }
+                    });
+                    if peak.is_finite() && peak >= 1.0e-8 {
+                        (knob_gain / peak).min(MAX_GAIN)
+                    } else {
+                        knob_gain
+                    }
+                } else {
+                    knob_gain
+                }
+            },
             pan: pan(clip_pan),
             fade_in,
             fade_out,
@@ -1130,6 +1190,21 @@ fn compile_audio_clips(
             skip: offset_seconds * speed * f64::from(buffer.sample_rate()),
             reach: end,
         });
+    }
+    // Crossfade only adjacent audible clips on the same playlist track.
+    // Keep this temporary ordering on the control side; playback needs the
+    // global start ordering below, regardless of playlist or mixer track.
+    playlist_order.sort_by_key(|&(track, index)| (track, clips[index].start, clips[index].id));
+    for pair in playlist_order.windows(2) {
+        let [(previous_track, previous), (next_track, next)] = [pair[0], pair[1]];
+        if previous_track != next_track || clips[next].start >= clips[previous].end {
+            continue;
+        }
+        let overlap = clips[previous].end - clips[next].start;
+        let previous_length = clips[previous].end - clips[previous].start;
+        let next_length = clips[next].end - clips[next].start;
+        clips[previous].fade_out = clips[previous].fade_out.max(overlap).min(previous_length);
+        clips[next].fade_in = clips[next].fade_in.max(overlap).min(next_length);
     }
     // Clips that start together take their slots in the order of their
     // ids, which settles who is left out when there are too many.
@@ -1360,9 +1435,342 @@ fn duration(ms: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use windfall_project::{Lane, Note, NoteId, Send};
+    use windfall_project::{Clip, Lane, Note, NoteId, Send};
 
     use super::*;
+
+    fn audio_clip(id: u32, track: u32, start: u32, length: u32, fades: (u32, u32)) -> Clip {
+        Clip {
+            id: ClipId(id),
+            track: windfall_project::PlaylistTrackId(track),
+            start,
+            length,
+            offset: 0,
+            muted: false,
+            content: ClipContent::Audio {
+                sample: windfall_project::SampleId(1),
+                mixer_track: TrackId::MASTER,
+                output: Default::default(),
+                normalize: false,
+                gain: 1.0,
+                pan: 0.0,
+                fade_in: fades.0,
+                fade_out: fades.1,
+                reverse: false,
+                pitch: 0.0,
+                stretch: Default::default(),
+            },
+        }
+    }
+
+    fn arrangement_fixture() -> (Project, SamplePool) {
+        use windfall_project::{
+            Automation, AutomationId, AutomationPoint, AutomationTarget, PlaylistTrack,
+            PlaylistTrackId,
+        };
+        let mut project = Project::new("Arrangement playback");
+        let mut pool = SamplePool::new();
+        pool.insert(
+            windfall_project::SampleId(1),
+            AudioBuffer::from_interleaved(48_000, 1, vec![0.25; 48_000]),
+        );
+        for index in 0..2 {
+            let track = PlaylistTrackId(50 + index);
+            project.playlist.tracks.push(PlaylistTrack {
+                id: track,
+                name: format!("Track {index}"),
+                muted: false,
+                solo: false,
+                color: 0,
+                height: 0,
+            });
+            let pattern = Clip {
+                id: ClipId(60 + index),
+                track,
+                start: index * PPQ,
+                length: PPQ,
+                offset: 120,
+                muted: false,
+                content: ClipContent::Pattern {
+                    pattern: project.patterns[0].id,
+                },
+            };
+            let automation = AutomationId(80 + index);
+            project.automations.push(Automation {
+                id: automation,
+                name: format!("Automation {index}"),
+                color: 0,
+                target: if index == 0 {
+                    AutomationTarget::Tempo
+                } else {
+                    AutomationTarget::TrackVolume {
+                        track: TrackId::MASTER,
+                    }
+                },
+                points: vec![AutomationPoint {
+                    tick: 0,
+                    value: 0.5,
+                    curve: 0.0,
+                    hold: true,
+                }],
+            });
+            project.playlist.clips.extend([
+                pattern.clone(),
+                audio_clip(62 + index, track.0, index * PPQ, PPQ, (0, 0)),
+                Clip {
+                    id: ClipId(64 + index),
+                    content: ClipContent::Automation { automation },
+                    ..pattern
+                },
+            ]);
+        }
+        project.playlist.clips.sort_by_key(Clip::sort_key);
+        (project, pool)
+    }
+
+    fn select_arrangement(project: &mut Project, clips: &[u32], tracks: &[u32]) {
+        project.playlist.arrangement_book = windfall_project::ArrangementBook {
+            active: Some(90),
+            arrangements: vec![windfall_project::arrangement::Arrangement {
+                id: 90,
+                name: "Verse".into(),
+                clips: clips.iter().copied().map(ClipId).collect(),
+                tracks: tracks
+                    .iter()
+                    .copied()
+                    .map(windfall_project::PlaylistTrackId)
+                    .collect(),
+            }],
+            ..Default::default()
+        };
+    }
+
+    #[test]
+    fn arrangement_empty_book_plans_every_audible_clip() {
+        let (mut project, pool) = arrangement_fixture();
+        project
+            .playlist
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == ClipId(61))
+            .unwrap()
+            .muted = true;
+        let plan = compile(&project, &pool);
+        assert_eq!(plan.clips.len(), 1);
+        assert_eq!(
+            plan.audio_clips
+                .iter()
+                .map(|clip| clip.id.0)
+                .collect::<Vec<_>>(),
+            [62, 63]
+        );
+        assert_eq!(plan.lanes.len(), 2);
+        assert_eq!(plan.song_end, 2 * PPQ);
+    }
+
+    #[test]
+    fn arrangement_active_plans_only_its_clip_without_moving_it() {
+        let (mut project, pool) = arrangement_fixture();
+        let saved = project.playlist.clips.clone();
+        for (clip, pattern_count, audio_count, lane_count) in
+            [(61, 1, 0, 0), (63, 0, 1, 0), (65, 0, 0, 1)]
+        {
+            select_arrangement(&mut project, &[clip], &[51]);
+            let plan = compile(&project, &pool);
+            assert_eq!(plan.clips.len(), pattern_count);
+            assert_eq!(plan.audio_clips.len(), audio_count);
+            assert_eq!(plan.lanes.len(), lane_count);
+            assert_eq!(plan.song_end, 2 * PPQ);
+            if let Some(clip) = plan.clips.first() {
+                assert_eq!((clip.start, clip.offset), (PPQ, 120));
+            }
+            assert_eq!(project.playlist.clips, saved);
+        }
+    }
+
+    #[test]
+    fn arrangement_clip_on_an_excluded_track_is_silent() {
+        let (mut project, pool) = arrangement_fixture();
+        select_arrangement(&mut project, &[61, 63, 65], &[50]);
+        let plan = compile(&project, &pool);
+        assert!(plan.clips.is_empty());
+        assert!(plan.audio_clips.is_empty());
+        assert!(plan.lanes.is_empty());
+        assert_eq!(plan.song_end, 0);
+    }
+
+    #[test]
+    fn arrangement_empty_reference_lists_plan_nothing() {
+        let (mut project, pool) = arrangement_fixture();
+        for (clips, tracks) in [(&[][..], &[50][..]), (&[60, 62, 64][..], &[][..])] {
+            select_arrangement(&mut project, clips, tracks);
+            let plan = compile(&project, &pool);
+            assert!(plan.clips.is_empty());
+            assert!(plan.audio_clips.is_empty());
+            assert!(plan.lanes.is_empty());
+            assert_eq!(plan.song_end, 0);
+        }
+    }
+
+    #[test]
+    fn arrangement_without_active_id_keeps_all_clips() {
+        let (mut project, pool) = arrangement_fixture();
+        select_arrangement(&mut project, &[], &[]);
+        project.playlist.arrangement_book.active = None;
+        let plan = compile(&project, &pool);
+        assert_eq!(plan.clips.len(), 2);
+        assert_eq!(plan.audio_clips.len(), 2);
+        assert_eq!(plan.lanes.len(), 2);
+    }
+
+    #[test]
+    fn arrangement_applies_mute_solo_and_crossfade_after_filtering() {
+        let (mut project, pool) = arrangement_fixture();
+        // A hidden solo track must not silence the active track.
+        project.playlist.tracks[1].solo = true;
+        project
+            .playlist
+            .clips
+            .push(audio_clip(66, 50, PPQ / 2, PPQ, (0, 0)));
+        select_arrangement(&mut project, &[60, 62, 64, 66], &[50]);
+        let plan = compile(&project, &pool);
+        assert_eq!(plan.clips.len(), 1);
+        assert_eq!(plan.lanes.len(), 1);
+        assert_eq!(plan.audio_clips.len(), 2);
+        assert_eq!(plan.audio_clips[0].fade_out, PPQ / 2);
+        assert_eq!(plan.audio_clips[1].fade_in, PPQ / 2);
+        select_arrangement(&mut project, &[62], &[50]);
+        assert_eq!(compile(&project, &pool).audio_clips[0].fade_out, 0);
+        project.playlist.tracks[0].muted = true;
+        select_arrangement(&mut project, &[60, 62, 64], &[50]);
+        let plan = compile(&project, &pool);
+        assert!(plan.clips.is_empty());
+        assert!(plan.audio_clips.is_empty());
+        assert!(plan.lanes.is_empty());
+    }
+
+    #[test]
+    fn audio_clip_normalize_plans_peak_gain_without_changing_the_knob() {
+        for (samples, normalize, knob, expected) in [
+            (vec![0.25, -0.5, 0.125, 0.0], true, 1.0, 2.0),
+            (vec![0.0; 4], true, 0.75, 0.75),
+            (vec![0.5; 4], false, 0.75, 0.75),
+            (vec![1.0e-9; 4], true, 0.75, 0.75),
+            (vec![0.5, f32::NAN, 0.25, 0.0], true, 0.75, 0.75),
+            (vec![0.5, f32::INFINITY, 0.25, 0.0], true, 0.75, 0.75),
+            (vec![0.25; 4], true, 1.0, MAX_GAIN),
+            (vec![-2.0; 4], true, 1.0, 0.5),
+        ] {
+            let mut pool = SamplePool::new();
+            let buffer = AudioBuffer::from_interleaved(48_000, 2, samples.clone());
+            let identity = buffer.identity();
+            pool.insert(windfall_project::SampleId(1), buffer);
+            let mut project = Project::new("Clip normalize");
+            let mut clip = audio_clip(1, 50, 0, PPQ, (0, 0));
+            let ClipContent::Audio {
+                gain,
+                normalize: enabled,
+                ..
+            } = &mut clip.content
+            else {
+                unreachable!();
+            };
+            *gain = knob;
+            *enabled = normalize;
+            project.playlist.clips.push(clip);
+            let stored = project.playlist.clips.clone();
+            let plan = compile(&project, &pool);
+            assert_eq!(plan.audio_clips.len(), 1);
+            assert_eq!(plan.audio_clips[0].gain, expected);
+            assert_eq!(project.playlist.clips, stored);
+            assert_eq!(plan.audio_clips[0].sample.identity(), identity);
+            // Includes NaN cases, whose float equality would fail.
+            assert_eq!(
+                plan.audio_clips[0]
+                    .sample
+                    .samples()
+                    .iter()
+                    .map(|s| s.to_bits())
+                    .collect::<Vec<_>>(),
+                samples.iter().map(|s| s.to_bits()).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn adjacent_audio_overlaps_extend_planned_fades_and_keep_longer_user_fades() {
+        let mut pool = SamplePool::new();
+        pool.insert(
+            windfall_project::SampleId(1),
+            AudioBuffer::from_interleaved(48_000, 1, vec![0.5; 48_000]),
+        );
+        for (user_fade, expected_fade) in [(20, 100), (150, 150)] {
+            let mut project = Project::new("playlist crossfade");
+            // Deliberately unsorted, with another playlist track routed to
+            // the same mixer track between the overlapping pair's starts.
+            project.playlist.clips = vec![
+                audio_clip(30, 50, 100, 200, (user_fade, 7)),
+                audio_clip(40, 50, 300, 100, (11, 13)),
+                audio_clip(20, 51, 50, 400, (17, 19)),
+                audio_clip(10, 50, 0, 200, (5, user_fade)),
+            ];
+            let stored_clips = project.playlist.clips.clone();
+            let plan = compile(&project, &pool);
+            let fades: Vec<_> = plan
+                .audio_clips
+                .iter()
+                .map(|clip| (clip.id.0, clip.fade_in, clip.fade_out))
+                .collect();
+            assert_eq!(
+                fades,
+                vec![
+                    (10, 5, expected_fade),
+                    (20, 17, 19),
+                    (30, expected_fade, 7),
+                    (40, 11, 13),
+                ]
+            );
+            assert_eq!(project.playlist.clips, stored_clips);
+        }
+    }
+
+    #[test]
+    fn adjacent_audio_overlaps_clamp_fades_skip_muted_clips_and_use_id_order() {
+        let mut project = Project::new("adjacent overlaps only");
+        project.playlist.tracks.push(windfall_project::PlaylistTrack {
+            id: windfall_project::PlaylistTrackId(52),
+            name: String::new(),
+            muted: true,
+            solo: false,
+            color: 0,
+            height: 0,
+        });
+        let mut muted = audio_clip(15, 50, 0, 50, (0, 0));
+        muted.muted = true;
+        project.playlist.clips = vec![
+            audio_clip(30, 50, 200, 100, (7, 9)),
+            audio_clip(20, 50, 0, 100, (0, 0)),
+            audio_clip(10, 50, 0, 1_000, (0, 0)),
+            muted,
+            audio_clip(40, 52, 0, 1_000, (0, 0)),
+            audio_clip(50, 52, 100, 1_000, (0, 0)),
+        ];
+        let mut pool = SamplePool::new();
+        pool.insert(
+            windfall_project::SampleId(1),
+            AudioBuffer::from_interleaved(48_000, 1, vec![0.5; 48_000]),
+        );
+        let plan = compile(&project, &pool);
+        let fades: Vec<_> = plan
+            .audio_clips
+            .iter()
+            .map(|clip| (clip.id.0, clip.fade_in, clip.fade_out))
+            .collect();
+        // ID 10 precedes ID 20 at the same start. Their overlap is 1,000
+        // ticks, clamped to ID 20's 100 ticks. ID 30 overlaps ID 10 only,
+        // so it is unchanged: ID 20 is its immediate predecessor.
+        assert_eq!(fades, vec![(10, 0, 1_000), (20, 100, 0), (30, 7, 9)]);
+    }
 
     fn track(id: u32, output: Option<u32>, sends: &[u32]) -> MixerTrack {
         MixerTrack {
@@ -1500,6 +1908,7 @@ mod tests {
             muted: false,
             solo: false,
             group: String::new(),
+            voice: Default::default(),
             timing: windfall_project::ChannelTiming::default(),
             mixer_track: TrackId::MASTER,
             source: ChannelSource::Sampler(SamplerSettings::default()),
